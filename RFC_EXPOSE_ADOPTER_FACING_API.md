@@ -8,6 +8,13 @@ Normative boundaries: [docs/CONTRACT.md](docs/CONTRACT.md).
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Derived facts: [docs/DERIVATION_SPEC.md](docs/DERIVATION_SPEC.md).
 
+Reading order: sections 2–7 specify the design and its boundaries; section 8
+is the engineering handoff and proof gate; section 9 records evidence, cost,
+and alternatives. This RFC is the single proposal authority for the private
+meta-framework. Do not maintain a second design document with duplicate grammar.
+After implementation, an enduring developer reference may replace these design
+sections as authority through an explicit documentation cutover.
+
 ## 1. Decision and intended outcome
 
 Define Nixfied's supported public contract through a private Nix meta-framework:
@@ -45,49 +52,9 @@ Native Nix algorithms and Rust runtime mechanisms remain implementations of that
 contract. The meta-framework does not attempt to express every algorithm in a
 new symbolic language.
 
-## 2. Problem and evidence
+## 2. Architecture, scope, and ownership
 
-An adopter asked what alternatives exist to `stateRefs = [ "slot" ]`. Answering
-required seven hops through a pinned store checkout, including compiler and
-runtime internals. A supplied reference should answer ordinary authoring
-questions without that reconstruction.
-
-The current option pipeline is a useful foundation:
-
-- [options.nix](nix/docs/options.nix) uses the existing module evaluator and
-  `pkgs.nixosOptionsDoc`.
-- The pinned generator exposes `optionsNix` and `optionsJSON`, with canonical
-  option paths, descriptions, types, formatted defaults, and examples.
-- The current evaluation produces 128 public option entries. Exact lookup can
-  reuse these records without parsing Markdown or replacing submodule traversal.
-
-It also exposes the limits of the current representation:
-
-- `stateRefs` is described as participating in service identity, but
-  [identity.rs](runtime/crates/nixfied-runtime/src/service/identity.rs) excludes it
-  and [lower.rs](runtime/crates/nixfied-runtime/src/execution/lower.rs) discards it.
-- Invocation timeouts use a positive-integer predicate, while the generated type
-  description says only "signed integer". A native check has lost a fact that a
-  structured range declaration could retain.
-- [validate.nix](nix/compiler/validate.nix) has 35 check entries, with additional
-  public constraints enforced in [derive.nix](nix/compiler/derive.nix).
-- Runtime flags, help, defaults, and error projection are spread across native
-  parsing branches. Output contracts combine serialized structs with dynamic
-  JSON construction.
-
-The correct current `stateRefs` answer must remain explicit: it accepts a list
-of strings and defaults to `[ "slot" ]`. These strings select neither storage
-backends nor alternative runtime state roots. They do not change service reuse
-identity. They remain serialized model data and appear in the model view, so
-changing them changes the raw model hash; execution lowering discards them.
-The sibling service/task ref fields need the same accuracy review.
-
-Generation establishes agreement between projections. Independent behavioral
-proofs establish whether an authored explanation matches execution.
-
-## 3. Scope and guarantees
-
-### 3.1 Public surface
+### 2.1 Public surface
 
 The target is every supported framework-owned public declaration, including open
 schema families. Internal Rust `pub` items and framework-only escape hatches are
@@ -108,7 +75,7 @@ Adopter task names and custom flake apps remain project facts. Nixpkgs and child
 programs retain their own contracts. Framework schema coverage does not claim to
 enumerate arbitrary Nix programs or child behavior.
 
-### 3.2 What is enforceable
+### 2.2 Guarantees and rejection boundaries
 
 | Guarantee | Owner and rejection boundary |
 | --- | --- |
@@ -128,7 +95,7 @@ English is true, that a native predicate implements that English, or that a
 reader understands it. Coverage, relationship integrity, and behavioral evidence
 are separate acceptance dimensions.
 
-### 3.3 Non-goals
+### 2.3 Non-goals
 
 - Replace Nix parsing, module evaluation, merging, or package realization.
 - Add a universal rule interpreter, runtime schema loader, daemon, or dynamic
@@ -140,7 +107,7 @@ are separate acceptance dimensions.
   grammar as a prerequisite for documentation.
 - Turn the meta-framework into a public framework for unrelated products.
 
-## 4. Architecture: two compilations from one contract
+### 2.4 Two compilations from one contract
 
 ```mermaid
 flowchart TD
@@ -161,7 +128,7 @@ flowchart TD
     X --> X2
 ```
 
-### 4.1 Framework compilation
+### 2.5 Framework compilation
 
 Framework compilation validates declarations and relationships, generates the
 public authoring interface and static bindings, and builds reference content.
@@ -177,7 +144,7 @@ implementation receives its context only when its owning phase invokes it.
 The normalized declaration index and reverse links are private generated data.
 They are neither a second authored catalog nor a runtime semantic artifact.
 
-### 4.2 Project compilation
+### 2.6 Project compilation
 
 Project compilation uses the generated module declarations with Nixpkgs'
 existing evaluator, then follows the existing pipeline:
@@ -196,7 +163,7 @@ pipeline. Native algorithms still compute closure resolution, graph facts,
 logical placement, and other derived values. Merely serializing the static
 reference graph cannot produce an executable project.
 
-### 4.3 Relationship to the existing project compiler
+### 2.7 Relationship to the existing project compiler
 
 The meta-framework replaces part of the handwritten machinery in `nix/compiler`
 while retaining the project compilation pipeline and its native algorithms.
@@ -224,7 +191,7 @@ Implementation may reorganize files; acceptance depends on clear ownership,
 preserved rejection phases, and removal of duplicate definitions rather than a
 particular directory layout.
 
-### 4.4 Proposed organization
+### 2.8 Source organization
 
 Keep the meta-framework and all authored meta-definitions together under
 `nix/meta/`. Separate its small compilation kernel from the definitions of
@@ -281,9 +248,9 @@ regardless of the source file that declares it. Documentation source links point
 to its definition under `nix/meta/`; semantic references retain the canonical
 option, exposure, rule, and inventory identities specified below.
 
-## 5. Declaration model
+## 3. Core grammar and compilation interfaces
 
-### 5.1 Closed declaration families
+### 3.1 Declaration families and design status
 
 Use distinct constructors with kind-specific required fields. A single record
 with interchangeable optional fields would hide invalid combinations.
@@ -302,7 +269,86 @@ with interchangeable optional fields would hide invalid combinations.
 These are compile-time declaration kinds. They add no semantic task/service kinds
 to the runtime model.
 
-### 5.2 Reuse existing Nix domains
+This table describes eventual coverage, not a promise that every constructor is
+already specified. The first assignment implements the closed grammar for option
+fragments, structural/native rules, scoped references, complete `Invocation`
+wire structure, and the private slot-command probe below. Exposure, contextual
+input, behavioral guarantee, native derivation, full command, and output/error
+families have requirements in this RFC but need concrete constructor designs and
+accepted/rejected examples before their migration stages. Unsupported forms fail
+construction; do not accept generic metadata bags or invent their grammar during
+the first assignment. Later designs extend this document before implementation.
+
+The signatures and tagged records below specify the first slice. Examples called
+excerpts are not complete inputs. All other examples must have accepted fixtures;
+each stated rejection must have an independent negative. Types here describe
+ordinary Nix values, not a second language or opaque runtime type system.
+
+### 3.2 Kernel signatures and evaluation boundaries
+
+```text
+compileOptions { declarations; }
+  -> { module; entries; }
+checkContract { entries; domains; rules; wire; commands; relations; inventory; }
+  -> CheckedContract
+resolveRef checkedContract.index reference -> Entry
+runRule { rule; phase; input; }
+  -> { kind = "pass"; } | { kind = "reject"; ruleId; message; }
+renderReference checkedContract -> reference text/index
+emitRust checkedContract -> product-keyed trees of source strings
+constructWire checkedRecord values -> checked JSON-compatible value
+```
+
+`entries` are mounted option/collection records from `compileOptions`; `domains`
+is an attrset keyed by semantic domain identity. `rules`, `wire`, and `commands`
+are lists of their closed declaration records. `relations` is a list of checked
+edge records. Empty collections default to empty; `inventory` is required.
+Identities embedded in records must be unique in their namespace; lists preserve
+order where it affects validation or serialization. Per-declaration relation
+lists normalize into the same edge list with their source identity attached.
+Do not duplicate edges in both places. The checked index derives from these
+inputs, including inventory entries; it is never independently authored.
+
+`CheckedContract = { index; domains; entries; rules; wire; commands; relations; }`
+contains normalized checked projections. Native implementations remain lazy
+members of their owning declarations. No exposure/context/guarantee collections
+are silently accepted in this first-slice signature. Their staged designs must
+extend both the input grammar and coverage checks explicitly.
+
+Constructors first apply the defaults in section 3.3 and produce complete
+normalized records. Validate defaults against their domains at the owning
+boundary: literal values when their domain is available, contextual values during
+native module evaluation. Static extraction never invokes a contextual resolver.
+Metadata failures throw deterministic, owner/path-qualified Nix errors.
+`CheckedContract` means a validated attrset projection. It is not a security or
+opacity boundary. `checkContract` forces required static fields, variant shapes,
+identities, relations, and inventory coordinates. It checks that native callbacks
+are functions, but never calls them or forces project values. Do not `deepSeq`
+the entire declaration graph. Native callback exceptions remain native errors;
+there is no catch-all conversion into an ordinary rejected rule.
+
+`compileOptions` walks a nested attribute tree whose leaves are tagged option
+declarations. Structured submodule and map domains retain their nested declaration
+trees. The supplied tree starts at the full option root; the collector carries
+mount paths internally, identically for native placement and metadata. One
+traversal produces both native `mkOption` declarations and mounted
+metadata. The returned `module` is a delayed ordinary Nix module receiving its
+usual module arguments; `entries` does not need that context. Collect each owning
+meta-definition bundle once and derive both projections from that collection.
+Native module entry points consume the generated module projection.
+Do not store metadata in extra `mkOption` fields, add an `_module` side channel,
+or maintain a second registration tree.
+
+Continue using `lib.evalModules` and `nixosOptionsDoc`. Join mounted metadata to
+evaluated option records by canonical path; preserve native merging, visibility,
+submodule traversal, default rendering, and `apply`. Coverage compares against
+actual evaluated option records and actual public export names, including raw
+option/export bypass negatives. Comparing two projections of the declaration
+list is insufficient. Enumerating exports must not force package/program values.
+Project-app fixtures audit framework apps plus declared verbs, excluding arbitrary
+adopter-added apps. Prototype declarations never count as public coverage.
+
+### 3.3 Domains, defaults, and normalization
 
 The initial domain vocabulary needs only primitives, bounded values, enums,
 lists, maps, products, and explicit alternatives that existing surfaces use.
@@ -340,7 +386,7 @@ There is one normalization path, not separate defaults in docs, Nix, and Rust.
 | Wire field `policy` | Required, non-null |
 | Wire field `producer` | Caller supplies the value |
 | Unsigned shape `nonzero` | False; positivity must be declared |
-| Command argument repetition | Reject duplicates unless explicitly overridden |
+| Command argument repetition | `{ kind = "reject"; }`; reject duplicates unless explicitly overridden |
 
 `default = value` is shorthand for `presence = api.defaultValue value`.
 A contextual default still uses `api.defaultFrom { expression; resolve; }`.
@@ -373,28 +419,55 @@ Changing a shared semantic default is a contract change affecting every consumer
 check its projections and existing ABI obligations together. Documentation shows
 effective defaults and contextual expressions, even when omitted at each use.
 
-### 5.3 Example: timeout
+### 3.4 Option declaration grammar
 
-Illustrative private syntax; constructor spelling is not an adopter API:
+The concise authored option envelope is (defaults are defined in section 3.3):
 
 ```nix
-timeoutMs = api.option {
-  domain = api.integer { min = 1; };
+api.option {
+  domain = api.integer { min = 1; }; # omitted bound means no additional bound
   default = 30000;
-  unit = "milliseconds";
   explanation = "Maximum invocation duration before cancellation.";
-};
+  unit = "milliseconds";
+}
 ```
 
-The domain generates the positive-integer check and the documented lower bound.
-The option reference continues to use the existing generator's canonical path,
-formatting, and visibility behavior. No separate list of option names is added.
+`integer` validates integer bounds and `min <= max`; its native representation
+still determines representable values. The normalized presence alternatives are
+`api.required`, `api.defaultValue value`, and
+`api.defaultFrom { expression; resolve; }`. The latter carries static display text
+and a context callback evaluated only by the native module. It produces the
+existing `defaultText = lib.literalExpression expression`. A required option has
+no generated default; ordinary lazy undefined-option behavior is preserved.
+A literal `null` default is not absence. The optional `moduleArgs` accepts native
+`apply`, `example`, `visible`, `internal`, and `readOnly`. It rejects overrides of
+`type`, `default`, `defaultText`, and `description`, and rejects unknown keys.
+Existing uses of `apply`, including source-identity conversion, remain native.
 
-The corresponding model field has its own wire contract and lowering relation.
-Its Rust binding must preserve the existing validated domain rather than admit
-an unchecked integer and rely on documentation to describe positivity.
+The first option/domain constructors needed by the probes and scope fixtures are:
 
-### 5.4 Exposure discipline
+```text
+api.integer { min ? null; max ? null; } -> integer domain
+api.text -> string domain
+api.list elementDomain -> native listOf domain
+api.map elementDomain -> native attrsOf domain, with a collection identity
+api.submodule declarationTree -> native submodule domain
+api.option { domain; explanation; default?; presence?; unit?; relations?; moduleArgs?; }
+  -> tagged option declaration
+```
+
+These compose existing Nixpkgs types. Map keys are strings in this slice; maps
+of submodules retain their declaration trees for mounting `{ item = true; }`
+paths. Wire shapes below are separate descriptors: `api.integer` never secretly
+means Rust `u64`. Additional authoring domains are added only with the surfaces
+that require them, preserving their native merge behavior.
+
+Implement domains only as they are exercised: native primitives, integer bounds,
+enums, lists, maps, submodules/products, and explicit alternatives. A native
+predicate needs an explanation and a direct callback, not a handler-name lookup.
+There is no arbitrary source-expression escape hatch or general constraint DSL.
+
+### 3.5 Exposure discipline
 
 Generate public functions, adapters, supplied module arguments, products, and
 framework app names from their declarations. Derive reserved project-app names
@@ -409,54 +482,146 @@ Check actual framework-owned exported surfaces against declared entries. Nix
 allows manual attrset extensions, so two projections of the same incomplete
 list cannot prove that no export bypassed the construction mechanism.
 
-## 6. Relations, rules, and premises
+## 4. References, relationships, and rules
 
-### 6.1 References and scope
+### 4.1 Canonical references and scope
 
 Derive option and export identities from their exposure paths. Author stable
 identities for rules and behavioral concepts that lack such a path. References
 resolve to those entries; a string that happens to look like a path is not an
 unchecked escape hatch.
 
-A small relation vocabulary covers current needs: `references`, `constrainedBy`,
-`defaultsFrom`, `derivedFrom`, `lowersTo`, `overrides`, `produces`, `mayFailWith`,
-and `guaranteedBy`. Each relation has allowed endpoint kinds and any necessary
-scope binding. Forward and reverse navigation derive from the same edge.
+The first-slice reference union is:
 
-Open families require distinct bindings even when their rendered segments use
-`<name>`:
+```text
+Ref = OptionRef { path: SchemaPath }
+    | CollectionRef { path: SchemaPath }
+    | DomainRef { id: DomainId }
+    | RuleRef { id: RuleId }
+    | CommandRef { name: CommandName }
+    | ArgumentRef { command: CommandName, field: FieldName }
+    | CapabilityRef { coordinate: InventoryCoordinate }
+```
 
-- A task's `requires` names keys in the global service map.
-- A step's `dependsOn` names siblings in that same composite task.
-- A service's primary endpoint names a key in its own endpoint map.
+These alternatives are tagged Nix records: `kind` is `option`, `collection`,
+`domain`, `rule`, `command`, `argument`, or `capability`, respectively; the other
+fields are shown above. `api.optionRef path`, `api.collectionRef path`, and
+`api.ruleRef id` are convenience constructors for these same records. A capability
+coordinate identifies an inventory record or member by family/owner/member as
+appropriate to that family; it must match the imported descriptor. A migrated
+primitive member additionally has the derived endpoint role `wire member`.
+Inventory membership alone does not mean its rich declaration has migrated.
 
-The reference compiler checks these schema scopes. Project validation checks
-actual instance references. Reference links can be cyclic; they do not define
-an execution DAG, phase schedule, or runtime dependency algorithm.
-
-### 6.2 Executable structural rules
-
-For a simple relation, one declaration can generate both validation and its
-explanation:
+Use a path segment that is either a literal string or `{ item = true; }`:
 
 ```nix
-slotWithinBounds = api.betweenInclusive {
+api.optionRef [ "nixfied" "tasks" { item = true; } "invocation" "timeoutMs" ]
+api.collectionRef [ "nixfied" "services" ]
+```
+
+An item marker binds the key of its immediately preceding map. Its identity is
+that map's complete prefix path. Reused invocation declarations acquire distinct
+identities when mounted under tasks, lifecycle operations, or probes; unmounted
+declarations have no `.ref`. Start with absolute checked references. No relative
+reference system or mirrored tree of reference handles is needed for this slice.
+
+Constructors return tagged records; normalized JSON of a validated record is
+sufficient as an internal index key. Dot-joined names and `<name>` are presentation
+only. Collections derive from map domains, capability entries from the descriptor,
+and other identities from their owning declarations. No separate catalogs exist.
+Exposure and guarantee references are added with those staged declaration forms.
+
+For a reference to collection keys, every ancestor map binder required by the
+target must occur identically in the source scope. Retain those bindings and
+discard source-only bindings:
+
+| Source | Target collection | Binding retained |
+| --- | --- | --- |
+| `tasks.<task>.requires` | `services` | None |
+| `tasks.<task>.steps.<step>.dependsOn` | `tasks.<task>.steps` | Same task |
+| `services.<service>.primaryEndpoint` | `services.<service>.endpoints` | Same service |
+
+Reject item markers under scalars, duplicate mounted identities, missing targets,
+wrong endpoint kinds, and targets requiring unavailable binders. Accept cyclic
+documentation links. No binder renaming, cross-instance join, or substitution
+language is needed.
+
+A `references` edge includes its source, target collection, and a required
+`rule = api.ruleRef id` explaining applicability and the enforcing owner.
+It validates schema navigation and scope; it does not install a project check.
+For example, endpoint normalization uses authored `primaryEndpoint` with named
+`endpoints`, derives the primary from `endpoint.endpointId` in the singular form,
+and omits endpoint fields when neither form exists. An unconditional map-membership
+check would change accepted authoring behavior. Link the existing normalization
+and admission rules instead, and show their qualification in the reference.
+
+The first-slice edge grammar is:
+
+```text
+Relation = { kind = "references"; source; target; rule; }
+         | { kind = "constrainedBy"; source; target; }
+         | { kind = "lowersTo"; source; target; }
+         | { kind = "defaultsFrom"; source; target; }
+```
+
+| Kind | Source | Target | Additional requirement |
+| --- | --- | --- | --- |
+| `references` | Option | Collection | Valid collection scope and required `RuleRef` |
+| `constrainedBy` | Option, collection, domain, wire member, command, argument | Rule | Rule exists; edge does not invoke it |
+| `lowersTo` | Option | Migrated wire member | Both declarations exist; conversion remains native |
+| `defaultsFrom` | Optional command argument | Concrete option | Omitted argument's native resolution uses this option; no generated fallback execution |
+
+Per-declaration edges omit `source`, which mounting supplies; top-level edges
+require it. Derive reverse links from the same normalized edge. Reject duplicate
+edges, wrong endpoint kinds, unsupported tags, and references to missing rich
+declarations. The slot fixture links its argument to the option default with `defaultsFrom`.
+That option links to `slot-default-within-bounds` with `constrainedBy`; the rule's
+inputs expose the configured min/max. This rule validates the configured default,
+not the requested CLI slot. Native requested-slot range/placement behavior remains
+independent harness evidence until runtime rule declarations are designed.
+These edges do not assert identical numeric domains or change runtime phase order.
+
+Later relations such as `derivedFrom`, `overrides`, `produces`, `mayFailWith`, and
+`guaranteedBy` need their own endpoint contract and proof before implementation.
+They are intended coverage, not accepted open-ended tags in the first kernel.
+
+### 4.2 Structural and native rule grammar
+
+A complete structural rule has this form:
+
+```nix
+api.betweenInclusive {
   id = "slot-default-within-bounds";
   phase = "validate";
   value = api.optionRef [ "nixfied" "slotPolicy" "default" ];
   lower = api.optionRef [ "nixfied" "slotPolicy" "min" ];
   upper = api.optionRef [ "nixfied" "slotPolicy" "max" ];
   diagnostic = input: "slotPolicy.default must be within the slot range";
-};
+}
 ```
 
-This removes duplicated option associations and comparison logic. The three
-options retain their owning declarations. Preserve existing diagnostics and
-evaluation order unless an explicit contract change authorizes a difference.
-The diagnostic renderer remains owner-specific; the example preserves the
-existing validation message.
+This closed rule resolves scalar configuration references and generates both the
+inclusive predicate and its explanation. It accepts only concrete option paths,
+without item markers. Contract checking requires all three targets to have
+non-null integer domains, rejecting string/Boolean/nullable comparisons. It is
+not a language for iteration over project graphs.
 
-### 6.3 Native rules and derivations
+Native rules use
+`api.nativeRule { id; phase; inputs; explanation; check; diagnostic; }`.
+`check input` returns a Boolean; `diagnostic input` is called only on rejection
+and returns a nonempty string. Wrong callback result types are contract defects,
+not ordinary input rejection.
+The validate-phase input is `{ config; system; }`. Derivation owners pass their
+existing local inputs explicitly, rather than introducing a global registry of
+phase-state types. `runRule` checks the requested phase before evaluating input.
+The existing owner retains its ordered rule list, failure prefix, and evaluation
+position. The same ordered rule list feeds execution and reference generation;
+there is no second handler registry. Declared inputs do not prove which values
+an arbitrary callback actually reads. For service cycles, keep the existing graph algorithm and its prior
+reference checks in that order. Neither documentation nor relationship traversal
+invokes the algorithm or schedules rules.
+
+### 4.3 Native derivations and rejection phases
 
 Graph, executable, and cross-field rules that need native algorithms retain
 those algorithms. Their declarations require phase, relevant inputs/outputs,
@@ -476,7 +641,7 @@ Derived facts such as `servicesRequired` and `operationBindings` keep their
 native Nix algorithms and independent Rust implementations. Their specifications
 remain in `docs/DERIVATION_SPEC.md`, linked by stable identities.
 
-### 6.4 Behavioral premises and evidence
+### 4.4 Behavioral premises and evidence
 
 Cleanup confinement, service reuse, redaction, and failure precedence are owned
 guarantees. Their declarations bind a normative explanation to the enforcing
@@ -495,7 +660,7 @@ runtime tests remain the evidence for important effects. Reuse existing tests
 and executable examples rather than generate a second set of illustrative
 examples that can drift.
 
-### 6.5 Example: task dependencies
+### 4.5 Example: task dependencies
 
 A `requires` entry must lead to the distinct owned facts that:
 
@@ -511,258 +676,9 @@ Reference validity, addressability, derivation, and runtime lifecycle keep their
 own rules. Their connected presentation answers the adopter's question without
 moving all enforcement into one layer.
 
-## 7. Generating model.json
+## 5. Wire contracts and model construction
 
-### 7.1 Authoring and wire contracts are distinct
-
-The meta-framework owns declared wire shapes as well as authoring declarations,
-with explicit lowering relationships between them. They are not one identical
-schema:
-
-| Authoring input | Model construction |
-| --- | --- |
-| Package-valued invocation tool | Realized closure metadata and tool reference. |
-| Singular `endpoint` sugar | Normalized endpoint map and primary endpoint. |
-| Tasks, steps, and service dependencies | Static primitives plus independently verifiable derived facts. |
-| Exported verb descriptions | Nix app metadata; no model field. |
-| `stateRefs` | Serialized current field, explicitly unused during execution lowering. |
-
-This distinguishes transformations, derived values, and Nix-only information.
-Reference relationships explain them; native lowering performs them.
-
-### 7.2 Close the producer boundary
-
-Generate wire constructors and serialization policies from the validated wire
-declarations. Existing lowering supplies their values. Producer construction
-rejects undeclared record members, missing required members, invalid values, and
-incoherent alternatives. Dynamic map keys follow their declared domains.
-Force validation of the entire constructed JSON-compatible value before returning
-it or publishing model bytes. Strictness here applies to the produced data, never
-to the contract graph or implementation callbacks.
-
-Generated Rust decoding must preserve the existing accepted wire inputs,
-including unknown-field, omission, null, and decode-default policies. Equivalent
-producer output does not prove equivalent consumer acceptance. Replacing a
-discriminated record and its coherence checks with a tagged alternative requires
-proof of the same accepted/rejected inputs or an explicit contract change.
-
-A wire field addition must require an explicit construction/lowering decision.
-Neither the Nix constructor nor generated Rust bindings may silently supply
-zero, null, or an ignored field as a universal fallback. Declared defaults remain
-possible only where the existing contract defines them.
-
-Preserve exact emitted names, omission/null behavior, enum encodings, ordering,
-and raw model bytes for behavior-preserving migration fixtures. Because the
-runtime hashes raw bytes, serialization differences need explicit review even
-when decoded values compare equal.
-
-### 7.3 Preserve realization and admission
-
-[emit-model.nix](nix/compiler/emit-model.nix) currently retains `derived.packages`
-as build inputs. The new construction path must preserve that closure realization
-obligation. Documentation generation must not inherit it.
-
-`model.json` remains the only required per-project semantic artifact. The
-existing model-derived `views/docs.md` remains disposable. No contract graph,
-schema descriptor, docs path, callback, secret value, or host-absolute runtime
-placement is added to the model.
-
-Generated wire structure is not a certificate that a model is safe. Rust still
-parses and validates untrusted bytes, checks exact ABI/toolchain and model origin,
-proves references, independently re-derives graph facts, and enforces host and
-phase-specific runtime invariants.
-
-## 8. Rust as a runtime consumer
-
-### 8.1 Generate bindings before the Rust build
-
-The Nix-owned contract compiler emits static Rust source for the facts Rust must
-consume: command grammar and help, field/variant structure, exact vocabulary,
-and convention-derived bindings to native handlers, resolvers, and validated
-domains. Authored definitions contain semantic identities and requirements;
-Rust names, paths, and type mappings belong exclusively to the Rust backend.
-It emits only the necessary executable projection, not the reference graph.
-
-The selected backend emits ordinary Rust source directly from validated Nix
-values. It uses a bounded set of templates/functions for the supported types,
-serialization attributes, grammar forms, and native bindings. Identifier and
-string-literal rendering must be explicit and tested. Native Nix functions are
-not serialized or translated into Rust algorithms.
-
-Rust compilation checks those bindings. For example, a generated command enum
-is matched exhaustively by native dispatch; a missing command handler fails to
-compile. Domain references bind to existing private/fallible constructors,
-newtypes, and validation traits. A generator must not replace `UniqueVec`,
-nonzero values, confined paths, or validated endpoint hosts with weaker raw
-values merely to simplify emission.
-
-Native Rust owns admission, execution, reconciliation, lifecycle, containment,
-state, secrets, output/redaction, and cleanup. Those implementations and their
-independent tests remain ordinary Rust. No Rust documentation extractor or
-build-host runtime invocation is needed.
-
-### 8.2 Commands and environment resolution
-
-Generate parsing facts and help from command declarations. Native handlers retain
-cross-field checks and their typed failures. Framework-injected arguments such
-as model paths and exported task selections are distinct from caller-selectable
-arguments and unstable framework test switches.
-
-The declaration vocabulary must represent existing behavior before replacing
-parsers: repeated flags, missing/invalid values, help precedence, unknown
-arguments, numeric parsing, and error output selection. Current commands do not
-all have the same repetition or help policy. Preserve those differences unless
-a reviewed ABI change deliberately replaces them.
-
-For `run --output`, connect accepted mode vocabulary, repeat handling, the root
-task's `defaultOutput`, and the direct-selection restriction checked after model
-admission and before slot/state side effects.
-For `run --slot`, connect explicit selection, `slotPolicy.default`, inclusive
-bounds, and the selected model placement. Default resolution that needs an
-admitted model remains a runtime operation.
-
-Environment declarations supply names, consuming operations, precedence, empty
-versus unset handling, platform conditions, and explanation. Generated bindings
-must be consumed by native resolvers; a detached list of environment names
-would leave the original duplication intact. Host paths and secret values are
-resolved only at runtime.
-
-### 8.3 Outputs and errors
-
-Generate structural output bindings with exact serialized names, variants,
-units, null/omission policies, and relationships. Runtime implementations supply
-observed values and enforce redaction and write behavior.
-
-A field implemented as arbitrary JSON requires an explicit open contract. Do
-not infer a closed schema from examples. Moving currently dynamic output into a
-closed shape requires review of the actual existing output and failure behavior;
-where the implementation does not enforce closure, document that limitation.
-Fixed public fields assembled with `json!` still need declared contracts. The
-absence of a Rust struct does not make their shape open; declaring every JSON
-value open solely to pass coverage is not an acceptable migration.
-
-Error declarations require code, meaning, applicable phases, detail contract,
-exit behavior, and recovery guidance. Native failure precedence, compound causes,
-redaction, and cleanup continuation remain runtime mechanisms with independent
-proofs. A generated error enum alone cannot enforce those properties.
-
-### 8.4 Installation tooling
-
-The public install/upgrade contracts also become meta-framework declarations.
-The existing installer lives in `nixfied-cli`; upgrade uses Nix-packaged shell.
-Those are delivery mechanisms, distinct from `nixfied-runtime`.
-
-For this RFC, keeping Rust runtime-only means Rust mechanisms consume the
-authored contract and own no reference-authoring or extraction layer. It does
-not silently require rewriting the existing installer in another language.
-Generate its grammar/help bindings at its existing owner, preserve its package
-isolation, and keep installation behavior outside the runtime model.
-
-## 9. Documentation and build delivery
-
-### 9.1 Adopter interface
-
-The first delivery preserves the concrete discovery interface:
-
-```sh
-nix run .#docs
-nix run .#docs -- options
-nix run .#docs -- options nixfied.services
-nix run .#docs -- option 'nixfied.services.<name>.stateRefs'
-nix run .#docs -- topic state
-nix run .#docs -- topic placeholders
-```
-
-`<name>` is a literal canonical schema segment. Namespace listing discovers the
-key before exact lookup. The index progressively exposes listable command,
-function, adapter, environment, output, error, rule, and guarantee categories.
-Their final query syntax belongs to their implementation cutover.
-
-Entries present their explanation, accepted structure, defaults, constraints,
-effects, examples, and typed relationships as applicable. Topics cover authoring
-limits, tasks/services, state, endpoints/placeholders, secrets, adapters, and
-operation/recovery. Topics remain readable without following source-code links.
-
-Unknown names and malformed queries fail nonzero with lookup guidance. Successful
-content goes to stdout; diagnostics go to stderr. No browser or interactive pager
-is required. The app performs static lookup and formatting only.
-
-### 9.2 One content builder, no Rust build dependency
-
-The app, full readable reference, and any public docs package use one Nix-owned
-content builder. Reuse the current option generator's `optionsNix`/`optionsJSON`
-and full renderer. Preserve its canonical paths, visibility filtering, formatted
-Nix expressions, and distinction between absent and null defaults.
-
-Contract declarations are upstream inputs to sibling documentation and
-runtime-binding projections. Building or running the reference must not require
-rustc, Cargo, the runtime binary, project executables, or a compiled project model. The
-realized docs app invokes neither Nix nor Rust. Build-time rendering tools are
-ordinary Nix dependencies and should be measured separately from its runtime
-closure. Existing option-renderer dependencies may transitively include SQLite;
-the excluded dependency is the Rust/runtime build, not every occurrence of that
-library in a rendering toolchain.
-
-### 9.3 Generated source and snapshots
-
-Generate Rust bindings deterministically from Nix values. No import-from-derivation
-is needed: Nix evaluation must not read a generated artifact back to discover
-contract structure. Cargo compiles the generated source as ordinary crate source;
-the baseline adds no per-crate build script or serialized intermediate contract
-for binding generation. No Cargo build script invokes Nix.
-
-Keep generated Rust modules checked in as disposable source projections so
-fixture-backed Cargo and editor workflows continue to use ordinary source.
-Regeneration checks compare them byte-for-byte with fresh generator outputs.
-Nix product builds verify the relevant projection before compiling the checked
-sources; release builds cannot ship stale bindings through an unchecked path.
-
-Only executable contract bytes enter each product's filtered Cargo source.
-Reference prose, reverse links, examples, and provenance are excluded. Conventional
-help or recovery text deliberately compiled into a product is an executable
-projection and can legitimately rebuild it. Preserve separate CLI, runtime/model,
-and test-child source boundaries. Freshness checks consume the relevant generated
-bytes and checked sources, without adding the full framework source or reference
-tree to every product's build dependencies. Prose-only changes outside embedded
-text must preserve product derivation identities as well as generated bytes.
-
-Keep a deterministic human projection of the complete public reference under
-`docs/`, checked for drift, so the existing README/docs upgrade report includes
-explanations authored outside that directory. Exact lookup and this projection
-must agree. Generated outputs are edited through their owning declarations.
-
-### 9.4 Revision binding and evaluation availability
-
-Construct the generic docs app from the framework input supplying `projectApps`.
-Expose the same generic app on the framework's own flake. Packaged provenance
-records that source identity and a revision when available, without assuming Git
-or resolving a default branch at runtime.
-
-Keep provenance outside deterministic checked reference/source snapshots.
-Embedding the changing source revision into those snapshots would create
-regeneration churn and can create self-referential source identities.
-
-There are two separate availability guarantees:
-
-1. **Content independence:** reference generation uses no adopter configuration,
-   model validation, project executable builds, admission, or state.
-2. **Project app selection:** `.#docs` remains usable when the surrounding flake
-   and its project app names can evaluate, even if later model validation fails.
-
-The current flat app attrset merges fixed apps with dynamically named task apps.
-Computing those names can force `surface.verbs`. Putting `docs` on either side of
-that merge cannot make selection survive a failure while computing the names.
-This RFC preserves the current caller interface and states that limit explicitly.
-The framework app selected through an explicit supplying source remains the
-recovery entry point; it must never silently choose a different framework pin.
-A stronger project-app selection guarantee requires a separate integration change.
-
-Contextual `.#help` continues to reflect final project app metadata, including
-custom apps and composition. Generic `.#docs` describes the supplying framework
-contract. The framework reference, compiled project view, and live observations
-retain these distinct scopes.
-
-## 10. Capability inventory and contract ownership
+### 5.1 Capability inventory and ownership
 
 [capability.txt](runtime/crates/nixfied-model/capability.txt) remains authored wire
 inventory whose exact bytes derive `runtimeAbi`. It is an input to the
@@ -801,357 +717,24 @@ guide, and development instructions together. Constructor migrations alone need
 no ABI rotation when admitted behavior and emitted bytes are preserved. Replacing
 the capability inventory's authored authority is outside this RFC.
 
-## 11. Proof strategy
+### 5.2 Separate authoring and wire domains
 
-### 11.1 Establish the architecture with representative cases
+The meta-framework owns declared wire shapes as well as authoring declarations,
+with explicit lowering relationships between them. They are not one identical
+schema:
 
-Before a broad migration, demonstrate all four cases through the same kernel:
-
-1. **Timeout:** one range declaration produces a positive-integer option and an
-   accurate reference; zero is rejected, the default remains 30000, and lowering
-   preserves the field's existing wire domain.
-2. **Slot bounds:** one inclusive relation connects three real options and
-   supplies the Nix check; independent boundary cases cover both endpoints.
-3. **Service cycles:** an owned native rule keeps its phase and diagnostic
-   behavior; metadata projection never evaluates its algorithm or a project.
-4. **`run --slot`:** a generated native parser binds to Rust resolution, while
-   docs links the Nix default, bounds, and placement; independent runtime tests
-   prove the omitted and explicit selection behavior.
-
-These cases exercise structural generation, relationships, native algorithms,
-and cross-language consumption. Passing only an option-rendering example is
-insufficient to establish the proposed architecture.
-
-Kernel prototypes are private proof artifacts until their participating
-production owner cuts over. They must not introduce a second live parser. Use
-the complete command grammar as the production cutover boundary; the slot case
-can exercise the generated/native interface in a focused fixture beforehand.
-
-### 11.2 Required evidence
-
-| Guarantee | Proof |
+| Authoring input | Model construction |
 | --- | --- |
-| Complete declared entry | Reject missing/empty required information and invalid family alternatives, while accepting genuine optionality. |
-| Real public coverage | Audit actual generated module, export, app, command, result, and error surfaces; include a bypass negative. |
-| Relationship integrity | Reject duplicate/dangling/wrong-kind references and invalid schema scopes; verify reverse links. |
-| Shared structural facts | Change an accepted range or enum in its owner and verify every affected projection changes together. |
-| Phase preservation | Existing native checks retain accepted/rejected behavior, order, diagnostics, and side-effect boundary. |
-| Model construction | Reject missing/extra fields and incoherent forms; compare preserved model bytes and closure dependencies. |
-| Independent admission | Rust preserves accepted-input behavior and rejects malformed wire values, mismatched ABI, forged derived facts, unresolved references, and invalid host facts. Cover omitted defaults, null versus absence, unknown fields, discriminator coherence, and map-key domains. |
-| Safe generated bindings | Compile failures expose missing handlers/lowering decisions; native newtype construction and deserialization remain fail closed. |
-| Parser fidelity | Characterize repetitions, help precedence, numeric edge cases, missing values, unknown flags, and error projections per command. |
-| Behavioral truth | Independent tests cover effects such as state identity, placeholders, output restrictions, cleanup, and failure precedence. |
-| Readable reference | Adopter-question cases cover choices, limitations, relationships, and recovery, including `stateRefs`. |
-| Pinning and independence | Distinguishable sources produce matching provenance/content; poison project/model/runtime dependencies and test the stated selection boundary. |
-| Build direction | Docs has no Rust/project build dependency; raw Cargo uses checked bindings; product builds reject stale bindings; no IFD or Nix-in-Cargo path. |
-| Distribution consistency | Lookup, full reference, packaged content, and upgrade-visible snapshots agree; non-embedded prose edits preserve executable projection bytes and runtime/model/CLI derivation identities, including freshness-check dependencies. |
+| Package-valued invocation tool | Realized closure metadata and tool reference. |
+| Singular `endpoint` sugar | Normalized endpoint map and primary endpoint. |
+| Tasks, steps, and service dependencies | Static primitives plus independently verifiable derived facts. |
+| Exported verb descriptions | Nix app metadata; no model field. |
+| `stateRefs` | Serialized current field, explicitly unused during execution lowering. |
 
-Generated producer and consumer agreeing with one another is not independent
-proof. Retain fixed vectors and mutation negatives authored from the normative
-contract, especially for DERIVE-1. Binding/evidence references alone do not prove
-coverage or correctness of a native algorithm.
+This distinguishes transformations, derived values, and Nix-only information.
+Reference relationships explain them; native lowering performs them.
 
-Follow [DEVELOPMENT.md](docs/DEVELOPMENT.md): focused Nix vectors and generation
-checks first, relevant Rust tests next, then affected models and adopter gates.
-Use `.#test` for the fixture-backed Cargo floor and `.#ci -- --dirty` for the
-cross-layer cutover. Report unverified platforms, release builds, and integration
-coverage explicitly.
-
-## 12. Delivery sequence
-
-Each stage replaces the participating representation atomically. Generated and
-hand-authored implementations of the same fact must not become permanent dual
-paths. Earlier stages can ship value while later public categories remain
-explicitly incomplete.
-
-1. **Prove the kernel.** Implement the interfaces and first assignment in section
-   14, including the four representative cases, establish metadata/project separation and
-   generated-source freshness, and measure build dependencies and LOC.
-2. **Deliver discovery.** Migrate the necessary option declarations, correct
-   inaccurate explanations, reuse the existing option renderer, and ship docs,
-   topics, pinning, namespace rejection, help/scaffold pointers, and acceptance
-   fixtures as one Nix-only public-surface change.
-3. **Complete Nix coverage.** Move public exposures and rule declarations into
-   `nix/meta/definitions.nix`, retaining their native enforcing phases. Cover adapters
-   and products, and enforce actual-surface coverage without a permanent omissions allowlist.
-4. **Generate model construction and bindings.** Bind wire declarations to the
-   authored capability inventory; cut over Nix constructors and Rust structural
-   bindings together with byte-equivalence and independent admission proofs.
-5. **Complete command/context/result coverage.** Cut over native parser/help and
-   resolver bindings, output/error projections, installation tooling contracts,
-   and remaining guarantee links. Preserve or explicitly revise existing ABI
-   behavior; keep every active public surface accounted for.
-
-The prototype of a category is not completion of that category. The full RFC is
-complete only when every supported public declaration is covered, all shipped
-projections are checked, and the appropriate independent proofs pass.
-
-## 13. Complexity, alternatives, and acceptance
-
-### 13.1 Cost envelope
-
-Planning estimates for net additional implementation/test LOC, excluding moved
-code, authored prose, and generated files:
-
-| Work | Estimated LOC |
-| --- | ---: |
-| Kernel, family constructors, reference validation, projections | 400–900 |
-| Nix declaration migration, docs delivery, export integration | 800–1,600 |
-| Model constructors and generated Rust structure/parser/resolver/output bindings | 1,400–3,200 |
-| Additional focused cross-layer proof infrastructure and cases | 700–1,500 |
-| Total | 3,300–7,200 |
-
-Expect further authored explanations and relationships, approximately 1,000–3,000
-lines as an initial allowance. Generated Rust/reference size is not independently
-maintained authority, but its readability and review cost still matter. The
-native-binding backend is the least certain estimate; re-estimate after the four
-architecture cases. This is a planning range, not a measured implementation.
-
-Recurring complexity consists of declaration forms, the existing inventory
-reader, projection backends, scope validation, and generation checks. Runtime
-algorithms gain no schema interpreter or reference lookup overhead. Cold docs
-rendering and executable rebuild behavior must be measured rather than assumed.
-
-### 13.2 Alternatives
-
-#### Direct Nix emission versus a Rust build-script generator
-
-Direct Nix emission is the baseline because the current structural forms fit a
-bounded renderer and it introduces fewer build mechanisms. A Rust build script
-could instead consume a generated contract file and emit the same Rust source.
-Both approaches need a code generator; changing its implementation language does
-not remove the type mapping, grammar, or native-binding work.
-
-| Concern | Direct Nix emission | Rust build-script generation |
-| --- | --- | --- |
-| Generator input | Validated Nix values. | Serialized contract plus a strict decoder. |
-| Checked artifact for Cargo workflows | Generated Rust source. | Generated contract input; Rust source produced during the build. |
-| Freshness obligation | Compare Rust source with fresh Nix output. | Compare contract input with fresh Nix output; generation cannot detect a stale input by itself. |
-| Build integration | Existing source compilation and projection checks. | Build scripts, build dependencies, generated includes, and input change tracking. |
-| Docs dependency | Independent of Rust. | Also independent of Rust when docs consumes the Nix declarations directly. |
-| Potential advantage | Smaller overall build path. | Rust-native tooling for a sufficiently complex emitter. |
-
-The existing model/runtime/CLI crates have no binding-generation build scripts.
-The CLI has a dependency-free package and separate lockfile. A shared Rust
-generator would need build-dependency, lockfile, and filtered-workspace changes;
-build-only dependencies need not enter the installed binary, but they remain
-build cost. Copying a generator into each crate would introduce duplicate
-implementation ownership.
-
-A build-script design would keep Nix as contract authority. Its intermediate
-file would be a private build input, not an additional runtime seam. It would
-need a precise execution-contract projection, rather than a project's
-`model.json` or human-readable option metadata. Generated files belong in Cargo's
-`OUT_DIR`, with explicit input tracking and target-aware generation. See the
-[Cargo code-generation example](https://doc.rust-lang.org/cargo/reference/build-script-examples.html#code-generation).
-
-Revisit the backend only if the representative cases demonstrate substantial
-Rust-syntax, transformation, or diagnostic complexity in the Nix renderer.
-Evaluate maintained generator code, format handling, packaging, and tests together;
-the length of a `build.rs` entry point is not a useful total LOC comparison.
-Choosing a Rust emitter and choosing to run it from Cargo are separate decisions:
-a standalone generator could also produce checked source before Cargo runs.
-These alternatives are not additional implementations to maintain alongside the
-selected backend. No generator comparison has yet been prototyped or benchmarked.
-
-#### Other alternatives
-
-- Packaging current Markdown improves access but leaves public construction and
-  behavioral relationships unenforced.
-- A separate documentation manifest duplicates exposure and parsing facts unless
-  it becomes the actual owning declaration.
-- Rust documentation extraction retains Rust as a reference-authoring source and
-  adds a compiler/extraction dependency to reference delivery. This design uses
-  Nix-owned declarations and static runtime bindings instead.
-- A universal language for Nix evaluation, graph algorithms, and runtime behavior
-  would expand the kernel beyond its purpose and undermine native proof boundaries.
-- Generating `model.json` directly from the static framework graph would confuse
-  available authoring choices with one resolved project's executable facts.
-
-### 13.3 Acceptance decision
-
-Adopt the private contract meta-framework as the construction discipline for
-Nixfied's supported public surface. Generate documentation, executable structural
-bindings, and the model producer from its owned declarations. Keep native Nix
-algorithms and Rust admission/execution accountable to that contract.
-
-Section 14 specifies the initial domain interfaces, scoped references,
-generated/native Rust boundary, and deterministic source-generation workflow.
-Before broad migration, prove them through the four representative cases and
-measure their cost. Those proofs do not reopen model seams, introduce a runtime
-meta-framework, or change the authored capability authority.
-
-Success means an adopter can discover a supported capability through `.#docs`,
-understand its accepted inputs, defaults, relationships, effects, and failures,
-and use the same supplying framework input to compile an independently admitted
-`model.json` without reconstructing the contract from implementation source.
-
-## 14. Engineering interfaces and first handoff
-
-This section settles the first implementation's private interfaces. Constructor
-names may change together during implementation; ownership, rejection phases,
-and the following acceptance cases may not be weakened. These are ordinary
-checked Nix records, not a new evaluator or an opaque type system.
-
-### 14.1 Kernel entry points and evaluation boundaries
-
-```text
-compileOptions { declarations; }
-  -> { module; entries; }
-checkContract { entries; rules; exposures; wire; commands; inventory; }
-  -> CheckedContract
-resolveRef checkedContract.index reference -> Entry
-runRule { rule; phase; input; }
-  -> { kind = "pass"; } | { kind = "reject"; ruleId; message; }
-renderReference checkedContract -> reference text/index
-emitRust checkedContract -> product-keyed trees of source strings
-constructWire checkedRecord values -> checked JSON-compatible value
-```
-
-Constructors first apply the defaults in section 5.2 and produce complete
-normalized records. Validate defaults against their domains at the owning
-boundary: literal values when their domain is available, contextual values during
-native module evaluation. Static extraction never invokes a contextual resolver.
-Metadata failures throw deterministic, owner/path-qualified Nix errors.
-`CheckedContract` means a validated attrset projection. It is not a security or
-opacity boundary. `checkContract` forces required static fields, variant shapes,
-identities, relations, and inventory coordinates. It checks that native callbacks
-are functions, but never calls them or forces project values. Do not `deepSeq`
-the entire declaration graph. Native callback exceptions remain native errors;
-there is no catch-all conversion into an ordinary rejected rule.
-
-`compileOptions` walks a nested attribute tree whose leaves are tagged option
-declarations. Structured submodule and map domains retain their nested declaration
-trees. The supplied tree starts at the full option root; the collector carries
-mount paths internally, identically for native placement and metadata. One
-traversal produces both native `mkOption` declarations and mounted
-metadata. The returned `module` is a delayed ordinary Nix module receiving its
-usual module arguments; `entries` does not need that context. Collect each owning
-meta-definition bundle once and derive both projections from that collection.
-Native module entry points consume the generated module projection.
-Do not store metadata in extra `mkOption` fields, add an `_module` side channel,
-or maintain a second registration tree.
-
-Continue using `lib.evalModules` and `nixosOptionsDoc`. Join mounted metadata to
-evaluated option records by canonical path; preserve native merging, visibility,
-submodule traversal, default rendering, and `apply`. Coverage compares against
-actual evaluated option records and actual public export names, including raw
-option/export bypass negatives. Comparing two projections of the declaration
-list is insufficient. Enumerating exports must not force package/program values.
-Project-app fixtures audit framework apps plus declared verbs, excluding arbitrary
-adopter-added apps. Prototype declarations never count as public coverage.
-
-### 14.2 Option and rule declarations
-
-The concise authored option envelope is (defaults are defined in section 5.2):
-
-```nix
-api.option {
-  domain = api.integer { min = 1; }; # omitted bound means no additional bound
-  default = 30000;
-  explanation = "Maximum invocation duration before cancellation.";
-  unit = "milliseconds";
-}
-```
-
-`integer` validates integer bounds and `min <= max`; its native representation
-still determines representable values. The normalized presence alternatives are
-`api.required`, `api.defaultValue value`, and
-`api.defaultFrom { expression; resolve; }`. The latter carries static display text
-and a context callback evaluated only by the native module. It produces the
-existing `defaultText = lib.literalExpression expression`. A required option has
-no generated default; ordinary lazy undefined-option behavior is preserved.
-A literal `null` default is not absence. The optional `moduleArgs` accepts native
-`apply`, `example`, `visible`, `internal`, and `readOnly`. It rejects overrides of
-`type`, `default`, `defaultText`, and `description`, and rejects unknown keys.
-Existing uses of `apply`, including source-identity conversion, remain native.
-
-Implement domains only as they are exercised: native primitives, integer bounds,
-enums, lists, maps, submodules/products, and explicit alternatives. A native
-predicate needs an explanation and a direct callback, not a handler-name lookup.
-There is no arbitrary source-expression escape hatch or general constraint DSL.
-
-A complete structural rule has this form:
-
-```nix
-api.betweenInclusive {
-  id = "slot-default-within-bounds";
-  phase = "validate";
-  value = api.optionRef [ "nixfied" "slotPolicy" "default" ];
-  lower = api.optionRef [ "nixfied" "slotPolicy" "min" ];
-  upper = api.optionRef [ "nixfied" "slotPolicy" "max" ];
-  diagnostic = input: "slotPolicy.default must be within the slot range";
-}
-```
-
-This closed rule resolves scalar configuration references and generates both the
-inclusive predicate and its explanation. It accepts only concrete option paths,
-without item markers. Contract checking requires all three targets to have
-non-null integer domains, rejecting string/Boolean/nullable comparisons. It is
-not a language for iteration over project graphs.
-
-Native rules use
-`api.nativeRule { id; phase; inputs; explanation; check; diagnostic; }`.
-`check input` returns a Boolean; `diagnostic input` is called only on rejection
-and returns a nonempty string. Wrong callback result types are contract defects,
-not ordinary input rejection.
-The validate-phase input is `{ config; system; }`. Derivation owners pass their
-existing local inputs explicitly, rather than introducing a global registry of
-phase-state types. `runRule` checks the requested phase before evaluating input.
-The existing owner retains its ordered rule list, failure prefix, and evaluation
-position. The same ordered rule list feeds execution and reference generation;
-there is no second handler registry. Declared inputs do not prove which values
-an arbitrary callback actually reads. For service cycles, keep the existing graph algorithm and its prior
-reference checks in that order. Neither documentation nor relationship traversal
-invokes the algorithm or schedules rules.
-
-### 14.3 Canonical identities and scoped relationships
-
-Use a path segment that is either a literal string or `{ item = true; }`:
-
-```nix
-api.optionRef [ "nixfied" "tasks" { item = true; } "invocation" "timeoutMs" ]
-api.collectionRef [ "nixfied" "services" ]
-```
-
-An item marker binds the key of its immediately preceding map. Its identity is
-that map's complete prefix path. Reused invocation declarations acquire distinct
-identities when mounted under tasks, lifecycle operations, or probes; unmounted
-declarations have no `.ref`. Start with absolute checked references. No relative
-reference system or mirrored tree of reference handles is needed for this slice.
-
-The initial reference alternatives are option/path, collection/path,
-exposure/path, rule/stable-id, guarantee/stable-id, and capability/inventory
-coordinates. Constructors return tagged records; normalized JSON of the validated
-record is sufficient as an internal index key. Dot-joined names and `<name>` are
-presentation only. Collection entries derive from map domains. Inventory entries
-derive from the authored descriptor. Neither gets a second authored catalog.
-
-For a reference to collection keys, every ancestor map binder required by the
-target must occur identically in the source scope. Retain those bindings and
-discard source-only bindings:
-
-| Source | Target collection | Binding retained |
-| --- | --- | --- |
-| `tasks.<task>.requires` | `services` | None |
-| `tasks.<task>.steps.<step>.dependsOn` | `tasks.<task>.steps` | Same task |
-| `services.<service>.primaryEndpoint` | `services.<service>.endpoints` | Same service |
-
-Reject item markers under scalars, duplicate mounted identities, missing targets,
-wrong endpoint kinds, and targets requiring unavailable binders. Accept cyclic
-documentation links. No binder renaming, cross-instance join, or substitution
-language is needed.
-
-A `references` edge includes its source, target collection, and a required
-`rule = api.ruleRef id` explaining applicability and the enforcing owner.
-It validates schema navigation and scope; it does not install a project check.
-For example, endpoint normalization uses authored `primaryEndpoint` with named
-`endpoints`, derives the primary from `endpoint.endpointId` in the singular form,
-and omits endpoint fields when neither form exists. An unconditional map-membership
-check would change accepted authoring behavior. Link the existing normalization
-and admission rules instead, and show their qualification in the reference.
-
-### 14.4 Complete wire records and native Rust bindings
+### 5.3 Wire grammar and Rust projection conventions
 
 Wire declarations bind inventory members by coordinates, for example
 `{ family = "primitive"; owner = "Invocation"; member = "timeoutMs"; }`.
@@ -1165,31 +748,115 @@ override them.
 The normalized generator input is
 `api.wireRecord { inventory; unknownFields; fields; }`. `fields` is an ordered
 list of records with `member`, `value`, `policy`, `producer`, `explanation`, and
-`relations`. Authored input omits fields covered by the defaults in section 5.2:
+`relations`. Concise declarations normalize each field with
+`policy = { kind = "requiredNonNull"; }`,
+`producer = { kind = "supplied"; }`, and `relations = [ ];`, plus record-level
+`unknownFields = "reject"`. These are the only first-slice policy alternatives.
 
+The complete first-slice value-shape grammar is:
+
+```text
+Shape = { kind = "text"; }
+      | { kind = "unsigned"; bits = 32 | 64; nonzero = Bool; }
+      | { kind = "list"; element = Shape; unique = Bool; }
+      | { kind = "map"; value = Shape; }
+      | { kind = "domain"; id = DomainId; }
+      | { kind = "enum"; inventory = { family = "enum"; owner = Name; }; }
+NativeDomain = { wire = Shape; explanation = NonemptyString; check = CallbackOrNull; }
+```
+
+`nonzero` and `unique` default to false; `check` defaults to null. Maps have string
+keys in this slice. `domains` is the owning declaration attrset: its keys provide
+semantic identities without repeating names inside values. Native-domain wire
+shapes cannot contain domain references in this slice, avoiding recursive expansion
+machinery. A supplied `check value` runs after shape validation and must return a
+Boolean; exceptions or other results are contract defects. Static extraction only
+checks callability. The Rust backend binds the corresponding native type by the
+convention below, retaining independent constructor/deserializer tests.
+
+For this complete example, the owning domains are:
+
+```nix
+domains = {
+  ClosureId = {
+    wire = { kind = "text"; };
+    explanation = "Reference to a model closure.";
+  };
+  CodebaseId = {
+    wire = { kind = "text"; };
+    explanation = "Reference to a model codebase.";
+  };
+};
+```
+
+Both are currently nominal string wrappers, not lexically refined identifiers.
+Preserve acceptance of arbitrary strings at decoding; native admission resolves
+the references. A unique list rejects duplicates but permits emptiness. Ordinary
+lists likewise gain no implicit nonempty constraint. Stronger authoring or
+admission checks retain their existing phases.
 
 ```nix
 api.wireRecord {
   inventory = { family = "primitive"; owner = "Invocation"; };
   fields = [
     {
+      member = "tools";
+      value = {
+        kind = "list";
+        unique = true;
+        element = { kind = "domain"; id = "ClosureId"; };
+      };
+      explanation = "Ordered, distinct closure references available to the invocation.";
+    }
+    {
+      member = "run";
+      value = { kind = "list"; element = { kind = "text"; }; };
+      explanation = "Declared invocation argument vector.";
+    }
+    {
+      member = "executable";
+      value = { kind = "text"; };
+      explanation = "Executable selected by native Nix lowering.";
+    }
+    {
+      member = "env";
+      value = { kind = "map"; value = { kind = "text"; }; };
+      explanation = "Declared environment entries for the invocation.";
+    }
+    {
+      member = "codebaseId";
+      value = { kind = "domain"; id = "CodebaseId"; };
+      explanation = "Codebase selected for working-directory resolution.";
+    }
+    {
+      member = "cwd";
+      value = { kind = "text"; };
+      explanation = "Working directory relative to the selected codebase.";
+    }
+    {
+      member = "stdin";
+      value = {
+        kind = "enum";
+        inventory = { family = "enum"; owner = "StdinPolicy"; };
+      };
+      explanation = "Invocation standard-input policy.";
+    }
+    {
       member = "timeoutMs";
       value = { kind = "unsigned"; bits = 64; nonzero = true; };
       explanation = "Maximum invocation duration before cancellation.";
     }
-    # Excerpt only: the real declaration supplies all eight fields in wire order.
   ];
 }
 ```
 
-The excerpt alone fails member completeness. Field order determines emitted Rust
-and serialization order; inventory membership checking does not sort that list.
-Built-in value shapes determine Rust types, so this numeric shape yields
-`NonZeroU64` without a second authored type choice. Native refined leaves reference their owning semantic domain declaration; the
-backend derives the native type binding from that identity. They retain their
-existing construction/admission proofs. Neither inline shapes nor domain
-references introduce a separate Rust type registry. `supplied` requires
-an explicit caller value and never borrows a decoder default.
+Field order determines emitted Rust and serialization order; inventory membership
+checking does not sort the list. Built-in shapes determine Rust types: text maps
+to `String`, lists to `Vec<T>`, unique lists to existing `UniqueVec<T>`, maps to
+`BTreeMap<String, T>`, and nonzero unsigned 64-bit integers to `NonZeroU64`.
+Inventory enums generate their named type and vocabulary. Native domains follow
+the naming convention below. No declaration chooses a Rust type.
+`supplied` requires an explicit caller value and never borrows a decoder default.
 
 The timeout prototype generates the complete eight-field record, preserving
 current wire names, derives, ordering, and unknown-field rejection. Its generated
@@ -1251,7 +918,10 @@ signatures and required traits. Domain declarations contain no Rust source,
 paths, type overrides, or per-entry naming exceptions. Backend changes are the
 single place to revise these conventions; runtime implementations follow them.
 
-Wire policy is a closed alternative, not independent Boolean switches:
+Wire policy is a closed alternative, not independent Boolean switches. The
+first slice implements only `requiredNonNull`/`supplied` above. Subsequent wire
+migrations must specify exact tags and fixtures for the following required
+behaviors before enabling them; this table is not an unspecified policy parser:
 
 | Policy | Rust behavior |
 | --- | --- |
@@ -1269,7 +939,78 @@ Nix producer to invent values: every constructor field needs an explicit lowerin
 value or producer policy. Test preserved Nix model bytes separately from Rust
 round-trip bytes and accepted-input behavior.
 
-### 14.5 Generated command syntax and native resolution
+### 5.4 Producer construction boundary
+
+Generate wire constructors and serialization policies from the validated wire
+declarations. Existing lowering supplies their values. Producer construction
+rejects undeclared record members, missing required members, invalid values, and
+incoherent alternatives. Dynamic map keys follow their declared domains.
+Force validation of the entire constructed JSON-compatible value before returning
+it or publishing model bytes. Strictness here applies to the produced data, never
+to the contract graph or implementation callbacks.
+
+Generated Rust decoding must preserve the existing accepted wire inputs,
+including unknown-field, omission, null, and decode-default policies. Equivalent
+producer output does not prove equivalent consumer acceptance. Replacing a
+discriminated record and its coherence checks with a tagged alternative requires
+proof of the same accepted/rejected inputs or an explicit contract change.
+
+A wire field addition must require an explicit construction/lowering decision.
+Neither the Nix constructor nor generated Rust bindings may silently supply
+zero, null, or an ignored field as a universal fallback. Declared defaults remain
+possible only where the existing contract defines them.
+
+Preserve exact emitted names, omission/null behavior, enum encodings, ordering,
+and raw model bytes for behavior-preserving migration fixtures. Because the
+runtime hashes raw bytes, serialization differences need explicit review even
+when decoded values compare equal.
+
+### 5.5 Realization and independent admission
+
+[emit-model.nix](nix/compiler/emit-model.nix) currently retains `derived.packages`
+as build inputs. The new construction path must preserve that closure realization
+obligation. Documentation generation must not inherit it.
+
+`model.json` remains the only required per-project semantic artifact. The
+existing model-derived `views/docs.md` remains disposable. No contract graph,
+schema descriptor, docs path, callback, secret value, or host-absolute runtime
+placement is added to the model.
+
+Generated wire structure is not a certificate that a model is safe. Rust still
+parses and validates untrusted bytes, checks exact ABI/toolchain and model origin,
+proves references, independently re-derives graph facts, and enforces host and
+phase-specific runtime invariants.
+
+## 6. Commands and native runtime interfaces
+
+### 6.1 Static bindings and runtime ownership
+
+The Nix-owned contract compiler emits static Rust source for the facts Rust must
+consume: command grammar and help, field/variant structure, exact vocabulary,
+and convention-derived bindings to native handlers, resolvers, and validated
+domains. Authored definitions contain semantic identities and requirements;
+Rust names, paths, and type mappings belong exclusively to the Rust backend.
+It emits only the necessary executable projection, not the reference graph.
+
+The selected backend emits ordinary Rust source directly from validated Nix
+values. It uses a bounded set of templates/functions for the supported types,
+serialization attributes, grammar forms, and native bindings. Identifier and
+string-literal rendering must be explicit and tested. Native Nix functions are
+not serialized or translated into Rust algorithms.
+
+Rust compilation checks those bindings. For example, a generated command enum
+is matched exhaustively by native dispatch; a missing command handler fails to
+compile. Domain references bind to existing private/fallible constructors,
+newtypes, and validation traits. A generator must not replace `UniqueVec`,
+nonzero values, confined paths, or validated endpoint hosts with weaker raw
+values merely to simplify emission.
+
+Native Rust owns admission, execution, reconciliation, lifecycle, containment,
+state, secrets, output/redaction, and cleanup. Those implementations and their
+independent tests remain ordinary Rust. No Rust documentation extractor or
+build-host runtime invocation is needed.
+
+### 6.2 Command grammar and native interfaces
 
 The first probe uses this complete private grammar envelope:
 
@@ -1290,6 +1031,18 @@ api.command {
   unknownArgument = { kind = "native"; };
 }
 ```
+
+The first command constructor accepts only value-taking long flags with optional
+request fields, `help = { kind = "none"; }`, native lexical parsing, and native
+unknown-argument handling. `arguments` is ordered; tokens and field identities
+must each be unique. The supported repetition alternatives are
+`{ kind = "reject"; }` (default) and `{ kind = "lastWins"; }`.
+Reject repetition calls the conventional command module's native
+`duplicate_argument(flag: &str) -> RuntimeError` before consuming a repeated
+flag's value. Require that hook only for commands using rejection; it owns the
+diagnostic and error classification. Last-wins parsing preserves existing order.
+Other flag forms, help policies, and repetition alternatives require their
+staged grammar extensions; the first parser must reject unsupported forms.
 
 This emits `SlotProbeArgs { slot: Option<u32> }` and
 `parse_slot_probe(args: &[String]) -> Result<SlotProbeArgs, RuntimeError>`, both
@@ -1345,7 +1098,116 @@ checks structural bindings, not whether every model field actually influences
 execution. The latter remains the deferred parity gap in
 [known-gaps.md](docs/known-gaps.md).
 
-### 14.6 Generation, freshness, and dependency isolation
+### 6.3 Full command and environment resolution
+
+Generate parsing facts and help from command declarations. Native handlers retain
+cross-field checks and their typed failures. Framework-injected arguments such
+as model paths and exported task selections are distinct from caller-selectable
+arguments and unstable framework test switches.
+
+The declaration vocabulary must represent existing behavior before replacing
+parsers: repeated flags, missing/invalid values, help precedence, unknown
+arguments, numeric parsing, and error output selection. Current commands do not
+all have the same repetition or help policy. Preserve those differences unless
+a reviewed ABI change deliberately replaces them.
+
+For `run --output`, connect accepted mode vocabulary, repeat handling, the root
+task's `defaultOutput`, and the direct-selection restriction checked after model
+admission and before slot/state side effects.
+For `run --slot`, connect explicit selection, `slotPolicy.default`, inclusive
+bounds, and the selected model placement. Default resolution that needs an
+admitted model remains a runtime operation.
+
+Environment declarations supply names, consuming operations, precedence, empty
+versus unset handling, platform conditions, and explanation. Generated bindings
+must be consumed by native resolvers; a detached list of environment names
+would leave the original duplication intact. Host paths and secret values are
+resolved only at runtime.
+
+### 6.4 Outputs and errors
+
+Generate structural output bindings with exact serialized names, variants,
+units, null/omission policies, and relationships. Runtime implementations supply
+observed values and enforce redaction and write behavior.
+
+A field implemented as arbitrary JSON requires an explicit open contract. Do
+not infer a closed schema from examples. Moving currently dynamic output into a
+closed shape requires review of the actual existing output and failure behavior;
+where the implementation does not enforce closure, document that limitation.
+Fixed public fields assembled with `json!` still need declared contracts. The
+absence of a Rust struct does not make their shape open; declaring every JSON
+value open solely to pass coverage is not an acceptable migration.
+
+Error declarations require code, meaning, applicable phases, detail contract,
+exit behavior, and recovery guidance. Native failure precedence, compound causes,
+redaction, and cleanup continuation remain runtime mechanisms with independent
+proofs. A generated error enum alone cannot enforce those properties.
+
+### 6.5 Installation tooling
+
+The public install/upgrade contracts also become meta-framework declarations.
+The existing installer lives in `nixfied-cli`; upgrade uses Nix-packaged shell.
+Those are delivery mechanisms, distinct from `nixfied-runtime`.
+
+For this RFC, keeping Rust runtime-only means Rust mechanisms consume the
+authored contract and own no reference-authoring or extraction layer. It does
+not silently require rewriting the existing installer in another language.
+Generate its grammar/help bindings at its existing owner, preserve its package
+isolation, and keep installation behavior outside the runtime model.
+
+## 7. Documentation and build workflow
+
+### 7.1 Adopter documentation interface
+
+The first delivery preserves the concrete discovery interface:
+
+```sh
+nix run .#docs
+nix run .#docs -- options
+nix run .#docs -- options nixfied.services
+nix run .#docs -- option 'nixfied.services.<name>.stateRefs'
+nix run .#docs -- topic state
+nix run .#docs -- topic placeholders
+```
+
+`<name>` is a literal canonical schema segment. Namespace listing discovers the
+key before exact lookup. The index progressively exposes listable command,
+function, adapter, environment, output, error, rule, and guarantee categories.
+Their final query syntax belongs to their implementation cutover.
+
+Entries present their explanation, accepted structure, defaults, constraints,
+effects, examples, and typed relationships as applicable. Topics cover authoring
+limits, tasks/services, state, endpoints/placeholders, secrets, adapters, and
+operation/recovery. Topics remain readable without following source-code links.
+
+Unknown names and malformed queries fail nonzero with lookup guidance. Successful
+content goes to stdout; diagnostics go to stderr. No browser or interactive pager
+is required. The app performs static lookup and formatting only.
+
+### 7.2 Reference rendering and dependency boundary
+
+The app, full readable reference, and any public docs package use one Nix-owned
+content builder. Reuse the current option generator's `optionsNix`/`optionsJSON`
+and full renderer. Preserve its canonical paths, visibility filtering, formatted
+Nix expressions, and distinction between absent and null defaults.
+
+Contract declarations are upstream inputs to sibling documentation and
+runtime-binding projections. Building or running the reference must not require
+rustc, Cargo, the runtime binary, project executables, or a compiled project model. The
+realized docs app invokes neither Nix nor Rust. Build-time rendering tools are
+ordinary Nix dependencies and should be measured separately from its runtime
+closure. Existing option-renderer dependencies may transitively include SQLite;
+the excluded dependency is the Rust/runtime build, not every occurrence of that
+library in a rendering toolchain.
+
+### 7.3 Generation, snapshots, and freshness
+
+Generated Rust is checked-in ordinary source. Nix evaluation never reads generated
+artifacts back to discover contract structure (no import-from-derivation). The
+baseline has no per-crate binding build scripts or serialized intermediate
+contract, and Cargo never invokes Nix. Product and release builds reject stale
+checked bindings. Conventional help/recovery text embedded in executable output
+may legitimately rebuild its product; non-embedded reference prose must not.
 
 Provide one packaged development tool defined in `nix/meta/regenerate.nix`
 using `pkgs.writeShellApplication`, following the existing development tooling.
@@ -1412,17 +1274,78 @@ non-embedded prose changes preserve all product identities, and runtime-only or
 CLI-only projection changes preserve the other product. This includes freshness
 check dependencies, which can otherwise recreate broad rebuilds.
 
-### 14.7 First engineer assignment and completion gate
+Keep a deterministic human projection of the complete public reference under
+`docs/`, checked for drift, so the existing README/docs upgrade report includes
+explanations authored outside that directory. Exact lookup and this projection
+must agree. Generated outputs are edited through their owning declarations.
 
-Implement the kernel and four architecture probes from section 11.1. Use
+### 7.4 Revision binding and evaluation availability
+
+Construct the generic docs app from the framework input supplying `projectApps`.
+Expose the same generic app on the framework's own flake. Packaged provenance
+records that source identity and a revision when available, without assuming Git
+or resolving a default branch at runtime.
+
+Keep provenance outside deterministic checked reference/source snapshots.
+Embedding the changing source revision into those snapshots would create
+regeneration churn and can create self-referential source identities.
+
+There are two separate availability guarantees:
+
+1. **Content independence:** reference generation uses no adopter configuration,
+   model validation, project executable builds, admission, or state.
+2. **Project app selection:** `.#docs` remains usable when the surrounding flake
+   and its project app names can evaluate, even if later model validation fails.
+
+The current flat app attrset merges fixed apps with dynamically named task apps.
+Computing those names can force `surface.verbs`. Putting `docs` on either side of
+that merge cannot make selection survive a failure while computing the names.
+This RFC preserves the current caller interface and states that limit explicitly.
+The framework app selected through an explicit supplying source remains the
+recovery entry point; it must never silently choose a different framework pin.
+A stronger project-app selection guarantee requires a separate integration change.
+
+Contextual `.#help` continues to reflect final project app metadata, including
+custom apps and composition. Generic `.#docs` describes the supplying framework
+contract. The framework reference, compiled project view, and live observations
+retain these distinct scopes.
+
+## 8. Proof and engineering handoff
+
+### 8.1 Four architecture probes
+
+Before a broad migration, demonstrate all four cases through the same kernel:
+
+1. **Timeout:** one range declaration produces a positive-integer option and an
+   accurate reference; zero is rejected, the default remains 30000, and lowering
+   preserves the field's existing wire domain.
+2. **Slot bounds:** one inclusive relation connects three real options and
+   supplies the Nix check; independent boundary cases cover both endpoints.
+3. **Service cycles:** an owned native rule keeps its phase and diagnostic
+   behavior; metadata projection never evaluates its algorithm or a project.
+4. **`run --slot`:** a generated native parser binds to Rust resolution, while
+   docs links the Nix default, bounds, and placement; independent runtime tests
+   prove the omitted and explicit selection behavior.
+
+These cases exercise structural generation, relationships, native algorithms,
+and cross-language consumption. Passing only an option-rendering example is
+insufficient to establish the proposed architecture.
+
+Kernel prototypes are private proof artifacts until their participating
+production owner cuts over. They must not introduce a second live parser. Use
+the complete command grammar as the production cutover boundary; the slot case
+can exercise the generated/native interface in a focused fixture beforehand.
+
+### 8.2 First assignment and completion gate
+
+Implement the kernel and four architecture probes from section 8.1. Use
 `nix/checks/fixtures/contract-prototype.nix`,
 `nix/checks/contract-vectors.nix`, and a test-only harness/generated fixture under
 `runtime/crates/nixfied-runtime/tests/fixtures/contract-prototype/`. Import the
 Rust harness through the runtime binary's `#[cfg(test)]` unit-test module so it
-can adapt native
-private helpers without publishing a runtime API. Test-only adapters can bridge
-existing helper signatures until production cutover. Keep the handwritten harness outside a `generated/` child in that fixture
-directory. That child alone is a temporary designated generated tree, included
+can adapt native private helpers without publishing a runtime API. Test-only adapters can bridge
+existing helper signatures until production cutover. Keep the handwritten harness
+outside a `generated/` child in that fixture directory. That child alone is a temporary designated generated tree, included
 in the runtime product's projection/freshness check; regeneration cannot replace
 the harness. Other product projections may initially be empty. Synthetic
 source/projection fixtures exercise cross-product isolation before their owners
@@ -1469,3 +1392,203 @@ and `nix flake check`. Use the complete `.#test` floor and cross-layer
 A prototype passes this gate without claiming the full RFC is implemented.
 If a probe needs a new generic language, runtime registry, or second authority,
 bring that concrete failure back to design review before expanding the kernel.
+
+### 8.3 Independent proof obligations
+
+| Guarantee | Proof |
+| --- | --- |
+| Complete declared entry | Reject missing/empty required information and invalid family alternatives, while accepting genuine optionality. |
+| Real public coverage | Audit actual generated module, export, app, command, result, and error surfaces; include a bypass negative. |
+| Relationship integrity | Reject duplicate/dangling/wrong-kind references and invalid schema scopes; verify reverse links. |
+| Shared structural facts | Change an accepted range or enum in its owner and verify every affected projection changes together. |
+| Phase preservation | Existing native checks retain accepted/rejected behavior, order, diagnostics, and side-effect boundary. |
+| Model construction | Reject missing/extra fields and incoherent forms; compare preserved model bytes and closure dependencies. |
+| Independent admission | Rust preserves accepted-input behavior and rejects malformed wire values, mismatched ABI, forged derived facts, unresolved references, and invalid host facts. Cover omitted defaults, null versus absence, unknown fields, discriminator coherence, and map-key domains. |
+| Safe generated bindings | Compile failures expose missing handlers/lowering decisions; native newtype construction and deserialization remain fail closed. |
+| Parser fidelity | Characterize repetitions, help precedence, numeric edge cases, missing values, unknown flags, and error projections per command. |
+| Behavioral truth | Independent tests cover effects such as state identity, placeholders, output restrictions, cleanup, and failure precedence. |
+| Readable reference | Adopter-question cases cover choices, limitations, relationships, and recovery, including `stateRefs`. |
+| Pinning and independence | Distinguishable sources produce matching provenance/content; poison project/model/runtime dependencies and test the stated selection boundary. |
+| Build direction | Docs has no Rust/project build dependency; raw Cargo uses checked bindings; product builds reject stale bindings; no IFD or Nix-in-Cargo path. |
+| Distribution consistency | Lookup, full reference, packaged content, and upgrade-visible snapshots agree; non-embedded prose edits preserve executable projection bytes and runtime/model/CLI derivation identities, including freshness-check dependencies. |
+
+Generated producer and consumer agreeing with one another is not independent
+proof. Retain fixed vectors and mutation negatives authored from the normative
+contract, especially for DERIVE-1. Binding/evidence references alone do not prove
+coverage or correctness of a native algorithm.
+
+Follow [DEVELOPMENT.md](docs/DEVELOPMENT.md): focused Nix vectors and generation
+checks first, relevant Rust tests next, then affected models and adopter gates.
+Use `.#test` for the fixture-backed Cargo floor and `.#ci -- --dirty` for the
+cross-layer cutover. Report unverified platforms, release builds, and integration
+coverage explicitly.
+
+### 8.4 Atomic delivery sequence
+
+Each stage replaces the participating representation atomically. Generated and
+hand-authored implementations of the same fact must not become permanent dual
+paths. Earlier stages can ship value while later public categories remain
+explicitly incomplete.
+
+1. **Prove the kernel.** Implement the grammar and first assignment in section
+   8.2, including the four representative cases. Establish metadata/project
+   separation and
+   generated-source freshness, and measure build dependencies and LOC.
+2. **Deliver discovery.** Migrate the necessary option declarations, correct
+   inaccurate explanations, reuse the existing option renderer, and ship docs,
+   topics, pinning, namespace rejection, help/scaffold pointers, and acceptance
+   fixtures as one Nix-only public-surface change.
+3. **Complete Nix coverage.** Move public exposures and rule declarations into
+   `nix/meta/definitions.nix`, retaining their native enforcing phases. Cover adapters
+   and products, and enforce actual-surface coverage without a permanent omissions allowlist.
+4. **Generate model construction and bindings.** Bind wire declarations to the
+   authored capability inventory; cut over Nix constructors and Rust structural
+   bindings together with byte-equivalence and independent admission proofs.
+5. **Complete command/context/result coverage.** Cut over native parser/help and
+   resolver bindings, output/error projections, installation tooling contracts,
+   and remaining guarantee links. Preserve or explicitly revise existing ABI
+   behavior; keep every active public surface accounted for.
+
+The prototype of a category is not completion of that category. The full RFC is
+complete only when every supported public declaration is covered, all shipped
+projections are checked, and the appropriate independent proofs pass.
+
+## 9. Rationale, cost, and acceptance
+
+### 9.1 Problem and current evidence
+
+An adopter asked what alternatives exist to `stateRefs = [ "slot" ]`. Answering
+required seven hops through a pinned store checkout, including compiler and
+runtime internals. A supplied reference should answer ordinary authoring
+questions without that reconstruction.
+
+The current option pipeline is a useful foundation:
+
+- [options.nix](nix/docs/options.nix) uses the existing module evaluator and
+  `pkgs.nixosOptionsDoc`.
+- The pinned generator exposes `optionsNix` and `optionsJSON`, with canonical
+  option paths, descriptions, types, formatted defaults, and examples.
+- The current evaluation produces 128 public option entries. Exact lookup can
+  reuse these records without parsing Markdown or replacing submodule traversal.
+
+It also exposes the limits of the current representation:
+
+- `stateRefs` is described as participating in service identity, but
+  [identity.rs](runtime/crates/nixfied-runtime/src/service/identity.rs) excludes it
+  and [lower.rs](runtime/crates/nixfied-runtime/src/execution/lower.rs) discards it.
+- Invocation timeouts use a positive-integer predicate, while the generated type
+  description says only "signed integer". A native check has lost a fact that a
+  structured range declaration could retain.
+- [validate.nix](nix/compiler/validate.nix) has 35 check entries, with additional
+  public constraints enforced in [derive.nix](nix/compiler/derive.nix).
+- Runtime flags, help, defaults, and error projection are spread across native
+  parsing branches. Output contracts combine serialized structs with dynamic
+  JSON construction.
+
+The correct current `stateRefs` answer must remain explicit: it accepts a list
+of strings and defaults to `[ "slot" ]`. These strings select neither storage
+backends nor alternative runtime state roots. They do not change service reuse
+identity. They remain serialized model data and appear in the model view, so
+changing them changes the raw model hash; execution lowering discards them.
+The sibling service/task ref fields need the same accuracy review.
+
+Generation establishes agreement between projections. Independent behavioral
+proofs establish whether an authored explanation matches execution.
+
+### 9.2 Cost envelope
+
+Planning estimates for net additional implementation/test LOC, excluding moved
+code, authored prose, and generated files:
+
+| Work | Estimated LOC |
+| --- | ---: |
+| Kernel, family constructors, reference validation, projections | 400–900 |
+| Nix declaration migration, docs delivery, export integration | 800–1,600 |
+| Model constructors and generated Rust structure/parser/resolver/output bindings | 1,400–3,200 |
+| Additional focused cross-layer proof infrastructure and cases | 700–1,500 |
+| Total | 3,300–7,200 |
+
+Expect further authored explanations and relationships, approximately 1,000–3,000
+lines as an initial allowance. Generated Rust/reference size is not independently
+maintained authority, but its readability and review cost still matter. The
+native-binding backend is the least certain estimate; re-estimate after the four
+architecture cases. This is a planning range, not a measured implementation.
+
+Recurring complexity consists of declaration forms, the existing inventory
+reader, projection backends, scope validation, and generation checks. Runtime
+algorithms gain no schema interpreter or reference lookup overhead. Cold docs
+rendering and executable rebuild behavior must be measured rather than assumed.
+
+### 9.3 Alternatives
+
+#### Direct Nix emission versus a Rust build-script generator
+
+Direct Nix emission is the baseline because the current structural forms fit a
+bounded renderer and it introduces fewer build mechanisms. A Rust build script
+could instead consume a generated contract file and emit the same Rust source.
+Both approaches need a code generator; changing its implementation language does
+not remove the type mapping, grammar, or native-binding work.
+
+| Concern | Direct Nix emission | Rust build-script generation |
+| --- | --- | --- |
+| Generator input | Validated Nix values. | Serialized contract plus a strict decoder. |
+| Checked artifact for Cargo workflows | Generated Rust source. | Generated contract input; Rust source produced during the build. |
+| Freshness obligation | Compare Rust source with fresh Nix output. | Compare contract input with fresh Nix output; generation cannot detect a stale input by itself. |
+| Build integration | Existing source compilation and projection checks. | Build scripts, build dependencies, generated includes, and input change tracking. |
+| Docs dependency | Independent of Rust. | Also independent of Rust when docs consumes the Nix declarations directly. |
+| Potential advantage | Smaller overall build path. | Rust-native tooling for a sufficiently complex emitter. |
+
+The existing model/runtime/CLI crates have no binding-generation build scripts.
+The CLI has a dependency-free package and separate lockfile. A shared Rust
+generator would need build-dependency, lockfile, and filtered-workspace changes;
+build-only dependencies need not enter the installed binary, but they remain
+build cost. Copying a generator into each crate would introduce duplicate
+implementation ownership.
+
+A build-script design would keep Nix as contract authority. Its intermediate
+file would be a private build input, not an additional runtime seam. It would
+need a precise execution-contract projection, rather than a project's
+`model.json` or human-readable option metadata. Generated files belong in Cargo's
+`OUT_DIR`, with explicit input tracking and target-aware generation. See the
+[Cargo code-generation example](https://doc.rust-lang.org/cargo/reference/build-script-examples.html#code-generation).
+
+Revisit the backend only if the representative cases demonstrate substantial
+Rust-syntax, transformation, or diagnostic complexity in the Nix renderer.
+Evaluate maintained generator code, format handling, packaging, and tests together;
+the length of a `build.rs` entry point is not a useful total LOC comparison.
+Choosing a Rust emitter and choosing to run it from Cargo are separate decisions:
+a standalone generator could also produce checked source before Cargo runs.
+These alternatives are not additional implementations to maintain alongside the
+selected backend. No generator comparison has yet been prototyped or benchmarked.
+
+#### Other alternatives
+
+- Packaging current Markdown improves access but leaves public construction and
+  behavioral relationships unenforced.
+- A separate documentation manifest duplicates exposure and parsing facts unless
+  it becomes the actual owning declaration.
+- Rust documentation extraction retains Rust as a reference-authoring source and
+  adds a compiler/extraction dependency to reference delivery. This design uses
+  Nix-owned declarations and static runtime bindings instead.
+- A universal language for Nix evaluation, graph algorithms, and runtime behavior
+  would expand the kernel beyond its purpose and undermine native proof boundaries.
+- Generating `model.json` directly from the static framework graph would confuse
+  available authoring choices with one resolved project's executable facts.
+
+### 9.4 Acceptance decision
+
+Adopt the private contract meta-framework as the construction discipline for
+Nixfied's supported public surface. Generate documentation, executable structural
+bindings, and the model producer from its owned declarations. Keep native Nix
+algorithms and Rust admission/execution accountable to that contract.
+
+Sections 3–7 specify the initial grammar, scoped references, generated/native
+Rust boundary, and deterministic source-generation workflow.
+Before broad migration, prove them through the four representative cases and
+measure their cost. Those proofs do not reopen model seams, introduce a runtime
+meta-framework, or change the authored capability authority.
+
+Success means an adopter can discover a supported capability through `.#docs`,
+understand its accepted inputs, defaults, relationships, effects, and failures,
+and use the same supplying framework input to compile an independently admitted
+`model.json` without reconstructing the contract from implementation source.
