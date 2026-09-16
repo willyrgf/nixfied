@@ -257,8 +257,9 @@ with interchangeable optional fields would hide invalid combinations.
 
 | Family | Authored contract | Generated or bound implementation |
 | --- | --- | --- |
-| Domain | Value structure, bounds, alternatives, and relevant units. | Nix type/check and, where representable, wire/native binding. |
-| Option | Domain, presence/default policy, explanation, examples, relationships. | Existing `mkOption` surface and structured reference. |
+| Authoring domain | Anonymous option-input structure, bounds, and alternatives. | Native Nix type/check and merge behavior. |
+| Native wire domain | Named wire shape, explanation, and optional producer check. | Nix wire validation and conventional native Rust binding. |
+| Option | Authoring domain, presence/default policy, explanation, units, examples, relationships. | Existing `mkOption` surface and structured reference. |
 | Exposure | Function/module/product alternative, arguments/results or usage contract, explanation. | Public export or module binding with its existing caller interface. |
 | Command | Argument grammar, repetition/default policy, handler identity, results/errors. | Native parser bindings, conventional help, app wiring, reference. |
 | Context input | Input name, resolution policy, consuming operations, explanation. | Constants and typed resolver bindings to native implementation. |
@@ -287,9 +288,9 @@ ordinary Nix values, not a second language or opaque runtime type system.
 ### 3.2 Kernel signatures and evaluation boundaries
 
 ```text
-compileOptions { declarations; }
-  -> { module; entries; }
-checkContract { entries; domains; rules; wire; commands; relations; inventory; }
+collectOptions { declarations; }
+  -> OptionCollection                       # kernel-private, not publishable
+checkContract { options; wireDomains; rules; wire; commands; relations; inventory; }
   -> CheckedContract
 resolveRef checkedContract.index reference -> Entry
 runRule { rule; phase; input; }
@@ -299,17 +300,29 @@ emitRust checkedContract -> product-keyed trees of source strings
 constructWire checkedRecord values -> checked JSON-compatible value
 ```
 
-`entries` are mounted option/collection records from `compileOptions`; `domains`
-is an attrset keyed by semantic domain identity. `rules`, `wire`, and `commands`
-are lists of their closed declaration records. `relations` is a list of checked
-edge records. Empty collections default to empty; `inventory` is required.
+`options` is the private collection returned by `collectOptions`, retaining
+mounted option/collection records and their delayed native module projection
+together. The interface does not accept a separate caller-supplied module.
+`wireDomains` is an attrset from `WireDomainId` to `NativeWireDomain` (section
+5.3); its keys are the sole authored identities of those declarations. It contains
+no authoring option descriptors. An `AuthoringDomain` is an anonymous descriptor
+composed with ordinary Nix values and functions and used by an option declaration;
+it needs no named registry. Neither category is accepted where the other is
+required. Reusing an authoring descriptor creates no wire domain, wire shape, or
+lowering implementation. `WireDomainRef` resolves only against `wireDomains`.
+Lowering relationships connect mounted options to migrated wire members;
+conversion remains native.
+
+`rules`, `wire`, and `commands` are lists of their closed declaration records.
+`relations` is a list of checked edge records. Empty collections default to empty;
+`inventory` is required.
 Identities embedded in records must be unique in their namespace; lists preserve
 order where it affects validation or serialization. Per-declaration relation
 lists normalize into the same edge list with their source identity attached.
 Do not duplicate edges in both places. The checked index derives from these
 inputs, including inventory entries; it is never independently authored.
 
-`CheckedContract = { index; domains; entries; rules; wire; commands; relations; }`
+`CheckedContract = { module; index; wireDomains; entries; rules; wire; commands; relations; }`
 contains normalized checked projections. Native implementations remain lazy
 members of their owning declarations. No exposure/context/guarantee collections
 are silently accepted in this first-slice signature. Their staged designs must
@@ -317,25 +330,39 @@ extend both the input grammar and coverage checks explicitly.
 
 Constructors first apply the defaults in section 3.3 and produce complete
 normalized records. Validate defaults against their domains at the owning
-boundary: literal values when their domain is available, contextual values during
-native module evaluation. Static extraction never invokes a contextual resolver.
+boundary: literal input shapes when their domain is available, merged values and
+contextual defaults during native module evaluation. A submodule default of `{}`
+is a module input, not a claim that all required nested values already exist;
+nested defaults and ordinary module merging determine the final value. Preserve
+lazy undefined-option behavior. Static extraction never invokes a contextual
+resolver.
 Metadata failures throw deterministic, owner/path-qualified Nix errors.
 `CheckedContract` means a validated attrset projection. It is not a security or
 opacity boundary. `checkContract` forces required static fields, variant shapes,
 identities, relations, and inventory coordinates. It checks that native callbacks
-are functions, but never calls them or forces project values. Do not `deepSeq`
-the entire declaration graph. Native callback exceptions remain native errors;
+are functions and checks contextual resolver signatures as specified in section
+3.4, but never calls them or forces project values. Do not `deepSeq` the entire
+declaration graph. Native callback exceptions remain native errors;
 there is no catch-all conversion into an ordinary rejected rule.
 
-`compileOptions` walks a nested attribute tree whose leaves are tagged option
+The facade in `nix/meta/default.nix` exposes only checked projections. Demanding
+any published projection, including the native module, must first force the
+complete static validation of the supplied contract. A malformed declaration or
+relationship cannot remain hidden because a consumer selects an unrelated valid
+option. Enforce this with an explicit dependency on static validation, not merely
+a lazy binding to its result. This barrier never evaluates native callbacks or
+project values and does not add contract source/prose to product derivation inputs.
+The private collection is not exported through native module entry points.
+
+`collectOptions` walks a nested attribute tree whose leaves are tagged option
 declarations. Structured submodule and map domains retain their nested declaration
 trees. The supplied tree starts at the full option root; the collector carries
 mount paths internally, identically for native placement and metadata. One
 traversal produces both native `mkOption` declarations and mounted
-metadata. The returned `module` is a delayed ordinary Nix module receiving its
+metadata. The collected module is a delayed ordinary Nix module receiving its
 usual module arguments; `entries` does not need that context. Collect each owning
 meta-definition bundle once and derive both projections from that collection.
-Native module entry points consume the generated module projection.
+Native module entry points consume only `checkedContract.module`.
 Do not store metadata in extra `mkOption` fields, add an `_module` side channel,
 or maintain a second registration tree.
 
@@ -350,14 +377,15 @@ adopter-added apps. Prototype declarations never count as public coverage.
 
 ### 3.3 Domains, defaults, and normalization
 
-The initial domain vocabulary needs only primitives, bounded values, enums,
+The authoring domain vocabulary needs only primitives, bounded values, enums,
 lists, maps, products, and explicit alternatives that existing surfaces use.
 Nix-only packages, paths, modules, and functions remain native authoring domains.
 Their lowering is explicit; a package does not become a JSON value simply
 because it is accepted by a Nix option.
 
-Domain constructors delegate merging and evaluation to Nixpkgs. Add a structured
-constraint when it can generate an existing predicate and explain the same fact.
+Authoring domain constructors delegate merging and evaluation to Nixpkgs. Add a
+structured constraint when it can generate an existing predicate and explain
+the same fact.
 For native checks, require an explanation and preserve their existing mechanism.
 
 Authoring presence distinguishes required input and a supplied literal or
@@ -378,7 +406,7 @@ There is one normalization path, not separate defaults in docs, Nix, and Rust.
 | Authored omission | Effective default |
 | --- | --- |
 | `relations`, examples collections | Empty list |
-| `moduleArgs` | Empty attrset; preserve native module behavior |
+| `optionAttrs` | Empty attrset; preserve native `mkOption` behavior |
 | `unit` | No unit annotation |
 | Additional integer bound | No additional bound beyond the native domain |
 | Option presence without a value default | Required; never invent a value |
@@ -439,26 +467,100 @@ still determines representable values. The normalized presence alternatives are
 and a context callback evaluated only by the native module. It produces the
 existing `defaultText = lib.literalExpression expression`. A required option has
 no generated default; ordinary lazy undefined-option behavior is preserved.
-A literal `null` default is not absence. The optional `moduleArgs` accepts native
+A literal `null` default is not absence. The optional `optionAttrs` accepts native
 `apply`, `example`, `visible`, `internal`, and `readOnly`. It rejects overrides of
 `type`, `default`, `defaultText`, and `description`, and rejects unknown keys.
+These are `mkOption` attributes, not module arguments such as `config` or `name`.
 Existing uses of `apply`, including source-identity conversion, remain native.
+The declared domain describes accepted input before `apply`; it does not prove
+the type of the resulting configuration value. In this slice, generated
+structural rules reject operands whose option or containing option declares
+`apply`. Such checks remain native until a concrete migration justifies a checked
+result-domain contract. Do not infer callback behavior from its source or name.
+
+#### Contextual defaults and native argument resolution
+
+A contextual `resolve` must be a native Nix function with a nonempty signature
+of named, required arguments, for example
+`{ config }: config.baseTimeoutMs`. Static validation requires
+`builtins.isFunction resolve`, a nonempty `builtins.functionArgs resolve`, and
+only `false` flags in that signature. Reject positional functions, empty named
+signatures, defaulted parameters, and callable attrsets. An empty signature
+cannot distinguish `args:` from `{ }:`, so both are rejected; context-free
+defaults use `defaultValue`. An ellipsis is permitted but grants no additional
+arguments. These checks inspect the signature without invoking the callback.
+The restriction applies to contextual resolvers, not native rule predicates or
+`optionAttrs.apply`.
+
+The generated ordinary module advertises its argument names through
+`lib.setFunctionArgs`. Derive the signature separately for each native module
+evaluation scope: union the required names of that scope's resolvers and any
+arguments used by the generated wrapper itself. Exclude resolvers belonging to
+nested submodule scopes. This signature is derived implementation data, never
+another authored argument registry.
+
+Native module evaluation resolves those arguments, including `specialArgs` and
+custom `_module.args`, with its existing precedence. The generator implements
+no argument lookup, fallback, eager availability check, or inheritance. Each
+resolver receives exactly its declared names, selected lazily from the generated
+module's supplied arguments. For a resolver signature `signature` and those
+arguments `moduleArguments`, the default expression is
+`resolve (builtins.intersectAttrs signature moduleArguments)`. Do not pass the
+combined scope argument set to every callback or force its values. Signature
+collection, static validation, and metadata extraction never call a resolver.
+
+`config` and `options` refer to the current native evaluation scope; inside a
+submodule they are local, not aliases for the project root. `name` is available
+where the native submodule supplies it. Parent `_module.args` are not implicitly
+inherited by submodules. Required forwarding uses ordinary explicit native
+module declarations, not another framework context mechanism.
+
+Install the resolver application as the native option's `default`, preserving
+ordinary default priority and `defaultText = lib.literalExpression expression`.
+A discarded default must not evaluate its callback or argument values. Consuming
+an unavailable argument or evaluating a throwing callback fails with a native
+error; resulting values undergo ordinary option-type checking. Do not eagerly
+validate contextual results or translate their failures into metadata errors.
+Defaulted callback parameters are excluded because native module evaluation
+supplies missing-argument thunks: a lambda's `? fallback` does not establish an
+argument-resolution fallback policy.
+
+#### Authoring domain constructors
 
 The first option/domain constructors needed by the probes and scope fixtures are:
 
 ```text
-api.integer { min ? null; max ? null; } -> integer domain
-api.text -> string domain
-api.list elementDomain -> native listOf domain
-api.map elementDomain -> native attrsOf domain, with a collection identity
-api.submodule declarationTree -> native submodule domain
-api.option { domain; explanation; default?; presence?; unit?; relations?; moduleArgs?; }
+api.integer { min ? null; max ? null; } -> AuthoringScalar
+api.text -> AuthoringScalar
+api.list authoringScalar -> AuthoringDomain, native listOf
+api.map authoringDomain -> AuthoringDomain, native attrsOf with a collection identity
+api.submodule declarationTree -> AuthoringDomain, native submodule
+api.option { domain; explanation; default?; presence?; unit?; relations?; optionAttrs?; }
   -> tagged option declaration
 ```
 
-These compose existing Nixpkgs types. Map keys are strings in this slice; maps
-of submodules retain their declaration trees for mounting `{ item = true; }`
-paths. Wire shapes below are separate descriptors: `api.integer` never secretly
+An option's `domain` accepts only an `AuthoringDomain`. These descriptors compose
+existing Nixpkgs types. Map keys are strings in this slice; maps of submodules
+retain their declaration trees for mounting `{ item = true; }`
+paths. The first-slice authoring grammar is closed:
+
+```text
+AuthoringScalar = integer | text
+AuthoringDomain = AuthoringScalar
+                | list AuthoringScalar
+                | map AuthoringDomain
+                | submodule DeclarationTree
+```
+
+Submodule trees contain option declarations using this same grammar. Every map
+introduces a collection at its mounted prefix, including maps nested directly
+inside maps; every map descent contributes one item marker. Lists have scalar
+elements and introduce no nested option or collection identities. Reject lists
+of lists, maps, or submodules at construction rather than silently omitting
+their contents from reference coverage. Extend this grammar and its mounting
+proofs only when a migrating surface requires another composition.
+
+Wire shapes below are separate descriptors: `api.integer` never secretly
 means Rust `u64`. Additional authoring domains are added only with the surfaces
 that require them, preserving their native merge behavior.
 
@@ -496,7 +598,7 @@ The first-slice reference union is:
 ```text
 Ref = OptionRef { path: SchemaPath }
     | CollectionRef { path: SchemaPath }
-    | DomainRef { id: DomainId }
+    | WireDomainRef { id: WireDomainId }
     | RuleRef { id: RuleId }
     | CommandRef { name: CommandName }
     | ArgumentRef { command: CommandName, field: FieldName }
@@ -504,7 +606,7 @@ Ref = OptionRef { path: SchemaPath }
 ```
 
 These alternatives are tagged Nix records: `kind` is `option`, `collection`,
-`domain`, `rule`, `command`, `argument`, or `capability`, respectively; the other
+`wireDomain`, `rule`, `command`, `argument`, or `capability`, respectively; the other
 fields are shown above. `api.optionRef path`, `api.collectionRef path`, and
 `api.ruleRef id` are convenience constructors for these same records. A capability
 coordinate identifies an inventory record or member by family/owner/member as
@@ -524,6 +626,15 @@ that map's complete prefix path. Reused invocation declarations acquire distinct
 identities when mounted under tasks, lifecycle operations, or probes; unmounted
 declarations have no `.ref`. Start with absolute checked references. No relative
 reference system or mirrored tree of reference handles is needed for this slice.
+
+Reuse includes relationships, not only option shapes. A fragment needing a target
+that varies by mount is an ordinary Nix function receiving explicit
+reference records as parameters; mounting still supplies each edge's source.
+The first assignment must include a complete fixture that mounts such a fragment
+twice with distinct target collections. Author the fragment's option and edge
+once, and prove that both mounted sources resolve to their supplied targets.
+Include a wrong-scope target negative. This requires no relative-reference
+language or parallel registration tree.
 
 Constructors return tagged records; normalized JSON of a validated record is
 sufficient as an internal index key. Dot-joined names and `<name>` are presentation
@@ -567,7 +678,7 @@ Relation = { kind = "references"; source; target; rule; }
 | Kind | Source | Target | Additional requirement |
 | --- | --- | --- | --- |
 | `references` | Option | Collection | Valid collection scope and required `RuleRef` |
-| `constrainedBy` | Option, collection, domain, wire member, command, argument | Rule | Rule exists; edge does not invoke it |
+| `constrainedBy` | Option, collection, native wire domain, wire member, command, argument | Rule | Rule exists; edge does not invoke it |
 | `lowersTo` | Option | Migrated wire member | Both declarations exist; conversion remains native |
 | `defaultsFrom` | Optional command argument | Concrete option | Omitted argument's native resolution uses this option; no generated fallback execution |
 
@@ -587,6 +698,38 @@ They are intended coverage, not accepted open-ended tags in the first kernel.
 
 ### 4.2 Structural and native rule grammar
 
+The first assignment supports only the validation phase:
+
+```text
+Phase = "validate"
+ValidateInput = { config: AttrSet; system: String; }
+RuleInputs = List<Ref>
+RuleOutcome = { kind = "pass"; }
+            | { kind = "reject"; ruleId: RuleId; message: NonemptyString; }
+
+check: ValidateInput -> Bool
+diagnostic: ValidateInput -> NonemptyString
+runRule { rule: CheckedRule; phase: Phase; input: ValidateInput; } -> RuleOutcome
+```
+
+`inputs` is a required, possibly empty ordered list of references resolved by
+contract checking. It describes the rule's dependencies for the reference; it
+does not select callback arguments, schedule checks, or prove which values a
+native callback reads. Structural rules derive this list from their operands.
+`ValidateInput` is the exact two-field envelope above. Its `config` is the native
+evaluated configuration, not a serialized copy. Validate the envelope and its
+top-level types without recursively forcing configuration values.
+
+Contract checking rejects unsupported declaration phases and unresolved input
+references before publication. At invocation, `runRule` rejects an unsupported
+or mismatched phase as a contract defect before inspecting `input` or invoking
+either callback. A malformed input envelope is also a contract defect. Only a
+false predicate produces ordinary rejection; only then is `diagnostic` called.
+A non-Boolean predicate result, non-string or empty diagnostic, or violated
+structural operand premise throws an owner-qualified contract-defect error.
+Callback exceptions remain native errors, never ordinary rejection. A passing
+rule must not evaluate its diagnostic.
+
 A complete structural rule has this form:
 
 ```nix
@@ -604,24 +747,26 @@ This closed rule resolves scalar configuration references and generates both the
 inclusive predicate and its explanation. It accepts only concrete option paths,
 without item markers. Contract checking requires all three targets to have
 non-null integer domains, rejecting string/Boolean/nullable comparisons. It is
-not a language for iteration over project graphs.
+also subject to section 3.4's rejection of transformed operands. Before comparing
+resolved values, the generated rule checks that its actual operands are integers;
+a violated operand premise is a contract defect, not an ordinary range rejection.
+It is not a language for iteration over project graphs.
 
 Native rules use
 `api.nativeRule { id; phase; inputs; explanation; check; diagnostic; }`.
-`check input` returns a Boolean; `diagnostic input` is called only on rejection
-and returns a nonempty string. Wrong callback result types are contract defects,
-not ordinary input rejection.
-The validate-phase input is `{ config; system; }`. Derivation owners pass their
-existing local inputs explicitly, rather than introducing a global registry of
-phase-state types. `runRule` checks the requested phase before evaluating input.
+Both callbacks receive the same `ValidateInput` under the calling contract above.
 The existing owner retains its ordered rule list, failure prefix, and evaluation
 position. The same ordered rule list feeds execution and reference generation;
-there is no second handler registry. Declared inputs do not prove which values
-an arbitrary callback actually reads. For service cycles, keep the existing graph algorithm and its prior
-reference checks in that order. Neither documentation nor relationship traversal
-invokes the algorithm or schedules rules.
+there is no second handler registry. For service cycles, keep the existing graph
+algorithm and its prior reference checks in that order. Neither documentation nor
+relationship traversal invokes the algorithm or schedules rules.
 
 ### 4.3 Native derivations and rejection phases
+
+This section specifies later migration requirements. Before admitting another
+phase, extend the closed `Phase` grammar, specify its owner-local input envelope,
+and add phase/rejection fixtures. Do not move derivation checks into `validate`
+to fit the first slice or introduce a global registry of phase-state types.
 
 Graph, executable, and cross-field rules that need native algorithms retain
 those algorithms. Their declarations require phase, relevant inputs/outputs,
@@ -760,24 +905,27 @@ Shape = { kind = "text"; }
       | { kind = "unsigned"; bits = 32 | 64; nonzero = Bool; }
       | { kind = "list"; element = Shape; unique = Bool; }
       | { kind = "map"; value = Shape; }
-      | { kind = "domain"; id = DomainId; }
+      | { kind = "wireDomain"; id = WireDomainId; }
       | { kind = "enum"; inventory = { family = "enum"; owner = Name; }; }
-NativeDomain = { wire = Shape; explanation = NonemptyString; check = CallbackOrNull; }
+NativeWireDomain = { wire = Shape; explanation = NonemptyString; check = CallbackOrNull; }
 ```
 
 `nonzero` and `unique` default to false; `check` defaults to null. Maps have string
-keys in this slice. `domains` is the owning declaration attrset: its keys provide
-semantic identities without repeating names inside values. Native-domain wire
-shapes cannot contain domain references in this slice, avoiding recursive expansion
-machinery. A supplied `check value` runs after shape validation and must return a
-Boolean; exceptions or other results are contract defects. Static extraction only
-checks callability. The Rust backend binds the corresponding native type by the
-convention below, retaining independent constructor/deserializer tests.
+keys in this slice. `wireDomains` owns the named `NativeWireDomain` declarations;
+names do not repeat inside their values. Each declaration supplies a wire shape
+and selects a conventional binding to an existing native Rust type. Its shape
+cannot contain a `wireDomain` reference anywhere, including inside lists or maps;
+the first slice excludes both reference chains and recursive expansion.
+A supplied `check value` runs after producer-side shape validation and must return
+a Boolean; exceptions or other results are contract defects. Static extraction
+only checks callability. This check does not replace independent Rust construction,
+deserialization, or admission. Native refinements retain their existing enforcing
+phases and tests. The Rust backend binds the native type by the convention below.
 
-For this complete example, the owning domains are:
+For this complete example, the owning wire domains are:
 
 ```nix
-domains = {
+wireDomains = {
   ClosureId = {
     wire = { kind = "text"; };
     explanation = "Reference to a model closure.";
@@ -804,7 +952,7 @@ api.wireRecord {
       value = {
         kind = "list";
         unique = true;
-        element = { kind = "domain"; id = "ClosureId"; };
+        element = { kind = "wireDomain"; id = "ClosureId"; };
       };
       explanation = "Ordered, distinct closure references available to the invocation.";
     }
@@ -825,7 +973,7 @@ api.wireRecord {
     }
     {
       member = "codebaseId";
-      value = { kind = "domain"; id = "CodebaseId"; };
+      value = { kind = "wireDomain"; id = "CodebaseId"; };
       explanation = "Codebase selected for working-directory resolution.";
     }
     {
@@ -854,8 +1002,8 @@ Field order determines emitted Rust and serialization order; inventory membershi
 checking does not sort the list. Built-in shapes determine Rust types: text maps
 to `String`, lists to `Vec<T>`, unique lists to existing `UniqueVec<T>`, maps to
 `BTreeMap<String, T>`, and nonzero unsigned 64-bit integers to `NonZeroU64`.
-Inventory enums generate their named type and vocabulary. Native domains follow
-the naming convention below. No declaration chooses a Rust type.
+Inventory enums generate their named type and vocabulary. Native wire domains
+follow the naming convention below. No declaration chooses a Rust type.
 `supplied` requires an explicit caller value and never borrows a decoder default.
 
 The timeout prototype generates the complete eight-field record, preserving
@@ -892,13 +1040,13 @@ The Rust backend owns the following fixed conventions:
 | Inventory record `Invocation` | `Invocation` in the model's generated wire module |
 | Wire member `timeoutMs` | Field `timeout_ms`, with exact serialized name `timeoutMs` |
 | Command `slot-probe` | Request `SlotProbeArgs`, parser `parse_slot_probe` |
-| Native domain `ClosureId` | Type `crate::contract::values::ClosureId` in the consuming crate |
+| Native wire domain `ClosureId` | Type `crate::contract::values::ClosureId` in the consuming crate |
 | Native parsing for `slot-probe` argument `slot` | `crate::contract::commands::slot_probe::parse_slot` |
 | Unknown argument for `slot-probe` | `crate::contract::commands::slot_probe::unknown_argument` |
 
 These are backend rules, not authored mappings for each declaration. Built-in
-shapes map directly to standard Rust types; native domains are selected by
-semantic domain references, not module paths. Runtime-owned `contract` modules
+shapes map directly to standard Rust types; native wire domains are selected by
+`WireDomainId`, not module paths. Runtime-owned `contract` modules
 implement the expected hooks or statically re-export their actual native owners.
 They contain implementation bindings only, never a duplicate description of
 shapes, defaults, or grammar. Generated source uses direct typed calls; no
@@ -914,9 +1062,9 @@ explicit serialization renames when the casing convention alone is insufficient.
 
 Nix rejects invalid identities and generated-name collisions. Rust compilation
 checks that conventional native types/functions exist and satisfy the generated
-signatures and required traits. Domain declarations contain no Rust source,
-paths, type overrides, or per-entry naming exceptions. Backend changes are the
-single place to revise these conventions; runtime implementations follow them.
+signatures and required traits. Native wire domain declarations contain no Rust
+source, paths, type overrides, or per-entry naming exceptions. Backend changes
+are the single place to revise these conventions; runtime implementations follow them.
 
 Wire policy is a closed alternative, not independent Boolean switches. The
 first slice implements only `requiredNonNull`/`supplied` above. Subsequent wire
@@ -1000,7 +1148,7 @@ not serialized or translated into Rust algorithms.
 
 Rust compilation checks those bindings. For example, a generated command enum
 is matched exhaustively by native dispatch; a missing command handler fails to
-compile. Domain references bind to existing private/fallible constructors,
+compile. Wire-domain references bind to existing private/fallible constructors,
 newtypes, and validation traits. A generator must not replace `UniqueVec`,
 nonzero values, confined paths, or validated endpoint hosts with weaker raw
 values merely to simplify emission.
@@ -1011,6 +1159,24 @@ independent tests remain ordinary Rust. No Rust documentation extractor or
 build-host runtime invocation is needed.
 
 ### 6.2 Command grammar and native interfaces
+
+Command argument values have their own closed first-slice grammar:
+
+```text
+CommandValue = { kind = "unsigned"; bits = 32; }
+NativeArgumentParser = (Option<&str>, &str) -> Result<u32, RuntimeError>
+RequestField = Option<u32>
+```
+
+`argument.value` accepts exactly this record, with no additional keys. It does
+not accept the general wire `Shape` grammar. Reject other widths, text, enums,
+lists, maps, wire-domain references, and refinement keys such as `nonzero` at
+contract checking. Syntax admits zero through `u32::MAX`; project slot bounds
+remain the native selection owner's responsibility. The conventional
+`parse_<field>` hook receives the possible following token and flag spelling,
+and returns `u32`; generated Rust compilation checks that signature. Each optional
+request field is `Option<u32>`. Additional value forms require an explicit grammar
+extension with their parser signature and accepted/rejected fixtures.
 
 The first probe uses this complete private grammar envelope:
 
@@ -1338,6 +1504,16 @@ can exercise the generated/native interface in a focused fixture beforehand.
 
 ### 8.2 First assignment and completion gate
 
+The engineering handoff is limited to this section's private kernel and four
+probes. Complete the acceptance gate and report the change-complexity evidence
+in section 9.2. Production migration and deferred declaration families are
+outside this assignment. Return concrete architectural conflicts for review
+before extending the grammar; completing the prototype does not authorize the
+next migration stage.
+
+Follow the commit sequence in section 8.5. Its intermediate checkpoints organize
+implementation; the complete acceptance gate below remains the completion test.
+
 Implement the kernel and four architecture probes from section 8.1. Use
 `nix/checks/fixtures/contract-prototype.nix`,
 `nix/checks/contract-vectors.nix`, and a test-only harness/generated fixture under
@@ -1359,23 +1535,84 @@ mounted prototype surfaces and generated fixtures. They do not require all
 unmigrated production definitions to use the kernel. Enable production coverage
 and product freshness for each participating owner at its atomic cutover.
 
+Require one assembled fixture in `contract-prototype.nix` that composes the
+specified interfaces, in addition to focused constructor cases:
+
+```text
+authored fixture declarations
+  -> collectOptions -> checkContract
+                         |-> checked module -> native evaluation
+                         |                     -> runRule -> constructWire
+                         |-> renderReference
+                         `-> emitRust -> compile and exercise fixture harness
+```
+
+The reference and Rust projections depend on the checked contract, not on the
+project-evaluation branch. The fixture connects timeout and slot options to their
+rules and declared relationships, invokes the native service-cycle rule after
+its reference checks, constructs the complete `Invocation` from explicit fixture
+lowering values only after rules pass, and generates the private slot parser. Its
+accepted case must agree with independently authored expected configuration,
+rule outcomes, wire values, reference relationships, and Rust behavior. Native
+slot selection remains exercised through the existing harness. Do not introduce
+a new coordinator API, full project model format, or second fixture declaration
+catalog to assemble these calls.
+
+Paired mutations must show that an invalid relationship blocks every published
+projection, an out-of-range configured slot default rejects at `runRule`, and an
+invalid supplied wire field rejects at `constructWire`. Poisoned project values
+must leave static reference/Rust generation evaluable. Reuse this assembled
+fixture for the relevant section 9.2 mutations; isolated constructor tests alone
+do not satisfy the integration proof.
+
 The first assignment is complete when all of these are demonstrated:
 
 - Metadata rejects missing fields, duplicate identities, dangling/wrong-scope
   references, invalid inventory coordinates, and public-surface bypasses.
+- Consuming an ordinary option through the checked module fails when an unrelated
+  declaration has a malformed relationship. The same static barrier guards the
+  other published projections without evaluating poisoned native callbacks.
+- Authoring domain composition accepts scalar lists and nested maps/submodules
+  with exact mounted identities. Lists of lists, maps, and submodules fail
+  construction.
+  A relationship-bearing fragment mounted twice resolves each supplied target
+  without duplicate semantic declarations or entries in `wireDomains`; an
+  unavailable target scope fails.
+- Static validation rejects authoring descriptors in `wireDomains`, native wire
+  descriptors as option domains, and unresolved or wrong-kind `WireDomainRef`
+  targets. A native wire domain containing a `wireDomain` reference anywhere in
+  its shape fails, including list/map nesting. Conventional `ClosureId` and
+  `CodebaseId` bindings preserve their decoding and admission behavior.
 - Concise declarations and their explicitly expanded forms produce identical
   checked metadata, generated source, and behavior. Reject conflicting presence
   declarations, unknown keys, and invalid default values. Documentation displays
   effective defaults; shared-default changes update all affected projections.
+- Omitted `optionAttrs` and `{}` are equivalent. Supported attributes preserve
+  native behavior; unknown attributes and overrides of generated `type`,
+  `default`, `defaultText`, or `description` fail construction.
 - Native module merging, contextual default display, `apply`, and required-option
   laziness are preserved. Poisoned callbacks/project defaults are not evaluated
-  by static metadata extraction.
+  by static metadata extraction. The contextual-default matrix below passes.
+  Submodule defaults of `{}` acquire nested defaults through native merging.
+- Structural rule construction rejects transformed operands, including an integer
+  option with `apply = toString` and a transformed containing option. Actual
+  non-integer operands fail as contract defects before comparison; ordinary
+  out-of-range integers retain the rule's normal rejection outcome.
 - Timeout accepts its default and valid values; rejects zero, null, missing wire
   fields, and unknown wire fields; Rust accepts values above the Nix maximum.
 - Slot bounds accept both endpoints and reject outside values. Service cycles
   retain their phase/order, while metadata generation never runs the algorithm.
+- Rule declarations reject unsupported phases and unresolved input references.
+  Invocation rejects phase errors before poisoned input or callbacks are forced.
+  Reject malformed input envelopes and callback result types as contract defects;
+  false predicates alone yield ordinary rejection. A passing rule leaves a
+  poisoned diagnostic unevaluated; callback exceptions remain native failures.
 - Generated slot syntax preserves missing/invalid/overflow errors and repetition;
   native resolution preserves omitted/explicit selection and placement checks.
+  Command value declarations accept exactly the unsigned 32-bit shape in section
+  6.2 and reject unsupported widths, shapes, refinements, and extra keys. Parser
+  fixtures accept zero and `u32::MAX`; native selection independently rejects
+  parsed values outside the configured slot range.
   A missing or wrongly typed conventional native implementation fails compilation.
   Naming vectors cover camelCase, kebab-case, acronyms, Rust keywords, and
   collisions; declarations reject language-specific naming/path overrides.
@@ -1384,7 +1621,30 @@ The first assignment is complete when all of these are demonstrated:
   and its build closure excludes Rust toolchains, runtime binaries, and models.
   Ordinary transitive dependencies of the existing option renderer are allowed.
 - Product dependency-isolation checks pass; maintained LOC and generator size
-  are measured separately from generated source and prose.
+  are measured separately from generated source and prose. The four comparisons
+  of change complexity in section 9.2 distinguish measured fixture behavior
+  from planned production removals.
+
+The contextual-default fixtures exercise the generated module through the pinned
+native evaluator, not a test-only callback dispatcher:
+
+| Fixture | Required result |
+| --- | --- |
+| Resolver with a required custom argument supplied by local `_module.args` | Demanded default receives the supplied value. |
+| The argument supplied through `specialArgs`, and then supplied through both mechanisms | Native resolution and precedence are preserved. |
+| Resolver consumes a missing custom argument | Demanding the default fails natively; overriding it succeeds. |
+| Throwing argument value, throwing callback body, or invalid result type | Demanding the default fails at the corresponding native boundary; overriding it succeeds without evaluating the discarded default. |
+| Valid resolver signature with a throwing body | Static extraction and unrelated published projections succeed. |
+| Unrelated sibling option beside a poisoned default | Demanding the sibling succeeds. |
+| One fragment reused in two keyed submodules | Local `config`, `options`, and `name` resolve correctly at both mounts; adopter overrides retain native priority. |
+| Submodule resolver needs an argument absent in the parent | `lib.functionArgs` shows the name in the child scope signature and absent from the parent signature; parent and unrelated options evaluate successfully. |
+| Child resolver consumes a custom argument present only in parent `_module.args` | Demanded child default fails without explicit native forwarding and succeeds with it. |
+| Resolver without ellipsis alongside another resolver using different names | Both work; each receives only its own declared names. |
+| Positional, empty-signature, defaulted-parameter, or callable-attrset resolver | Static checking rejects it with the owning path before any projection is published. |
+
+Assert native missing-argument failures through a failing Nix evaluation process;
+`builtins.tryEval` does not catch every native evaluation error. Static signature
+negatives must also prove that checking never invokes the callback body.
 
 Run focused Nix vectors/generation checks, the relevant fixture-backed Rust tests,
 and `nix flake check`. Use the complete `.#test` floor and cross-layer
@@ -1400,6 +1660,8 @@ bring that concrete failure back to design review before expanding the kernel.
 | Complete declared entry | Reject missing/empty required information and invalid family alternatives, while accepting genuine optionality. |
 | Real public coverage | Audit actual generated module, export, app, command, result, and error surfaces; include a bypass negative. |
 | Relationship integrity | Reject duplicate/dangling/wrong-kind references and invalid schema scopes; verify reverse links. |
+| Domain separation | Authoring descriptors remain anonymous; named wire domains retain their own shapes and native bindings. Reject category confusion and unresolved or nested wire-domain references at the static boundary. |
+| Contextual defaults | The section 8.2 matrix proves signature rejection, native argument resolution, scope isolation, default priority, and laziness through the generated module. |
 | Shared structural facts | Change an accepted range or enum in its owner and verify every affected projection changes together. |
 | Phase preservation | Existing native checks retain accepted/rejected behavior, order, diagnostics, and side-effect boundary. |
 | Model construction | Reject missing/extra fields and incoherent forms; compare preserved model bytes and closure dependencies. |
@@ -1411,6 +1673,7 @@ bring that concrete failure back to design review before expanding the kernel.
 | Pinning and independence | Distinguishable sources produce matching provenance/content; poison project/model/runtime dependencies and test the stated selection boundary. |
 | Build direction | Docs has no Rust/project build dependency; raw Cargo uses checked bindings; product builds reject stale bindings; no IFD or Nix-in-Cargo path. |
 | Distribution consistency | Lookup, full reference, packaged content, and upgrade-visible snapshots agree; non-embedded prose edits preserve executable projection bytes and runtime/model/CLI derivation identities, including freshness-check dependencies. |
+| Change complexity | Section 9.2 comparisons identify authored change sites and substantiate actual removals at cutover without deleting independent evidence or required ABI recording. |
 
 Generated producer and consumer agreeing with one another is not independent
 proof. Retain fixed vectors and mutation negatives authored from the normative
@@ -1428,12 +1691,13 @@ coverage explicitly.
 Each stage replaces the participating representation atomically. Generated and
 hand-authored implementations of the same fact must not become permanent dual
 paths. Earlier stages can ship value while later public categories remain
-explicitly incomplete.
+explicitly incomplete. Each cutover supplies evidence of actual deletions and
+retained owners as required by section 9.2.
 
 1. **Prove the kernel.** Implement the grammar and first assignment in section
    8.2, including the four representative cases. Establish metadata/project
-   separation and
-   generated-source freshness, and measure build dependencies and LOC.
+   separation and generated-source freshness, and measure build dependencies,
+   LOC, and recurring change sites as specified in section 9.2.
 2. **Deliver discovery.** Migrate the necessary option declarations, correct
    inaccurate explanations, reuse the existing option renderer, and ship docs,
    topics, pinning, namespace rejection, help/scaffold pointers, and acceptance
@@ -1452,6 +1716,132 @@ explicitly incomplete.
 The prototype of a category is not completion of that category. The full RFC is
 complete only when every supported public declaration is covered, all shipped
 projections are checked, and the appropriate independent proofs pass.
+
+### 8.5 Commit-by-commit plan for the first assignment
+
+These six commits implement only stage 1 of section 8.4. The suggested subjects
+identify reviewable outcomes; each commit includes its implementation, focused
+accepted/rejected cases, and any generated artifacts it changes. Keep each
+checkpoint buildable and preserve the existing production behavior. This is a
+plan for the engineering assignment, not an instruction to commit the RFC or
+unrelated working-tree changes.
+
+Develop the single `contract-prototype.nix` fixture incrementally throughout the
+sequence. Until a declaration family is implemented, reject its nonempty input
+and unsupported forms explicitly; do not add successful stubs or silently ignore
+declarations. Every implemented projection goes through its static validation
+barrier from its first commit. Intermediate subsets are private checkpoints,
+not completion of the closed first-slice grammar or permission to migrate a
+production owner.
+
+#### Commit 1 — `feat(meta): construct checked authoring declarations`
+
+Implement the private kernel/composition entry points, the existing capability
+inventory reader, authoring domains, literal/required presence, and
+`collectOptions`. Mount option and collection identities from the declaration
+tree, derive the index, and publish the checked native module projection.
+Establish the prototype fixture and focused Nix vectors through the repository's
+check wiring. Keep unmigrated production declarations at their existing owners.
+
+Prove scalar/list/map/submodule composition, nested mounting, literal-default
+normalization, required-option laziness, `optionAttrs` restrictions, inventory
+coordinates, duplicate identities, and unknown-key rejection. An unrelated
+malformed declaration must block module publication without forcing project
+values. Native module evaluation must accept the timeout default and reject zero.
+Run the focused Nix vectors before completing this commit.
+
+#### Commit 2 — `feat(meta): preserve contextual defaults and render option references`
+
+Add contextual resolvers, scope-local argument signatures, and native argument
+forwarding as specified in section 3.4. Build the prototype reference projection
+using the existing option evaluator/renderer, with actual evaluated-option
+coverage and a raw-option bypass negative. Keep prototype rendering separate
+from the unmigrated production `docs/OPTIONS.md` snapshot and public apps.
+Return the prototype reference as a build artifact; leave the production docs
+snapshot projection empty until its discovery cutover.
+
+Pass the complete contextual-default matrix in section 8.2, native override and
+submodule-default cases, and static extraction with poisoned callbacks. Check
+that references display effective defaults and contextual expressions. Run the
+expanded Nix vectors and build the prototype reference without a project model
+or runtime build dependency.
+
+#### Commit 3 — `feat(meta): enforce scoped relationships and validation rules`
+
+Add the applicable reference/relationship forms, scope validation, reverse
+links, structural slot bounds, native rules, and `runRule`. Preserve the existing
+service-cycle algorithm and its prior reference-check order. If binding that
+algorithm requires extracting a native helper, change its existing caller and
+the prototype binding together without copying the algorithm or changing its
+behavior. References requiring not-yet-implemented command or rich wire entries
+continue to fail closed until those entries exist.
+
+Prove the twice-mounted relationship-bearing fragment, wrong-scope/kind and
+dangling-reference negatives, phase/input/result failures, transformed-operand
+rejection, inclusive slot boundaries, and native service-cycle outcomes. Add the
+unrelated-malformed-relationship publication test. Run the focused Nix vectors
+and, if a production helper was extracted, its existing affected checks. The
+same owned rule list must feed invocation and reference generation.
+
+#### Commit 4 — `feat(meta): construct and generate the Invocation wire fixture`
+
+Add `wireDomains`, wire shapes, inventory-complete record validation,
+`constructWire`, conventional Rust naming, and whole-record/enum generation.
+Complete the timeout probe with the eight-field `Invocation`. In this same commit,
+add the test-only Rust harness and required native adapters, checked generated
+fixture tree, pinned formatting, packaged regeneration tool, and freshness
+enforcement for that tree. Introduce the section 7.3 generation/projection
+plumbing with this first real generated consumer; other product projections
+may remain empty. Do not replace production model records or add unused output
+files for deferred families.
+
+Run wire/domain/category negatives, exact inventory coverage, producer-value
+validation, deterministic generation, and generated-name cases. Compile and test
+the generated Rust through the pinned fixture-backed environment; preserve
+native identifier behavior and acceptance above the Nix integer maximum. Check
+missing/extra/stale generated files, regeneration idempotence, and source-tree
+confinement, including preservation of the handwritten harness. Neither stale
+bindings nor an uncompiled generated artifact may be deferred to a later commit.
+
+#### Commit 5 — `feat(meta): generate the private slot command probe`
+
+Add the exact first-slice command grammar, command/argument reference entries,
+and `defaultsFrom` links. Generate the complete private slot request/parser and
+bind its conventional hooks to native lexical parsing, errors, and slot selection
+through the test harness. Extend the same regeneration/freshness path and
+reference projection; the production `run` parser remains its existing owner.
+
+Run unsupported command-shape negatives, numeric boundary and overflow cases,
+missing/invalid/unknown argument cases, both repetition policies, omitted/explicit
+slot selection, and configured range/placement failures. Prove missing or
+wrongly typed native hooks fail compilation. Run the affected Nix vectors,
+generation checks, and fixture-backed Rust tests in this commit.
+
+#### Commit 6 — `test(meta): prove the assembled contract and dependency boundaries`
+
+Complete the assembled fixture required by section 8.2 using the declarations
+already introduced; do not create a parallel set for integration. Add its paired
+mutations and the remaining product-isolation, derivation-identity, reference
+closure, and poisoned-dependency proofs. Synthetic cross-product cases cover
+unmigrated products without migrating their declarations. Verify all first-slice
+interfaces and negatives, including those previously rejected as unimplemented,
+now satisfy the specified grammar.
+
+Run the focused Nix/generation checks, relevant fixture-backed Rust tests, and
+`nix flake check`. Apply any additional affected-owner checks required by
+DEVELOPMENT.md; the full `.#test` and `.#ci -- --dirty` obligations for production
+cutovers remain unchanged. Report exact commands/results, all unverified platform,
+release, or integration coverage, and the four section 9.2 comparisons with
+measured LOC/build dependencies and planned production removals. Put this evidence
+in the implementation review or handoff, not a new persistent report catalog.
+Stop at prototype completion; later stages require their own scoped handoff.
+
+Commit boundaries may be combined when required to keep coupled changes atomic.
+Do not split generators from their checked outputs, behavior from its focused
+proofs, or a helper extraction from its callers. A failed check belongs to the
+commit introducing the change; do not carry an intentionally broken checkpoint
+forward or defer its repair to commit 6. Scope or grammar changes return to
+design review rather than being hidden in the sequence.
 
 ## 9. Rationale, cost, and acceptance
 
@@ -1518,6 +1908,53 @@ Recurring complexity consists of declaration forms, the existing inventory
 reader, projection backends, scope validation, and generation checks. Runtime
 algorithms gain no schema interpreter or reference lookup overhead. Cold docs
 rendering and executable rebuild behavior must be measured rather than assumed.
+
+#### Change-complexity acceptance
+
+LOC is supporting evidence, not the acceptance criterion. For each architecture
+probe and production cutover, include a short before/after comparison in the
+implementation review or handoff. Identify the representative change, its
+authored owner, every independently edited definition site, affected generated
+projections, and superseded definitions. Count sites by required independent
+edits, not files: two synchronized definitions in one file remain two sites.
+
+Classify retained edits as owning structural declarations, native behavior,
+independently authored evidence, or the deliberate capability-descriptor update
+required by section 5.1. Report generated artifacts separately; regeneration is
+not another authored definition. Explain why retained sites express distinct
+responsibilities rather than repeated facts. Native Rust admission, independently
+implemented Nix/Rust derivation, and their independent proofs retain their
+existing ownership.
+
+Use these four representative changes in private fixtures:
+
+| Probe | Change and required evidence |
+| --- | --- |
+| Timeout | Change an authoring bound without changing its wire domain. One range declaration updates the option and reference projections; independent boundary expectations remain separately authored. Identify handwritten predicates and duplicated range explanations replaced at cutover. |
+| Slot bounds | Change a relation operand. One relation declaration updates enforcement and reference; independent endpoint and rejection cases verify the result. Identify superseded handwritten relation checks. |
+| Service cycles | Refactor a native rule implementation while retaining its declared behavior and interface. The algorithm stays in its enforcing owner; binding and reference require no copy or re-expression of it. Preserve independent graph cases and phase/diagnostic evidence. |
+| Slot parser | Change argument repetition policy. One command declaration updates generated parsing and reference; independent syntax cases verify the change while native slot resolution retains its behavior. Identify handwritten parser definitions replaced at the complete-command cutover. |
+
+Prototype comparisons distinguish measured fixture behavior from planned
+production removals and name the existing production definitions to replace.
+Temporary fixture copies do not demonstrate that production duplication has
+already disappeared. These mutations prove the machinery; they do not authorize
+changes to production behavior or bypass ABI recording.
+
+At production cutover, the actual diff must substantiate the claimed removals,
+remove participating prototype copies, and leave one authored owner for each
+structural fact. Reject a cutover that leaves synchronized handwritten
+projections, adds another algorithm owner, or requires unrelated declarations
+or backends to change for an edit already expressible by the grammar. Independent
+proofs and required ABI recording must not be removed to improve the count.
+
+The probes must demonstrate fewer independently maintained structural
+definitions where duplication exists; every category need not shrink. Native
+rule integration passes by preserving its single algorithm owner and exposing
+its contract without duplicating execution logic. Unexplained increases in
+recurring change sites return to design review before broader migration. Keep
+this evidence in the implementation review or handoff; no persistent catalog,
+report format, or measurement service is required.
 
 ### 9.3 Alternatives
 
