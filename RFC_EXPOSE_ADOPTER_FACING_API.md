@@ -226,21 +226,60 @@ particular directory layout.
 
 ### 4.4 Proposed organization
 
-Keep the kernel small and definitions distributed by responsibility:
+Keep the meta-framework and all authored meta-definitions together under
+`nix/meta/`. Separate its small compilation kernel from the definitions of
+Nixfied built on that kernel:
 
 ```text
-nix/contract/                 private constructors, reference checks, projections
-nix/modules/                 authoring declarations using those constructors
-nix/compiler/                phase-specific rules, lowering, derivation, emission
-nix/spec/                    wire shapes bound to the capability inventory
-nix/adapters/                adapter exposures and their module implementations
-nix/docs/                    reference rendering, lookup, and packaging
+nix/meta/
+  default.nix                compose definitions and expose checked projections
+  kernel.nix                 constructors, validation, projection generators
+  definitions.nix            Nixfied's authored meta-definitions
+  regenerate.nix             packaged development tool for generation/checks
+
+nix/modules/                 consume generated options; native module composition
+nix/compiler/                native evaluation, algorithms, lowering, realization
+nix/adapters/                native adapter implementations
+nix/docs/                    reference presentation, lookup, packaging
 runtime/crates/*/             generated static bindings plus native mechanisms
 ```
 
-The directory sketch is private organization, not a new public path contract.
-The compiler imports the owning declarations; it must not require a second
-registration file that repeats all public names.
+Start with these files, not a directory per declaration category. Options,
+exposures, rules, wire shapes, commands, context inputs, and guarantees are kinds
+of definitions, not mandatory modules or subdirectories. Split `kernel.nix` or
+`definitions.nix` only when the implemented code needs it; keep any resulting
+files under `nix/meta/`. `default.nix` is the composition entry point, not another
+registry. Packaging generated projections can live there without a separate
+`generated.nix` layer.
+
+This is the target source organization, not an adopter-facing import API.
+`nix/meta/definitions.nix` is the place to review what Nixfied exposes, accepts,
+relates, and guarantees. Native implementation directories consume those
+contracts; they do not retain separately authored copies of migrated definitions.
+Move existing structural definitions into `meta` as their owners cut over,
+including applicable definitions currently under `nix/spec/`. Do not leave
+forwarding catalogs or a second inventory of public names behind.
+
+`default.nix` composes definition bundles by responsibility, rather than repeating
+every declared name in a registration file. Each bundle owns both the declaration
+and its implementation binding. Pure structural checks can be generated entirely
+from these definitions. Complex algorithms remain native: a rule definition binds
+a native predicate directly, and its phase owner invokes the resulting checked
+rule in the existing order. Keep imported native helpers independent of the
+assembled meta-framework to avoid an import cycle; pass project context only at
+execution, never during static metadata extraction.
+
+The authored `runtime/crates/nixfied-model/capability.txt` remains the explicit
+exception: it retains its current location and ABI authority, and `meta` imports
+it. Generated Rust stays with its consuming crate; generated reference snapshots
+stay under `docs/`. Centralizing definitions does not move runtime behavior into
+Nix or require the project compiler and native algorithms to be generated.
+
+The directory name `meta` identifies the source layer, not a prefix in public
+reference identities. An option remains `nixfied.tasks.<task>.invocation.timeoutMs`
+regardless of the source file that declares it. Documentation source links point
+to its definition under `nix/meta/`; semantic references retain the canonical
+option, exposure, rule, and inventory identities specified below.
 
 ## 5. Declaration model
 
@@ -275,11 +314,64 @@ Domain constructors delegate merging and evaluation to Nixpkgs. Add a structured
 constraint when it can generate an existing predicate and explain the same fact.
 For native checks, require an explanation and preserve their existing mechanism.
 
-Presence policies distinguish required input, optional absence, and a supplied
-default. A default of `null` is a real default. Wire presence additionally
+Authoring presence distinguishes required input and a supplied literal or
+contextual default. Optional values use an explicit nullable domain/default,
+not implicit omission. A default of `null` is a real default. Wire presence additionally
 records whether absence and explicit null are accepted and what serialization
 emits. Nix defaults, wire decode defaults, and command fallback policies are
 separate facts unless an explicit relation connects them.
+
+#### Defaults and concise authoring
+
+Prefer short declarations with sane, visible defaults. Authors supply the facts
+that distinguish a definition; they should not repeat empty metadata, standard
+policies, or mechanically derived names. Constructors normalize this concise
+input into the complete tagged records used by validation and every projection.
+There is one normalization path, not separate defaults in docs, Nix, and Rust.
+
+| Authored omission | Effective default |
+| --- | --- |
+| `relations`, examples collections | Empty list |
+| `moduleArgs` | Empty attrset; preserve native module behavior |
+| `unit` | No unit annotation |
+| Additional integer bound | No additional bound beyond the native domain |
+| Option presence without a value default | Required; never invent a value |
+| Wire `unknownFields` | Reject |
+| Wire field `policy` | Required, non-null |
+| Wire field `producer` | Caller supplies the value |
+| Unsigned shape `nonzero` | False; positivity must be declared |
+| Command argument repetition | Reject duplicates unless explicitly overridden |
+
+`default = value` is shorthand for `presence = api.defaultValue value`.
+A contextual default still uses `api.defaultFrom { expression; resolve; }`.
+Supplying both `default` and `presence` is an error, including when `default`
+is `null`. Use attribute presence, not truthiness, to distinguish omissions.
+Unknown keys remain errors; defaulting must not conceal misspelled declarations.
+Explanations, domains, semantic identities, and required native behavior are
+not fabricated from defaults.
+
+For adopter configuration, give each option a useful default wherever one is
+valid for its role: existing examples include invocation timeout, working
+directory, stdin policy, and an empty environment. Put that default in the owning
+option or shared declaration fragment once. Reuse fragments with ordinary Nix
+composition; use existing module defaults and override priorities for adopter
+configuration. Do not introduce an ambient defaults registry or a second merge
+system. Related values may use an explicit contextual default instead of copying
+a literal across definitions.
+
+A type alone cannot choose a useful value: a string is not automatically empty,
+a list is not automatically empty, and a nullable option is not automatically
+`null`. Executable argv, tool requirements, project identities, and other inputs
+without a valid universal value remain required. Runtime-owned host placement and
+secrets remain runtime-owned. Wire decode defaults and command fallback policies
+remain separate from authoring defaults.
+
+These defaults reduce declaration size without changing accepted inputs.
+Migration must explicitly override any constructor default that differs from
+existing behavior, such as last-occurrence-wins flags or optional wire fields.
+Changing a shared semantic default is a contract change affecting every consumer;
+check its projections and existing ABI obligations together. Documentation shows
+effective defaults and contextual expressions, even when omitted at each use.
 
 ### 5.3 Example: timeout
 
@@ -288,7 +380,7 @@ Illustrative private syntax; constructor spelling is not an adopter API:
 ```nix
 timeoutMs = api.option {
   domain = api.integer { min = 1; };
-  default = api.defaultValue 30000;
+  default = 30000;
   unit = "milliseconds";
   explanation = "Maximum invocation duration before cancellation.";
 };
@@ -348,20 +440,21 @@ For a simple relation, one declaration can generate both validation and its
 explanation:
 
 ```nix
-slotWithinBounds = api.rule {
+slotWithinBounds = api.betweenInclusive {
+  id = "slot-default-within-bounds";
   phase = "validate";
-  relation = api.betweenInclusive {
-    value = slotPolicy.default.ref;
-    lower = slotPolicy.min.ref;
-    upper = slotPolicy.max.ref;
-  };
+  value = api.optionRef [ "nixfied" "slotPolicy" "default" ];
+  lower = api.optionRef [ "nixfied" "slotPolicy" "min" ];
+  upper = api.optionRef [ "nixfied" "slotPolicy" "max" ];
+  diagnostic = input: "slotPolicy.default must be within the slot range";
 };
 ```
 
 This removes duplicated option associations and comparison logic. The three
 options retain their owning declarations. Preserve existing diagnostics and
-evaluation order unless an explicit contract change authorizes a difference. The diagnostic renderer may
-remain owner-specific even when the predicate is generated.
+evaluation order unless an explicit contract change authorizes a difference.
+The diagnostic renderer remains owner-specific; the example preserves the
+existing validation message.
 
 ### 6.3 Native rules and derivations
 
@@ -443,6 +536,9 @@ Generate wire constructors and serialization policies from the validated wire
 declarations. Existing lowering supplies their values. Producer construction
 rejects undeclared record members, missing required members, invalid values, and
 incoherent alternatives. Dynamic map keys follow their declared domains.
+Force validation of the entire constructed JSON-compatible value before returning
+it or publishing model bytes. Strictness here applies to the produced data, never
+to the contract graph or implementation callbacks.
 
 Generated Rust decoding must preserve the existing accepted wire inputs,
 including unknown-field, omission, null, and decode-default policies. Equivalent
@@ -482,7 +578,9 @@ phase-specific runtime invariants.
 
 The Nix-owned contract compiler emits static Rust source for the facts Rust must
 consume: command grammar and help, field/variant structure, exact vocabulary,
-and explicit bindings to native handlers, resolvers, and validated domains.
+and convention-derived bindings to native handlers, resolvers, and validated
+domains. Authored definitions contain semantic identities and requirements;
+Rust names, paths, and type mappings belong exclusively to the Rust backend.
 It emits only the necessary executable projection, not the reference graph.
 
 The selected backend emits ordinary Rust source directly from validated Nix
@@ -598,11 +696,12 @@ Nix expressions, and distinction between absent and null defaults.
 
 Contract declarations are upstream inputs to sibling documentation and
 runtime-binding projections. Building or running the reference must not require
-rustc, Cargo, SQLite,
-the runtime binary, project executables, or a compiled project model. The
+rustc, Cargo, the runtime binary, project executables, or a compiled project model. The
 realized docs app invokes neither Nix nor Rust. Build-time rendering tools are
 ordinary Nix dependencies and should be measured separately from its runtime
-closure.
+closure. Existing option-renderer dependencies may transitively include SQLite;
+the excluded dependency is the Rust/runtime build, not every occurrence of that
+library in a rendering toolchain.
 
 ### 9.3 Generated source and snapshots
 
@@ -765,16 +864,16 @@ hand-authored implementations of the same fact must not become permanent dual
 paths. Earlier stages can ship value while later public categories remain
 explicitly incomplete.
 
-1. **Prove the kernel.** Specify declaration families and scope rules, implement
-   the four representative cases, establish metadata/project separation and
+1. **Prove the kernel.** Implement the interfaces and first assignment in section
+   14, including the four representative cases, establish metadata/project separation and
    generated-source freshness, and measure build dependencies and LOC.
 2. **Deliver discovery.** Migrate the necessary option declarations, correct
    inaccurate explanations, reuse the existing option renderer, and ship docs,
    topics, pinning, namespace rejection, help/scaffold pointers, and acceptance
    fixtures as one Nix-only public-surface change.
-3. **Complete Nix coverage.** Move public exposures and rules from every enforcing
-   Nix phase into declared construction, cover adapters and products, and enforce
-   actual-surface coverage without a permanent omissions allowlist.
+3. **Complete Nix coverage.** Move public exposures and rule declarations into
+   `nix/meta/definitions.nix`, retaining their native enforcing phases. Cover adapters
+   and products, and enforce actual-surface coverage without a permanent omissions allowlist.
 4. **Generate model construction and bindings.** Bind wire declarations to the
    authored capability inventory; cut over Nix constructors and Rust structural
    bindings together with byte-equivalence and independent admission proofs.
@@ -876,13 +975,497 @@ Nixfied's supported public surface. Generate documentation, executable structura
 bindings, and the model producer from its owned declarations. Keep native Nix
 algorithms and Rust admission/execution accountable to that contract.
 
-Before broad migration, implementation review must settle the exact small domain
-vocabulary, the generated/native Rust binding interface, and the deterministic
-source-generation layout through the representative cases. Those are bounded
-implementation decisions; they do not reopen model seams, introduce a runtime
+Section 14 specifies the initial domain interfaces, scoped references,
+generated/native Rust boundary, and deterministic source-generation workflow.
+Before broad migration, prove them through the four representative cases and
+measure their cost. Those proofs do not reopen model seams, introduce a runtime
 meta-framework, or change the authored capability authority.
 
 Success means an adopter can discover a supported capability through `.#docs`,
 understand its accepted inputs, defaults, relationships, effects, and failures,
 and use the same supplying framework input to compile an independently admitted
 `model.json` without reconstructing the contract from implementation source.
+
+## 14. Engineering interfaces and first handoff
+
+This section settles the first implementation's private interfaces. Constructor
+names may change together during implementation; ownership, rejection phases,
+and the following acceptance cases may not be weakened. These are ordinary
+checked Nix records, not a new evaluator or an opaque type system.
+
+### 14.1 Kernel entry points and evaluation boundaries
+
+```text
+compileOptions { declarations; }
+  -> { module; entries; }
+checkContract { entries; rules; exposures; wire; commands; inventory; }
+  -> CheckedContract
+resolveRef checkedContract.index reference -> Entry
+runRule { rule; phase; input; }
+  -> { kind = "pass"; } | { kind = "reject"; ruleId; message; }
+renderReference checkedContract -> reference text/index
+emitRust checkedContract -> product-keyed trees of source strings
+constructWire checkedRecord values -> checked JSON-compatible value
+```
+
+Constructors first apply the defaults in section 5.2 and produce complete
+normalized records. Validate defaults against their domains at the owning
+boundary: literal values when their domain is available, contextual values during
+native module evaluation. Static extraction never invokes a contextual resolver.
+Metadata failures throw deterministic, owner/path-qualified Nix errors.
+`CheckedContract` means a validated attrset projection. It is not a security or
+opacity boundary. `checkContract` forces required static fields, variant shapes,
+identities, relations, and inventory coordinates. It checks that native callbacks
+are functions, but never calls them or forces project values. Do not `deepSeq`
+the entire declaration graph. Native callback exceptions remain native errors;
+there is no catch-all conversion into an ordinary rejected rule.
+
+`compileOptions` walks a nested attribute tree whose leaves are tagged option
+declarations. Structured submodule and map domains retain their nested declaration
+trees. The supplied tree starts at the full option root; the collector carries
+mount paths internally, identically for native placement and metadata. One
+traversal produces both native `mkOption` declarations and mounted
+metadata. The returned `module` is a delayed ordinary Nix module receiving its
+usual module arguments; `entries` does not need that context. Collect each owning
+meta-definition bundle once and derive both projections from that collection.
+Native module entry points consume the generated module projection.
+Do not store metadata in extra `mkOption` fields, add an `_module` side channel,
+or maintain a second registration tree.
+
+Continue using `lib.evalModules` and `nixosOptionsDoc`. Join mounted metadata to
+evaluated option records by canonical path; preserve native merging, visibility,
+submodule traversal, default rendering, and `apply`. Coverage compares against
+actual evaluated option records and actual public export names, including raw
+option/export bypass negatives. Comparing two projections of the declaration
+list is insufficient. Enumerating exports must not force package/program values.
+Project-app fixtures audit framework apps plus declared verbs, excluding arbitrary
+adopter-added apps. Prototype declarations never count as public coverage.
+
+### 14.2 Option and rule declarations
+
+The concise authored option envelope is (defaults are defined in section 5.2):
+
+```nix
+api.option {
+  domain = api.integer { min = 1; }; # omitted bound means no additional bound
+  default = 30000;
+  explanation = "Maximum invocation duration before cancellation.";
+  unit = "milliseconds";
+}
+```
+
+`integer` validates integer bounds and `min <= max`; its native representation
+still determines representable values. The normalized presence alternatives are
+`api.required`, `api.defaultValue value`, and
+`api.defaultFrom { expression; resolve; }`. The latter carries static display text
+and a context callback evaluated only by the native module. It produces the
+existing `defaultText = lib.literalExpression expression`. A required option has
+no generated default; ordinary lazy undefined-option behavior is preserved.
+A literal `null` default is not absence. The optional `moduleArgs` accepts native
+`apply`, `example`, `visible`, `internal`, and `readOnly`. It rejects overrides of
+`type`, `default`, `defaultText`, and `description`, and rejects unknown keys.
+Existing uses of `apply`, including source-identity conversion, remain native.
+
+Implement domains only as they are exercised: native primitives, integer bounds,
+enums, lists, maps, submodules/products, and explicit alternatives. A native
+predicate needs an explanation and a direct callback, not a handler-name lookup.
+There is no arbitrary source-expression escape hatch or general constraint DSL.
+
+A complete structural rule has this form:
+
+```nix
+api.betweenInclusive {
+  id = "slot-default-within-bounds";
+  phase = "validate";
+  value = api.optionRef [ "nixfied" "slotPolicy" "default" ];
+  lower = api.optionRef [ "nixfied" "slotPolicy" "min" ];
+  upper = api.optionRef [ "nixfied" "slotPolicy" "max" ];
+  diagnostic = input: "slotPolicy.default must be within the slot range";
+}
+```
+
+This closed rule resolves scalar configuration references and generates both the
+inclusive predicate and its explanation. It accepts only concrete option paths,
+without item markers. Contract checking requires all three targets to have
+non-null integer domains, rejecting string/Boolean/nullable comparisons. It is
+not a language for iteration over project graphs.
+
+Native rules use
+`api.nativeRule { id; phase; inputs; explanation; check; diagnostic; }`.
+`check input` returns a Boolean; `diagnostic input` is called only on rejection
+and returns a nonempty string. Wrong callback result types are contract defects,
+not ordinary input rejection.
+The validate-phase input is `{ config; system; }`. Derivation owners pass their
+existing local inputs explicitly, rather than introducing a global registry of
+phase-state types. `runRule` checks the requested phase before evaluating input.
+The existing owner retains its ordered rule list, failure prefix, and evaluation
+position. The same ordered rule list feeds execution and reference generation;
+there is no second handler registry. Declared inputs do not prove which values
+an arbitrary callback actually reads. For service cycles, keep the existing graph algorithm and its prior
+reference checks in that order. Neither documentation nor relationship traversal
+invokes the algorithm or schedules rules.
+
+### 14.3 Canonical identities and scoped relationships
+
+Use a path segment that is either a literal string or `{ item = true; }`:
+
+```nix
+api.optionRef [ "nixfied" "tasks" { item = true; } "invocation" "timeoutMs" ]
+api.collectionRef [ "nixfied" "services" ]
+```
+
+An item marker binds the key of its immediately preceding map. Its identity is
+that map's complete prefix path. Reused invocation declarations acquire distinct
+identities when mounted under tasks, lifecycle operations, or probes; unmounted
+declarations have no `.ref`. Start with absolute checked references. No relative
+reference system or mirrored tree of reference handles is needed for this slice.
+
+The initial reference alternatives are option/path, collection/path,
+exposure/path, rule/stable-id, guarantee/stable-id, and capability/inventory
+coordinates. Constructors return tagged records; normalized JSON of the validated
+record is sufficient as an internal index key. Dot-joined names and `<name>` are
+presentation only. Collection entries derive from map domains. Inventory entries
+derive from the authored descriptor. Neither gets a second authored catalog.
+
+For a reference to collection keys, every ancestor map binder required by the
+target must occur identically in the source scope. Retain those bindings and
+discard source-only bindings:
+
+| Source | Target collection | Binding retained |
+| --- | --- | --- |
+| `tasks.<task>.requires` | `services` | None |
+| `tasks.<task>.steps.<step>.dependsOn` | `tasks.<task>.steps` | Same task |
+| `services.<service>.primaryEndpoint` | `services.<service>.endpoints` | Same service |
+
+Reject item markers under scalars, duplicate mounted identities, missing targets,
+wrong endpoint kinds, and targets requiring unavailable binders. Accept cyclic
+documentation links. No binder renaming, cross-instance join, or substitution
+language is needed.
+
+A `references` edge includes its source, target collection, and a required
+`rule = api.ruleRef id` explaining applicability and the enforcing owner.
+It validates schema navigation and scope; it does not install a project check.
+For example, endpoint normalization uses authored `primaryEndpoint` with named
+`endpoints`, derives the primary from `endpoint.endpointId` in the singular form,
+and omits endpoint fields when neither form exists. An unconditional map-membership
+check would change accepted authoring behavior. Link the existing normalization
+and admission rules instead, and show their qualification in the reference.
+
+### 14.4 Complete wire records and native Rust bindings
+
+Wire declarations bind inventory members by coordinates, for example
+`{ family = "primitive"; owner = "Invocation"; member = "timeoutMs"; }`.
+Resolve these against the imported descriptor. Require exact member-set equality
+for a migrated complete record; reject missing, duplicate, and wrong-owner members.
+Enums obtain their vocabulary from the named inventory entry. Definitions name
+semantic concepts, not Rust symbols. The Rust backend derives type, field, and
+function names and implementation paths by convention; declarations cannot
+override them.
+
+The normalized generator input is
+`api.wireRecord { inventory; unknownFields; fields; }`. `fields` is an ordered
+list of records with `member`, `value`, `policy`, `producer`, `explanation`, and
+`relations`. Authored input omits fields covered by the defaults in section 5.2:
+
+
+```nix
+api.wireRecord {
+  inventory = { family = "primitive"; owner = "Invocation"; };
+  fields = [
+    {
+      member = "timeoutMs";
+      value = { kind = "unsigned"; bits = 64; nonzero = true; };
+      explanation = "Maximum invocation duration before cancellation.";
+    }
+    # Excerpt only: the real declaration supplies all eight fields in wire order.
+  ];
+}
+```
+
+The excerpt alone fails member completeness. Field order determines emitted Rust
+and serialization order; inventory membership checking does not sort that list.
+Built-in value shapes determine Rust types, so this numeric shape yields
+`NonZeroU64` without a second authored type choice. Native refined leaves reference their owning semantic domain declaration; the
+backend derives the native type binding from that identity. They retain their
+existing construction/admission proofs. Neither inline shapes nor domain
+references introduce a separate Rust type registry. `supplied` requires
+an explicit caller value and never borrows a decoder default.
+
+The timeout prototype generates the complete eight-field record, preserving
+current wire names, derives, ordering, and unknown-field rejection. Its generated
+Rust name follows the inventory identity:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Invocation {
+    pub tools: UniqueVec<ClosureId>,
+    pub run: Vec<String>,
+    pub executable: String,
+    pub env: BTreeMap<String, String>,
+    pub codebase_id: CodebaseId,
+    pub cwd: String,
+    pub stdin: StdinPolicy,
+    pub timeout_ms: NonZeroU64,
+}
+```
+
+Keep refined native types and methods handwritten. Update internal callers to the
+conventional names at the atomic cutover; do not preserve old names through an
+alias catalog. Generate whole records, not field snippets inserted into
+handwritten records. Authoring timeout is a positive Nix integer; the wire domain
+is a nonzero unsigned 64-bit integer. Shared positivity does not make their
+maximum values equal. Rust must continue accepting valid values above the signed
+Nix integer maximum even though the Nix producer cannot construct them.
+
+The Rust backend owns the following fixed conventions:
+
+| Semantic identity | Rust projection |
+| --- | --- |
+| Inventory record `Invocation` | `Invocation` in the model's generated wire module |
+| Wire member `timeoutMs` | Field `timeout_ms`, with exact serialized name `timeoutMs` |
+| Command `slot-probe` | Request `SlotProbeArgs`, parser `parse_slot_probe` |
+| Native domain `ClosureId` | Type `crate::contract::values::ClosureId` in the consuming crate |
+| Native parsing for `slot-probe` argument `slot` | `crate::contract::commands::slot_probe::parse_slot` |
+| Unknown argument for `slot-probe` | `crate::contract::commands::slot_probe::unknown_argument` |
+
+These are backend rules, not authored mappings for each declaration. Built-in
+shapes map directly to standard Rust types; native domains are selected by
+semantic domain references, not module paths. Runtime-owned `contract` modules
+implement the expected hooks or statically re-export their actual native owners.
+They contain implementation bindings only, never a duplicate description of
+shapes, defaults, or grammar. Generated source uses direct typed calls; no
+runtime registration or name lookup is involved.
+
+The backend uses one tested conversion of semantic identifiers into Rust casing.
+Keep inventory type identifiers in their existing PascalCase; convert camelCase
+members and kebab-case command names at word boundaries, including acronym runs.
+Use Rust raw identifiers for keywords where legal; reject names Rust cannot
+represent and collisions after conversion within a generated namespace. Never
+silently disambiguate with suffixes or rewrite wire names. Exact wire names use
+explicit serialization renames when the casing convention alone is insufficient.
+
+Nix rejects invalid identities and generated-name collisions. Rust compilation
+checks that conventional native types/functions exist and satisfy the generated
+signatures and required traits. Domain declarations contain no Rust source,
+paths, type overrides, or per-entry naming exceptions. Backend changes are the
+single place to revise these conventions; runtime implementations follow them.
+
+Wire policy is a closed alternative, not independent Boolean switches:
+
+| Policy | Rust behavior |
+| --- | --- |
+| Required non-null | `T`, no decode default |
+| Absent/null means none; omit none | `Option<T>`, default and omit-none serialization |
+| Absent/null means none; emit null | `Option<T>`, default, no omission |
+| Defaulted non-null; emit value | `T`, declared decode default |
+| Defaulted empty collection; omit empty | Collection, default and matching empty predicate |
+| Output-only nullable, always present | Serialize-only `Option<T>`, no omission |
+
+Unsupported combinations fail contract compilation. Plain Serde `Option<T>` does
+not enforce a required nullable key on input. Add a specific tested mechanism
+only if such a current contract requires it. Decode defaults do not authorize the
+Nix producer to invent values: every constructor field needs an explicit lowering
+value or producer policy. Test preserved Nix model bytes separately from Rust
+round-trip bytes and accepted-input behavior.
+
+### 14.5 Generated command syntax and native resolution
+
+The first probe uses this complete private grammar envelope:
+
+```nix
+api.command {
+  name = "slot-probe";
+  explanation = "Private probe of generated slot argument syntax.";
+  help = { kind = "none"; }; # fixture only
+  arguments = [ {
+    token = "--slot";
+    field = "slot";
+    value = { kind = "unsigned"; bits = 32; };
+    presence = { kind = "optional"; };
+    repeat = { kind = "lastWins"; };
+    parse = { kind = "native"; };
+    explanation = "Select a declared project slot.";
+  } ];
+  unknownArgument = { kind = "native"; };
+}
+```
+
+This emits `SlotProbeArgs { slot: Option<u32> }` and
+`parse_slot_probe(args: &[String]) -> Result<SlotProbeArgs, RuntimeError>`, both
+crate-visible. `parse.kind = "native"` selects an implementation obligation,
+not an authored function name. The native unknown-argument hook has signature
+`fn unknown_argument(value: &str) -> RuntimeError` and preserves the current
+diagnostic. The harness invokes native slot selection after parsing. This probe
+has no public command exposure or handler registry. Production `run` must supply
+its complete grammar, early-help policy, and error-output selection at cutover.
+
+The slot example's native lexical hook, in its conventional command module, is:
+
+```rust
+pub(crate) fn parse_slot(
+    value: Option<&str>, flag: &str,
+) -> Result<u32, RuntimeError>
+```
+
+It preserves existing `u32::from_str` behavior, missing/invalid diagnostics, and
+`ModelAdmission` errors. The generated parser branch is:
+
+```rust
+"--slot" => {
+    index += 1;
+    slot = Some(crate::contract::commands::slot_probe::parse_slot(
+        args.get(index).map(String::as_str), "--slot",
+    )?);
+}
+```
+
+The declaration records a value-taking flag, native parsing, an optional unsigned
+32-bit value, and last-occurrence-wins repetition. Its semantic command/argument
+identities determine the hook path and generated request field. It relates omitted selection
+to the checked option references for slot default/bounds and native placement.
+The existing native interface remains:
+
+```rust
+pub fn select_slot(
+    model: &Model, requested_slot: Option<u32>,
+) -> RuntimeResult<SelectedSlot<'_>>
+```
+
+Keep lexical parsing, state/environment fallback, model admission, and selection
+at their current phases and in their existing order. Preserve help's early exit
+even alongside otherwise-invalid arguments. Generated syntax does not certify
+model ranges, placement coherence, or runtime admission.
+
+A production cutover replaces the complete command grammar, request record,
+help, repetition rules, and early error-output selection together. A single
+production flag must not acquire a second parser. The first slot probe is a
+private test fixture; native resolution remains shared with production. This
+checks structural bindings, not whether every model field actually influences
+execution. The latter remains the deferred parity gap in
+[known-gaps.md](docs/known-gaps.md).
+
+### 14.6 Generation, freshness, and dependency isolation
+
+Provide one packaged development tool defined in `nix/meta/regenerate.nix`
+using `pkgs.writeShellApplication`, following the existing development tooling.
+Keep its shell body in that Nix expression and declare its external programs in
+`runtimeInputs`; do not add a standalone `.sh` file. Expose the package through
+the existing development shell, without adding an adopter-facing flake app:
+
+```sh
+nix develop -c nixfied-meta                  # all generated outputs
+nix develop -c nixfied-meta --check          # compare without modification
+nix develop -c nixfied-meta --docs           # documentation only
+nix develop -c nixfied-meta --rust --check
+```
+
+Support `--docs --check` as well. The tool accepts `--root PATH`, defaulting to
+the current working directory, verifies it is a Nixfied source root, and exports
+its absolute path as `NIXFIED_GENERATION_ROOT`. Never infer the checkout from the
+packaged executable's location in the Nix store. These are development commands;
+the tool is not a dependency of ordinary product builds or the docs app.
+
+`nix/meta/default.nix` exposes checked projections and a lazy `generated` attrset
+with `docs`, `byProduct`, and `all` build outputs. Use the locked dependencies
+and local-source import pattern documented in DEVELOPMENT.md. A fixed impure
+Nix expression obtains only pinned inputs using
+`builtins.getFlake ("git+file://" + root)` and imports
+`builtins.toPath root + "/nix/meta/default.nix"` to select `generated`.
+Framework imports and descriptor reads remain relative to that local entry
+point, not the flake's `outPath`; newly created untracked Nix sources are therefore
+included. Existing product filters still govern Cargo source. Do not copy the
+entire checkout into a derivation merely to expose new files.
+
+The packaged tool only orchestrates builds and compares or replaces designated
+files. Generation semantics stay in Nix, and product freshness checks consume
+the same projections directly. Do not introduce separate ad hoc shell files for
+generation or freshness checks; any required shell orchestration belongs in its
+owning Nix derivation or packaged application.
+
+| Owner | Checked output location |
+| --- | --- |
+| Model | `runtime/crates/nixfied-model/src/generated/{mod.rs,wire.rs}` |
+| Runtime | `runtime/crates/nixfied-runtime/src/generated/{mod.rs,commands.rs,context.rs,outputs.rs,errors.rs}` |
+| Installer | `runtime/crates/nixfied-cli/src/generated/{mod.rs,commands.rs}` |
+| Reference | `docs/OPTIONS.md`, `docs/API.md` |
+
+Create files only when a category migrates. Generated directories contain no
+handwritten source. Removal of superseded files is confined to those designated
+trees. Pure Nix emits deterministic source strings; a separate derivation applies
+the existing pinned development toolchain's `rustfmt` with edition 2024. Docs
+must not reference that formatting derivation. No timestamps, checkout paths,
+revision provenance, or non-embedded reference prose enter Rust projections.
+
+Pass each product's formatted projection to `runtime-source.nix`. Its existing
+source-staging derivation compares the expected generated trees with filtered
+checked source before copying/compiling. Missing, extra, or changed files fail;
+never silently replace stale checked bindings during a build. Runtime receives
+model/runtime projections; CLI receives only CLI; test-child receives none.
+Freshness inputs are filtered Cargo source, selected generated bytes, and the
+existing manifest/lock inputs, never the complete contract/docs source tree.
+
+Extend workspace checks to verify generated snapshots. The fixture-backed
+`.#test` path requires Rust freshness before Cargo; raw Cargo/editor workflows
+continue reading checked source. Test derivation identities as well as bytes:
+non-embedded prose changes preserve all product identities, and runtime-only or
+CLI-only projection changes preserve the other product. This includes freshness
+check dependencies, which can otherwise recreate broad rebuilds.
+
+### 14.7 First engineer assignment and completion gate
+
+Implement the kernel and four architecture probes from section 11.1. Use
+`nix/checks/fixtures/contract-prototype.nix`,
+`nix/checks/contract-vectors.nix`, and a test-only harness/generated fixture under
+`runtime/crates/nixfied-runtime/tests/fixtures/contract-prototype/`. Import the
+Rust harness through the runtime binary's `#[cfg(test)]` unit-test module so it
+can adapt native
+private helpers without publishing a runtime API. Test-only adapters can bridge
+existing helper signatures until production cutover. Keep the handwritten harness outside a `generated/` child in that fixture
+directory. That child alone is a temporary designated generated tree, included
+in the runtime product's projection/freshness check; regeneration cannot replace
+the harness. Other product projections may initially be empty. Synthetic
+source/projection fixtures exercise cross-product isolation before their owners
+migrate. Delete this temporary generated tree at the real owner's cutover.
+Production declarations, complete command migration, and public docs delivery remain subsequent stages.
+At each owner's cutover, remove its prototype declaration/parser copies and
+retain independent expected behavior against the production path.
+
+For this first slice, coverage and freshness negatives exercise explicitly
+mounted prototype surfaces and generated fixtures. They do not require all
+unmigrated production definitions to use the kernel. Enable production coverage
+and product freshness for each participating owner at its atomic cutover.
+
+The first assignment is complete when all of these are demonstrated:
+
+- Metadata rejects missing fields, duplicate identities, dangling/wrong-scope
+  references, invalid inventory coordinates, and public-surface bypasses.
+- Concise declarations and their explicitly expanded forms produce identical
+  checked metadata, generated source, and behavior. Reject conflicting presence
+  declarations, unknown keys, and invalid default values. Documentation displays
+  effective defaults; shared-default changes update all affected projections.
+- Native module merging, contextual default display, `apply`, and required-option
+  laziness are preserved. Poisoned callbacks/project defaults are not evaluated
+  by static metadata extraction.
+- Timeout accepts its default and valid values; rejects zero, null, missing wire
+  fields, and unknown wire fields; Rust accepts values above the Nix maximum.
+- Slot bounds accept both endpoints and reject outside values. Service cycles
+  retain their phase/order, while metadata generation never runs the algorithm.
+- Generated slot syntax preserves missing/invalid/overflow errors and repetition;
+  native resolution preserves omitted/explicit selection and placement checks.
+  A missing or wrongly typed conventional native implementation fails compilation.
+  Naming vectors cover camelCase, kebab-case, acronyms, Rust keywords, and
+  collisions; declarations reject language-specific naming/path overrides.
+- Repeated generation is byte-identical. Freshness rejects stale, missing, and
+  extra files. Docs evaluation survives poisoned runtime/project dependencies,
+  and its build closure excludes Rust toolchains, runtime binaries, and models.
+  Ordinary transitive dependencies of the existing option renderer are allowed.
+- Product dependency-isolation checks pass; maintained LOC and generator size
+  are measured separately from generated source and prose.
+
+Run focused Nix vectors/generation checks, the relevant fixture-backed Rust tests,
+and `nix flake check`. Use the complete `.#test` floor and cross-layer
+`.#ci -- --dirty` as production owners cut over, following DEVELOPMENT.md.
+A prototype passes this gate without claiming the full RFC is implemented.
+If a probe needs a new generic language, runtime registry, or second authority,
+bring that concrete failure back to design review before expanding the kernel.
