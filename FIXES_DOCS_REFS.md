@@ -1,8 +1,16 @@
 # Discoverable authoring reference at the project's Nixfied revision
 
-Status: proposal, not implemented. Commands below describe the proposed surface.
+Status: product requirements for the replacement design in
+[RFC_EXPOSE_ADOPTER_FACING_API.md](RFC_EXPOSE_ADOPTER_FACING_API.md).
+Implementation is not claimed complete or in progress by this document.
 Origin: adopter report from MFM, "Reading Nixfied From the Store", against
 pin `6b3a70b`.
+
+This document owns the adopter problem and behavioral acceptance requirements.
+The RFC owns architecture, public artifact names, the complete command surface,
+and the engineering replacement plan. The abandoned implementation is excluded
+from the engineer's handoff; its files and progress claims are not references for
+implementing these requirements.
 
 ## 1. Problem and required outcome
 
@@ -41,7 +49,8 @@ reference, not another required model artifact or runtime authority.
 
 ## 2. Evidence and the answer currently missing
 
-The current sources establish these concrete gaps:
+The original report established these gaps. The replacement is evaluated against
+the clean baseline identified by the RFC, not the abandoned working tree:
 
 - [`nix/project-apps.nix`](nix/project-apps.nix) exports command discovery and
   runtime controls, but no authoring-reference app.
@@ -51,12 +60,13 @@ The current sources establish these concrete gaps:
   [`nix/packages/rust-workspace-check.nix`](nix/packages/rust-workspace-check.nix)
   proves that the checked-in reference matches the generator, not that every
   description matches behavior.
-- [`nix/modules/primitives.nix`](nix/modules/primitives.nix) describes
-  `stateRefs` as participating in service identity. It does not appear in
+- Baseline primitive option declarations describe `stateRefs` as participating in
+  service identity. That description needs correction: it does not appear in
   [`service/identity.rs`](runtime/crates/nixfied-runtime/src/service/identity.rs),
   and [`execution/lower.rs`](runtime/crates/nixfied-runtime/src/execution/lower.rs)
   discards it.
-- The `requires` description does not explain task-side placeholder names.
+- The baseline `requires` description omits task-side placeholder names. The
+  replacement must explain their scope and primary selection.
   [`nix/compiler/validate.nix`](nix/compiler/validate.nix) admits named endpoint
   references only to required services that have endpoints.
 
@@ -82,7 +92,8 @@ work (§7), not a prerequisite for telling adopters the truth today.
 
 Add a framework-owned `docs` app to the generated project surface, with a visible
 entry in `.#help` and a pointer in the scaffold's authoring comments.
-The following syntax is the proposed first-delivery interface:
+The following are the required discovery journeys; the RFC defines the complete
+query interface and delivery plan:
 
 ```sh
 nix run .#docs
@@ -166,11 +177,10 @@ An exported documentation derivation can make the same content available for
 direct reading, archiving, or tooling. It may back the app too. There is no
 architectural conflict between the two.
 
-The required first-delivery surface is the project docs app. Public artifact
-names and layout can be chosen during implementation if the artifact is also
-exported; they must be documented and reuse the same content builder. Packaging
-alone does not satisfy command discovery, and an app alone does not prove that
-it reads the right revision.
+The project docs app is required. The RFC fixes the package name and readable
+reference location; both app and artifact reuse the same content builder.
+Packaging alone does not satisfy command discovery, and an app alone does not
+prove that it reads the right revision.
 
 ### Bind content at evaluation
 
@@ -212,11 +222,11 @@ topic navigation in their existing documentation owners. Keep authored prose
 under the existing documentation tree so the upgrade documentation report
 continues to cover it.
 
-## 6. Proof and delivery order
+## 6. Product acceptance evidence
 
-First establish accurate content and the reference builder. Then connect lookup,
-project and framework apps, help, namespace rejection, and scaffold discovery as
-one public-surface delivery. Validate with an adopter-shaped fixture.
+Validate the complete product through an adopter-shaped fixture. These are
+behavioral requirements, not a second engineering schedule; the RFC owns the
+replacement order and the full architectural acceptance gate.
 
 Acceptance requires these proofs:
 
