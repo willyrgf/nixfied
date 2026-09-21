@@ -1,0 +1,9 @@
+Safely clean Nixfied-owned state for a slot.
+
+Usage:
+  nix run .#clean -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  --purge          Relax only the protected/persistent cleanup policy gate
+  -h, --help       Show this help

@@ -1,6 +1,7 @@
 { lib, system, ... }:
 let
-  inherit (lib) mkOption types;
+  inherit (lib) types;
+  inherit (import ../meta/options.nix { inherit lib; }) mkOption;
 in
 {
   options.nixfied.project = {

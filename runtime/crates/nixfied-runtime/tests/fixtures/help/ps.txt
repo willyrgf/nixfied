@@ -1,0 +1,8 @@
+Reconcile and report Nixfied-owned processes for a slot.
+
+Usage:
+  nix run .#ps -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  -h, --help       Show this help

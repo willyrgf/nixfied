@@ -44,7 +44,7 @@
         import ./nix/packages/runtime.nix {
           inherit pkgs package buildType;
         };
-      mkNixfiedLib =
+      libraryDeclarations =
         { pkgs, system }:
         let
           compileModel =
@@ -67,32 +67,132 @@
               inherit pkgs system module;
             }).config;
         in
-        {
-          inherit compileModel;
-          inherit (composeLib) seq;
-          # The generated discovery/control apps plus one app per task id the
-          # adopter exports in `nixfied.surface.verbs`.
-          projectApps =
-            module:
-            import ./nix/project-apps.nix {
-              inherit module;
-              inherit pkgs releaseRuntime system;
-              inherit (nixpkgs) lib;
-              model = compileModel module;
-              config = resolveConfig module;
-            };
+        [
+          {
+            kind = "function";
+            scope = "library";
+            name = "compileModel";
+            description = "Compile a native Nixfied module into a model package.";
+            input = "A native module function, attribute set, or module path.";
+            result = "Derivation containing model.json and disposable views/docs.md.";
+            usage = "nixfied.lib.${system}.compileModel ./nixfied.nix";
+            references = [
+              {
+                kind = "topic";
+                id = "model";
+              }
+            ];
+            binding = compileModel;
+          }
+          {
+            kind = "function";
+            scope = "library";
+            name = "seq";
+            description = "Construct sequential composite steps from distinct task names.";
+            input = "List of distinct declared task identifiers, in execution order.";
+            result = "Native steps attribute set; each step depends on its predecessor.";
+            usage = ''nixfiedLib.seq [ "lint" "test" ]'';
+            references = [
+              {
+                kind = "topic";
+                id = "derivation";
+              }
+            ];
+            binding = composeLib.seq;
+          }
+          {
+            kind = "function";
+            scope = "library";
+            name = "projectApps";
+            description = "Expose discovery, documentation, controls and explicitly exported project tasks.";
+            input = "Project-root ./nixfied.nix beside flake.nix and flake.lock.";
+            result = "Native flake app attribute set with descriptions.";
+            usage = "apps.${system} = nixfied.lib.${system}.projectApps ./nixfied.nix;";
+            references = [
+              {
+                kind = "topic";
+                id = "discovery";
+              }
+              {
+                kind = "option";
+                path = [
+                  "nixfied"
+                  "surface"
+                  "verbs"
+                ];
+              }
+            ];
+            binding =
+              module:
+              import ./nix/project-apps.nix {
+                inherit module;
+                inherit pkgs releaseRuntime system;
+                inherit (nixpkgs) lib;
+                docs = docsFor { inherit pkgs system; };
+                publicationTargets = (authoringFor { inherit pkgs system; }).targets;
+                model = compileModel module;
+                config = resolveConfig module;
+              };
+          }
+        ];
+      authoringFor = args: import ./nix/meta/authoring.nix ({ inherit (nixpkgs) lib; } // args);
+      publicationFor =
+        args@{ pkgs, system }:
+        let
+          authoring = authoringFor args;
+        in
+        import ./nix/meta/publications.nix { inherit (nixpkgs) lib; } {
+          targets = authoring.targets;
+          declarations =
+            authoring.declarations
+            ++ libraryDeclarations args
+            ++ packageDeclarations.${system}
+            ++ appDeclarations.${system}
+            ++ checkDeclarations.${system}
+            ++ shellDeclarations.${system}
+            ++ import ./nix/project-publications.nix { };
         };
+      mkNixfiedLib = args: (publicationFor args).project "function" "library";
+      docsFor =
+        args:
+        import ./nix/docs/reference.nix (
+          {
+            inherit (nixpkgs) lib;
+            options = (authoringFor args).options;
+            publications = (publicationFor args).entries;
+            source = {
+              path = toString self.outPath;
+              revision = self.rev or null;
+              dirtyRevision = self.dirtyRev or null;
+              narHash = self.narHash or null;
+            };
+          }
+          // args
+        );
+      publishPackage = scope: name: description: artifact: binding: {
+        kind = "package";
+        inherit
+          scope
+          name
+          description
+          artifact
+          binding
+          ;
+        usage =
+          if scope == "devShell" then
+            "nix develop"
+          else if scope == "check" then
+            "nix build .#checks.<system>.${name}"
+          else
+            "nix build .#${name}";
+      };
       mkNixfiedTestChild =
         pkgs:
         mkNixfiedPackage {
           inherit pkgs;
           package = "nixfied-test-child";
         };
-    in
-    {
-      lib = forAllSystems mkNixfiedLib;
-
-      packages = forAllSystems (
+      packageDeclarations = forAllSystems (
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
@@ -160,7 +260,10 @@
                     "7"
                   ];
                 };
-                exitPolicy.successCodes = [ 0 7 ];
+                exitPolicy.successCodes = [
+                  0
+                  7
+                ];
               };
 
               nixfied.tasks.redacted = {
@@ -377,8 +480,7 @@
               nixfied.tasks.example-reth.invocation.env.RETH_MODEL = toString rethModel;
               nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
               nixfied.tasks.task-output.invocation.env.TASK_OUTPUT_MODEL = toString taskOutputModel;
-              nixfied.tasks.task-output.invocation.env.NIXFIED_TASK_OUTPUT_SECRET =
-                "task-output-gate-secret";
+              nixfied.tasks.task-output.invocation.env.NIXFIED_TASK_OUTPUT_SECRET = "task-output-gate-secret";
               nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL =
@@ -425,69 +527,157 @@
             testChild = nixfiedTestChild;
           };
         in
-        {
-          default = minimalModel;
-          toolchain-model = toolchainModel;
-          gate-runtime-model = gateRuntimeModel;
-          nixfied-cli = nixfiedCli;
-          nixfied-runtime = nixfiedRuntime;
-          install = nixfiedInstall;
-          upgrade = nixfiedUpgrade;
-          gate = nixfiedGate;
-          check = devApps.check;
-          test = devApps.test;
-          ci = devApps.ci;
-          minimal-model = minimalModel;
-          postgres-model = postgresModel;
-          composite-model = compositeModel;
-          polyglot-stack-model = polyglotModel;
-          downstream-model = downstreamModel;
-          reth-model = rethModel;
-        }
+        [
+          (publishPackage "root" "default" "Default minimal example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            minimalModel
+          )
+          (publishPackage "root" "toolchain-model" "Heterogeneous toolchain example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            toolchainModel
+          )
+          (publishPackage "root" "gate-runtime-model" "Runtime integration gate model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            gateRuntimeModel
+          )
+          (publishPackage "root" "nixfied-cli" "Release scaffold installer CLI"
+            "Executable under bin/ with its native runtime dependencies."
+            nixfiedCli
+          )
+          (publishPackage "root" "nixfied-runtime" "Release generic process runtime"
+            "Executable under bin/ with its native runtime dependencies."
+            nixfiedRuntime
+          )
+          (publishPackage "root" "install" "Scaffold installation program"
+            "Executable under bin/ with its native runtime dependencies."
+            nixfiedInstall
+          )
+          (publishPackage "root" "upgrade" "Input upgrade and documentation-report program"
+            "Executable under bin/ with its native runtime dependencies."
+            nixfiedUpgrade
+          )
+          (publishPackage "root" "gate" "Framework integration gate program"
+            "Executable under bin/ with its native runtime dependencies."
+            nixfiedGate
+          )
+          (publishPackage "root" "check" "Hermetic source and model-admission check program"
+            "Executable under bin/ with its native runtime dependencies."
+            devApps.check
+          )
+          (publishPackage "root" "test" "Fixture-backed Cargo test program"
+            "Executable under bin/ with its native runtime dependencies."
+            devApps.test
+          )
+          (publishPackage "root" "ci" "Whole-repository local CI program"
+            "Executable under bin/ with its native runtime dependencies."
+            devApps.ci
+          )
+          (publishPackage "root" "minimal-model" "Minimal service example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            minimalModel
+          )
+          (publishPackage "root" "postgres-model" "PostgreSQL example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            postgresModel
+          )
+          (publishPackage "root" "composite-model" "Composite task example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            compositeModel
+          )
+          (publishPackage "root" "polyglot-stack-model" "Polyglot service example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            polyglotModel
+          )
+          (publishPackage "root" "downstream-model" "Downstream workflow example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            downstreamModel
+          )
+          (publishPackage "root" "reth-model" "Reth multi-endpoint example model"
+            "model.json and disposable views/docs.md, with realised closure dependencies."
+            rethModel
+          )
+          (publishPackage "root" "docs" "Revision-bound authoring and API reference"
+            "bin/nixfied-docs and share/nixfied/reference/API.md."
+            (docsFor {
+              inherit pkgs system;
+            })
+          )
+        ]
       );
 
-      apps = forAllSystems (
+      appDeclarations = forAllSystems (
         { pkgs, system }:
-        {
-          help = import ./nix/help-app.nix {
-            inherit pkgs system;
-            expectedFlakePath = self.outPath;
-            flakeRef = self.outPath;
-          };
-          install = {
+        let
+          app =
+            name: description: effects: reference: binding:
+            {
+              kind = "app";
+              scope = "root";
+              inherit
+                name
+                description
+                effects
+                binding
+                ;
+              usage = "nix run .#${name} -- --help";
+            }
+            // reference;
+          program = name: {
             type = "app";
-            program = "${self.packages.${system}.install}/bin/nixfied-install";
-            meta.description = "Install Nixfied scaffold files into a downstream project";
+            program = "${self.packages.${system}.${name}}/bin/nixfied-${name}";
           };
-          upgrade = {
-            type = "app";
-            program = "${self.packages.${system}.upgrade}/bin/nixfied-upgrade";
-            meta.description = "Repin the Nixfied flake input without touching project-owned declarations";
-          };
-          gate = {
-            type = "app";
-            program = "${self.packages.${system}.gate}/bin/nixfied-gate";
-            meta.description = "Run the framework gate (examples + slots/negative/adoption) against the working tree";
-          };
-          check = {
-            type = "app";
-            program = "${self.packages.${system}.check}/bin/nixfied-check";
-            meta.description = "Hermetic source gate (rustfmt/clippy/check) + model admission";
-          };
-          test = {
-            type = "app";
-            program = "${self.packages.${system}.test}/bin/nixfied-test";
-            meta.description = "Run the white-box cargo test floor with the pinned toolchain";
-          };
-          ci = {
-            type = "app";
-            program = "${self.packages.${system}.ci}/bin/nixfied-ci";
-            meta.description = "Fail-fast whole-repo gate: check then test then the gate";
-          };
-        }
+        in
+        [
+          (app "help" "List this flake's runnable commands"
+            "Evaluates final flake app metadata through Nix and verifies source context."
+            { topic = "discovery"; }
+            (
+              import ./nix/help-app.nix {
+                inherit pkgs system;
+                expectedFlakePath = self.outPath;
+                flakeRef = self.outPath;
+              }
+            )
+          )
+          (app "docs" "Read the authoring and API reference from this Nixfied source"
+            "Reads packaged reference content without model admission, runtime state or network access."
+            { topic = "discovery"; }
+            (program "docs")
+          )
+          (app "install" "Install Nixfied scaffold files into a downstream project"
+            "Creates scaffold files with native ownership and overwrite checks."
+            { command = "install"; }
+            (program "install")
+          )
+          (app "upgrade" "Repin the Nixfied flake input without touching project-owned declarations"
+            "Inspects pinned sources and reports documentation changes; checked apply updates project wiring after model preflight."
+            { command = "upgrade"; }
+            (program "upgrade")
+          )
+          (app "gate" "Run the framework gate (examples + slots/negative/adoption) against the working tree"
+            "Builds and executes runtime and downstream adoption integration fixtures."
+            { topic = "development"; }
+            (program "gate")
+          )
+          (app "check" "Hermetic source gate (rustfmt/clippy/check) + model admission"
+            "Runs flake checks and admits a realised example model."
+            { topic = "development"; }
+            (program "check")
+          )
+          (app "test" "Run the white-box cargo test floor with the pinned toolchain"
+            "Executes fixture-backed Cargo tests, including native processes and sockets."
+            { topic = "development"; }
+            (program "test")
+          )
+          (app "ci" "Fail-fast whole-repo gate: check then test then the gate"
+            "Runs the complete local check, test and integration sequence."
+            { topic = "development"; }
+            (program "ci")
+          )
+        ]
       );
 
-      checks = forAllSystems (
+      checkDeclarations = forAllSystems (
         { pkgs, system }:
         let
           optionsDoc = import ./nix/docs/options.nix {
@@ -495,49 +685,92 @@
             inherit (nixpkgs) lib;
           };
         in
-        {
-          minimal-model = self.packages.${system}.minimal-model;
-          # The derivation spec's golden vectors as Nix eval fixtures
-          # (docs/DERIVATION_SPEC.md §6; DERIVE-1).
-          derive-facts-vectors = import ./nix/checks/derive-facts-vectors.nix {
-            inherit pkgs;
-            inherit (nixpkgs) lib;
-          };
-          # The runtime workspace must compile reproducibly. CI verifies the fast
-          # debug profile for fast iteration. The hosted workflow separately
-          # builds the release package as its final safety net.
-          nixfied-runtime = mkNixfiedPackage {
-            inherit pkgs;
-            package = "nixfied-runtime";
-            buildType = "debug";
-          };
-          # Hermetic source gate: checked option reference + rustfmt + clippy
-          # (-D warnings). Keep this under the existing check rather than adding
-          # another public flake output solely for documentation maintenance.
-          rust-workspace = import ./nix/packages/rust-workspace-check.nix {
-            inherit pkgs optionsDoc;
-          };
-        }
+        [
+          (publishPackage "check" "minimal-model" "Build the minimal example model" "Realised model package."
+            self.packages.${system}.minimal-model
+          )
+          (publishPackage "check" "derive-facts-vectors" "Check independent Nix derivation golden vectors"
+            "Successful evaluation of the derivation-spec vectors."
+            (
+              import ./nix/checks/derive-facts-vectors.nix {
+                inherit pkgs;
+                inherit (nixpkgs) lib;
+              }
+            )
+          )
+          (publishPackage "check" "nixfied-runtime" "Compile the debug runtime reproducibly"
+            "Debug runtime executable."
+            (mkNixfiedPackage {
+              inherit pkgs;
+              package = "nixfied-runtime";
+              buildType = "debug";
+            })
+          )
+          (publishPackage "check" "rust-workspace"
+            "Check native metadata, reference freshness, rustfmt and Clippy"
+            "Successful hermetic source and type checks."
+            (
+              assert import ./nix/checks/option-metadata.nix {
+                inherit pkgs system;
+                inherit (nixpkgs) lib;
+              };
+              assert import ./nix/checks/publications.nix {
+                inherit pkgs system;
+                inherit (nixpkgs) lib;
+              };
+              assert import ./nix/checks/structure.nix { inherit (nixpkgs) lib; };
+              assert import ./nix/checks/syntax.nix { inherit (nixpkgs) lib; };
+              assert import ./nix/checks/coverage.nix { inherit (nixpkgs) lib; };
+              assert (publicationFor { inherit pkgs system; }).audit "function" "library" self.lib.${system};
+              assert (publicationFor { inherit pkgs system; }).audit "package" "root" self.packages.${system};
+              assert (publicationFor { inherit pkgs system; }).audit "app" "root" self.apps.${system};
+              assert (publicationFor { inherit pkgs system; }).audit "package" "check" self.checks.${system};
+              assert (publicationFor { inherit pkgs system; }).audit "package" "devShell"
+                self.devShells.${system};
+              import ./nix/packages/rust-workspace-check.nix {
+                inherit pkgs optionsDoc;
+                referenceCheck = import ./nix/checks/reference.nix {
+                  inherit pkgs system;
+                  inherit (nixpkgs) lib;
+                  docs = docsFor { inherit pkgs system; };
+                };
+              }
+            )
+          )
+        ]
       );
 
-      devShells = forAllSystems (
+      shellDeclarations = forAllSystems (
         { pkgs, ... }:
         let
           nixfiedTestChild = mkNixfiedTestChild pkgs;
         in
-        {
+        [
           # The pinned toolchain (cargo/rustc/clippy/rustfmt) so the cargo floor
           # runs identically on every host and in CI, independent of host Rust.
-          default = pkgs.mkShell {
-            packages = [
-              (import ./nix/toolchain.nix { inherit pkgs; }).dev
-              pkgs.sqlite
-              pkgs.nix
-              pkgs.git
-            ];
-            NIXFIED_TEST_CHILD = "${nixfiedTestChild}/bin/nixfied-test-child";
-          };
-        }
+          (publishPackage "devShell" "default" "Pinned Rust and Nix development environment"
+            "Development shell with the private test-child fixture."
+            (
+              pkgs.mkShell {
+                packages = [
+                  (import ./nix/toolchain.nix { inherit pkgs; }).dev
+                  pkgs.sqlite
+                  pkgs.nix
+                  pkgs.git
+                ];
+                NIXFIED_TEST_CHILD = "${nixfiedTestChild}/bin/nixfied-test-child";
+              }
+            )
+          )
+        ]
       );
+
+    in
+    {
+      lib = forAllSystems mkNixfiedLib;
+      packages = forAllSystems (args: (publicationFor args).project "package" "root");
+      apps = forAllSystems (args: (publicationFor args).project "app" "root");
+      checks = forAllSystems (args: (publicationFor args).project "package" "check");
+      devShells = forAllSystems (args: (publicationFor args).project "package" "devShell");
     };
 }

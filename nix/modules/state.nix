@@ -1,6 +1,8 @@
 { lib, ... }:
 let
-  inherit (lib) mkOption types;
+  inherit (lib) types;
+  vocabulary = (import ../meta/default.nix { inherit lib; }).vocabularyMap;
+  inherit (import ../meta/options.nix { inherit lib; }) mkOption;
 in
 {
   options.nixfied.state = {
@@ -17,19 +19,13 @@ in
     };
 
     cleanupPolicy = mkOption {
-      type = types.enum [
-        "delete-on-clean"
-        "protected"
-      ];
+      type = types.enum vocabulary."enum CleanupPolicy".members;
       default = "delete-on-clean";
       description = "Whether ordinary `clean` may delete owned state or must require explicit purge.";
     };
 
     persistence = mkOption {
-      type = types.enum [
-        "run-scoped"
-        "persistent"
-      ];
+      type = types.enum vocabulary."enum PersistencePolicy".members;
       default = "run-scoped";
       description = "Whether slot state is eligible for ordinary cleanup or treated as persistent data requiring explicit purge.";
     };

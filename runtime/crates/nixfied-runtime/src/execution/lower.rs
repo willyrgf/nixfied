@@ -1312,6 +1312,46 @@ mod tests {
     }
 
     #[test]
+    fn descriptive_refs_change_model_bytes_but_not_service_reuse_identity() {
+        let baseline = model_value();
+        let baseline_execution = lower(&model_from(baseline.clone())).unwrap();
+        for labels in [
+            json!([]),
+            json!(["slot"]),
+            json!(["arbitrary", "../label", ""]),
+        ] {
+            let mut changed = baseline.clone();
+            changed["services"]["svc"]["stateRefs"] = labels.clone();
+            changed["services"]["svc"]["logRefs"] = json!(["descriptive-log"]);
+            changed["tasks"]["t"]["artifactRefs"] = json!(["descriptive-artifact"]);
+            changed["tasks"]["t"]["logRefs"] = json!(["descriptive-task-log"]);
+            changed["tasks"]["t"]["summaryRefs"] = json!(["descriptive-summary"]);
+            assert_ne!(
+                serde_json::to_vec(&baseline).unwrap(),
+                serde_json::to_vec(&changed).unwrap()
+            );
+            let model = model_from(changed);
+            assert_eq!(
+                serde_json::to_value(&model).unwrap()["services"]["svc"]["stateRefs"],
+                labels
+            );
+            let execution = lower(&model).expect("descriptive strings remain accepted");
+            assert_eq!(
+                execution.services["svc"].identity,
+                baseline_execution.services["svc"].identity
+            );
+            assert_eq!(
+                execution.services["svc"].start.exec.args,
+                baseline_execution.services["svc"].start.exec.args
+            );
+            assert_eq!(
+                execution.tasks["t"].exec.args,
+                baseline_execution.tasks["t"].exec.args
+            );
+        }
+    }
+
+    #[test]
     fn stdin_inherit_is_carried_into_resolved_invocation() {
         // A model that declares `stdin: inherit` must lower to an invocation that
         // records it, not silently collapse to null.
@@ -2098,6 +2138,32 @@ mod tests {
             vec!["postgres", "redis", "postgres"]
         );
         assert!(named_endpoint_refs("--port ${port}").is_empty());
+    }
+
+    #[test]
+    fn task_named_placeholders_use_service_ids_not_endpoint_ids() {
+        let mut value = model_value();
+        value["tasks"]["t"]["invocation"]["run"] = json!(["task", "${host:svc}", "${port:svc}"]);
+        lower(&model_from(value.clone())).expect("direct required service is addressable");
+        value["tasks"]["t"]["invocation"]["run"] = json!(["task", "${port:svc-tcp}"]);
+        let error =
+            lower(&model_from(value)).expect_err("endpoint id is not a task service reference");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("svc-tcp"));
+    }
+
+    #[test]
+    fn task_bare_placeholders_do_not_skip_endpoint_less_first_requirement() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+        value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
+        lower(&model_from(value.clone())).expect("addressable first dependency accepts bare port");
+        value["tasks"]["t"]["requires"] = json!(["worker", "svc"]);
+        let error =
+            lower(&model_from(value)).expect_err("first dependency cannot be skipped or sorted");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("${port}"));
     }
 
     #[test]

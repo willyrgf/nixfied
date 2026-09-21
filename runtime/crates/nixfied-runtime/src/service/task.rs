@@ -4,7 +4,7 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::admission::secrets::ResolvedSecrets;
 use crate::cancellation::{CancellationToken, canceled_error};
@@ -24,25 +24,7 @@ use crate::service::registry::{
 use crate::state::HostPlacement;
 use nixfied_model::ServiceId;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskRun {
-    pub task_id: String,
-    /// Evidence identity: the flattened step path of the node that ran this
-    /// leaf (`<root>.<step>...` for composite selections, the task id for a
-    /// direct leaf run). Logs, summaries, and the registry process row key by
-    /// it, so the same leaf referenced twice leaves distinct evidence.
-    pub step_path: String,
-    pub process_key: String,
-    pub exit_code: Option<i32>,
-    pub timed_out: bool,
-    pub canceled: bool,
-    pub success: bool,
-    pub duration_ms: u64,
-    pub stdout_path: PathBuf,
-    pub stderr_path: PathBuf,
-    pub summary_path: PathBuf,
-}
+include!("../generated/task.rs");
 
 #[derive(Debug)]
 pub enum CompletedEvidence {

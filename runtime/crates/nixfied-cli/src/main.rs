@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_NIXFIED_URL: &str = "github:willyrgf/nixfied";
+include!("generated/commands.rs");
 
 fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
@@ -18,8 +18,11 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
         return Ok(());
     };
     match command {
-        "install" => {
-            if args[1..].iter().any(|arg| arg == "-h" || arg == "--help") {
+        INSTALL_COMMAND => {
+            if args[1..]
+                .iter()
+                .any(|arg| arg == HELP_SHORT || arg == HELP_LONG)
+            {
                 print_install_usage();
                 return Ok(());
             }
@@ -28,7 +31,7 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
             print_install_outcome(&outcome);
             Ok(())
         }
-        "-h" | "--help" | "help" => {
+        HELP_SHORT | HELP_LONG | "help" => {
             print_usage();
             Ok(())
         }
@@ -48,31 +51,31 @@ struct InstallOptions {
 
 impl InstallOptions {
     fn parse(args: &[OsString]) -> Result<Self, CliError> {
-        let mut root = PathBuf::from(".");
-        let mut project_id = None;
-        let mut name = None;
-        let mut nixfied_url = DEFAULT_NIXFIED_URL.to_string();
+        let mut root = PathBuf::from(INSTALL_ROOT_INITIAL);
+        let mut project_id = INSTALL_PROJECT_ID_INITIAL.map(str::to_string);
+        let mut name = INSTALL_NAME_INITIAL.map(str::to_string);
+        let mut nixfied_url = INSTALL_NIXFIED_URL_INITIAL.to_string();
         let mut index = 0;
         while index < args.len() {
             let Some(arg) = args[index].to_str() else {
                 return Err(CliError::usage("arguments must be valid UTF-8"));
             };
             match arg {
-                "--root" => {
+                INSTALL_ROOT => {
                     index += 1;
-                    root = take_value(args, index, "--root")?.into();
+                    root = take_value(args, index, INSTALL_ROOT)?.into();
                 }
-                "--project-id" => {
+                INSTALL_PROJECT_ID => {
                     index += 1;
-                    project_id = Some(take_value(args, index, "--project-id")?.to_string());
+                    project_id = Some(take_value(args, index, INSTALL_PROJECT_ID)?.to_string());
                 }
-                "--name" => {
+                INSTALL_NAME => {
                     index += 1;
-                    name = Some(take_value(args, index, "--name")?.to_string());
+                    name = Some(take_value(args, index, INSTALL_NAME)?.to_string());
                 }
-                "--nixfied-url" => {
+                INSTALL_NIXFIED_URL => {
                     index += 1;
-                    nixfied_url = take_value(args, index, "--nixfied-url")?.to_string();
+                    nixfied_url = take_value(args, index, INSTALL_NIXFIED_URL)?.to_string();
                 }
                 other => {
                     return Err(CliError::usage(format!(
@@ -271,6 +274,7 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
   # The synthetic adapter contributes the `smoke` task (it pings the
   # service); exporting it below makes it a flake app: `nix run .#smoke`.
   # `nix run .#help` lists the final flake app surface.
+  # `nix run .#docs` explains authoring at this project's pinned Nixfied revision.
   # Add your own leaf tasks (lint/test), compose them into composite tasks
   # (kind = "composite", steps = ...), and export the ones that form your
   # public surface. `nix run .#run -- --task <id>` runs any declared task.
@@ -343,9 +347,7 @@ fn print_usage() {
 }
 
 fn print_install_usage() {
-    println!(
-        "usage: nixfied install [--root PATH] [--project-id ID] [--name NAME] [--nixfied-url URL]"
-    );
+    println!("{INSTALL_HELP}");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,7 +424,7 @@ mod tests {
             root: root.clone(),
             project_id: Some("existing-flake".to_string()),
             name: None,
-            nixfied_url: DEFAULT_NIXFIED_URL.to_string(),
+            nixfied_url: INSTALL_NIXFIED_URL_INITIAL.to_string(),
         })
         .expect_err("existing flake should refuse");
 
@@ -451,7 +453,7 @@ mod tests {
             root: root.clone(),
             project_id: None,
             name: None,
-            nixfied_url: DEFAULT_NIXFIED_URL.to_string(),
+            nixfied_url: INSTALL_NIXFIED_URL_INITIAL.to_string(),
         })
         .expect("install should create only flake");
 
@@ -468,7 +470,7 @@ mod tests {
             root: tmp.path.join("bad"),
             project_id: Some("-bad".to_string()),
             name: None,
-            nixfied_url: DEFAULT_NIXFIED_URL.to_string(),
+            nixfied_url: INSTALL_NIXFIED_URL_INITIAL.to_string(),
         })
         .expect_err("invalid project id should fail");
 
@@ -533,3 +535,6 @@ mod tests {
         (now << 16) | count
     }
 }
+
+#[cfg(test)]
+mod command_tests;

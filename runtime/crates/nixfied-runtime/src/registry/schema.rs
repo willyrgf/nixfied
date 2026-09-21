@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
+include!("../generated/registry_identity.rs");
+
 pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
@@ -314,12 +316,12 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeRes
 }
 
 fn registry_identity_json(identity: &RegistryIdentity) -> Value {
-    json!({
-        "projectId": identity.project_id,
-        "environment": identity.environment,
-        "slot": identity.slot,
-        "runtimeAbi": identity.runtime_abi,
-        "toolchainId": identity.toolchain_id,
+    json!(RegistryIdentityDiagnostic {
+        project_id: &identity.project_id,
+        environment: &identity.environment,
+        slot: identity.slot,
+        runtime_abi: &identity.runtime_abi,
+        toolchain_id: &identity.toolchain_id,
     })
 }
 

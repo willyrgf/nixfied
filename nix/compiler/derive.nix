@@ -7,13 +7,15 @@
 }:
 
 let
-  inherit (lib) filterAttrs mapAttrs mapAttrsToList;
+  inherit (lib) mapAttrs mapAttrsToList;
+  constructors = (import ../meta/default.nix { inherit lib; }).constructors;
+  construct = name: constructors.${"primitive/" + name};
   targetLib = import ../lib/target.nix { inherit lib; };
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
 
-  target = targetLib.fromSystem config.nixfied.target.system;
+  target = construct "Target" (targetLib.fromSystem config.nixfied.target.system);
 
-  slotPolicy = config.nixfied.slotPolicy;
+  slotPolicy = construct "SlotPolicy" config.nixfied.slotPolicy;
   slots = lib.range slotPolicy.min slotPolicy.max;
   portPolicy = config.nixfied.placement.ports;
   slotWindow =
@@ -21,39 +23,46 @@ let
     let
       start = portPolicy.base + (slot * portPolicy.slotStride);
     in
-    {
+    construct "CandidatePortWindow" {
       inherit start;
       end = start + portPolicy.windowSize - 1;
     };
-  slotPlacement = slot: {
-    inherit slot;
-    candidatePorts = slotWindow slot;
-  };
+  slotPlacement =
+    slot:
+    construct "SlotPlacement" {
+      inherit slot;
+      candidatePorts = slotWindow slot;
+    };
   slotPlacements = builtins.listToAttrs (
     map (slot: {
       name = builtins.toString slot;
       value = slotPlacement slot;
     }) slots
   );
-  secretDescriptors = mapAttrs (secretId: secret: {
-    inherit secretId;
-    source = filterAttrs (_name: value: value != null) secret.source;
-  }) config.nixfied.secrets;
+  secretDescriptors = mapAttrs (
+    secretId: secret:
+    construct "SecretDescriptor" {
+      inherit secretId;
+      source = construct "SecretSource" secret.source;
+    }
+  ) config.nixfied.secrets;
 
   # Declared closures: realise package store paths and absolute executable
   # paths. Tool entries given as plain packages synthesize additional closures
   # below.
   # Bindings are DERIVED (docs/DERIVATION_SPEC.md §4); a declared list is an
   # optional narrowing gate checked below.
-  declaredClosureSpec = id: closure: {
-    kind = closure.kind;
-    storePath = "${closure.package}";
-    executable = "${closure.package}/${closure.executable}";
-    targetSystem = target.closureSystem;
-    operationBindings = gatedBindings id closure.operationBindings;
-    requiresExecutable = closure.requiresExecutable;
-    effects = closure.effects;
-  };
+  declaredClosureSpec =
+    id: closure:
+    construct "ClosureSpec" {
+      kind = closure.kind;
+      storePath = "${closure.package}";
+      executable = "${closure.package}/${closure.executable}";
+      targetSystem = target.closureSystem;
+      operationBindings = gatedBindings id closure.operationBindings;
+      requiresExecutable = closure.requiresExecutable;
+      effects = closure.effects;
+    };
   declaredClosures = mapAttrs declaredClosureSpec config.nixfied.closures;
 
   # A package-shaped tool synthesizes a closure: its executable anchors the
@@ -61,15 +70,17 @@ let
   # weakest attestation (per-tool effects granularity is deferred).
   toolClosureId = package: "tool-${lib.getName package}";
   toolMainProgram = package: package.meta.mainProgram or (lib.getName package);
-  synthesizedClosureOf = package: {
-    kind = "executable";
-    storePath = "${package}";
-    executable = "${package}/bin/${toolMainProgram package}";
-    targetSystem = target.closureSystem;
-    operationBindings = derivedBindings (toolClosureId package);
-    requiresExecutable = true;
-    effects = [ "process" ];
-  };
+  synthesizedClosureOf =
+    package:
+    construct "ClosureSpec" {
+      kind = "executable";
+      storePath = "${package}";
+      executable = "${package}/bin/${toolMainProgram package}";
+      targetSystem = target.closureSystem;
+      operationBindings = derivedBindings (toolClosureId package);
+      requiresExecutable = true;
+      effects = [ "process" ];
+    };
 
   # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §5.1),
   # declared only to override.
@@ -150,7 +161,7 @@ let
     assert lib.assertMsg (
       !(invocation.env ? PATH)
     ) "${owner}: env.PATH is runtime-owned (assembled from the tool roots) and must not be declared";
-    {
+    construct "Invocation" {
       tools = toolIds;
       run = invocation.run;
       executable = closures.${resolvedId}.executable;
@@ -194,54 +205,57 @@ let
         "closure ${id}: dispatched against operations outside its declared bindings: ${builtins.concatStringsSep ", " outsideGate}";
       derived;
 
-  # Mirror the runtime's serde skip rules (invocation only on exec probes and
-  # bound prepares) so the emitted model matches the typed runtime wire shape.
+  # Native lowering selects invocations; shared construction owns omission.
   probeOf =
     owner: op:
-    {
+    construct "ProbeSpec" {
       inherit (op.probe)
         kind
         timeoutMs
         retryIntervalMs
         maxAttempts
         ;
-    }
-    // lib.optionalAttrs (op.probe.kind == "exec" && op.probe.invocation != null) {
-      invocation = resolveInvocation owner op.probe.invocation;
+      invocation =
+        if op.probe.kind == "exec" && op.probe.invocation != null then
+          resolveInvocation owner op.probe.invocation
+        else
+          null;
     };
-  terminalOf = op: { inherit (op.terminal) success failure; };
+  terminalOf = op: construct "TerminalSemantics" { inherit (op.terminal) success failure; };
   lifecycleSpec =
     name: lc:
-    {
-      start = {
+    construct "Lifecycle" {
+      start = construct "StartSpec" {
         operationId = serviceOperationId name "start" lc.start.operationId;
         invocation = resolveInvocation "service ${name} start" lc.start.invocation;
         terminal = terminalOf lc.start;
       };
-      ready = {
+      ready = construct "ReadySpec" {
         operationId = serviceOperationId name "ready" lc.ready.operationId;
         probe = probeOf "service ${name} ready probe" lc.ready;
         terminal = terminalOf lc.ready;
       };
-      health = {
+      health = construct "HealthSpec" {
         operationId = serviceOperationId name "health" lc.health.operationId;
         probe = probeOf "service ${name} health probe" lc.health;
         terminal = terminalOf lc.health;
       };
-      stop = {
+      stop = construct "StopSpec" {
         operationId = serviceOperationId name "stop" lc.stop.operationId;
         inherit (lc.stop) signal timeoutMs;
         terminal = terminalOf lc.stop;
       };
-      clean = {
+      clean = construct "CleanSpec" {
         operationId = serviceOperationId name "clean" lc.clean.operationId;
         terminal = terminalOf lc.clean;
       };
-    }
-    // lib.optionalAttrs (lc.prepare.task != null) {
-      prepare = {
-        task = lc.prepare.task;
-      };
+      prepare =
+        if lc.prepare.task == null then
+          null
+        else
+          construct "PrepareSpec" {
+            task = lc.prepare.task;
+          };
     };
 
   # Service identity is no longer emitted: the runtime derives a service's reuse
@@ -262,15 +276,18 @@ let
       endpoints =
         if singular then
           {
-            ${service.endpoint.endpointId} = {
+            ${service.endpoint.endpointId} = construct "Endpoint" {
               inherit (service.endpoint) endpointId host;
             };
           }
         else
-          builtins.mapAttrs (id: ep: {
-            endpointId = id;
-            inherit (ep) host;
-          }) service.endpoints;
+          builtins.mapAttrs (
+            id: ep:
+            construct "Endpoint" {
+              endpointId = id;
+              inherit (ep) host;
+            }
+          ) service.endpoints;
       primaryEndpoint = if singular then service.endpoint.endpointId else service.primaryEndpoint;
       probeKind = op: service.lifecycle.${op}.probe.kind;
       startClosureEffects =
@@ -305,15 +322,13 @@ let
     assert lib.assertMsg (
       !endpointLess || !startListens
     ) "service ${name}: an endpoint-less service's start closure must not declare `network-listener`";
-    {
-      inherit lifecycle;
+    construct "ServiceSpec" {
+      inherit lifecycle endpoints;
+      primaryEndpoint = if endpointLess then null else primaryEndpoint;
       connectsTo = service.connectsTo;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;
-    }
-    // lib.optionalAttrs (!endpointLess) {
-      inherit endpoints primaryEndpoint;
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 
@@ -345,18 +360,21 @@ let
   taskSpec =
     name: task:
     if task.kind == "composite" then
-      {
+      construct "TaskSpec" {
         kind = "composite";
         defaultOutput = task.defaultOutput;
         serviceLifetime = task.serviceLifetime;
         servicesRequired = taskServicesRequired name;
-        steps = mapAttrs (_stepName: step: {
-          task = step.task;
-          dependsOn = step.dependsOn;
-        }) task.steps;
+        steps = mapAttrs (
+          _stepName: step:
+          construct "StepSpec" {
+            task = step.task;
+            dependsOn = step.dependsOn;
+          }
+        ) task.steps;
       }
     else
-      {
+      construct "TaskSpec" {
         kind = "leaf";
         defaultOutput = task.defaultOutput;
         serviceLifetime = task.serviceLifetime;
@@ -364,7 +382,7 @@ let
         invocation = resolveInvocation "task ${name}" task.invocation;
         requires = task.requires;
         servicesRequired = taskServicesRequired name;
-        exitPolicy = {
+        exitPolicy = construct "ExitPolicy" {
           successCodes = task.exitPolicy.successCodes;
         };
         artifactRefs = task.artifactRefs;
@@ -377,37 +395,37 @@ in
 {
   packages = closurePackages;
 
-  model = {
+  model = construct "Model" {
     modelVersion = constants.modelVersion;
     toolchainId = constants.toolchainId;
     runtimeAbi = constants.runtimeAbi;
-    generator = {
+    generator = construct "Generator" {
       name = "nixfied";
       version = constants.toolchainId;
       emitter = "nix/compiler/emit-model.nix";
     };
-    project = {
+    project = construct "Project" {
       inherit (config.nixfied.project) projectId name;
     };
     inherit target;
     codebases = [
-      {
+      (construct "Codebase" {
         codebaseId = "main";
         inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
-        sourcePolicy = {
+        sourcePolicy = construct "SourcePolicy" {
           inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
         };
-      }
+      })
     ];
     secrets = secretDescriptors;
     # Membership does not exist; `dev` is the single isolation namespace
     # (state roots, slots, registry keys).
     environments = [ "dev" ];
     inherit slotPolicy;
-    placement = {
+    placement = construct "Placement" {
       inherit slotPlacements;
     };
-    state = {
+    state = construct "StatePolicy" {
       inherit (config.nixfied.state)
         markerIdentity
         stateEpoch

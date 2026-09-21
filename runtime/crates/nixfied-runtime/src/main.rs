@@ -7,7 +7,10 @@ use nixfied_model::{ServiceLifetime, TaskDefaultOutput};
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::RuntimeCause;
 use nixfied_runtime::execution::plan;
-use nixfied_runtime::output::{EvidenceMode, ReplaySinks, ReplayTicket};
+use nixfied_runtime::output::{
+    EvidenceMode, OutputStream, ProjectionDiagnostic, ProjectionOperation, ReplaySinks,
+    ReplayTicket,
+};
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::{
@@ -26,66 +29,14 @@ use nixfied_runtime::{
     read_raw_model,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckOutput {
-    model_path: PathBuf,
-    computed_model_hash: String,
-    raw_len: usize,
-    project_id: String,
-    runtime_abi: String,
-    toolchain_id: String,
-    target_system: String,
-    environment: String,
-    slot: u32,
-}
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ServiceRunOutput {
-    service_id: String,
-    service_instance_id: String,
-    process_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    selected_endpoint: Option<SelectedEndpoint>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NodeResult {
-    node_id: String,
-    task_id: String,
-    success: bool,
-    exit_code: Option<i32>,
-    duration_ms: u64,
-    // Where the node's full execution detail lives — the task's captured stdout,
-    // stderr, and summary — so the summary links each node straight to its
-    // evidence without a separate lookup.
-    stdout_path: PathBuf,
-    stderr_path: PathBuf,
-    summary_path: PathBuf,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunOutput {
-    run_id: String,
-    model_path: PathBuf,
-    computed_model_hash: String,
-    duration_ms: u64,
-    services: Vec<ServiceRunOutput>,
-    tasks: Vec<TaskRun>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    task: Option<TaskRun>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary_path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    nodes: Vec<NodeResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    run_summary_path: Option<PathBuf>,
-}
+include!("generated/main.rs");
+include!("generated/commands.rs");
 
 enum ReplayPlan {
     None,
@@ -307,15 +258,7 @@ impl<'a> RunSession<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSelection {
-    slot: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RunOutputMode {
-    Summary,
-    Json,
-    Both,
-    TaskOutput,
+    slot: Option<CheckSlotValue>,
 }
 
 impl RunOutputMode {
@@ -361,13 +304,13 @@ fn main() {
 }
 
 fn run(args: &[String]) -> Result<(), RuntimeError> {
-    let command = args.first().map(String::as_str).unwrap_or("check");
+    let command = args.first().map(String::as_str).unwrap_or(CHECK_COMMAND);
     match command {
-        "check" => check(args.get(1..).unwrap_or(&[])),
-        "run" => run_m0(args.get(1..).unwrap_or(&[])),
-        "ps" => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
-        "down" => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
-        "clean" => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
+        CHECK_COMMAND => check(args.get(1..).unwrap_or(&[])),
+        RUN_COMMAND => run_m0(args.get(1..).unwrap_or(&[])),
+        PS_COMMAND => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
+        DOWN_COMMAND => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
+        CLEAN_COMMAND => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
         _ => Err(RuntimeError::unsupported_feature(
             "runtime.command",
             format!("unsupported runtime command: {command}"),
@@ -395,14 +338,14 @@ enum ErrorOutputProjection {
 }
 
 fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
-    if args.first().map(String::as_str) != Some("run") {
+    if args.first().map(String::as_str) != Some(RUN_COMMAND) {
         return ErrorOutputProjection::Human;
     }
     let args = args.get(1..).unwrap_or(&[]);
     let mut mode = None;
     let mut index = 0;
     while index < args.len() {
-        if args[index].as_str() == "--output"
+        if args[index].as_str() == RUN_OUTPUT
             && let Some(value) = args.get(index + 1).map(String::as_str)
         {
             mode = Some(value);
@@ -411,8 +354,8 @@ fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
         index += 1;
     }
     match mode {
-        Some("both") => ErrorOutputProjection::Both,
-        Some("json") => ErrorOutputProjection::Json,
+        Some(RUN_OUTPUT_MODE_BOTH) => ErrorOutputProjection::Both,
+        Some(RUN_OUTPUT_MODE_JSON) => ErrorOutputProjection::Json,
         _ => ErrorOutputProjection::Human,
     }
 }
@@ -522,44 +465,40 @@ fn print_recovery_hint(error: &RuntimeError) -> Result<(), RuntimeError> {
 }
 
 fn write_stderr_line(line: impl Display) -> Result<(), RuntimeError> {
-    writeln!(io::stderr().lock(), "{line}")
-        .map_err(|error| output_projection_io_error("stderr", "write", "<stderr>", error))
+    writeln!(io::stderr().lock(), "{line}").map_err(|error| {
+        output_projection_io_error(
+            OutputStream::Stderr,
+            ProjectionOperation::Write,
+            "<stderr>",
+            error,
+        )
+    })
 }
 
 fn string_detail<'a>(error: &'a RuntimeError, key: &str) -> Option<&'a str> {
     error.details.get(key).and_then(Value::as_str)
 }
 
-const CHECK_HELP: &str = "\
-Admit the compiled Nixfied model without executing tasks.
-
-Usage:
-  nix run .#model-check -- [options]
-
-Options:
-  --slot <number>  Select a declared project slot
-  -h, --help       Show this help";
-
 fn check(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, CHECK_HELP) {
         return Ok(());
     }
-    let mut model_path = None;
-    let mut allow_non_store = false;
-    let mut slot = None;
+    let mut model_path = CHECK_MODEL_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = CHECK_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut slot = CHECK_SLOT_INITIAL;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--model" => {
+            CHECK_MODEL => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            "--allow-non-store-model" => {
+            CHECK_ALLOW_NON_STORE_MODEL => {
                 allow_non_store = true;
             }
-            "--slot" => {
+            CHECK_SLOT => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+                slot = Some(parse_slot_arg(args.get(index), CHECK_SLOT)?);
             }
             other => {
                 return Err(RuntimeError::new(
@@ -573,7 +512,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            "missing --model path",
+            format!("missing {CHECK_MODEL} path"),
         )
     })?;
     let (loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
@@ -1259,18 +1198,30 @@ fn write_diagnostic(output_mode: RunOutputMode, line: impl Display) -> Result<()
     if !output_mode.emit_summary() {
         return Ok(());
     }
-    writeln!(io::stderr().lock(), "{line}")
-        .map_err(|error| output_projection_io_error("stderr", "write", "<stderr>", error))
+    writeln!(io::stderr().lock(), "{line}").map_err(|error| {
+        output_projection_io_error(
+            OutputStream::Stderr,
+            ProjectionOperation::Write,
+            "<stderr>",
+            error,
+        )
+    })
 }
 
 fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
-    writeln!(io::stdout().lock(), "{line}")
-        .map_err(|error| output_projection_io_error("stdout", "write", "<stdout>", error))
+    writeln!(io::stdout().lock(), "{line}").map_err(|error| {
+        output_projection_io_error(
+            OutputStream::Stdout,
+            ProjectionOperation::Write,
+            "<stdout>",
+            error,
+        )
+    })
 }
 
 fn output_projection_io_error(
-    stream: &str,
-    operation: &str,
+    stream: OutputStream,
+    operation: ProjectionOperation,
     path: &str,
     error: io::Error,
 ) -> RuntimeError {
@@ -1286,13 +1237,13 @@ fn output_projection_io_error(
     )
     .with_detail(
         "projections",
-        vec![json!({
-            "stream": stream,
-            "operation": operation,
-            "kind": kind,
-            "path": path,
-            "bytesWritten": 0,
-        })],
+        vec![ProjectionDiagnostic {
+            stream: &stream,
+            operation: &operation,
+            kind,
+            path,
+            bytes_written: 0,
+        }],
     )
 }
 
@@ -1444,13 +1395,13 @@ struct RunSummary<'a> {
 /// results — a complete, inspectable record of the run.
 fn write_run_summary(input: RunSummary<'_>) -> Result<PathBuf, RuntimeError> {
     let path = input.placement.artifacts_dir.join("run-summary.json");
-    let mut summary = serde_json::json!({
-        "runId": input.run_id,
-        "success": input.run_succeeded && input.nodes.iter().all(|node| node.success),
-        "durationMs": input.duration_ms,
-        "services": input.services,
-        "nodes": input.nodes,
-        "tasks": input.tasks,
+    let mut summary = serde_json::json!(RunSummaryOutput {
+        run_id: input.run_id,
+        success: input.run_succeeded && input.nodes.iter().all(|node| node.success),
+        duration_ms: input.duration_ms,
+        services: input.services,
+        nodes: input.nodes,
+        tasks: input.tasks,
     });
     input.redactor.redact_value(&mut summary);
     let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
@@ -1484,57 +1435,10 @@ struct ControlOptions {
     cleanup_mode: nixfied_runtime::state::CleanupMode,
 }
 
-const RUN_HELP: &str = "\
-Run one declared task and its required services.
-
-Usage:
-  nix run .#run -- --task <id> [options]
-  nix run .#<verb> -- [options]
-
-Options:
-  --task <id>             Select a declared task (the exported verb preselects it)
-  --slot <number>         Select a declared project slot
-  --timeout-ms <number>   Set the runtime operation timeout in milliseconds
-  --output <mode>         Select summary, json, both, or task-output (default: task default or summary)
-                           task-output requires one directly selected leaf and replays redacted output
-  -h, --help              Show this help";
-
-const PS_HELP: &str = "\
-Reconcile and report Nixfied-owned processes for a slot.
-
-Usage:
-  nix run .#ps -- [options]
-
-Options:
-  --slot <number>  Select a declared project slot
-  -h, --help       Show this help";
-
-const DOWN_HELP: &str = "\
-Stop Nixfied-owned process groups for a slot.
-
-Usage:
-  nix run .#down -- [options]
-
-Options:
-  --slot <number>        Select a declared project slot
-  --timeout-ms <number>  Set the stop timeout in milliseconds
-  -h, --help             Show this help";
-
-const CLEAN_HELP: &str = "\
-Safely clean Nixfied-owned state for a slot.
-
-Usage:
-  nix run .#clean -- [options]
-
-Options:
-  --slot <number>  Select a declared project slot
-  --purge          Relax only the protected/persistent cleanup policy gate
-  -h, --help       Show this help";
-
 fn print_help_if_requested(args: &[String], help: &str) -> bool {
     if args
         .iter()
-        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+        .any(|arg| matches!(arg.as_str(), HELP_SHORT | HELP_LONG))
     {
         println!("{help}");
         true
@@ -1563,7 +1467,7 @@ fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) 
     RuntimeError::new(
         nixfied_runtime::ErrorCode::TaskSelectionInvalid,
         format!(
-            "run requires --task <id>; declared tasks: {}",
+            "{RUN_COMMAND} requires {RUN_TASK} <id>; declared tasks: {}",
             declared.join(", ")
         ),
     )
@@ -1630,13 +1534,13 @@ fn validate_selection_nodes(
 
 fn parse_run_output_mode(value: &str) -> Result<RunOutputMode, RuntimeError> {
     match value {
-        "summary" => Ok(RunOutputMode::Summary),
-        "json" => Ok(RunOutputMode::Json),
-        "both" => Ok(RunOutputMode::Both),
-        "task-output" => Ok(RunOutputMode::TaskOutput),
+        RUN_OUTPUT_MODE_SUMMARY => Ok(RunOutputMode::Summary),
+        RUN_OUTPUT_MODE_JSON => Ok(RunOutputMode::Json),
+        RUN_OUTPUT_MODE_BOTH => Ok(RunOutputMode::Both),
+        RUN_OUTPUT_MODE_TASK_OUTPUT => Ok(RunOutputMode::TaskOutput),
         other => Err(RuntimeError::new(
             nixfied_runtime::ErrorCode::OutputModeInvalid,
-            format!("invalid --output value {other}: expected summary, json, both, or task-output"),
+            format!("invalid {RUN_OUTPUT} value {other}: expected {RUN_OUTPUT_MODE_CHOICES}"),
         )),
     }
 }
@@ -1697,77 +1601,77 @@ fn run_control_admitted(
 }
 
 fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> {
-    let mut model_path = None;
-    let mut allow_non_store = false;
-    let mut state_base = None;
-    let mut timeout_ms = 5000;
-    let mut output_mode = None;
-    let mut slot = None;
-    let mut task = None;
+    let mut model_path = RUN_MODEL_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUN_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut state_base = RUN_STATE_BASE_INITIAL.map(PathBuf::from);
+    let mut timeout_ms = RUN_TIMEOUT_MS_INITIAL;
+    let mut output_mode = RUN_OUTPUT_INITIAL;
+    let mut slot = RUN_SLOT_INITIAL;
+    let mut task = RUN_TASK_INITIAL.map(str::to_string);
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--model" => {
+            RUN_MODEL => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            "--allow-non-store-model" => {
+            RUN_ALLOW_NON_STORE_MODEL => {
                 allow_non_store = true;
             }
-            "--state-base" => {
+            RUN_STATE_BASE => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
             }
-            "--slot" => {
+            RUN_SLOT => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+                slot = Some(parse_slot_arg(args.get(index), RUN_SLOT)?);
             }
-            "--task" => {
+            RUN_TASK => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| {
                         RuntimeError::new(
                             nixfied_runtime::ErrorCode::TaskSelectionInvalid,
-                            "missing --task value",
+                            format!("missing {RUN_TASK} value"),
                         )
                     })?
                     .clone();
                 if task.replace(value).is_some() {
                     return Err(RuntimeError::new(
                         nixfied_runtime::ErrorCode::TaskSelectionInvalid,
-                        "--task may be specified only once",
+                        format!("{RUN_TASK} may be specified only once"),
                     ));
                 }
             }
-            "--timeout-ms" => {
+            RUN_TIMEOUT_MS => {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::ModelAdmission,
-                        "missing --timeout-ms value",
+                        format!("missing {RUN_TIMEOUT_MS} value"),
                     )
                 })?;
-                timeout_ms = value.parse::<u64>().map_err(|error| {
+                timeout_ms = value.parse::<RunTimeoutMsValue>().map_err(|error| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::ModelAdmission,
-                        format!("invalid --timeout-ms value {value}: {error}"),
+                        format!("invalid {RUN_TIMEOUT_MS} value {value}: {error}"),
                     )
                 })?;
             }
-            "--output" => {
+            RUN_OUTPUT => {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::OutputModeInvalid,
-                        "missing --output value",
+                        format!("missing {RUN_OUTPUT} value"),
                     )
                 })?;
                 let parsed = parse_run_output_mode(value)?;
                 if output_mode.replace(parsed).is_some() {
                     return Err(RuntimeError::new(
                         nixfied_runtime::ErrorCode::OutputModeConflict,
-                        "--output may be specified only once",
+                        format!("{RUN_OUTPUT} may be specified only once"),
                     ));
                 }
             }
@@ -1775,7 +1679,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::OutputModeInvalid,
                     format!(
-                        "unsupported output flag {}; use --output <mode>",
+                        "unsupported output flag {}; use {RUN_OUTPUT} <mode>",
                         args[index]
                     ),
                 ));
@@ -1792,7 +1696,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            "missing --model path",
+            format!("missing {RUN_MODEL} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
@@ -1811,14 +1715,14 @@ struct ParsedRunOptions {
     model_path: PathBuf,
     allow_non_store: bool,
     state_base: PathBuf,
-    timeout_ms: u64,
-    output_mode: Option<RunOutputMode>,
+    timeout_ms: RunTimeoutMsValue,
+    output_mode: Option<RunOutputValue>,
     selection: RuntimeSelection,
     task: Option<String>,
 }
 
 impl ParsedRunOptions {
-    fn resolve(self, output_mode: RunOutputMode) -> RunOptions {
+    fn resolve(self, output_mode: RunOutputValue) -> RunOptions {
         RunOptions {
             state_base: self.state_base,
             timeout_ms: self.timeout_ms,
@@ -1831,8 +1735,8 @@ impl ParsedRunOptions {
 
 struct RunOptions {
     state_base: PathBuf,
-    timeout_ms: u64,
-    output_mode: RunOutputMode,
+    timeout_ms: RunTimeoutMsValue,
+    output_mode: RunOutputValue,
     selection: RuntimeSelection,
     task: Option<String>,
 }
@@ -1841,45 +1745,90 @@ fn parse_control_options(
     command: ControlCommand,
     args: &[String],
 ) -> Result<ControlOptions, RuntimeError> {
-    let mut model_path = None;
-    let mut allow_non_store = false;
-    let mut state_base = None;
-    let mut timeout_ms = 5000;
-    let mut slot = None;
-    let mut cleanup_mode = nixfied_runtime::state::CleanupMode::Standard;
+    let (
+        model_token,
+        model_initial,
+        allow_token,
+        allow_initial,
+        state_token,
+        state_initial,
+        slot_token,
+        slot_initial,
+    ) = match command {
+        ControlCommand::Ps => (
+            PS_MODEL,
+            PS_MODEL_INITIAL,
+            PS_ALLOW_NON_STORE_MODEL,
+            PS_ALLOW_NON_STORE_MODEL_INITIAL,
+            PS_STATE_BASE,
+            PS_STATE_BASE_INITIAL,
+            PS_SLOT,
+            PS_SLOT_INITIAL,
+        ),
+        ControlCommand::Down => (
+            DOWN_MODEL,
+            DOWN_MODEL_INITIAL,
+            DOWN_ALLOW_NON_STORE_MODEL,
+            DOWN_ALLOW_NON_STORE_MODEL_INITIAL,
+            DOWN_STATE_BASE,
+            DOWN_STATE_BASE_INITIAL,
+            DOWN_SLOT,
+            DOWN_SLOT_INITIAL,
+        ),
+        ControlCommand::Clean => (
+            CLEAN_MODEL,
+            CLEAN_MODEL_INITIAL,
+            CLEAN_ALLOW_NON_STORE_MODEL,
+            CLEAN_ALLOW_NON_STORE_MODEL_INITIAL,
+            CLEAN_STATE_BASE,
+            CLEAN_STATE_BASE_INITIAL,
+            CLEAN_SLOT,
+            CLEAN_SLOT_INITIAL,
+        ),
+    };
+    let mut model_path = model_initial.map(PathBuf::from);
+    let mut allow_non_store = allow_initial;
+    let mut state_base = state_initial.map(PathBuf::from);
+    let mut timeout_ms = DOWN_TIMEOUT_MS_INITIAL;
+    let mut slot = slot_initial;
+    let mut cleanup_mode = if CLEAN_PURGE_INITIAL {
+        nixfied_runtime::state::CleanupMode::Purge
+    } else {
+        nixfied_runtime::state::CleanupMode::Standard
+    };
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--model" => {
+            value if value == model_token => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            "--allow-non-store-model" => {
+            value if value == allow_token => {
                 allow_non_store = true;
             }
-            "--state-base" => {
+            value if value == state_token => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
             }
-            "--slot" => {
+            value if value == slot_token => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+                slot = Some(parse_slot_arg(args.get(index), slot_token)?);
             }
-            "--purge" if matches!(command, ControlCommand::Clean) => {
+            CLEAN_PURGE if matches!(command, ControlCommand::Clean) => {
                 cleanup_mode = nixfied_runtime::state::CleanupMode::Purge;
             }
-            "--timeout-ms" if matches!(command, ControlCommand::Down) => {
+            DOWN_TIMEOUT_MS if matches!(command, ControlCommand::Down) => {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::ModelAdmission,
-                        "missing --timeout-ms value",
+                        format!("missing {DOWN_TIMEOUT_MS} value"),
                     )
                 })?;
-                timeout_ms = value.parse::<u64>().map_err(|error| {
+                timeout_ms = value.parse::<DownTimeoutMsValue>().map_err(|error| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::ModelAdmission,
-                        format!("invalid --timeout-ms value {value}: {error}"),
+                        format!("invalid {DOWN_TIMEOUT_MS} value {value}: {error}"),
                     )
                 })?;
             }
@@ -1895,7 +1844,7 @@ fn parse_control_options(
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            "missing --model path",
+            format!("missing {model_token} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
@@ -1909,14 +1858,14 @@ fn parse_control_options(
     })
 }
 
-fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<u32, RuntimeError> {
+fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<CheckSlotValue, RuntimeError> {
     let value = value.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             format!("missing {flag} value"),
         )
     })?;
-    value.parse::<u32>().map_err(|error| {
+    value.parse::<CheckSlotValue>().map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             format!("invalid {flag} value {value}: {error}"),

@@ -1,7 +1,9 @@
 { lib, ... }:
 let
-  inherit (lib) mkOption types;
-  positiveInt = types.addCheck types.int (value: value > 0);
+  inherit (lib) types;
+  vocabulary = (import ../meta/default.nix { inherit lib; }).vocabularyMap;
+  inherit (import ../meta/options.nix { inherit lib; }) mkOption;
+  positiveInt = types.ints.positive;
   port = types.addCheck types.int (value: value >= 1 && value <= 65535);
 
   terminalType = types.submodule {
@@ -38,44 +40,7 @@ let
   # compiler synthesizes tool closures from. `run` is the argv; `run[0]` is
   # resolved against the tool set at eval, so the runtime resolves nothing on
   # the host (SEAM-1).
-  invocationOptions = {
-    tools = mkOption {
-      type = types.nonEmptyListOf (types.either types.nonEmptyStr types.package);
-      description = "Tool set: declared closure ids or packages; their bin roots form the child PATH in order.";
-    };
-    run = mkOption {
-      type = types.nonEmptyListOf types.str;
-      description = "Argv. run[0] must be the executable basename of one tool.";
-    };
-    env = mkOption {
-      type = types.attrsOf types.str;
-      default = { };
-      description = "Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned).";
-    };
-    codebaseId = mkOption {
-      type = types.nonEmptyStr;
-      default = "main";
-      description = "Codebase the invocation observes.";
-    };
-    cwd = mkOption {
-      type = types.nonEmptyStr;
-      default = ".";
-      description = "Confined relative working directory under the codebase.";
-    };
-    stdin = mkOption {
-      type = types.enum [
-        "null"
-        "inherit"
-      ];
-      default = "null";
-      description = "Whether the child receives closed stdin (`null`) or the runtime command's stdin (`inherit`).";
-    };
-    timeoutMs = mkOption {
-      type = positiveInt;
-      default = 30000;
-      description = "Maximum invocation duration in milliseconds before cancellation.";
-    };
-  };
+  invocationOptions = import ./invocation.nix { inherit lib positiveInt; };
   invocationType = types.submodule { options = invocationOptions; };
 
   # Each lifecycle class binds exactly the primitive its mechanism needs: an
@@ -106,10 +71,7 @@ let
   probeSpecType = types.submodule {
     options = {
       kind = mkOption {
-        type = types.enum [
-          "tcp"
-          "exec"
-        ];
+        type = types.enum vocabulary."enum ProbeKind".members;
         default = "tcp";
         description = "Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived invocation (exit 0 = success).";
       };
@@ -153,12 +115,7 @@ let
       inherit operationId;
       terminal = mkTerminal "stop";
       signal = mkOption {
-        type = types.enum [
-          "TERM"
-          "INT"
-          "QUIT"
-          "HUP"
-        ];
+        type = types.enum vocabulary."signal".members;
         default = "TERM";
         description = "Graceful stop signal.";
       };
@@ -285,18 +242,23 @@ let
       stateRefs = mkOption {
         type = types.listOf types.str;
         default = [ "slot" ];
-        description = "Logical state-root references attributed to the service and included in its identity.";
+        description = ''
+          Descriptive state labels, defaulting to `[ "slot" ]`; any strings are
+          accepted, not an enum of storage backends or selectable roots.
+          Execution lowering discards these labels: changing them does not select
+          a state directory or change service reuse identity. They remain in
+          model.json and its generated view, so changing them changes the raw
+          model hash. See `docs topic state` for state policy and the
+          ''${stateDir} slot-root convention.
+        '';
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Logical log references recorded for the service.";
+        description = "Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity.";
       };
       containment = mkOption {
-        type = types.enum [
-          "process-group"
-          "process-tree"
-        ];
+        type = types.enum vocabulary."enum ContainmentRequirement".members;
         default = "process-group";
         description = "OS process-containment strength required for ownership, cancellation, and endpoint verification.";
       };
@@ -314,10 +276,7 @@ let
         description = "Executable path relative to the package store path.";
       };
       kind = mkOption {
-        type = types.enum [
-          "executable"
-          "helper"
-        ];
+        type = types.enum vocabulary."enum ClosureKind".members;
         default = "executable";
         description = "Declared role of the realised closure: directly executable program or supporting helper.";
       };
@@ -337,14 +296,7 @@ let
         '';
       };
       effects = mkOption {
-        type = types.listOf (
-          types.enum [
-            "process"
-            "network-listener"
-            "source-read"
-            "file-write"
-          ]
-        );
+        type = types.listOf (types.enum vocabulary."enum ClosureEffect".members);
         default = [ "process" ];
         description = "Attested effect classes the closure may exercise when dispatched.";
       };
@@ -384,10 +336,7 @@ let
   secretSourceType = types.submodule {
     options = {
       kind = mkOption {
-        type = types.enum [
-          "env-var"
-          "file"
-        ];
+        type = types.enum vocabulary."enum SecretSourceKind".members;
         description = "Runtime resolver used to obtain the secret without embedding its value in the model.";
       };
       envVar = mkOption {
@@ -416,18 +365,12 @@ let
   taskType = types.submodule {
     options = {
       kind = mkOption {
-        type = types.enum [
-          "leaf"
-          "composite"
-        ];
+        type = types.enum vocabulary."enum TaskKind".members;
         default = "leaf";
         description = "Task kind: a bounded leaf invocation, or a composite DAG of steps.";
       };
       defaultOutput = mkOption {
-        type = types.enum [
-          "summary"
-          "task-output"
-        ];
+        type = types.enum vocabulary."enum TaskDefaultOutput".members;
         default = "summary";
         description = "Default output for a directly selected task; task-output is valid only for leaves.";
       };
@@ -437,11 +380,7 @@ let
         description = "Globally unique task operation identifier (leaf only); derived (`task.<name>.run`) unless overridden.";
       };
       serviceLifetime = mkOption {
-        type = types.enum [
-          "run-scoped"
-          "until-idle"
-          "persistent-until-down"
-        ];
+        type = types.enum vocabulary."enum ServiceLifetime".members;
         default = "run-scoped";
         description = "Lifetime policy applied to the task's full servicesRequired closure.";
       };
@@ -458,7 +397,15 @@ let
       requires = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Services that must be ready (alive, probed, addressable) while the leaf runs.";
+        description = ''
+          Direct service dependencies that must be ready while the leaf runs;
+          endpoint-less dependencies are allowed. Named ''${port:<serviceId>}
+          and ''${host:<serviceId>} placeholders address the primary endpoint of
+          a directly required service, never an endpoint id. Bare ''${port} and
+          ''${host} use the first service in this authored list and reject if it
+          has no endpoints; they do not skip to a later addressable dependency.
+          See `docs topic placeholders`.
+        '';
       };
       exitPolicy = mkOption {
         type = exitPolicyType;
@@ -468,17 +415,17 @@ let
       artifactRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Logical artifact references recorded for the leaf task.";
+        description = "Descriptive artifact labels retained in the model and generated view, then discarded by execution lowering; they do not create, collect or place artifacts.";
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Logical log references recorded for the leaf task.";
+        description = "Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select evidence paths.";
       };
       summaryRefs = mkOption {
         type = types.listOf types.str;
         default = [ "summary" ];
-        description = "Logical summary references recorded for the leaf task.";
+        description = "Descriptive summary labels retained in the model and generated view, then discarded by execution lowering; they do not select summary paths.";
       };
     };
   };

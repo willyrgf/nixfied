@@ -1,0 +1,8 @@
+Admit the compiled Nixfied model without executing tasks.
+
+Usage:
+  nix run .#model-check -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  -h, --help       Show this help

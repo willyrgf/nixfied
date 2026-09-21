@@ -135,6 +135,32 @@ explicit remote or path adopter reference invoked from elsewhere fails instead
 of cataloging the caller. Per-app `--help` remains the exact runtime-flag
 reference.
 
+Read the authoring and API reference at the project's pinned Nixfied revision:
+
+```sh
+nix run .#docs
+nix run .#docs -- options nixfied.services
+nix run .#docs -- option 'nixfied.services.<name>.stateRefs'
+nix run .#docs -- topic placeholders
+nix run .#docs -- api function library/compileModel
+nix run .#docs -- source
+```
+
+`docs --help` shows the full query interface. Option lookup is exact, including
+literal `<name>` segments; namespace listing matches whole path segments.
+Unknown names and empty queries fail with guidance. The realised command reads
+static content without a browser, pager, network, model admission or runtime
+state. It reports the supplying source path and revision when available;
+path/dirty sources are not presented as committed revisions. The readable
+reference is also in `packages.<system>.docs/share/nixfied/reference/API.md`.
+
+Selecting a project app still evaluates its surrounding flake and exported task
+names. If broken authoring prevents that evaluation, invoke `#docs` on the exact
+supplying framework source from the project's lock, for example
+`nix run /nix/store/<supplying-source>#docs`. Do not substitute an unpinned latest
+source. Unlike contextual help, docs does not require the caller's directory to
+match the project.
+
 For project-specific model facts, build the existing model package:
 
 ```sh
@@ -367,6 +393,65 @@ process-gated. Run `down` first. A protected or persistent policy additionally
 requires `clean --purge`; purge relaxes only that policy gate, never the
 ownership, confinement, or live-process checks. Do not manually rewrite state
 markers or the registry.
+
+### Descriptive references and state roots
+
+`services.<name>.stateRefs` accepts a list of arbitrary strings and defaults to
+`[ "slot" ]`. It is not a storage-backend selector or a registry of state roots.
+Execution lowering discards these labels, so changing them does not move state
+or change service reuse identity. They remain serialized in `model.json` and
+shown in `views/docs.md`; changing them therefore changes the raw model hash.
+
+Service/task `logRefs`, task `artifactRefs`, and task `summaryRefs` are likewise
+descriptive model/view data, discarded during execution lowering. They do not
+choose evidence paths, collect artifacts, or configure cleanup. Runtime evidence
+and cleanup retain their native behavior.
+
+Use `${stateDir}` in invocation arguments or environment values for the
+runtime-owned slot root. Child programs choose subdirectories beneath it (for
+example `${stateDir}/pgdata`); `stateRefs` does not create them. Configure state
+compatibility and cleanup with `nixfied.state`, and use `down`/`clean` for owned
+state as described above. Child-tool caches remain project-owned.
+
+### Source and invocation context
+
+Native module arguments include `pkgs`, `system`, `adapters` and `nixfiedLib`.
+Nixpkgs supplies `lib`, `config`, `options` and `_module` through ordinary module
+evaluation; these are native module facilities, not additional framework
+providers. Imports, `mkDefault`, `mkForce`, submodule merging and native `apply`
+retain their normal meanings. Required values need not be supplied to read the
+static framework reference.
+
+The compiler's `system` supplies the contextual `target.system` default.
+`sourceIdentity` accepts paths or nonempty strings and converts them with native
+`toString`, retaining dependency context. Live source roots resolve from the
+invocation root; immutable source roots come from the model's store source.
+Children receive only declared environment variables and the runtime-owned
+`PATH` built from invocation tools. See the secrets section for secret values.
+
+Host directories are resolved natively, outside `model.json`:
+
+| Base | Selection order | Linux HOME fallback | macOS HOME fallback |
+| --- | --- | --- | --- |
+| Runtime state | explicit `--state-base`, `NIXFIED_STATE_DIR`, `XDG_STATE_HOME/nixfied`, HOME fallback | `.local/state/nixfied` | `Library/Application Support/nixfied` |
+| File secrets | `NIXFIED_SECRETS_DIR`, `XDG_CONFIG_HOME/nixfied/secrets`, HOME fallback | `.config/nixfied/secrets` | `Library/Application Support/nixfied/secrets` |
+
+The explicit state argument retains the native parser's lexical-path behavior,
+including an empty operand; the nonempty rule applies to environment overrides.
+When a base is needed, unset HOME without another selected base rejects. Empty HOME is present and
+produces the corresponding relative fallback. Directory variables retain OS
+path bytes, including non-UTF-8 names; secret material itself must be UTF-8.
+A selected secrets directory with missing material fails rather than falling
+back to another directory. Environment and file secret values have trailing CR
+and LF removed, and empty resulting values reject. Rejected non-UTF-8 environment
+secret values never enter diagnostics.
+
+On Linux, runtime admission may warn when a declared candidate-port window
+overlaps the observed host ephemeral-port range. This optional advisory neither
+changes the model nor reserves a port; endpoint ownership still requires the
+native listener/process proof. A host without that observation produces no
+such advisory.
+
 
 ### Secrets
 

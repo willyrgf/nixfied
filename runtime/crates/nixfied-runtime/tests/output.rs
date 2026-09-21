@@ -106,6 +106,60 @@ fn no_service(model: &mut Value) {
 }
 
 #[test]
+fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() {
+    let mut model = task_model(&["exit".to_string(), "0".to_string()]);
+    no_service(&mut model);
+    model["secrets"]["token"] = json!({"secretId":"token","source":{
+        "kind":"env-var","envVar":"NIXFIED_OUTPUT_VIEW_SECRET"
+    }});
+    let fixture = fixture(model);
+    let output = command(&fixture, &["--task", "smoke", "--output", "json"])
+        .env("NIXFIED_OUTPUT_VIEW_SECRET", "smoke")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = String::from_utf8(output.stdout).unwrap();
+    assert!(bytes.starts_with("{\n  \"computedModelHash\": "));
+    assert!(bytes.ends_with("\n}\n"));
+    assert!(!bytes.contains("smoke"));
+    let result: Value = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(result["task"]["taskId"], REDACTION_TOKEN);
+    assert_eq!(result["task"]["exitCode"], 0);
+    assert_eq!(result["task"]["success"], true);
+    assert_eq!(result["nodes"][0]["nodeId"], REDACTION_TOKEN);
+    assert_eq!(result["services"], json!([]));
+    let summary = fs::read_to_string(result["runSummaryPath"].as_str().unwrap()).unwrap();
+    assert!(summary.starts_with("{\n  \"durationMs\": "));
+    assert!(summary.ends_with("\n}"));
+    assert!(!summary.ends_with('\n'));
+    assert!(!summary.contains("smoke"));
+    let value: Value = serde_json::from_str(&summary).unwrap();
+    assert_eq!(value["tasks"][0]["taskId"], REDACTION_TOKEN);
+    assert_eq!(value["nodes"][0]["success"], true);
+    assert_eq!(value["success"], true);
+    assert_eq!(
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "durationMs",
+            "nodes",
+            "runId",
+            "services",
+            "success",
+            "tasks"
+        ]
+    );
+}
+
+#[test]
 fn direct_leaf_replays_exact_binary_without_metadata() {
     let stdout = [0_u8, 1, 2, 0, 0xff, b'\n'];
     let stderr = b"stderr-without-final-newline\0";
@@ -512,4 +566,91 @@ fn hex(bytes: &[u8]) -> String {
 
 fn tempfile_marker(label: &str) -> PathBuf {
     common::temp_marker(&format!("nixfied-output-{label}"))
+}
+
+#[test]
+fn non_utf8_environment_secret_never_reaches_diagnostics() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let marker_dir = TempDir::new();
+    let marker = marker_dir.path.join("child-started");
+    let mut model = task_model(&["prepare".to_string(), marker.to_string_lossy().into_owned()]);
+    model["secrets"]["token"] = json!({"secretId":"token","source":{
+        "kind":"env-var","envVar":"NIXFIED_TEST_INVALID_SECRET"
+    }});
+    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
+    let fixture = fixture(model);
+    let mut bytes = b"synthetic-prefix-".to_vec();
+    bytes.push(0xff);
+    bytes.extend_from_slice(b"-synthetic-suffix");
+    for mode in ["summary", "json", "both", "task-output"] {
+        let output = command(&fixture, &["--task", "smoke", "--output", mode])
+            .env(
+                "NIXFIED_TEST_INVALID_SECRET",
+                OsString::from_vec(bytes.clone()),
+            )
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(33));
+        assert!(output.stdout.is_empty());
+        assert!(!marker.exists());
+        assert!(!fixture.state_base.exists());
+        for fragment in [
+            b"synthetic-prefix".as_slice(),
+            b"synthetic-suffix".as_slice(),
+        ] {
+            assert!(
+                !output
+                    .stderr
+                    .windows(fragment.len())
+                    .any(|window| window == fragment),
+                "rejected secret material reached {mode} diagnostics"
+            );
+        }
+        if matches!(mode, "json" | "both") {
+            let error = common::stderr_json(&output.stderr);
+            assert_eq!(error["code"], "SECRET_UNAVAILABLE");
+            assert_eq!(error["exitClass"], "error");
+        }
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        assert!(diagnostic.contains("SECRET_UNAVAILABLE"));
+        assert!(diagnostic.contains("is unavailable: value is not valid UTF-8"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn optional_host_ephemeral_observation_warns_without_executing_children() {
+    let Ok(raw) = fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") else {
+        return;
+    };
+    let bounds = raw
+        .split_whitespace()
+        .map(str::parse::<u16>)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(bounds.len(), 2);
+    let executable = test_child();
+    let model = synthetic_model(
+        executable.to_str().unwrap(),
+        &["listen", "127.0.0.1", "${port}", "hold"],
+        bounds[0],
+        bounds[0],
+    );
+    let fixture = fixture(model);
+    let output = Command::new(runtime_binary())
+        .args(["check", "--allow-non-store-model", "--model"])
+        .arg(&fixture.model_path)
+        .current_dir(&fixture._tmp.path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "overlaps the host ephemeral port range {}-{}",
+        bounds[0], bounds[1]
+    )));
+    assert!(!fixture.state_base.exists());
 }

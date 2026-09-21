@@ -1,10 +1,175 @@
 # Engineer handoff: shared contracts and adopter reference
 
-Status: architecture settled; implementation starts from baseline. Read this
-document, [the RFC](RFC_EXPOSE_ADOPTER_FACING_API.md), and the authority routed
-by [AGENTS.md](AGENTS.md). The RFC owns the design and stable acceptance gate;
-[FIXES_DOCS_REFS.md](FIXES_DOCS_REFS.md) owns the adopter problem. This is a
-baseline coverage and delivery audit, never a source registry or generator input.
+Status: implemented corrective decisions and delivery requirements. The six
+corrections below supersede the original launch instructions and any broader
+publication audit or default-safety proposal; they are retained as the review
+record, not a second active implementation assignment. The owner cutovers, maintenance
+traces and verification entry points are recorded in
+[the delivery audit](docs/DEVELOPMENT.md#adopter-api-delivery-audit); its earlier
+receipt does not establish acceptance of these corrections. Read [the RFC](RFC_EXPOSE_ADOPTER_FACING_API.md)
+for the stable design and A1–A12 gate, and the authority routed by
+[AGENTS.md](AGENTS.md) for current behavior. [FIXES_DOCS_REFS.md](FIXES_DOCS_REFS.md)
+retains the adopter problem. The preparation receipts below describe the
+reviewed starting tree, not evidence for the final implementation.
+
+## Corrective implementation assignment
+
+Work from the current checkout, recording HEAD and the full dirty status before
+editing. Preserve the existing implementation and unrelated work; do not reset
+to the historical baseline or consult the abandoned archive. The original
+five-unit launch below is historical, not an instruction to repeat the migration.
+Do not commit unless requested.
+
+The invariant is that supported declarations produce valid native bindings,
+already-emitted nested values obey their producer policies, and every framework
+option and publication is accounted for without forcing configured values or
+native package bindings. The existing structural checker owns value rejection;
+the raw option audit owns metadata rejection before documentation rendering;
+publication tests observe actual native exports. Native evaluation, decoding,
+parsing, effects and behavioral validation retain their owners. State the
+specific rejection boundary and independent proof before each implementation edit.
+
+### 1. One structural matcher, two purposes
+
+In `nix/meta/structure.nix`, replace the boolean matcher mode with the explicit
+internal purposes `NixWire` and `DecoderLiteral`. Retain one recursive matcher.
+`NixWire` validates already-emitted nested values against Nix presence and
+omission policies. `DecoderLiteral` validates declared defaults against decoder
+rules, including the referenced record's unknown-field policy and decoder
+availability. The outer constructor still receives pre-emission inputs: required
+null or empty inputs that it must omit remain accepted. Do not validate those
+inputs as though omission had already occurred.
+
+Extend `nix/checks/structure.nix` with independent accepted/rejected nested
+presence cases and outer null/empty construction cases. Do not add a second
+validator, intermediate representation, or reconstruction-and-comparison path.
+
+### 2. Narrow decoder-default restrictions
+
+Within `DecoderLiteral`, reject an encountered `NativeDomain` value. Empty
+collections and optional absence/null remain supported because they construct
+no native value. Reject a nonempty unique-list default when its element type
+contains a `RecordRef`, using the existing reference traversal. Record defaults
+must reference decoder-capable records. Ordinary structural defaults remain
+supported within these restrictions; a native-free check alone is insufficient.
+At default admission, require `isJson literal` alongside the matcher, including
+ignored record members. Reject the ignored-function regression before Rust
+generation and retain acceptance of ignored JSON values.
+
+The independent counterexample is a unique list of `Child` records defaulting to
+`[ {} { value = null; } ]`, with `Child.value` optional. The two raw Nix records
+are distinct, but decode identically and Rust `UniqueVec` rejects them. Require
+declaration rejection for this case and other nonempty record-containing unique
+lists, plus acceptance of the supported empty/absent cases and ordinary
+structural defaults. Do not add decoded-value normalization or another equality
+algorithm. Keep the restrictions in RFC section 4.2 equally narrow.
+
+### 3. Raw option audit as assertions only
+
+In `nix/meta/options.nix`, traverse native option records and
+`type.getSubOptions`, checking visibility, non-internal status and valid metadata
+before rendering. Retain the explicit exclusions for native `_module` options.
+Pass native `option.loc` into both `getSubOptions` and recursive auditing so
+keyed `<name>` mounts are preserved. The mounted-prefix regression must prove
+that a prefix-sensitive native type cannot hide undocumented descendants.
+Use the existing Nixpkgs documentation renderer after this assertion pass;
+remove redundant validation of its rendered metadata. Do not construct another
+option representation or duplicate native documentation normalization.
+
+Extend `nix/checks/option-metadata.nix` only with hidden-parent counterexamples
+and their valid/lazy counterparts. Prove that hiding a parent cannot hide a
+framework option from the audit and that required values, contextual defaults
+and poisoned package bindings remain unforced.
+
+### 4. Observe actual publications directly
+
+The existing downstream test in `nix/gate-nix.nix` already evaluates an actual
+empty-verbs project and checks exactly `clean`, `docs`, `down`, `help`,
+`model-check`, `ps`, and `run` (line 838 at this review). Preserve it; add no new
+project-app audit. In the existing `nix/checks/publications.nix`, evaluate the
+native resolver and observe:
+
+```nix
+actualArgs = resolved._module.specialArgs;
+actualAdapters = actualArgs.adapters;
+```
+
+Compare each observed set with the existing descriptors using the existing
+audit: two positive checks. For each set, append one undocumented attribute and
+remove one expected attribute and require rejection: four small negatives.
+These observations must work with poisoned `pkgs` without forcing it. Do not
+patch source text, add production observation hooks, or introduce another
+registry. This replaces publication-specific source-mutation instructions;
+the existing product source-isolation matrix remains a separate required proof.
+
+### 5. Help padding and the existing maintenance fixture
+
+In `nix/meta/command-help.nix`, clamp row padding to `max 1`. Preserve all current
+help bytes and continuation indentation. Lengthen only the metavar of the
+existing `--budget-ms` argument in `nix/checks/maintenance.nix` so its label
+exceeds the normal column width. Update the independent help expectation in
+`maintenance-native.rs` and the packaged-reference assertion. This same fixture
+must exercise declaration checking, help generation and reference packaging;
+do not change the token, add a parser branch, or create another derivation.
+
+### 6. Shared Rust string escaping, actual failure-path proof
+
+Extract the escape-aware helper from `nix/meta/syntax-project.nix` and use it in
+both that generator and `nix/meta/rust.nix`. Extend the existing
+`nix/checks/structure-projection.nix` fixture with an unusual wire field name and
+a normal explicit Rust field name. In `structure-projection.rs`, independently
+write the expected serialization bytes and compile/test the actual generated
+binding. Preserve the syntax literal test in `syntax-projection.nix`.
+
+Structural text defaults alone are insufficient evidence: their double JSON
+encoding can mask the broken escaping implementation. Do not add another
+escaping framework or a broad test matrix.
+
+### Preservation and acceptance
+
+Preserve capability bytes/runtime ABI, production model/output/help bytes,
+decoder and native-domain behavior outside the restricted declaration inputs,
+parser tokens/precedence, reference coverage, lazy providers, source isolation,
+and the separately approved secret-diagnostic correction below. No compatibility
+path, new dependency, semantic seam, runtime branch or generated parser is needed.
+
+Run the focused structural, option-metadata and publication evaluation checks
+first, then the existing compiled structural/syntax projection and maintenance
+fixtures, generated-source freshness, exact baseline help and packaged-reference
+checks. Regenerate through the existing pinned operation only where needed.
+Widen to the relevant fixture-backed Rust checks and affected package checks
+under `docs/DEVELOPMENT.md`. After all implementation and documentation edits,
+run `nix run .#ci -- --dirty` on the exact final tree, plus the required affected
+release checks. Do not edit the tree during final verification or present a
+previous tree's green CI as acceptance.
+
+Update the delivery receipt with HEAD, dirty diff/source identity, the six
+corrections and removed duplication, actual focused/final commands and results,
+generated-file freshness, revised maintenance/cost accounting, and unverified
+platform/release/integration coverage. Reconcile the delivery audit's completion
+claims with that receipt. The architect's reproductions establish the need for
+the work; they do not establish that the correction has been implemented.
+
+### Corrective handoff preparation receipt (historical)
+
+This revision records the six settled decisions after inspecting the current
+matcher, option collector, publication tests, resolver/provider bindings, help
+formatter, compiled projection fixture and downstream empty-verbs assertion.
+Only this handoff and the RFC are changed for this preparation. Document checks
+passed: `git diff --check`, local file links, balanced fenced blocks and retained
+A1–A12 identities. A SHA-256 comparison against the pre-edit file-content
+manifest confirmed that all other existing repository files were preserved.
+These are preparation checks; corrective implementation checks and final
+exact-tree CI remain pending. Earlier delivery receipts remain historical
+evidence for their recorded trees.
+
+Implementation follow-up: all six corrections now use the existing owners and
+fixtures described above. Focused structure/syntax/options/publication checks,
+compiled structural and syntax projections, the maintenance fixture and pinned
+regeneration passed. Production generated Rust bytes were unchanged. The
+delivery audit records the resulting boundaries; the final execution receipt
+records exact-tree CI and release results separately from this preparation
+history.
 
 ## Starting tree and recovery receipt
 
@@ -381,6 +546,21 @@ the implemented invocation. These are new implementation obligations, not passed
 preparation checks.
 
 ## Baseline issue kept separate
+
+Implementation baseline amendment (2026-09-21, after verified unit 4): preserving
+the rejected value in a non-UTF-8 environment-secret diagnostic is explicitly
+excluded from preservation. Secret admission must report unavailable/invalid
+encoding without formatting the rejected value, before child execution or state
+materialization. The regression in `tests/output.rs` exercises all four output
+modes with synthetic bytes and a child sentinel; it failed against the reviewed
+native implementation before the correction.
+
+ABI disposition: this restores the existing REDACT-1 guarantee. Admission still
+rejects the same input with `SECRET_UNAVAILABLE`, its existing exit class/status,
+and the same error fields. Only the unsafe free-form message changes. No model,
+capability inventory, numeric version, alias or compatibility reader changes.
+The missing-variable diagnostic remains native and unchanged. This amendment is
+separate from the structural and command migrations.
 
 The baseline `admission/secrets.rs::read_env_secret` formats the error returned
 by `std::env::var`. For a non-UTF-8 value, VarError::NotUnicode's display includes

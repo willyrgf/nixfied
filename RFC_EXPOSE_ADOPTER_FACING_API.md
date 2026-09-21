@@ -1,7 +1,8 @@
 # RFC: Shared contract declarations and complete adopter reference
 
-Status: architecture settled for engineer handoff. This supersedes both the original
-migration handoff and the subsequent integer-only assignment. It specifies the
+Status: settled design with owner cutovers recorded in the
+[delivery audit](docs/DEVELOPMENT.md#adopter-api-delivery-audit). This supersedes
+both the original migration handoff and the subsequent integer-only assignment. It specifies the
 whole intended architecture; delivery is staged through complete owner cutovers.
 It does not declare implementation complete or authorize restoring, committing,
 or changing the product contract merely by editing this document.
@@ -229,6 +230,16 @@ nested option metadata, including keyed submodule paths. Render names using the
 existing native option documentation facilities, including literal <name>
 segments; do not parse generated Markdown to recover paths.
 
+Before rendering, an assertion-only audit traverses the raw native option
+records and `type.getSubOptions`. Framework options must be visible,
+non-internal and have valid metadata even beneath a hidden parent. Retain the
+native `option.loc` when querying suboptions, including mounted `<name>` segments;
+do not reconstruct that prefix from traversed attribute names. Retain the
+explicit native `_module` exclusions. Then use the existing Nixpkgs
+documentation renderer; do not repeat metadata validation against its rendered
+entries or build another option representation. This audit does not force
+configured values or defaults to inspect their metadata.
+
 Omitting default preserves required-value laziness. A supplied null is a value
 accepted only by a nullable type. Native default/defaultText, apply, specialArgs,
 imports, mkDefault, and mkForce continue to work normally. A contextual default
@@ -355,7 +366,27 @@ the decoder: omission must be admitted, null must be admitted if emitted, and
 OmitEmpty requires a collection with the matching empty default when decoding
 exists. Serialization-only outputs do not acquire fictional decoder defaults.
 OmitAbsent requires Optional; Nullable plus Present never means optional.
-Default literals must satisfy the value form.
+Default literals must be JSON-representable and satisfy the value form under
+decoder rules. The existing `isJson` check also covers members ignored by an
+`IgnoreUnknown` decoder; ignored JSON values remain accepted. The existing
+recursive matcher has two explicit internal purposes: `NixWire` validates
+already-emitted nested values using Nix presence/omission policies, while
+`DecoderLiteral` validates declared defaults using decoder rules. These purposes
+share one recursive implementation; no second validator, intermediate
+representation or reconstruction-and-comparison mechanism is introduced.
+
+`DecoderLiteral` rejects an encountered `NativeDomain` value. Empty collections
+and optional absence/null remain supported when they construct no native value.
+It also rejects a nonempty unique-list default whose element type contains a
+`RecordRef`, using the existing reference traversal. Record defaults must
+reference decoder-capable records and obey their decoder policies. Other
+structural defaults remain supported subject to the ordinary value checks.
+
+Native-free alone is not a sufficient default restriction: with optional
+`Child.value`, the raw unique-list default `[ {} { value = null; } ]` contains
+distinct Nix records that decode identically, causing Rust `UniqueVec` rejection.
+The restriction above rejects this declaration without implementing decoded-value
+normalization or another equality algorithm.
 
 Required nullable decoding must reject missing while accepting explicit null;
 a plain serde Option field alone does not prove this. Preserve the separate
@@ -368,6 +399,9 @@ lowering chooses which keys to supply, and the constructor validates that an
 omission is allowed. For example, baseline leaf tasks supply empty ref lists,
 while composites omit them; Rust may omit empties for both. servicesRequired
 remains RequiredPresent even though Rust can default it when decoding.
+The outer constructor accepts pre-emission inputs, including the explicit null
+or empty values its policy requires it to omit. `NixWire` checking of nested
+already-emitted values must not reject those outer inputs before omission.
 
 Model decode rejects unknown fields. An output has NoDecoder unless a real
 consumer needs deserialization; preserve that consumer's existing unknown-field
@@ -1439,9 +1473,9 @@ Do not repeatedly launch full CI while the relevant producer/consumer cutover
 is incomplete. Record the tree/source identity for check results. A prior run
 against a different tree is historical evidence, not final acceptance.
 
-For this RFC-only revision, verification is document review, baseline source
-cross-checking, link/format checks, and inspection that unrelated files were
-preserved. It does not claim any implementation acceptance item has passed.
+Document review, baseline source cross-checking, link/format checks and
+unrelated-file preservation checks establish document integrity only.
+Implementation acceptance requires the execution evidence above.
 
 ## 12. Architectural review and handoff
 

@@ -116,3 +116,45 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
     assert!(!missing_model.exists(), "help must not materialise a model");
     assert!(!state_base.exists(), "help must not materialise state");
 }
+
+#[test]
+fn exact_help_and_entry_encoding_precede_admission() {
+    for (command, expected) in [
+        ("check", include_str!("fixtures/help/check.txt")),
+        ("run", include_str!("fixtures/help/run.txt")),
+        ("ps", include_str!("fixtures/help/ps.txt")),
+        ("down", include_str!("fixtures/help/down.txt")),
+        ("clean", include_str!("fixtures/help/clean.txt")),
+    ] {
+        for help in ["-h", "--help"] {
+            let output = Command::new(runtime_binary())
+                .args([command, "--unknown", "--model", help])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, expected.as_bytes());
+            assert!(output.stderr.is_empty());
+        }
+    }
+    let no_args = Command::new(runtime_binary()).output().unwrap();
+    assert!(!no_args.status.success());
+    assert!(String::from_utf8_lossy(&no_args.stderr).contains("missing --model path"));
+    let unknown = Command::new(runtime_binary())
+        .args(["unknown", "--help"])
+        .output()
+        .unwrap();
+    assert!(!unknown.status.success());
+    assert!(unknown.stdout.is_empty());
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let output = Command::new(runtime_binary())
+            .arg("run")
+            .arg(std::ffi::OsString::from_vec(vec![0xff]))
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty()); // Panic text is deliberately not an oracle.
+    }
+}

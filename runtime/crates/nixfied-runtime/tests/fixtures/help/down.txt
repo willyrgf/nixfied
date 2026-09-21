@@ -1,0 +1,9 @@
+Stop Nixfied-owned process groups for a slot.
+
+Usage:
+  nix run .#down -- [options]
+
+Options:
+  --slot <number>        Select a declared project slot
+  --timeout-ms <number>  Set the stop timeout in milliseconds
+  -h, --help             Show this help

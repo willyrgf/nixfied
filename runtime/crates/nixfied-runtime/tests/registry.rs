@@ -6,6 +6,55 @@ mod common;
 use common::*;
 
 #[test]
+fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let expected = RegistryIdentity::for_slot("project", "dev", 2, "abi", "tool");
+    let registry = Registry::open_or_create(&path, &expected).unwrap();
+    // Deliberately corrupt only this fixture; production writes keep the check.
+    registry
+        .connection()
+        .execute_batch("PRAGMA ignore_check_constraints = ON;")
+        .unwrap();
+    registry
+        .connection()
+        .execute("UPDATE registry_meta SET slot = -7 WHERE id = 1", [])
+        .unwrap();
+    drop(registry);
+    let error = match Registry::open_or_create(&path, &expected) {
+        Ok(_) => panic!("negative observed slot must reject ownership"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_eq!(
+        error.details["expectedRegistryIdentity"],
+        serde_json::json!({
+            "projectId":"project","environment":"dev","slot":2,"runtimeAbi":"abi","toolchainId":"tool"
+        })
+    );
+    assert_eq!(
+        error.details["foundRegistryIdentity"],
+        serde_json::json!({
+            "projectId":"project","environment":"dev","slot":-7,"runtimeAbi":"abi","toolchainId":"tool"
+        })
+    );
+    assert_eq!(
+        error.details["mismatchedFields"],
+        serde_json::json!(["slot"])
+    );
+    let original = error.details.clone();
+    let cause = nixfied_runtime::error::RuntimeCause::from_error(error);
+    assert_eq!(
+        cause.details["foundRegistryIdentity"],
+        original["foundRegistryIdentity"]
+    );
+    assert_eq!(
+        cause.details["expectedRegistryIdentity"],
+        original["expectedRegistryIdentity"]
+    );
+}
+
+#[test]
 fn creates_registry_schema_with_wal() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry/registry.sqlite3");

@@ -239,6 +239,23 @@ else
       }
     ))
 
+    (reject "a task using an endpoint id instead of a required service id" (
+      { lib, ... }: {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.run = lib.mkForce [
+          "nixfied-synthetic-helper" "task" "--port" "\${port:synthetic-tcp}"
+        ];
+      }
+    ))
+
+    (reject "a bare task placeholder with an endpoint-less first dependency" (
+      { lib, ... }: {
+        imports = [ (checkout + /examples/toolchain/nixfied.nix) ];
+        nixfied.tasks.db-test.requires = lib.mkForce [ "worker" "postgres" ];
+        nixfied.tasks.db-test.invocation.run = lib.mkForce [ "psql" "-p" "\${port}" ];
+      }
+    ))
+
     (reject "a service named endpoint ref outside connectsTo" (
       { lib, ... }:
       {
@@ -531,6 +548,18 @@ else
           };
         };
         nixfied.surface.verbs.help = "Run the reserved task";
+      }
+    ))
+
+    (reject "a task verb shadowing the docs app" (
+      { lib, ... }: {
+        imports = [ composite ];
+        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
+        nixfied.tasks.docs.invocation = {
+          tools = [ "synthetic-helper" ];
+          run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ];
+        };
+        nixfied.surface.verbs.docs = "Shadow framework reference";
       }
     ))
 
