@@ -11,7 +11,8 @@ baseline coverage and delivery audit, never a source registry or generator input
 Baseline: `c3d9111c861d40b0885a49f3d62950f9871702e1`, branch `ex-adp-api`.
 Recovery on 2026-09-21 restored every production source, test, fixture, generated
 artifact, dependency, and normative document to that revision. Only this handoff,
-the revised RFC, and the revised problem statement differ. Nothing is committed.
+the revised RFC, and the revised problem statement differ. Those three documents
+were subsequently committed as b0e379b; the production baseline is unchanged.
 
 The architect preserved the abandoned worktree, original index and Git metadata,
 binary diff, baseline RFC, and recovery manifest outside the repository. All
@@ -39,6 +40,13 @@ no prototype phase, universal parser, rule interpreter, or additional execution
 grammar. The RFC fixes passes, laziness, source isolation, field policies, public
 docs interfaces, and unsupported forms.
 
+RFC sections 4.2.1 and 6.7 fix private Rust bindings: generate owned data
+definitions with native impls, borrowing only for actual temporary projections.
+Sections 4.2.2 and 6.8 fix nested diagnostic ownership and native help formatting.
+These are decisions to implement, not alternatives to resolve during migration.
+Reference packaging discards string context only at the presentation boundary
+specified in section 8; native values retain their dependency context.
+
 Begin RFC unit 1 as one coherent authoring/publication/docs cutover. Implement
 checked metadata without replacing Nixpkgs modules; migrate actual exports and
 reserved app names; deliver revision-bound docs and the original stateRefs and
@@ -54,6 +62,29 @@ never establish whole-project completion. Record actual deleted owners and
 proofs against the rows below at each cutover. Any proposed new mechanism needs
 architectural review before implementation, rather than an RFC progress entry.
 Ordinary supported declarations use the already specified mechanisms.
+
+## Engineer-agent launch
+
+Use the supplied reviewed handoff commit and a clean working tree. Record the
+starting commit and status before editing; do not substitute an earlier RFC
+revision. Preparing the handoff does not start implementation: launch a fresh
+engineer session separately against that revision.
+Read AGENTS.md and its routed authorities in a fresh session, without the
+abandoned implementation conversation or archive. Do not commit unless requested.
+
+Before the first implementation edit, give a brief unit-1 interpretation naming
+the invariant, owners, interfaces, evaluation dependencies, rejection boundaries,
+definitions being replaced and focused proofs. Instantiate the settled design;
+do not write another RFC or scaffold later generators. Then implement unit 1
+autonomously within its specified boundaries.
+
+After each replacement unit, audit actual removed owners, remaining duplication,
+new mechanisms/dependencies, maintained-code growth and proof results against
+the coverage rows and RFC A1–A12. Report unverified coverage explicitly. Complete
+the unit's coupled cutover and required checks before starting the next unit.
+Proceed on ordinary implementation choices; return a concrete architectural
+departure for review before implementing it. Do not enlarge the acceptance gate
+or absorb adjacent defects merely to keep local work moving.
 
 ## Baseline option coverage: 128 entries
 
@@ -133,6 +164,7 @@ dependency or realizing the derivations it describes.
 
 Unit 2 uses the shared structure grammar for all **29** `primitive` identities
 in the baseline [capability inventory](runtime/crates/nixfied-model/capability.txt):
+all are Owned bindings with Serialize/Deserialize and RejectUnknown decoding.
 
 | Complete record identities | Existing replacement sites |
 | --- | --- |
@@ -157,6 +189,44 @@ LoopbackHost, NonZero integers, UniqueVec and ordered maps retain their exact
 construction/validation roles. Identifier wrappers separate namespaces; native
 model validation owns their lexical checks.
 
+Unit 2 also replaces the matching native types.enum membership lists below.
+Paths are under nix/modules; option paths are relative to nixfied. The shared
+invocation fragment mounts under tasks and service start/ready/health invocations.
+Use inventory members directly, retaining native option defaults separately.
+Unit 1 may retain these baseline lists; unit 2 removes them in the same cutover
+as the corresponding Rust enum definitions.
+
+| Inventory owner | Native file | Option / shared fragment |
+| --- | --- | --- |
+| StdinPolicy | `primitives.nix` | `invocation.stdin` |
+| ProbeKind | `primitives.nix` | `services.<name>.lifecycle.{ready,health}.probe.kind` |
+| signal (StopSignal) | `primitives.nix` | `services.<name>.lifecycle.stop.signal` |
+| ContainmentRequirement | `primitives.nix` | `services.<name>.containment` |
+| ClosureKind | `primitives.nix` | `closures.<name>.kind` |
+| ClosureEffect | `primitives.nix` | `closures.<name>.effects element type` |
+| SecretSourceKind | `primitives.nix` | `secrets.<name>.source.kind` |
+| TaskKind | `primitives.nix` | `tasks.<name>.kind` |
+| TaskDefaultOutput | `primitives.nix` | `tasks.<name>.defaultOutput` |
+| ServiceLifetime | `primitives.nix` | `tasks.<name>.serviceLifetime` |
+| SourceMode | `source.nix` | `codebases.main.sourceMode` |
+| DirtyPolicy | `source.nix` | `codebases.main.dirtyPolicy` |
+| CleanupPolicy | `state.nix` | `state.cleanupPolicy` |
+| PersistencePolicy | `state.nix` | `state.persistence` |
+
+Use inventory order for these native type projections. This deliberately changes
+SourceMode's reference/type-description order to snapshot, flake-input,
+live-workspace; its accepted values and live-workspace default stay unchanged.
+Regenerate OPTIONS.md accordingly. Do not author a second member list just to
+preserve documentation ordering. target.system is a separate authoring domain;
+TaskDefaultOutput and RunOutputMode, and PersistencePolicy and ServiceLifetime,
+remain distinct inventories despite shared spellings.
+
+Add an independent fixture mutation of one shared inventory domain: a removed
+member rejects and an added member accepts through the native Nix option and
+Rust decoder, and the generated reference reflects that same change. Assert
+literal expected membership independently; do not generate the oracle from the
+mutated inventory. This fixture must not change the production capability bytes.
+
 Unit 3 projects PortConflictReason, error-code, exit-class, and the five status
 inventories RunStatus, ProcessStatus, RunLeaseStatus, PortStatus, CleanupStatus.
 Emit status macro invocations in `registry/status.rs`; retain DbStatus, parsing
@@ -173,20 +243,34 @@ approved; inventory omissions do not justify silently extending it.
 
 ## Result and error coverage
 
-Unit 3 covers **18 structured identities**: 15 inventory-backed records and
-three local records. Paths below are within `runtime/crates/nixfied-runtime/`.
-Use serialization views where native objects own state; replace field-list
-duplication, not native data acquisition or lifecycle.
+Unit 3 covers **19 structured identities**: 15 inventory-backed records and
+four local records. There are 13 Owned definitions, five Borrowed projections
+and one MemberNamesOnly envelope; this is not a count of generated Rust structs.
+Paths below are within `runtime/crates/nixfied-runtime/`. Replace structural
+duplication while retaining native impls, data acquisition and lifecycle.
 
-| Complete identities | Existing serializer/construction boundary | Baseline evidence to extend |
-| --- | --- | --- |
-| Local CheckOutput, DownReport, CleanupOutcome | `src/main.rs`, `src/control.rs`, `src/state/cleanup.rs` | admission, registry, state tests; runtime gate |
-| run-json, run-summary-json, run-node, run-service | `src/main.rs::RunOutput/write_run_summary/NodeResult/ServiceRunOutput` | output/lifecycle tests; runtime gate |
-| run-task, selected-endpoint | `src/service/task.rs::TaskRun`, `src/service/process.rs::SelectedEndpoint` | output/service tests |
-| ps-json, ps-process | `src/control.rs::PsReport/ProcessObservation` | registry/endpoint tests |
-| runtime-error, runtime-error-cause | `src/error.rs::RuntimeError/RuntimeCause` | native error cause tests; admission/output tests |
-| runtime-error-projection | `src/output.rs::ReplayReport::into_error`, `src/main.rs::output_projection_io_error` | native output fault tests; output integration tests |
-| runtime-error-port-conflict, port-conflict, port-conflict-endpoint, nixfied-owner | `src/service/process.rs::port_conflict_error` and native diagnostic structs | endpoint tests, including lock/listener conflicts |
+| Complete identities | Binding | Existing serializer/construction boundary | Baseline evidence to extend |
+| --- | --- | --- | --- |
+| Local CheckOutput, DownReport, CleanupOutcome | Owned | `src/main.rs`, `src/control.rs`, `src/state/cleanup.rs` | admission, registry, state tests; runtime gate |
+| run-json, run-node, run-service | Owned | `src/main.rs::RunOutput/NodeResult/ServiceRunOutput` | output/lifecycle tests; runtime gate |
+| run-summary-json | Borrowed | `src/main.rs::write_run_summary` | summary bytes, ordering, redaction and write failures |
+| run-task, selected-endpoint | Owned | `src/service/task.rs::TaskRun`, `src/service/process.rs::SelectedEndpoint` | output/service tests; TaskRun decoder cases |
+| ps-json, ps-process | Owned | `src/control.rs::PsReport/ProcessObservation` | registry/endpoint tests |
+| runtime-error, runtime-error-cause | Owned | `src/error.rs::RuntimeError/RuntimeCause` | native error cause tests; display/source, omission/null, admission/output |
+| runtime-error-projection | Borrowed | `src/output.rs::ReplayReport::into_error`, `src/main.rs::output_projection_io_error` | native output faults, lossy paths and output integration |
+| runtime-error-port-conflict | MemberNamesOnly | Literal key at native `with_detail` call in `src/service/process.rs` | preserve serialization-failure fallback |
+| port-conflict, port-conflict-endpoint | Borrowed | `src/service/process.rs::PortConflictDetails/PortConflictEndpoint` | endpoint tests, including lock/listener conflicts |
+| nixfied-owner | Owned | `src/service/process.rs::NixfiedOwner` | nested presence/omission and owner proof |
+| Local RegistryIdentityDiagnostic | Borrowed | `src/registry/schema.rs::registry_identity_json` | expected/found identity, negative observed slot, mismatch causes and human output |
+
+TaskRun alone among these outputs keeps Deserialize, with IgnoreUnknown. Preserve
+its explicit-null exitCode and native paths; no duplicate TaskRunView is needed.
+RuntimeError retains Box<Vec<RuntimeCause>> through the bounded private storage
+binding. Replace its thiserror derive with native Display/Error impls preserving
+display and source() == None, and remove the now-unused direct dependency.
+All other output records have NoDecoder and no Nix producer. Remove handwritten
+data definitions or projected field lists in the same unit that adds their
+generated replacement. Keep ProjectionIssue storage and lossy conversion native.
 
 The uninventoried scalar leaves OutputStream and ProjectionOperation remain
 native bindings, as do PathBuf and usize. Keep `to_value -> redact -> format ->
@@ -201,6 +285,41 @@ process exit mapping (success 0, existing error statuses 12–38). Its mapping i
 native behavior, not generated per-error policy. Verify actual CLI status and
 failure precedence as well as enum spelling. Open error details remain open;
 declared structured diagnostics cannot hide inside an opaque schema escape.
+RuntimeError.details is Required(OpenJson) plus Present: plain serde_json::Value
+includes null. Preserve with_details(Value::Null) emitting a present null member;
+cause projection still turns non-object details into an empty object. Nullable
+wrapping of OpenJson rejects during declaration checking. For NoDecoder records,
+rustEncode determines emitted member presence, so a Required list may OmitEmpty.
+
+Fixed nested detail ownership is exhaustive for current production insertions:
+taskRun uses run-task; projections entries use runtime-error-projection;
+portConflict uses its declared endpoint/owner structure; expectedRegistryIdentity
+and foundRegistryIdentity share RegistryIdentityDiagnostic. The latter's required
+projectId, environment, slot, runtimeAbi and toolchainId fields are all Present;
+slot is signed i64, the others Text. Preserve native RegistryIdentity, SQLite
+reads, ordered mismatchedFields, mismatch classification, tolerant human display,
+recovery guidance and cause filtering. Tests must assert all five fields, including
+a negative observed slot, not merely that the values are objects.
+
+Other scalar/path/list detail keys stay native, documented once in the error
+topic by producer; this list is an audit, not an executable registry:
+
+| Native producer | Other detail keys |
+| --- | --- |
+| `src/slot.rs` | slot, slotMin, slotMax |
+| `src/main.rs` | command, compositeSteps, declaredTasks, environment, failedNodeId, failedService, logsDir, registryDir, registryPath, runDir, runId, runSummaryPath, slot, stateBase, stateRoot, stderrPath, stdoutPath, summaryPath, task, unknownTask |
+| `src/error.rs` | unsupportedFeature |
+| `src/service/process.rs` | address, endpointId, port |
+| `src/registry/schema.rs` | mismatchedFields |
+| `src/registry/sqlite.rs` | registryPath, registryDir |
+
+Existing cause allowlist names endpoint and nixfiedOwner have no direct
+production insertion; preserve the allowlist without inventing producers.
+Safe causes must retain identity objects while excluding raw infrastructure
+text. Preserve with_detail serialization fallback and cause_details returning
+empty details for non-object input. Persistent TaskCommandRecord, process-start
+identity and lifecycle/cleanup/upgrade event payloads retain native storage and
+history ownership; no public-output schema machinery is added for them.
 
 ## Commands and native topics
 
@@ -214,6 +333,13 @@ The new docs dispatcher, contextual help and gate wrappers remain native apps
 with complete interface topics; they do not enlarge command syntax machinery.
 Upgrade/installer fixture oracles already committed in the baseline remain valid
 evidence. No archived new fixture is an acceptable oracle.
+
+Native renderHelp consumes checked syntax facts, with helpers iterating every
+visible argument. Preserve RFC section 6.8's runtime rows and compact installer /
+upgrade usage; no help-layout vocabulary or hand-maintained row list is added.
+The shared help pair comes from surface-help. Default reference entries do not
+automatically add default prose to baseline help. Native parser error construction
+can consume inventory-derived spelling phrases without acquiring generated policy.
 
 Unit 5 completes these native topics, with links available from earlier units.
 Each row retains its implementation owner and requires behavioral proof, not
@@ -232,7 +358,7 @@ a new executable declaration family.
 | Output modes/defaults, summaries, task-output replay, typed errors and failure precedence | Native main/output/error/task finalization | Output fault and integration tests; task-output gate |
 | Install/upgrade reports, transactions/preflight and recovery | Native CLI and Nix installer/upgrade | CLI preservation/refusal tests, upgrade goldens and Nix gate |
 | Discovery/help, fixed model.json and disposable views/docs.md | Native help and compiler emission/views | Final app metadata/help tests and model/adoption assertions |
-| Developer tools, build/source isolation, verification and platform limits | DEVELOPMENT, native dev/gate/package/toolchain builders | Existing source/build checks; freshness from first generated consumer |
+| Developer tools, build/source isolation, verification and platform limits | DEVELOPMENT, native dev/gate/package/toolchain builders | Existing build checks; new source-variation matrix and freshness from first generated Rust consumer |
 
 Context coverage includes state precedence NIXFIED_STATE_DIR/XDG_STATE_HOME/HOME,
 secret-directory precedence NIXFIED_SECRETS_DIR/XDG_CONFIG_HOME/HOME, actual
@@ -242,6 +368,17 @@ run-error-summary-text, and byte inventory run-task-output, bind to native
 topics and behavioral evidence. Endpoint-acquisition/reuse, lease-authority,
 escape-settlement and escaped-port-reconciliation inventory lines also remain
 native guarantees, not structural records or generated transition machines.
+
+No executable source-variation matrix was identified in the baseline; the prose
+in DEVELOPMENT.md is not proof that one exists. Unit 2 adds the focused check
+specified in RFC section 5.1; unit 4 extends it to CLI-generated files. Vary each
+product's sources/generated files independently and check that only its filtered
+source and product derivation identities change. Also vary declaration/reference
+inputs with unchanged generated Rust bytes and require stable Rust product
+identities. Keep shared toolchain/manifest/lock inputs fixed in those cases.
+Wire the check into repository verification and update DEVELOPMENT.md to name
+the implemented invocation. These are new implementation obligations, not passed
+preparation checks.
 
 ## Baseline issue kept separate
 
@@ -275,6 +412,15 @@ and document integrity only. All new implementation proofs above remain open.
 - Document whitespace, local links, fenced examples, RFC sections/A1–A12,
   option-entry count and complete named capability coverage passed. A separate
   architect reviewed the coverage counts, scope choices, and readiness claims.
+
+The subsequent design refinement used focused Rust, diagnostic and command /
+reference architects plus independent counter-review. It resolved emission
+bindings, diagnostic classification, native help formatting and presentation
+context handling; these are design findings, not compiled implementation proof.
+Local links, fences, section/checklist identities, the 19-record assignment and
+git diff whitespace passed. All 142 tracked non-design files matched their
+pre-review content hashes. Only the RFC and this handoff changed; no implementation
+or CI run was part of this refinement.
 
 Do not infer runtime, release, macOS execution, hosted CI or full integration
 success from these checks. Implementation must run the focused proofs for each
