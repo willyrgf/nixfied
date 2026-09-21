@@ -135,6 +135,13 @@ Inventory-linked declarations reference its coordinates; generated enum members
 come from that owner rather than a copied list. Agreement is checked before
 publication. The inventory does not become generated output.
 
+Native option enums representing the same domain consume that inventory's
+members in inventory order. SourceMode therefore changes only its native type /
+reference presentation order to snapshot, flake-input, live-workspace; accepted
+values and its live-workspace default are preserved. This intentional presentation
+change avoids a second authored member-order list. Distinct domains and native
+option defaults remain separate facts even when some spellings coincide.
+
 The descriptor and richer structural declarations own different facts:
 inventory membership versus representation, field policy, and explanation.
 Agreement checks do not make them interchangeable authorities.
@@ -294,7 +301,8 @@ A record identity is Inventory(coordinate) when the baseline descriptor contains
 that record, or Local(name) when it does not. These are disjoint alternatives,
 not two independent names for one record. Existing model records must retain
 their inventory identities; Local is not an escape from available coverage.
-CheckOutput, DownReport, and CleanupOutcome use Local identities. References and
+CheckOutput, DownReport, CleanupOutcome, and RegistryIdentityDiagnostic use Local
+identities. References and
 the derived index use this same identity; no second record registry is authored.
 In record queries render Inventory as family/owner and Local as local/name.
 Inventory-linked records must cover their inventoried members exactly, after
@@ -305,15 +313,25 @@ A field separates **accepted decoder input** from **producer emission**:
 
 | Decode form | Meaning |
 | --- | --- |
-| Required(value) | Field required; null rejected |
+| Required(value) | Field required; supplied value must satisfy its domain |
 | Nullable(value) | Field required; null accepted |
 | Optional(value) | Missing or null means absence |
-| Default(value, literal) | Missing means the checked literal; null rejected |
+| Default(value, literal) | Missing means the checked literal; supplied value must satisfy its domain |
 
-For NoDecoder records, these field forms describe the value's presence and
-nullability for serialization only. They do not promise an accepted input
-language or cause a deserializer to be generated. Decoder-default compatibility
-checks apply only when a record actually has a decoder.
+OpenJson intrinsically includes every JSON value, including null. Thus
+Required(OpenJson) requires a member whose value may be null; it lowers directly
+to serde_json::Value, not Option<Value>. Other value domains reject null unless
+the field uses Nullable or Optional. Nullable(OpenJson) is redundant and rejected
+at declaration checking. Optional retains its explicit missing/null-as-absence
+meaning; a Default on OpenJson substitutes only for a missing member, not null.
+These rules add no validator to native open-detail composition.
+
+For NoDecoder records, field forms determine value representation and nullability,
+while rustEncode determines emitted member presence. They do not promise an
+accepted input language or cause a deserializer to be generated. For example,
+a Required list with OmitEmpty can omit its member when empty; it does not need
+a fictional decoder default. Decoder-default compatibility checks apply only
+when a record actually has a decoder.
 
 | Rust encode form | Meaning |
 | --- | --- |
@@ -383,11 +401,12 @@ RunOutputMode methods remain beside their callers. PortConflictReason replaces
 the native diagnostic's reason strings with the same wire spelling.
 
 Rust data generation preserves existing native type names and crate ownership.
-Use generated owned records for wire data and generated serialization views
-where native runtime objects already own the values. Lifetime/storage choices
-belong to the Rust backend or a small native conversion, not the public schema.
-A view may borrow native data; generating a second mutable runtime object graph
-or deserializing generated JSON back into native objects is prohibited.
+Generate owned data definitions and retain native impl blocks. Native methods
+alone do not justify a parallel view: TaskRun and RuntimeError each keep one
+owned representation. Borrowed views serve temporary output projections over
+other native data. Section 4.2.1 fixes these bindings; the handoff assigns every
+baseline record. No second mutable runtime object graph or conversion through
+serialized JSON is permitted.
 
 Generated views enter the existing native serialization/redaction/write pipeline.
 For example, run/control output still converts to serde_json::Value, redacts it,
@@ -398,6 +417,104 @@ boundary. Native path serialization stays native: replay diagnostics deliberatel
 use to_string_lossy, whereas other PathBuf fields retain their existing serde
 behavior. Do not make all paths lossy or invent a formatting-policy language.
 
+#### 4.2.1 Private Rust bindings and deterministic lowering
+
+Each structural declaration carries its private Rust binding beside it, not in
+a second catalog. Every binding supplies its owning generated file/native module
+and emission choice: Owned, Borrowed, or MemberNamesOnly. Owned/Borrowed supply
+type name and record/field visibility; MemberNamesOnly supplies constant naming
+and visibility, never a fictitious type. Generated definitions enter their owning
+native module's scope; generation must not widen existing private fields merely
+to let native impls access them.
+MemberNamesOnly applies to the existing one-member runtime-error-port-conflict
+envelope: emit its key for native with_detail insertion and reference its checked
+port-conflict value shape. Do not create an unused envelope struct or an error
+insertion helper. This is an output choice of the same structural backend.
+
+The remaining private binding fields are deliberately bounded:
+
+- Derive capabilities from Debug, Clone, Copy, PartialEq, Eq, preserving the
+  baseline requirements. Serialize/Deserialize and serde field policy derive
+  solely from the shared declaration, never an arbitrary attribute string.
+- Conventional wire-to-Rust field spelling, with explicit exceptions such as
+  port-conflict-endpoint.address becoming host. Check resulting name collisions.
+- Direct field storage, or one outer Box on an Owned field; currently only
+  RuntimeError.causes. No recursive storage/type-expression language.
+- Each NativeDomain binds one native Rust type path, represented by checked
+  path segments, not source text, generics, or a serializer callback.
+
+Keep ordinary imports in each native owner module and emit its in-scope type
+paths verbatim. For example, the model owner defines LoopbackHost and runtime
+owners import it normally. Generated fragments are included in those scopes,
+not detached into modules requiring a generated crate/path resolver. Rust checks
+resolution separately for every consuming library/binary target.
+
+Native traits outside the closed derive set remain native impls. In particular,
+TaskDefaultOutput retains Default returning Summary. Its convenience API and
+TaskSpec.defaultOutput's decoder default are distinct contracts: generate the
+field's serde default from its explicit structural policy, not by silently
+delegating to native Default. Preserve and independently test both baseline
+values; no arbitrary trait/attribute language is needed.
+
+Owned lowering uses String, the specified integer/nonzero types, native scalar
+types, generated enums, Vec or native UniqueVec, BTreeMap with String keys,
+referenced owned records, and serde_json::Value for OpenJson. Nullable/Optional
+wrap the lowered value in Option; their distinct decode policies remain enforced.
+Apply an outer Box last. Existing native constructor/serde checks remain intact.
+
+Borrowed lowering has one lifetime and NoDecoder:
+
+| Value | Borrowed representation |
+| --- | --- |
+| Boolean, integer, generated enum | By value; do not assume every enum is Copy |
+| Text | &str |
+| NativeDomain | &NativeType |
+| OpenJson | &serde_json::Value |
+| Non-unique list of owned elements | &[T] |
+| Unique list of owned elements | &UniqueVec<T>, preserving its invariant |
+| Map of owned values | &BTreeMap<String, T> |
+| Reference to Owned | &T |
+| Reference to Borrowed | T with the view lifetime, nested by value |
+| Nullable/Optional | Option of the corresponding representation |
+
+Declaration checking rejects value-type references to MemberNamesOnly, Owned
+references to Borrowed records, a Borrowed
+decoder or Box, and collections requiring temporary per-element borrowed
+projections. No baseline consumer requires those combinations. It validates path
+syntax, names, reference kinds and storage choices before rendering. Rust then
+checks that native paths exist, derives are satisfied, visibility is legal, and
+assembly lifetimes are sound. Static Nix checking does not claim to resolve Rust
+symbols or prove native serialization behavior.
+
+All 29 model records are Owned with RejectUnknown decoding. Of the 19 result/error
+identities, 13 are Owned, five Borrowed, and one MemberNamesOnly. TaskRun alone
+among these outputs retains a decoder, with IgnoreUnknown. The handoff lists
+the complete assignment; no migration chooses its own binding convention.
+
+#### 4.2.2 Open error details and fixed nested diagnostics
+
+OpenJson preserves native conditional detail composition; it is not a closed
+sum indexed by error code. These existing fixed nested values have shared shape
+owners: taskRun (run-task), projections entries (runtime-error-projection),
+portConflict and its endpoint/owner, and expectedRegistryIdentity /
+foundRegistryIdentity (Local RegistryIdentityDiagnostic).
+
+RegistryIdentityDiagnostic has five required, always-present fields: projectId,
+environment, slot, runtimeAbi, toolchainId. All are Text except signed i64 slot.
+The observed SQLite identity may contain an invalid negative slot; a diagnostic
+must report it without forcing admission into an unsigned slot type. It is a
+Borrowed, NoDecoder, NotProduced view over native RegistryIdentity. Replace only
+registry/schema.rs::registry_identity_json's field list. Keep native storage,
+constructors, mismatch classification, human rendering and safe-cause selection.
+This Local declaration preserves public bytes without modifying capability.txt.
+
+Other scalar/path/list additions and their enclosing keys remain documented
+native behavior. Do not build an executable detail-key registry, generic detail
+validator, or unknown-key rejection. Persistent TaskCommandRecord, process-start
+identity and lifecycle/cleanup/upgrade event JSON remain native storage/evidence
+contracts; being JSON does not make them command-output projections. The handoff
+names the audited detail producers and their proof obligations.
+
 ### 4.3 Command syntax facts and native parsers
 
 Use one syntax descriptor vocabulary for the five hidden runtime commands,
@@ -407,14 +524,32 @@ and reference entries. Retain the baseline native parsers and their typed option
 structures. This is the final design choice, not an alternative for the engineer
 to reconsider during migration.
 
-A command descriptor has name, description, ordered arguments, help text/layout,
+A command descriptor has name, description, ordered arguments, native renderHelp,
 and references to its native behavior topic and output/error contracts.
-An argument has token, valueDomain, initialValue, and help. valueDomain is Flag,
+An argument has a private identifier, token, valueDomain, initialValue, and help.
+valueDomain is Flag,
 Text, Path, Unsigned(32|64), or Enum sourced from the shared vocabulary.
 initialValue is Absent or Literal(value), checked against the domain.
 help is Visible { text; metavar } or Hidden { explanation }; flag metavariables
 must be absent. Reject unknown keys, duplicate tokens, invalid defaults, missing
-explanations, and conflicting generated names.
+explanations, duplicate private identifiers, and conflicting generated names.
+
+renderHelp is an ordinary pure Nix function from checked presentation facts to
+text, not a template AST or layout declaration. Check that its binding is a
+function during declaration validation and that its projection returns a string.
+Its input contains command/ordered argument facts, named argument lookup,
+resolved vocabulary members, referenced publication names and the common
+-h/--help spellings from the existing surface-help inventory. It receives no
+parser state, project model or native product
+bindings. Invoke it at help/reference projection, not during static binding checks.
+
+Native formatting helpers emit all visible argument rows in declared order, or
+all bracketed arguments for compact usage. Adding an ordinary optional argument
+therefore needs no formatter edit. Native invocation examples and whitespace
+remain presentation behavior. Hidden arguments have reference entries but no
+help rows. Section 6.8 demonstrates runtime and installer formatting without
+introducing a layout language. The baseline help spelling pair is one shared
+fact, not a general alias mechanism; installer root help routing remains native.
 
 Ordinary Nix composition shares common arguments. Native parser comparisons,
 initializers, app wrappers, and help use the generated constants and value
@@ -582,7 +717,9 @@ Publication descriptors can live beside the owning flake/module assembly.
 The composition entry point imports cohesive bundles; it contains no repeated
 catalog of every option, command, record, or exported name.
 
-Generated Rust lives in clearly marked generated modules in the consuming crate.
+Generated Rust lives in clearly marked files in the consuming crate. Include
+data-definition fragments in their native owner-module scopes as specified in
+section 4.2.1; generated constants may use ordinary dedicated modules.
 Retain checked-in Rust projections so ordinary editor/Cargo workflows work.
 Provide one explicit regeneration operation using pinned Nix and rustfmt.
 Repository checks compare freshly generated product-specific projections with
@@ -597,7 +734,18 @@ alone. A product check compares only its expected generated files; do not add
 the entire framework checkout, docs output, or other products' projections to
 that product's filtered source. Shared declaration/compiler inputs can affect
 generation checks, but unchanged generated bytes must not invalidate unrelated
-Rust product sources. Prove this with the existing source-variant checks.
+Rust product sources. Add a focused source-variation check with the first
+generated Rust consumer in unit 2, then extend it for unit 4's CLI projection.
+The baseline contains product filtering but no identified executable variation
+matrix; do not count the DEVELOPMENT.md prose as evidence that this check exists.
+The check must vary only one product's crate sources or generated files at a time
+and compare filtered-source and product derivation identities: the owning product
+changes, unrelated CLI, runtime/model, and test-child products do not. Also vary
+declaration/reference inputs while generated Rust bytes stay unchanged and prove
+Rust product identities remain stable. Hold shared manifests, toolchain and lock
+inputs fixed for these cases; legitimate shared-input changes have wider effects.
+Wire this proof into repository verification and document its actual invocation
+in DEVELOPMENT.md at cutover. No new public maintenance app is needed.
 
 Keep the existing checked docs/OPTIONS.md snapshot for its established repository
 and upgrade-reference role. The full new API index/reference is a disposable
@@ -679,9 +827,14 @@ Use these baseline cases, with separately authored raw JSON and expected bytes:
 | RunOutput.nodes | Empty list is omitted by serialization; this output has no decoder |
 | ProcessObservation.serviceInstanceId/serviceLifetime | Absent values serialize as explicit null, despite question-mark inventory notation |
 | RuntimeError.modelPath/computedModelHash | Absent values serialize as explicit null; do not infer omission from the inventory |
+| RuntimeError.details | Required(OpenJson) plus Present keeps plain Value and emits explicit null for Value::Null; objects, arrays and scalars remain valid |
 
 A synthetic Required-Nullable field must accept explicit null and reject a
 missing key, independently of the baseline Optional-plus-Present example.
+Reject Nullable(OpenJson) in a declaration-negative case. Independently assert
+that native with_details(Value::Null) serializes a present null details member,
+and that converting an error with non-object details into a cause still yields
+empty-object cause details. Neither behavior may be inferred from the schema.
 Also compare Nix-produced model bytes and Rust serialization separately. They
 need not have identical omission choices merely because both decode to the same
 value. Preserve the baseline producer's supplied-empty behavior explicitly.
@@ -731,6 +884,150 @@ against their actual baseline behavior; removing them is separate contract work.
 A downstream project pinned to source A must expose source A's reference even
 when another checkout/source B is available. Invalid project configuration must
 not contaminate the standalone supplying framework's docs package.
+
+### 6.7 Owned records, borrowed diagnostics, and native behavior
+
+TaskRun is an Owned binding in service::task with its baseline Debug, Clone,
+PartialEq, Eq, Serialize and Deserialize capabilities. Native execution continues
+constructing this same type, and CompletedEvidence continues owning it. Its
+exitCode is Optional plus Present: missing/null decode as None, serialization
+emits explicit null. Unknown fields continue to be accepted. Paths retain native
+PathBuf serde behavior. Remove the handwritten struct/serde policy; do not add a
+TaskRunView or a conversion layer. Independent raw-input and output cases cover
+unknown fields, missing/null exitCode and native path handling.
+
+RuntimeError is likewise Owned in error with Debug and Serialize; native methods
+retain redaction, cause selection, constructors and routing. Its field lowering is:
+
+| Wire member | Generated storage |
+| --- | --- |
+| code, exitClass | Existing inventory-backed ErrorCode, ExitClass |
+| message | String |
+| details | serde_json::Value |
+| causes | Box<Vec<RuntimeCause>>, omitted when empty |
+| modelPath | Option<PathBuf>, explicit null when absent |
+| computedModelHash | Option<String>, explicit null when absent |
+
+Replace thiserror's derive with a native Display impl using
+`write!(f, "{:?}: {}", self.code, self.message)` and an empty std::error::Error
+impl. This preserves display and source() == None without supporting arbitrary
+generated derive attributes. Remove the superseded struct/import and unused
+runtime thiserror dependency at cutover. Test display/source, boxed storage,
+empty causes and explicit nulls independently. Serialization omission is a
+shared field policy; the backend handles dereferencing Box without a new policy.
+
+The port-conflict projection is Borrowed and nested by value:
+
+~~~rust
+struct PortConflictEndpoint<'a> {
+    transport: &'a str,
+    family: &'a str,
+    // Generated serde rename to wire member "address".
+    host: &'a LoopbackHost,
+    port: u16,
+    endpoint_id: &'a str,
+}
+struct PortConflictDetails<'a> {
+    reason: PortConflictReason,
+    project_id: &'a str,
+    endpoint: PortConflictEndpoint<'a>,
+    // Generated omit-absent policy.
+    nixfied_owner: Option<&'a NixfiedOwner>,
+}
+~~~
+
+These excerpts illustrate lowered field types; serde annotations derive from the
+declared policies. Native assembly selects the reason, endpoint and proven owner,
+then calls with_detail with the generated portConflict key and typed view. Keep
+that call's serialization-failure fallback. Remove the old diagnostic structs,
+reason spellings and literal envelope key, not listener/lock/ownership logic.
+Independent fixtures cover nested omission, host serialization and conflict causes.
+
+Keep native ProjectionIssue storage. Its generated error view borrows a locally
+retained to_string_lossy result, serialized before that temporary is dropped.
+Replace repeated field lists at ReplayReport::into_error and
+main::output_projection_io_error; do not collect views over dropped temporaries
+or build another owned issue graph. Bind this shared view in the library's output
+module with public Rust visibility for the runtime binary's existing library
+dependency. Its fields are public for native assembly in both consumers; existing
+ProjectionIssue fields stay private. This internal library/binary integration is
+not a new supported adopter API. Change the main helper's stream/operation
+parameters from string literals to the existing native enum types at its three
+callsites, preserving their serialized spellings; do not add a string parser.
+Run-summary similarly uses a temporary view
+while native success calculation, redaction, pretty printing and writing remain.
+Registry identity uses the signed-slot view in section 4.2.2. These choices
+exercise native types, nested borrowing and behavior without another mechanism.
+
+### 6.8 Command facts with native presentation
+
+The run command has these ordered arguments; hidden explanations remain required
+in reference metadata even when omitted below for space:
+
+| Private identifier | Token | Domain | Initial value | Visible metavar |
+| --- | --- | --- | --- | --- |
+| model | --model | Path | Absent | Hidden |
+| allowNonStoreModel | --allow-non-store-model | Flag | false | Hidden |
+| stateBase | --state-base | Path | Absent | Hidden |
+| task | --task | Text | Absent | `<id>` |
+| slot | --slot | Unsigned32 | Absent | `<number>` |
+| timeoutMs | --timeout-ms | Unsigned64 | 5000 | `<number>` |
+| output | --output | Enum(run-output-mode) | Absent | `<mode>` |
+
+Visible text preserves the baseline explanations. The output explanation uses
+the inventory's ordered members to render "summary, json, both, or task-output";
+its contextual default remains native "task default or summary", using the
+inventory's Summary spelling. Absent does not derive that resolution policy;
+literal default metadata does not automatically add default prose to help. Reuse the
+inventory-derived choices phrase in the native invalid-mode error, retaining
+that error's construction and phase. No repeated authored member list is needed.
+
+Conceptually, the native formatter is ordinary Nix:
+
+~~~nix
+renderHelp = facts:
+  lib.concatStringsSep "\n" [
+    facts.description
+    ""
+    "Usage:"
+    "  nix run .#${facts.apps.run.name} -- ${argumentLabel facts.args.task} [options]"
+    "  nix run .#<verb> -- [options]"
+    ""
+    "Options:"
+    (runtimeRows 26 facts.arguments)
+  ];
+~~~
+
+runtimeRows emits every Visible argument in order, then the shared help row.
+argumentLabel derives token plus metavar; multiline explanations indent their
+continuation one column beyond the description column. Baseline description
+columns are 26 for run, 19 for check/ps/clean, and 25 for down (zero-based).
+Those are private formatting constants, not schema properties. The help string
+has no trailing newline; the native println! supplies it.
+
+Installer's ordered arguments are root (--root, Path, literal ".", metavar PATH),
+projectId (--project-id, Text, Absent, ID), name (--name, Text, Absent, NAME), and
+nixfiedUrl (--nixfied-url, Text, literal "github:willyrgf/nixfied", URL). Each owns
+its reference explanation. Its native formatter uses:
+
+~~~nix
+renderHelp = facts:
+  "usage: nixfied ${facts.name}${optionalArguments facts.arguments}";
+~~~
+
+optionalArguments emits each visible argument as a bracketed token/metavariable,
+producing the baseline compact usage. It does not append a help row: installer
+and upgrade usage omit one, while their parsers recognize the common help pair.
+Upgrade shares this compact helper; safely quoted constants enter its unchanged
+shell parser. Its --no-lock false default does not replace the native inverse
+update_lock=1 representation or change locking behavior.
+
+An ordinary visible optional argument adds declaration data, native parser/state
+and behavior, and independent expectations. Regeneration updates help rows,
+constants and reference with no formatter edit. A genuinely new invocation form
+requires a native formatter edit. Neither case requires a help grammar, renderer
+registry or parser-generation feature. Seven-command exact help and real-parser
+fixtures prove the correspondence, not checks derived from the same metadata.
 
 ## 7. Command preservation and native continuations
 
@@ -880,6 +1177,22 @@ Static reference packaging must not retain or build the runtime/CLI products
 merely to extract metadata. A disposable index.json in the reference package is
 presentation data, not another required model artifact or semantic seam.
 
+Preserve native option-documentation normalization, including defaultText for
+contextual defaults and native emptyValue semantics. Assemble a presentation-only
+value of strings, lists and maps; never include native implementation bindings.
+At its serialized packaging boundary use
+`builtins.unsafeDiscardStringContext (builtins.toJSON reference)` before writeText.
+Markdown consumes that presentation data or crosses the same boundary. This
+removes evaluator dependencies from display strings, not their visible source
+identity. Apply it uniformly to explanations, examples, help and provenance;
+do not create a per-field sanitizer registry. Never strip context from configured
+defaults, model values, app scripts or package bindings.
+
+Prove this with an otherwise unused sentinel derivation interpolated in metadata:
+the serialized reference has empty getContext, and its derivation inputs/closure
+exclude the sentinel and runtime/CLI products. A corresponding executable use
+must retain its context; a contextual default with defaultText remains unforced.
+
 ## 9. Replacement plan
 
 This plan describes reviewable change units, not authorization to create Git
@@ -900,9 +1213,9 @@ mechanism without another design stage.
 | --- | --- | --- | --- |
 | 0. Architect preparation | Quarantined archive, verified clean baseline, reviewed RFC, consistent problem statement, independently specified baseline cases | Abandoned material from engineer workspace/context; competing handoffs and progress claims | Clean-tree/import inventory and baseline checks; archive recovery verified separately |
 | 1. Authoring and publication | Checked native option metadata in nix/modules; actual lib, adapter, module-argument, app/package descriptors; reference lookup and revision-bound docs app | Duplicate export-name/description lists in flake.nix and nix/project-apps.nix; reserved-name literals in compiler validation; replace option-reference wiring without replacing native merging | Nested reuse, default/apply/override/laziness cases; publication coverage; original adopter question; pinned downstream discovery and standalone docs isolation |
-| 2. Shared model structure | Single structure checker, Nix constructors, Rust wire projection; migrate baseline model records/enums in nixfied-model and producer construction in derive.nix | Handwritten migrated record/enum definitions in types.rs and matching Nix shape/omission duplication; retain native newtypes and algorithms | Independently authored raw JSON; baseline producer bytes; Rust decode/serialize; invalid domains/coherence; Nix/Rust derived-fact vectors and admission |
+| 2. Shared model structure | Single structure checker, Nix constructors, Rust wire projection; migrate baseline model records/enums, matching native option enum memberships, and producer construction in derive.nix | Handwritten migrated records/enums in types.rs, the 14 native option enum membership lists named in the handoff, and matching Nix shape/omission duplication; retain native newtypes and algorithms | Raw JSON; producer bytes; Rust decode/serialize; shared-inventory mutation across Nix/Rust/reference; invalid domains/coherence; independent derivation/admission; new source-variation proof |
 | 3. Result/error structure | Reuse the same structure mechanism for public JSON, error/exit vocabulary, and registry status bindings; migrate serializers/views at their native output boundaries | Superseded field lists, serde records, ad hoc JSON reconstruction, and duplicated vocabulary spelling at migrated sites; retain native process exit mapping and status transitions | Existing public field/omission behavior, observed values, redaction, phase and failure precedence; no new structural backend |
-| 4. Command syntax | Shared syntax-fact projection; route all seven native parsers, their help, and generated app tokens through it | Duplicated tokens, enum/default definitions, and help literals in runtime main, CLI InstallOptions::parse, upgrade's initial syntax definitions, and project-app wrappers; retain native parsing loops | Independent section 7 vectors; actual parser conformance; help before admission; installer/upgrade ownership and existing report fixtures; no effect reordering |
+| 4. Command syntax | Shared syntax-fact projection; route all seven native parsers, their help, and generated app tokens through it | Duplicated tokens, enum/default definitions, and help literals in runtime main, CLI InstallOptions::parse, upgrade's initial syntax definitions, and project-app wrappers; retain native parsing loops | Independent section 7 vectors; actual parser conformance; help before admission; installer/upgrade ownership and existing report fixtures; extend source-variation proof to generated CLI files; no effect reordering |
 | 5. Complete coverage and audit | Finish native behavioral/context explanations in their owning docs; integrate reference links, source boundaries, developer instructions, and all final projections | Temporary fixtures/scaffolding that duplicate production paths; stale owner claims and obsolete generated readers | Whole acceptance gate in section 11, maintenance traces, complete replacement ledger, final affected-product and cross-layer checks |
 
 Units 2 and 3 reuse one structural representation; unit 3 does not add an output
@@ -910,6 +1223,14 @@ grammar. Unit 4 uses the syntax-fact boundary already specified here; it does no
 generate scanners or develop three command frameworks in sequence. Unit 5 is
 coverage/integration work, not a place to defer architectural decisions or repair
 unbuildable slices.
+
+Unit 1 retains baseline native enum lists until unit 2 cuts over their shared
+membership together with the Rust bindings. At that cutover, the inventory supplies
+all 13 equivalent model enum domains and stop signals to native types.enum and
+Rust generation. Remove the copied Nix member lists; do not merely compare them
+with the inventory. Preserve native defaults as separate facts. The handoff names
+the exact sites and the independent mutation proof. This is ordinary projection
+of the existing vocabulary owner, not another declaration family.
 
 Each unit must be buildable and preserve its native boundaries before the next.
 Where a unit affects producer and consumer, cut them over together. There is no
@@ -979,9 +1300,9 @@ native code, generated outputs, and tests, which are accounted for separately.
 | --- | --- | --- |
 | Native option metadata/domain helpers | Metadata rejection and shared constraints while retaining Nixpkgs semantics | 120–250 |
 | Shared structure normalization, linking, and Nix construction | One shape traversal and field-policy owner for model/results/errors | 350–650 |
-| Rust structural/vocabulary projection | Static records/enums and serialization views using native domains | 250–500 |
+| Rust structural/vocabulary projection | Owned/borrowed definitions, member keys, bounded Box/naming, enums and status macro invocations; native imports/impls retained | 250–500 |
 | Command normalization and shared checking | Shared syntax facts for all seven native parsers | 100–180 |
-| Rust/shell syntax projection | Tokens, numeric/enum bindings, literal defaults, and help; no scanners | 120–240 |
+| Rust/shell syntax projection | Tokens, numeric/enum bindings, literal defaults, native row/compact help formatting; no scanners | 120–240 |
 | Publication and reference assembly | Actual export bindings, identity checks, native option/reference joins | 200–400 |
 | Docs lookup and provenance packaging | Static query experience, authored prose, source binding | 180–320 |
 | Regeneration/freshness/build wiring | One explicit generation path with product-specific checks | 100–200 |
@@ -1019,6 +1340,35 @@ The required maintenance traces are:
 | Add a command argument | Syntax declaration, native parser branch and handler logic where needed | Shared type/token/default/help/reference bindings; independent parser precedence and no-effect cases |
 | Change native behavior without shape changes | Native owner, normative explanation, behavioral tests; capability descriptor if runtime contract changes | Reference prose and ABI snapshot where applicable; ordinarily no schema/compiler/backend edit |
 | Add an export of a supported kind | Its publication descriptor and native implementation | Actual export and reference entry; existing coverage check observes it |
+
+The following concrete change-site exercises disambiguate that table. Hypothetical
+new fields/options are fixture exercises, not additions authorized by this RFC:
+
+- **Option:** add a documented string option to the shared invocation fragment
+  in nix/modules. Native mounting supplies task/start/probe paths and native
+  merging; OPTIONS.md and the built reference regenerate. Add one independent
+  nested override expectation. No path registry, module evaluator or renderer edit.
+- **Constraint:** change the shared positive-integer fixture minimum from one
+  to two. Edit its domain once; independently assert one rejects and two accepts
+  at task and service invocation mounts. Their native type/reference projections
+  change together. Do not change unrelated stop defaults or native wire domains
+  that merely also contain integers; shared meaning determines reuse.
+- **Wire field:** add a required boolean in a fixture record modeled on
+  TaskSpec. Edit the one structural field declaration and native constructor
+  inputs/uses; generated owned Rust fields, Nix construction and reference follow.
+  A real inventoried-field amendment additionally edits capability.txt and updates
+  digest/snapshot/constants and coverage evidence atomically. Raw JSON tests
+  independently cover missing, null and valid values. No Rust backend edit.
+- **Command argument:** add a visible optional Unsigned64 argument to a run
+  fixture. Edit its syntax entry, native options state/parser/handler and independent
+  operand/overflow/repetition expectations. Tokens, alias, default, all-visible
+  help rows and reference regenerate. Existing native renderHelp needs no edit;
+  an exceptional new synopsis would be an explicit presentation change.
+- **Native behavior:** change failure selection in a native output fixture while
+  preserving its JSON shape. Edit the native selection branch and independent
+  behavioral expectations, with owning contract prose for a real behavior change.
+  Any real ABI amendment follows normal contract handling. No structural field,
+  binding, generator or serializer declaration changes merely to record progress.
 
 Record the actual edit path after implementing these changes in a small fixture
 or a reviewed demonstration. Expected results must not be generated from the
@@ -1099,6 +1449,14 @@ The architectural review covers the worked examples, baseline command matrix,
 and replacement ledger. RFC_ENGINEER_HANDOFF.md records the completed preparation
 and remaining implementation proofs. No difficult family is delegated to
 "design it when that migration begins."
+
+The focused adversarial review selected owned definitions with native impls over
+parallel serializers for every native struct; ordinary module imports over a
+generated Rust target resolver; temporary borrowed views over duplicate runtime
+graphs; and native help formatters over a layout language. It assigned all known
+nested public diagnostics while preserving open detail composition. These choices
+close design questions, not implementation proof obligations: compilation,
+preservation fixtures and maintenance exercises remain required at cutover.
 
 The handoff package is the clean baseline, this RFC, the baseline normative
 documents, and independently specified acceptance cases. The archive is excluded
