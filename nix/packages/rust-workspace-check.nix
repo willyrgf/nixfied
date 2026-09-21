@@ -6,7 +6,11 @@
 # with no host toolchain and no network. The white-box `cargo test` floor is
 # intentionally *not* here (it binds ports / spawns process groups); that runs via
 # `.#test` / `.#ci` outside the sandbox.
-{ pkgs, optionsDoc }:
+{
+  pkgs,
+  optionsDoc,
+  referenceCheck,
+}:
 let
   rustToolchain = (import ../toolchain.nix { inherit pkgs; }).dev;
 in
@@ -22,6 +26,23 @@ pkgs.stdenv.mkDerivation {
   ];
   buildPhase = ''
     runHook preBuild
+    test -e ${referenceCheck}
+    test -e ${import ../checks/upgrade-syntax.nix { inherit pkgs; }}
+    test -e ${import ../checks/syntax-projection.nix { inherit pkgs; }}
+    test -e ${import ../checks/maintenance.nix { inherit pkgs; }}
+    test -e ${import ../checks/structure-projection.nix { inherit pkgs; }}
+    test -e ${
+      import ../checks/generated.nix {
+        inherit pkgs;
+        package = "nixfied-runtime";
+      }
+    }
+    test -e ${
+      import ../checks/generated.nix {
+        inherit pkgs;
+        package = "nixfied-cli";
+      }
+    }
     diff -u ${../../docs/OPTIONS.md} ${optionsDoc}
     cargo fmt --all -- --check
     # `clippy` runs the full rustc front end, so `--all-targets -D warnings` also

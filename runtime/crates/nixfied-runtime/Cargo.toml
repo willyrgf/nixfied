@@ -13,7 +13,6 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-thiserror = "2.0"
 
 [dev-dependencies]
 nixfied-model = { path = "../nixfied-model", features = ["test-fixtures"] }

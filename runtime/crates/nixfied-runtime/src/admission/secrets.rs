@@ -199,7 +199,10 @@ pub(crate) fn has_unclosed_secret_ref(value: &str) -> bool {
 fn read_env_secret(id: &str, env_var: &str) -> RuntimeResult<String> {
     match std::env::var(env_var) {
         Ok(value) => normalize_secret_value(id, value),
-        Err(error) => Err(secret_unavailable(format!(
+        Err(std::env::VarError::NotUnicode(_)) => Err(secret_unavailable(format!(
+            "secret {id} env var {env_var} is unavailable: value is not valid UTF-8"
+        ))),
+        Err(error @ std::env::VarError::NotPresent) => Err(secret_unavailable(format!(
             "secret {id} env var {env_var} is unavailable: {error}"
         ))),
     }

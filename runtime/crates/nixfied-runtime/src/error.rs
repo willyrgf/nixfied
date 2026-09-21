@@ -2,60 +2,10 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-use thiserror::Error;
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ErrorCode {
-    ModelNotStoreOutput,
-    ModelInvalid,
-    ModelAdmission,
-    RuntimeAbiMismatch,
-    SourceMismatch,
-    PlatformUnsupported,
-    ClosureMissing,
-    RegistryCorrupt,
-    StateUnwritable,
-    StateUnowned,
-    CleanupRefused,
-    PortConflict,
-    PortUnverifiable,
-    ProcEscape,
-    ReadinessTimeout,
-    Canceled,
-    LeaseStale,
-    LeaseConflict,
-    // Execution-class failures: the model admitted cleanly, execution failed.
-    // These must never be reported for a pre-execution (admission) problem, so
-    // that `ModelAdmission` appearing after admission is, by construction, a leak.
-    TaskFailed,
-    LifecycleFailed,
-    DependencyUnavailable,
-    SecretUnavailable,
-    SecretLeakBlocked,
-    OutputModeInvalid,
-    OutputModeConflict,
-    TaskSelectionInvalid,
-    OutputProjectionFailed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExitClass {
-    Ok,
-    Error,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeCause {
-    pub code: ErrorCode,
-    pub exit_class: ExitClass,
-    pub message: String,
-    pub details: Value,
-}
+include!("generated/error.rs");
 
 impl RuntimeCause {
     pub fn from_error(error: RuntimeError) -> Self {
@@ -183,23 +133,13 @@ fn cause_details(code: ErrorCode, details: Value) -> Value {
     Value::Object(safe)
 }
 
-fn causes_empty(causes: &[RuntimeCause]) -> bool {
-    causes.is_empty()
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.code, self.message)
+    }
 }
 
-#[derive(Debug, Error, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[error("{code:?}: {message}")]
-pub struct RuntimeError {
-    pub code: ErrorCode,
-    pub exit_class: ExitClass,
-    pub message: String,
-    pub details: Value,
-    #[serde(default, skip_serializing_if = "causes_empty")]
-    pub causes: Box<Vec<RuntimeCause>>,
-    pub model_path: Option<PathBuf>,
-    pub computed_model_hash: Option<String>,
-}
+impl std::error::Error for RuntimeError {}
 
 impl RuntimeError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {

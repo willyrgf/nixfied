@@ -9,14 +9,7 @@ let
   source = config.nixfied.codebases.main;
   sourceIsLive = source.sourceMode == "live-workspace";
   sourceIsImmutable = source.sourceMode == "snapshot" || source.sourceMode == "flake-input";
-  reservedProjectApps = [
-    "help"
-    "run"
-    "ps"
-    "down"
-    "clean"
-    "model-check"
-  ];
+  reservedProjectApps = map (entry: entry.name) (import ../project-publications.nix { });
   sourceIdentity = toString source.sourceIdentity;
   immutableSourceIsStoreRoot =
     !sourceIsImmutable || lib.hasPrefix "${builtins.storeDir}/" sourceIdentity;
@@ -47,15 +40,7 @@ let
   # cannot even parse fails at evaluation instead of admission. The runtime
   # accepts any loopback IP literal; this check admits the canonical forms
   # (127.x.x.x and ::1), which is strictly narrower — fail-closed.
-  isLoopbackHost =
-    host:
-    host == "::1"
-    || (
-      let
-        octets = builtins.match "127\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)" host;
-      in
-      octets != null && lib.all (octet: lib.toInt octet <= 255) octets
-    );
+  isLoopbackHost = import ../lib/loopback-host.nix { inherit lib; };
   # A service declares either the single-endpoint `endpoint` sugar or the
   # multi-endpoint `endpoints` map; collect the bind hosts from whichever form.
   serviceHosts =
@@ -76,9 +61,7 @@ let
   # `attrsOf` values are lazy. Force every description here so malformed or
   # throwing descriptions fail model evaluation even when no app projection is
   # requested later.
-  surfaceDescriptionsForced = builtins.deepSeq (
-    map (verb: surfaceVerbs.${verb}) surfaceVerbIds
-  ) true;
+  surfaceDescriptionsForced = builtins.deepSeq (map (verb: surfaceVerbs.${verb}) surfaceVerbIds) true;
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
   taskNames = builtins.attrNames tasks;
   stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
@@ -360,10 +343,7 @@ let
     (expect (lib.all (
       verb: builtins.hasAttr verb tasks
     ) surfaceVerbIds) "surface.verbs must name declared tasks")
-    (expect
-      (lib.all (
-        verb: !(builtins.elem verb reservedProjectApps)
-      ) surfaceVerbIds)
+    (expect (lib.all (verb: !(builtins.elem verb reservedProjectApps)) surfaceVerbIds)
       "surface.verbs must not collide with the reserved project-app namespace (${builtins.concatStringsSep ", " reservedProjectApps})"
     )
     (expect combinedGraphAcyclic "the combined connectsTo + prepare-requires service graph must be acyclic")

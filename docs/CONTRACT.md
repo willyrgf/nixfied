@@ -90,7 +90,7 @@ when the model/runtime contract changes.
   does not identify, place, create, lock, report, retain, or selectively clean
   cache artifacts. Child tools and projects own those concerns through ordinary
   invocation environment or arguments.
-- **VERB-1:** `help`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
+- **VERB-1:** `help`, `docs`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
   project-app names. `nixfied.surface.verbs` is an attrset mapping each
   explicitly exported task id to its exact nonempty user-facing app
   description. Project verbs derive only from those task names; undeclared ids,
@@ -111,6 +111,15 @@ when the model/runtime contract changes.
   stays outside `runtimeAbi`. `projectApps` requires project-root `flake.nix`,
   `flake.lock`, and `nixfied.nix`; its help app is source-bound and rejects a
   current-flake context that does not match that source.
+- **Reference discovery:** the Nix-only `docs` app reads the authoring and API
+  reference from the same supplying framework source as `projectApps`. Root and
+  project apps use `packages.<system>.docs`, whose supported interfaces are
+  `bin/nixfied-docs` and `share/nixfied/reference/API.md`. Exact option/API queries,
+  namespace listing, topic navigation and source provenance are read-only after
+  realization: no Nix invocation, model admission, runtime or secret lookup.
+  Private lookup files are presentation data, not model artifacts. Outer flake
+  evaluation still occurs; recovery from broken project evaluation uses that
+  project's explicit supplying framework source, never an unpinned substitute.
 - **Hermetic child environment:** every leaf, probe, and service start receives
   only its declared environment plus the runtime-owned `PATH` assembled from
   invocation tool roots. Runtime environment inheritance and append-to-inherited
@@ -161,7 +170,8 @@ when the model/runtime contract changes.
   including captured child output, summaries, registry payloads, and runtime
   error JSON. Resolved secrets exist only in runtime memory and hermetic child
   environments. Files and sockets written directly by a child are outside this
-  guarantee.
+  guarantee. A rejected non-UTF-8 environment-secret value is never formatted
+  into an admission diagnostic; the error identifies the encoding failure.
 - A task's `defaultOutput` is part of the model contract. `summary` is the
   normal default; `task-output` is valid only for a directly selected leaf.
   A leaf's default never propagates through a composite or a service prepare
@@ -221,6 +231,41 @@ when the model/runtime contract changes.
   succeeded, task, lifecycle, and dependency failures use their execution-class
   codes; a later `MODEL_ADMISSION` is a phase leak.
 
+## Runtime error diagnostics
+
+`docs api error` lists the exact error vocabulary and recovery topics. Native
+constructors select the exit class; the command's native exit mapping produces
+statuses 12–38 for these failures. Neither the record declarations nor the error
+reference select failure precedence or retry behavior.
+
+Error `details` is open JSON and may be explicitly null. Fixed nested diagnostics
+have declared shapes: `taskRun` uses `run-task`, `projections` uses
+`runtime-error-projection`, and `portConflict` contains its endpoint and optional
+proven Nixfied owner. `expectedRegistryIdentity` and `foundRegistryIdentity` share
+the five-field registry identity diagnostic; observed slot values stay signed,
+including negative corrupt values. Replay diagnostic paths deliberately use
+lossy display strings. Task, model and cleanup paths retain native path
+serialization and its failure behavior.
+
+Other detail keys are native producer facts, not a closed record or an executable
+registry:
+
+| Native producer | Additional detail keys |
+| --- | --- |
+| Slot selection | `slot`, `slotMin`, `slotMax` |
+| Command/run orchestration | `command`, `compositeSteps`, `declaredTasks`, `environment`, `failedNodeId`, `failedService`, `logsDir`, `registryDir`, `registryPath`, `runDir`, `runId`, `runSummaryPath`, `slot`, `stateBase`, `stateRoot`, `stderrPath`, `stdoutPath`, `summaryPath`, `task`, `unknownTask` |
+| Runtime error construction | `unsupportedFeature` |
+| Service process ownership | `address`, `endpointId`, `port` |
+| Registry identity checking | `mismatchedFields` |
+| Registry I/O | `registryPath`, `registryDir` |
+
+Native cause projection retains its existing safe-key allowlist and excludes raw
+infrastructure text. Non-object details become an empty object in a cause. The
+allowlisted `endpoint` and `nixfiedOwner` keys have no direct current production
+insertion. Native `with_detail` retains its serialization-failure fallback. Run,
+control and summary output keep their existing conversion, redaction, formatting
+and write boundaries; the structural declarations perform none of those effects.
+
 ## Definitional boundaries
 
 The following are product redefinitions, not backlog items: an additional
@@ -247,3 +292,52 @@ A contract change must be explicit and atomic:
    focused tests/golden vectors, and delete the superseded implementation,
    fixtures, and documentation in the same transition.
 5. Run the appropriate gates from `DEVELOPMENT.md`.
+
+## Native command parsing
+
+The five runtime commands (`check`, `run`, `ps`, `down`, `clean`), installer and
+upgrade share checked syntax declarations. `docs api command <name>` lists each
+argument's domain, initial value and visibility. Native parsers own acquisition,
+repetition, errors and effects; declarations do not implement parsing policy.
+
+Runtime collects UTF-8 arguments before selecting a command. No arguments selects
+`check`; unknown commands reject. For a recognized command, either help spelling
+anywhere after the command wins before option validation or model admission.
+Signal installation still precedes help. Help does not materialize source/state
+or execute declared children. Invalid UTF-8 fails during input collection even
+when a help token is present.
+
+Runtime consumes the next token as an operand even when it looks like an option.
+Model and state-base paths use the last occurrence; a trailing bare flag clears
+an earlier value. Missing model rejection and state-base environment fallback
+follow parsing. Slots parse each occurrence as `u32`, timeouts as `u64`; the last
+valid occurrence wins. Native integer parsing accepts leading plus and zero,
+and rejects whitespace, negative values and overflow. Task repetition acquires
+the next operand before checking duplication. Output repetition validates the
+next mode before checking duplication, so a repeated invalid mode reports an
+invalid mode and a repeated task without an operand reports a missing value.
+Flags set their native state idempotently. Purge changes only the native cleanup
+policy selection. Output defaults remain explicit mode, then selected task's
+default, then summary. The early error projection scans output operands natively:
+the last operand-bearing occurrence selects projection; a trailing bare output
+flag does not clear it. Removed output aliases retain their specific rejection.
+
+Installer collects OS strings. Missing or non-UTF-8 root command prints successful
+root usage. Root `help`, `-h` and `--help` route natively. After `install`, either
+help token anywhere wins before option validation. Other standalone invalid
+UTF-8 yields `arguments must be valid UTF-8`; an invalid UTF-8 operand follows
+the native missing-value error. Operands include empty and option-like strings;
+all values use the last occurrence. Project metadata inference/validation and
+file ownership checks follow parsing, before native scaffold creation.
+
+Upgrade parses byte strings under `LC_ALL=C` sequentially. An earlier error wins
+over later help. Empty and double-hyphen-prefixed operands reject; `--root --help`
+is missing a root value, while `--root -h` consumes `-h`. Native command
+substitution strips trailing operand newlines. Values use the last occurrence;
+flags are idempotent. The empty initial URL preserves current selection, and
+`--no-lock` updates the native inverse lock state. Source inspection, Nix calls,
+preflight, plan/apply and transaction ownership remain native continuations.
+
+These commands do not accept equals-form options, positional operands, short
+clusters or an option terminator. Hidden model/state arguments remain documented
+for framework and test integration; generated app wrappers supply the model.

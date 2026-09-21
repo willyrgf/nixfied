@@ -94,6 +94,24 @@ pkgs.writeShellApplication {
     framework_help
     printf '  framework_help: %ds\n' "$((SECONDS - t0))" >&2
 
+    framework_reference() {
+      ${builtins.readFile ./checks/reference-sources.sh}
+    }
+    t0=$SECONDS
+    echo "  framework reference (pinned sources, invalid project, no runtime dependency)" >&2
+    framework_reference
+    runtime_sources() {
+      ${builtins.readFile ./checks/runtime-sources.sh}
+    }
+    echo "  Rust product source variation matrix" >&2
+    runtime_sources
+    inventory_mutation() {
+      ${builtins.readFile ./checks/inventory-mutation.sh}
+    }
+    echo "  Shared inventory mutation (Nix, Rust, reference)" >&2
+    inventory_mutation
+    printf '  framework_reference: %ds\n' "$((SECONDS - t0))" >&2
+
     # Nix-layer validation must fail before an invalid model or app catalog can
     # become executable. Batch the negative expressions into one evaluation.
     reject_invalid_evaluations() {
@@ -822,7 +840,7 @@ pkgs.writeShellApplication {
     empty_surface_apps=$(nix eval --no-write-lock-file --json "$path_project#apps.$current_system") \
       || fail "adoption: empty surface app metadata did not evaluate"
     printf '%s\n' "$empty_surface_apps" | jq -e '
-      (keys | sort) == ["clean", "down", "help", "model-check", "ps", "run"]
+      (keys | sort) == ["clean", "docs", "down", "help", "model-check", "ps", "run"]
     ' >/dev/null || fail "adoption: empty surface unexpectedly exported a task app"
     rm -rf "$path_project"
 
@@ -854,7 +872,7 @@ pkgs.writeShellApplication {
     scaffold_apps=$(nix eval --no-write-lock-file --json "$project#apps.$current_system") \
       || fail "adoption: untouched scaffold app metadata did not evaluate"
     printf '%s\n' "$scaffold_apps" | jq -e '
-      (keys | sort) == ["clean", "down", "help", "model-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "docs", "down", "help", "model-check", "ps", "run", "smoke"]
       and all(.[];
         (.program | type == "string" and length > 0)
         and (.meta.description | type == "string" and length > 0)
@@ -885,7 +903,7 @@ pkgs.writeShellApplication {
     surface_apps=$(nix eval --json "$project#apps.$current_system") \
       || fail "adoption: leaf/composite surface app metadata did not evaluate"
     printf '%s\n' "$surface_apps" | jq -e '
-      (keys | sort) == ["clean", "composite-smoke", "down", "help", "model-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "composite-smoke", "docs", "down", "help", "model-check", "ps", "run", "smoke"]
       and .smoke.meta.description == "Run the starter smoke test"
       and .["composite-smoke"].meta.description == "Run the composite smoke test"
     ' >/dev/null || fail "adoption: leaf/composite app descriptions were not copied exactly"
@@ -910,6 +928,7 @@ pkgs.writeShellApplication {
       and .smoke.meta.description == "Overridden adopter verb"
       and .["composite-smoke"].meta.description == "Run the composite smoke test"
       and has("help")
+      and has("docs")
       and .merged.meta.description == "Merged adopter app"
     ' >/dev/null || fail "adoption: generated apps lack discoverable descriptions"
     model_dir="$(nix build --no-link --print-out-paths "$project#model")"

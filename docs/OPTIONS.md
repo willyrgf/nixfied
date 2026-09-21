@@ -233,7 +233,7 @@ Whether the main codebase resolves from the live workspace or an immutable Nix-s
 
 
 *Type:*
-one of “live-workspace”, “snapshot”, “flake-input”
+one of “snapshot”, “flake-input”, “live-workspace”
 
 
 
@@ -275,7 +275,7 @@ Port offset between adjacent slot candidate windows\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -296,7 +296,7 @@ Number of candidate ports assigned to each slot\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -889,7 +889,7 @@ Maximum invocation duration in milliseconds before cancellation\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -944,7 +944,7 @@ Maximum number of probe attempts before readiness or health fails\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -965,7 +965,7 @@ Delay in milliseconds between probe attempts\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -986,7 +986,7 @@ Per-attempt probe timeout (the invocation’s own timeoutMs does not apply to pr
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1280,7 +1280,7 @@ Maximum invocation duration in milliseconds before cancellation\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1335,7 +1335,7 @@ Maximum number of probe attempts before readiness or health fails\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1356,7 +1356,7 @@ Delay in milliseconds between probe attempts\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1377,7 +1377,7 @@ Per-attempt probe timeout (the invocation’s own timeoutMs does not apply to pr
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1571,7 +1571,7 @@ Maximum invocation duration in milliseconds before cancellation\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1789,7 +1789,7 @@ Graceful stop timeout before SIGKILL escalation\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -1805,7 +1805,7 @@ signed integer
 
 
 
-Logical log references recorded for the service\.
+Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity\.
 
 
 
@@ -1849,7 +1849,13 @@ null
 
 
 
-Logical state-root references attributed to the service and included in its identity\.
+Descriptive state labels, defaulting to ` [ "slot" ] `; any strings are
+accepted, not an enum of storage backends or selectable roots\.
+Execution lowering discards these labels: changing them does not select
+a state directory or change service reuse identity\. They remain in
+model\.json and its generated view, so changing them changes the raw
+model hash\. See ` docs topic state ` for state policy and the
+${stateDir} slot-root convention\.
 
 
 
@@ -2080,7 +2086,7 @@ attribute set of (submodule)
 
 
 
-Logical artifact references recorded for the leaf task\.
+Descriptive artifact labels retained in the model and generated view, then discarded by execution lowering; they do not create, collect or place artifacts\.
 
 
 
@@ -2293,7 +2299,7 @@ Maximum invocation duration in milliseconds before cancellation\.
 
 
 *Type:*
-signed integer
+positive integer, meaning >0
 
 
 
@@ -2343,7 +2349,7 @@ one of “leaf”, “composite”
 
 
 
-Logical log references recorded for the leaf task\.
+Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select evidence paths\.
 
 
 
@@ -2385,7 +2391,13 @@ null
 
 
 
-Services that must be ready (alive, probed, addressable) while the leaf runs\.
+Direct service dependencies that must be ready while the leaf runs;
+endpoint-less dependencies are allowed\. Named ${port:\<serviceId>}
+and ${host:\<serviceId>} placeholders address the primary endpoint of
+a directly required service, never an endpoint id\. Bare ${port} and
+${host} use the first service in this authored list and reject if it
+has no endpoints; they do not skip to a later addressable dependency\.
+See ` docs topic placeholders `\.
 
 
 
@@ -2482,7 +2494,7 @@ non-empty string
 
 
 
-Logical summary references recorded for the leaf task\.
+Descriptive summary labels retained in the model and generated view, then discarded by execution lowering; they do not select summary paths\.
 
 
 

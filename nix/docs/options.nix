@@ -5,14 +5,9 @@
 }:
 
 let
-  evaluated = import ../compiler/resolve.nix {
-    inherit
-      lib
-      pkgs
-      system
-      ;
-    module = { ... }: { };
-  };
+  authoring = import ../meta/authoring.nix { inherit lib pkgs system; };
+  evaluated = authoring.evaluated;
+  metadata = authoring.options;
   rendered = pkgs.nixosOptionsDoc {
     options = builtins.removeAttrs evaluated.options [ "_module" ];
     # Declaration paths are evaluator-local store or checkout paths. They add no
@@ -34,11 +29,13 @@ let
     rendered.optionsCommonMark
   ];
 in
-pkgs.runCommand "nixfied-options.md" { } ''
-  # Preserve generated formatting while dropping any trailing blank lines.
-  awk '
-    NF { last = NR }
-    { lines[NR] = $0 }
-    END { for (line = 1; line <= last; line++) print lines[line] }
-  ' ${combined} > "$out"
-''
+builtins.seq metadata (
+  pkgs.runCommand "nixfied-options.md" { } ''
+    # Preserve generated formatting while dropping any trailing blank lines.
+    awk '
+      NF { last = NR }
+      { lines[NR] = $0 }
+      END { for (line = 1; line <= last; line++) print lines[line] }
+    ' ${combined} > "$out"
+  ''
+)

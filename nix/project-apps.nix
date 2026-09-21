@@ -16,6 +16,8 @@
   system,
   model,
   config,
+  docs,
+  publicationTargets,
 }:
 let
   modulePath = toString module;
@@ -27,6 +29,7 @@ let
     && builtins.pathExists "${moduleRoot}/flake.lock";
   runtimeBin = "${releaseRuntime}/bin/nixfied-runtime";
   modelJson = "${model}/model.json";
+  syntax = (import ./meta/command-default.nix { inherit lib; }).byName.run;
   verbs = config.nixfied.surface.verbs;
   verbIds = builtins.attrNames verbs;
   mkApp =
@@ -47,43 +50,23 @@ let
       name = verb;
       value =
         mkApp verb verbs.${verb}
-          ''exec "${runtimeBin}" run --model "${modelJson}" --task "${verb}" "$@"'';
+          ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.model.token} "${modelJson}" ${syntax.args.task.token} "${verb}" "$@"'';
     }) verbIds
   );
-in
-assert lib.assertMsg moduleIsProjectRoot "lib.projectApps requires project-root flake.nix, flake.lock, and nixfied.nix";
-{
-  help = import ./help-app.nix {
-    inherit pkgs system;
-    expectedFlakePath = moduleRoot;
-    flakeRef = ".";
+  framework = import ./meta/publications.nix { inherit lib; } {
+    targets = publicationTargets;
+    declarations = import ./project-publications.nix {
+      inherit
+        pkgs
+        system
+        moduleRoot
+        runtimeBin
+        modelJson
+        docs
+        ;
+    };
   };
-
-  # Run one selected task (`nix run .#run -- --task <id>`): its derived
-  # service union starts eagerly, then the flattened nodes execute. With no
-  # selection the runtime refuses and lists the declared tasks.
-  run =
-    mkApp "run" "Run one declared Nixfied task"
-      ''exec "${runtimeBin}" run --model "${modelJson}" "$@"'';
-
-  # Admission sanity: the model is well-formed and admits (cheap, no
-  # execution). Named `model-check` so `check` stays free for adopters.
-  model-check =
-    mkApp "model-check" "Admit the compiled Nixfied model without executing tasks"
-      ''exec "${runtimeBin}" check --model "${modelJson}" "$@"'';
-
-  # Recovery/control surface over the project's slots: observe registry-owned
-  # processes (reconciling stale evidence), stop everything the runtime owns,
-  # and remove the marker-gated slot state. Extra args are forwarded
-  # (e.g. `nix run .#down -- --slot 1`).
-  ps =
-    mkApp "ps" "Reconcile and report Nixfied-owned processes for a slot"
-      ''exec "${runtimeBin}" ps --model "${modelJson}" "$@"'';
-  down =
-    mkApp "down" "Stop Nixfied-owned processes for a slot"
-      ''exec "${runtimeBin}" down --model "${modelJson}" "$@"'';
-  clean =
-    mkApp "clean" "Safely clean Nixfied-owned state for a slot"
-      ''exec "${runtimeBin}" clean --model "${modelJson}" "$@"'';
-}
-// verbApps
+in
+assert lib.assertMsg moduleIsProjectRoot
+  "lib.projectApps requires project-root flake.nix, flake.lock, and nixfied.nix";
+framework.project "app" "project" // verbApps

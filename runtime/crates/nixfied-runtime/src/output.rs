@@ -39,6 +39,8 @@ pub enum ProjectionOperation {
     Join,
 }
 
+include!("generated/output.rs");
+
 /// A redaction-safe description of one replay failure.
 ///
 /// It intentionally stores an error kind rather than an operating-system error
@@ -249,12 +251,13 @@ impl ReplayReport {
             .issues
             .into_iter()
             .map(|issue| {
-                json!({
-                    "stream": issue.stream,
-                    "operation": issue.operation,
-                    "kind": issue.kind,
-                    "path": issue.path.to_string_lossy(),
-                    "bytesWritten": issue.bytes_written,
+                let path = issue.path.to_string_lossy();
+                json!(ProjectionDiagnostic {
+                    stream: &issue.stream,
+                    operation: &issue.operation,
+                    kind: &issue.kind,
+                    path: path.as_ref(),
+                    bytes_written: issue.bytes_written,
                 })
             })
             .collect::<Vec<_>>();
@@ -374,6 +377,28 @@ fn io_kind(error: &io::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_diagnostic_keeps_intentional_lossy_path_and_safe_fields() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let report = ReplayReport {
+            issues: vec![ProjectionIssue {
+                stream: OutputStream::Stderr,
+                operation: ProjectionOperation::Read,
+                kind: "io".into(),
+                path: PathBuf::from(OsString::from_vec(vec![b'/', 0xff])),
+                bytes_written: 17,
+            }],
+        };
+        let error = report.into_error().unwrap();
+        assert_eq!(
+            error.details,
+            json!({"projections":[{
+                "stream":"stderr","operation":"read","kind":"io","path":"/\u{fffd}","bytesWritten":17
+            }]})
+        );
+    }
     use std::io::ErrorKind;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};

@@ -61,66 +61,7 @@ macro_rules! db_status {
     };
 }
 
-db_status! {
-    /// `runs.status`: the overall outcome of a run.
-    RunStatus {
-        ServiceStarting => "service-starting",
-        Canceling => "canceling",
-        Canceled => "canceled",
-        Completed => "completed",
-        TaskSucceeded => "task-succeeded",
-        TaskFailed => "task-failed",
-        ServiceFailed => "service-failed",
-        ProcEscaped => "proc-escaped",
-        Stale => "stale",
-    }
-}
-
-db_status! {
-    /// `processes.status`: a spawned process's state.
-    ProcessStatus {
-        Starting => "starting",
-        Running => "running",
-        Ready => "ready",
-        Stopped => "stopped",
-        Succeeded => "succeeded",
-        Failed => "failed",
-        Canceled => "canceled",
-        Escaped => "escaped",
-        Stale => "stale",
-    }
-}
-
-db_status! {
-    /// `run_leases.status`: ownership of a run's service reservation.
-    RunLeaseStatus {
-        Active => "active",
-        Canceling => "canceling",
-        Canceled => "canceled",
-        Completed => "completed",
-        Failed => "failed",
-        Stale => "stale",
-    }
-}
-
-db_status! {
-    /// `ports.status`: a port reservation's binding state.
-    PortStatus {
-        Reserved => "reserved",
-        Active => "active",
-        Released => "released",
-        Stale => "stale",
-    }
-}
-
-db_status! {
-    /// `cleanups.status`: a marker-gated cleanup's state.
-    CleanupStatus {
-        Intent => "intent",
-        Deleted => "deleted",
-        Failed => "failed",
-    }
-}
+include!("../generated/status.rs");
 
 /// Lease statuses that keep a reservation open (not yet terminal).
 pub const LEASE_OPEN: &[RunLeaseStatus] = &[RunLeaseStatus::Active, RunLeaseStatus::Canceling];
@@ -157,6 +98,23 @@ pub const CLEANUP_PRIOR: &[CleanupStatus] = &[CleanupStatus::Intent, CleanupStat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_bindings_keep_native_database_domains_and_parse_failures() {
+        assert_eq!(RunStatus::DOMAIN, "RunStatus");
+        assert_eq!(ProcessStatus::DOMAIN, "ProcessStatus");
+        assert_eq!(RunLeaseStatus::DOMAIN, "RunLeaseStatus");
+        assert_eq!(PortStatus::DOMAIN, "PortStatus");
+        assert_eq!(CleanupStatus::DOMAIN, "CleanupStatus");
+        assert_eq!(ProcessStatus::Escaped.as_str(), "escaped");
+        assert_eq!(RunLeaseStatus::Canceling.as_str(), "canceling");
+        let error = RunLeaseStatus::parse_db("bad-status").unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert_eq!(
+            error.message,
+            "registry holds unknown RunLeaseStatus status \"bad-status\""
+        );
+    }
 
     /// The serialized strings are the registry's on-disk wire format: a rename
     /// must break here, never silently write an unreadable column.

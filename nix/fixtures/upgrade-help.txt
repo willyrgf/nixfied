@@ -1,0 +1,1 @@
+usage: nixfied upgrade [--root PATH] [--nixfied-url URL] [--plan] [--no-lock]

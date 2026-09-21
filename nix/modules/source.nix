@@ -1,6 +1,8 @@
 { lib, ... }:
 let
-  inherit (lib) mkOption types;
+  inherit (lib) types;
+  vocabulary = (import ../meta/default.nix { inherit lib; }).vocabularyMap;
+  inherit (import ../meta/options.nix { inherit lib; }) mkOption;
 in
 {
   options.nixfied.codebases.main = {
@@ -11,11 +13,7 @@ in
     };
 
     sourceMode = mkOption {
-      type = types.enum [
-        "live-workspace"
-        "snapshot"
-        "flake-input"
-      ];
+      type = types.enum vocabulary."enum SourceMode".members;
       default = "live-workspace";
       description = "Whether the main codebase resolves from the live workspace or an immutable Nix-store source.";
     };
@@ -28,11 +26,7 @@ in
     };
 
     dirtyPolicy = mkOption {
-      type = types.enum [
-        "allow"
-        "warn"
-        "reject"
-      ];
+      type = types.enum vocabulary."enum DirtyPolicy".members;
       default = "warn";
       description = "Admission policy for uncommitted changes in a live workspace.";
     };

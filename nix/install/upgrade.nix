@@ -2,6 +2,11 @@
 # The repin script is embedded here (literal `${...}` is escaped as
 # `''${...}` for the Nix indented string); `nix run .#upgrade` runs it.
 { pkgs }:
+let
+  structure = import ../meta/default.nix { inherit (pkgs) lib; };
+  syntax = import ../meta/command-default.nix { inherit (pkgs) lib; };
+  projection = import ../meta/syntax-project.nix { inherit (pkgs) lib; inherit structure; } syntax;
+in
 pkgs.writeShellApplication {
   name = "nixfied-upgrade";
   runtimeInputs = [
@@ -26,13 +31,14 @@ pkgs.writeShellApplication {
     # refreshes the lock entry for that input. It never creates, edits, or deletes
     # nixfied.nix, and it makes no compatibility promise for already-compiled models.
 
-    root="."
-    nixfied_url=""
-    update_lock=1
-    plan=0
+    ${projection.shell "upgrade"}
+    root="$UPGRADE_ROOT_INITIAL"
+    nixfied_url="$UPGRADE_NIXFIED_URL_INITIAL"
+    update_lock=$((1 - UPGRADE_NO_LOCK_INITIAL))
+    plan="$UPGRADE_PLAN_INITIAL"
 
     usage() {
-      echo 'usage: nixfied upgrade [--root PATH] [--nixfied-url URL] [--plan] [--no-lock]'
+      echo "$UPGRADE_HELP"
     }
 
     take_value() {
@@ -47,23 +53,23 @@ pkgs.writeShellApplication {
 
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --root)
+        "$UPGRADE_ROOT")
           root="$(take_value "$1" "''${2-}")"
           shift 2
           ;;
-        --nixfied-url)
+        "$UPGRADE_NIXFIED_URL")
           nixfied_url="$(take_value "$1" "''${2-}")"
           shift 2
           ;;
-        --plan)
+        "$UPGRADE_PLAN")
           plan=1
           shift
           ;;
-        --no-lock)
+        "$UPGRADE_NO_LOCK")
           update_lock=0
           shift
           ;;
-        -h | --help)
+        "$HELP_SHORT" | "$HELP_LONG")
           usage
           exit 0
           ;;

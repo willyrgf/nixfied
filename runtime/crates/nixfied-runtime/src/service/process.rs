@@ -56,13 +56,7 @@ pub(crate) fn stdin_for(policy: StdinPolicy) -> Stdio {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SelectedEndpoint {
-    pub endpoint_id: String,
-    pub host: LoopbackHost,
-    pub port: u16,
-}
+include!("../generated/process.rs");
 
 pub struct StartedService {
     child: Option<Child>,
@@ -221,7 +215,7 @@ impl StartedService {
                     listeners,
                 } => {
                     return Err(port_conflict_error(
-                        "listener-occupied",
+                        PortConflictReason::ListenerOccupied,
                         self.computed_project_id(registry),
                         endpoint,
                         proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?
@@ -362,7 +356,7 @@ impl StartedService {
                 endpoint,
                 listeners,
             } => Err(port_conflict_error(
-                "listener-occupied",
+                PortConflictReason::ListenerOccupied,
                 self.computed_project_id(registry),
                 endpoint,
                 proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?.as_ref(),
@@ -912,45 +906,16 @@ fn probe_policy(probe: &Probe) -> (u32, Duration, &str) {
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PortConflictEndpoint<'a> {
-    transport: &'static str,
-    family: &'static str,
-    #[serde(rename = "address")]
-    host: &'a LoopbackHost,
-    port: u16,
-    endpoint_id: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NixfiedOwner {
-    project_id: String,
-    environment: String,
-    slot: u32,
-    run_id: String,
-    service_id: String,
-    service_instance_id: String,
-    process_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PortConflictDetails<'a> {
-    reason: &'a str,
-    project_id: &'a str,
-    endpoint: PortConflictEndpoint<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nixfied_owner: Option<&'a NixfiedOwner>,
-}
-
 fn port_conflict_error(
-    reason: &str,
+    reason: PortConflictReason,
     project_id: &str,
     endpoint: &SelectedEndpoint,
     owner: Option<&NixfiedOwner>,
 ) -> RuntimeError {
+    let reason_wire = serde_json::to_value(reason).expect("closed conflict reason serializes");
+    let reason_text = reason_wire
+        .as_str()
+        .expect("closed conflict reason is a string");
     let details = PortConflictDetails {
         reason,
         project_id,
@@ -969,11 +934,11 @@ fn port_conflict_error(
     RuntimeError::new(
         ErrorCode::PortConflict,
         format!(
-            "endpoint {} is unavailable at {}:{} ({reason})",
+            "endpoint {} is unavailable at {}:{} ({reason_text})",
             endpoint.endpoint_id, endpoint.host, endpoint.port
         ),
     )
-    .with_detail("portConflict", details)
+    .with_detail(PORT_CONFLICT_KEY, details)
 }
 
 fn port_unverifiable_error(
@@ -1089,7 +1054,7 @@ fn endpoint_failure_error(
 ) -> RuntimeResult<RuntimeError> {
     match failure {
         EndpointFailure::LockContended { endpoint } => Ok(port_conflict_error(
-            "startup-lock-contended",
+            PortConflictReason::StartupLockContended,
             &registry.identity().project_id,
             &endpoint,
             None,
@@ -1100,7 +1065,7 @@ fn endpoint_failure_error(
         } => {
             let owner = proven_nixfied_owner(registry, &endpoint, &listeners, service)?;
             Ok(port_conflict_error(
-                "listener-occupied",
+                PortConflictReason::ListenerOccupied,
                 &registry.identity().project_id,
                 &endpoint,
                 owner.as_ref(),
@@ -1788,7 +1753,7 @@ fn refuse_nonreusable_local_service(
         } => {
             let owner = proven_nixfied_owner(registry, endpoint, &listeners, requested_service)?;
             Err(port_conflict_error(
-                "listener-occupied",
+                PortConflictReason::ListenerOccupied,
                 &registry.identity().project_id,
                 endpoint,
                 owner.as_ref(),
@@ -3290,6 +3255,58 @@ mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
     use nixfied_model::ServiceId;
+
+    #[test]
+    fn conflict_view_preserves_wire_host_owner_omission_and_native_message() {
+        let selected = SelectedEndpoint {
+            endpoint_id: "web".into(),
+            host: LoopbackHost::parse("::1").unwrap(),
+            port: 23080,
+        };
+        let error = port_conflict_error(
+            PortConflictReason::ListenerOccupied,
+            "project",
+            &selected,
+            None,
+        );
+        assert_eq!(
+            error.message,
+            "endpoint web is unavailable at ::1:23080 (listener-occupied)"
+        );
+        assert_eq!(
+            error.details,
+            serde_json::json!({"portConflict":{
+                "reason":"listener-occupied","projectId":"project",
+                "endpoint":{"transport":"tcp","family":"ipv6","address":"::1","port":23080,"endpointId":"web"}
+            }})
+        );
+        let owner = NixfiedOwner {
+            project_id: "owner".into(),
+            environment: "dev".into(),
+            slot: 2,
+            run_id: "run".into(),
+            service_id: "service".into(),
+            service_instance_id: "instance".into(),
+            process_key: "process".into(),
+        };
+        let error = port_conflict_error(
+            PortConflictReason::StartupLockContended,
+            "project",
+            &selected,
+            Some(&owner),
+        );
+        assert_eq!(
+            error.details["portConflict"]["reason"],
+            "startup-lock-contended"
+        );
+        assert_eq!(
+            error.details["portConflict"]["nixfiedOwner"],
+            serde_json::json!({
+                "projectId":"owner","environment":"dev","slot":2,"runId":"run",
+                "serviceId":"service","serviceInstanceId":"instance","processKey":"process"
+            })
+        );
+    }
 
     fn endpoint(host: &str, port: u16) -> SelectedEndpoint {
         SelectedEndpoint {

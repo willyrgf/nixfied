@@ -17,7 +17,7 @@ types and defaults used below.
 ```
 
 `adapters` is provided to every compiled `nixfied.nix` via `specialArgs`;
-the registry lives in `nix/adapters/default.nix` (`synthetic`, `postgres`,
+the publication descriptors live in `nix/adapters/default.nix` (`synthetic`, `postgres`,
 `reth`).
 
 ## What an adapter provides
@@ -71,6 +71,29 @@ Adapters are ordinary modules: the importing project overrides options by
 module merging — `nixfied.services.postgres.lifecycle.stop.signal`,
 `nixfied.placement.ports.base`, probe timing, or lifecycle invocations. No
 adapter has its own option namespace.
+
+## Endpoints and placeholders
+
+Placeholders in invocation arguments and environment values are scope-specific:
+
+| Invocation owner | Bare `${port}` / `${host}` | Named `${port:<name>}` / `${host:<name>}` |
+| --- | --- | --- |
+| Leaf task (including a service prepare task) | Primary endpoint of the **first** service in its authored `requires` list | Primary endpoint of a directly declared required **service id**, not an endpoint id |
+| Service start or exec probe | The service's own primary endpoint | An own endpoint id first, then the primary endpoint of a directly declared `connectsTo` service id |
+
+Endpoint shorthand declares a single primary endpoint. With an `endpoints` map,
+`primaryEndpoint` must name one of its keys. Task bare references do not select
+by sorted order or skip an endpoint-less first dependency. Transitive derived
+requirements do not expand the named placeholder scope. Endpoint-less services
+may be dependencies but cannot be addressed by endpoint placeholders.
+
+`${stateDir}` names the runtime-materialised slot root in either invocation
+scope. `${secret:<id>}` is allowed only in invocation environment values, must
+name a declared secret, and is rejected in argv. The environment stays hermetic.
+Use escaped interpolation in Nix strings, for example `"\${port:postgres}"`, or
+`''${port:postgres}` inside an indented Nix string. Arbitrary `${...}` child-tool
+syntax is not a registry of Nixfied placeholders; consult these exact supported
+forms rather than inferring additional names from examples.
 
 ## Multiple listeners: model every endpoint
 

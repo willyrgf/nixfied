@@ -1,0 +1,13 @@
+Run one declared task and its required services.
+
+Usage:
+  nix run .#run -- --task <id> [options]
+  nix run .#<verb> -- [options]
+
+Options:
+  --task <id>             Select a declared task (the exported verb preselects it)
+  --slot <number>         Select a declared project slot
+  --timeout-ms <number>   Set the runtime operation timeout in milliseconds
+  --output <mode>         Select summary, json, both, or task-output (default: task default or summary)
+                           task-output requires one directly selected leaf and replays redacted output
+  -h, --help              Show this help

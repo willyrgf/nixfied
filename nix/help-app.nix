@@ -51,5 +51,4 @@ in
 {
   type = "app";
   program = "${app}/bin/nixfied-help";
-  meta.description = "List this flake's runnable commands";
 }
