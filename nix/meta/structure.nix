@@ -4,7 +4,7 @@
   inventory,
   records,
   vocabularies,
-  recoveryTopics ? [ ],
+  contextTopics ? [ ],
 }:
 let
   fail = message: throw "Nixfied structure: ${message}";
@@ -220,9 +220,9 @@ let
               && builtins.attrNames annotations == builtins.sort builtins.lessThan members
               && builtins.all (
                 entry:
-                exact [ "description" "recoveryTopic" ] entry
+                exact [ "description" "contextTopic" ] entry
                 && nonBlank entry.description
-                && builtins.elem entry.recoveryTopic recoveryTopics
+                && builtins.elem entry.contextTopic contextTopics
               ) (builtins.attrValues annotations)
             )
           )

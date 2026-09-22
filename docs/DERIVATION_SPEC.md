@@ -1,5 +1,7 @@
 # DERIVATION SPEC: the composition algebra's derived facts
 
+## Specification ownership and scope
+
 Status: **normative**. Both implementations — the Nix compiler
 (`nix/compiler/derive.nix`) and the runtime lowering
 (`runtime/crates/nixfied-runtime/src/execution/lower.rs`) — are written
@@ -265,6 +267,8 @@ wire.
 
 ## 6. Golden vectors
 
+### 6.1 Representative examples
+
 Each vector is input (the relevant model fragment) and the exact expected
 derivation. These land verbatim as fixtures in **both** implementations:
 Nix eval fixtures under the compiler tests, and cargo fixtures next to the
@@ -274,7 +278,7 @@ fixture.
 Shorthand: `leaf(name, requires=[...])`, `comp(name, steps={...})`;
 `step = { task, dependsOn }`.
 
-### V1 — nesting, step paths, canonical step order
+#### V1 — nesting, step paths, canonical step order
 
 ```
 tasks:
@@ -297,29 +301,7 @@ flatten(ci) =
 `ci.check.clippy` because clippy depends on it. `ci.tests` depends on
 **every** node under `ci.check`.)
 
-### V2 — the same task referenced twice flattens twice
-
-```
-tasks:
-  unit = leaf(unit)
-  twice = comp(steps = { again: {task: unit, dependsOn: [first]},
-                         first: {task: unit} })
-
-flatten(twice) =
-  [ { stepPath: "twice.first", leaf: "unit", dependsOn: [] }
-  , { stepPath: "twice.again", leaf: "unit", dependsOn: ["twice.first"] }
-  ]
-```
-
-Two nodes, one leaf, one operation id (`task.unit.run`), two step paths.
-
-### V3 — selecting a leaf directly
-
-```
-flatten(fmt) = [ { stepPath: "fmt", leaf: "fmt", dependsOn: [] } ]
-```
-
-### V4 — servicesRequired: union, connectsTo closure, canonical order
+#### V4 — servicesRequired: union, connectsTo closure, canonical order
 
 ```
 services:
@@ -338,7 +320,7 @@ servicesRequired(lint)  = []
 servicesRequired(smoke) = ["api", "postgres"]
 ```
 
-### V5 — operationBindings: run[0] closure binds, tools do not
+#### V5 — operationBindings: run[0] closure binds, tools do not
 
 ```
 closures: cargoC (provides bin/cargo), gitC (provides bin/git),
@@ -358,7 +340,35 @@ operationBindings(pg-serverC)  = ["service.postgres.start"]
 operationBindings(pg-isreadyC) = ["service.postgres.ready"]
 ```
 
-### V6 — defaults and overrides
+### 6.2 Additional examples
+
+These vectors use the shorthand defined in [§6.1](#61-representative-examples)
+and cover repeated execution, direct selection, defaults and further dependency
+graphs. Vector identifiers remain stable across both implementations.
+
+#### V2 — the same task referenced twice flattens twice
+
+```
+tasks:
+  unit = leaf(unit)
+  twice = comp(steps = { again: {task: unit, dependsOn: [first]},
+                         first: {task: unit} })
+
+flatten(twice) =
+  [ { stepPath: "twice.first", leaf: "unit", dependsOn: [] }
+  , { stepPath: "twice.again", leaf: "unit", dependsOn: ["twice.first"] }
+  ]
+```
+
+Two nodes, one leaf, one operation id (`task.unit.run`), two step paths.
+
+#### V3 — selecting a leaf directly
+
+```
+flatten(fmt) = [ { stepPath: "fmt", leaf: "fmt", dependsOn: [] } ]
+```
+
+#### V6 — defaults and overrides
 
 ```
 tasks:
@@ -373,7 +383,7 @@ opId(postgres.start) = "service.postgres.start";  terminal = spawned/failed
 opId(postgres.ready) = "service.postgres.ready";  terminal = ready/not-ready
 ```
 
-### V7 — one closure dispatched by several leaves
+#### V7 — one closure dispatched by several leaves
 
 ```
 tasks:
@@ -383,7 +393,7 @@ tasks:
 operationBindings(cargoC) = ["task.clippy.run", "task.fmt.run"]   # sorted
 ```
 
-### V8 — servicesRequired: diamond dedup
+#### V8 — servicesRequired: diamond dedup
 
 ```
 services:
@@ -396,7 +406,7 @@ tasks:
 servicesRequired(e2e) = ["a", "b", "db"]
 ```
 
-### V9 — servicesRequired: prepare task may be composite
+#### V9 — servicesRequired: prepare task may be composite
 
 ```
 services:
@@ -411,7 +421,7 @@ tasks:
 servicesRequired(run) = ["dep", "svc"]
 ```
 
-### V10 — servicesRequired: connectsTo closure is a fixpoint
+#### V10 — servicesRequired: connectsTo closure is a fixpoint
 
 ```
 services:

@@ -124,6 +124,12 @@ the projections never depend on their own audits.
 
 The reference is built from those facts and existing authored documents at the
 supplying framework revision. Its lookup index is disposable presentation data.
+Topics combine focused explanation with concise entries from the selected
+definitions. Checked references and topic membership supply navigation in both
+directions from one association; they do not infer execution prerequisites or
+native effects. Unknown targets and invalid selectors reject during reference
+construction. `nix run .#docs -- topic runtime` demonstrates the runtime view;
+exact `api` and `option` queries provide the full entries it references.
 Only serialized presentation data loses Nix string context; executable values
 keep their dependencies. Reference queries need no admitted model or runtime.
 Structural agreement and reference freshness do not prove behavioral parity:
@@ -153,8 +159,9 @@ into the adopter's own flake. The accepted fix is a closed algebra of exactly
   while binding no socket and claiming no port (PORT-1 stays fully scoped to
   declared endpoints).
 
-The connective tissue is the **invocation** (`tools + run + env + cwd + timeout
-+ stdin`) — the one way anything says "run this program".
+The connective tissue is the **invocation** — the one way anything says
+"run this program". Its fields come from the structural definition rendered by
+`nix run .#docs -- api record primitive/Invocation`.
 Invocations are **anonymous and inline** (INVOKE-1): naming them for reuse would
 recreate the named-invocation registry and its reuse/wiring entanglement;
 content reuse is a Nix `let`, and the model carries the fully-applied copies.
@@ -326,12 +333,14 @@ govern files, cache contents, or sockets a child chooses to write on its own.
 
 ## Output Control
 
-`run` has four output projections selected by one canonical runtime-owned
-option. `--output summary` is the human default: progress, concise pass/fail
+`run` selects output through one canonical runtime-owned option; its accepted
+domain is rendered by `nix run .#docs -- api command run`.
+`--output summary` is the human default: progress, concise pass/fail
 summaries, and pointers to the run summary and log directory on stderr, with
-stdout empty. `--output json` is the structured automation contract: run/task/
-node results, diagnostic `durationMs`, and evidence paths on stdout, with human
-run-summary narration suppressed. `--output both` emits both projections
+stdout empty. `--output json` emits the structured automation contract on stdout,
+with human run-summary narration suppressed. Its fields and nested records are
+rendered by `nix run .#docs -- api record output-schema/run-json`.
+`--output both` emits both projections
 explicitly for diagnostics. When the option is omitted, the runtime uses the
 selected root task's model `defaultOutput`, whose normal value is `summary`.
 

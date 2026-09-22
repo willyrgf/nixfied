@@ -1854,8 +1854,8 @@ accepted, not an enum of storage backends or selectable roots\.
 Execution lowering discards these labels: changing them does not select
 a state directory or change service reuse identity\. They remain in
 model\.json and its generated view, so changing them changes the raw
-model hash\. See ` docs topic state ` for state policy and the
-${stateDir} slot-root convention\.
+model hash\. ${stateDir} names the runtime-owned slot root; state
+policy controls its compatibility and cleanup\.
 
 
 
@@ -2397,7 +2397,6 @@ and ${host:\<serviceId>} placeholders address the primary endpoint of
 a directly required service, never an endpoint id\. Bare ${port} and
 ${host} use the first service in this authored list and reject if it
 has no endpoints; they do not skip to a later addressable dependency\.
-See ` docs topic placeholders `\.
 
 
 

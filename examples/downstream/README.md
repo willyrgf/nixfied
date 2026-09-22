@@ -21,24 +21,29 @@ example-only flake wiring.
 
 ## What it declares
 
-- **Database** — the reusable `adapters.postgres` Nix-side adapter contributes a
-  `postgres` service (initdb → server → TCP-ownership readiness → health → stop →
-  marker-gated clean) and a `smoke-query` task (`SELECT 1`).
-- **Services** — `api` and `worker`, two foreground TCP services built from a
-  small Nix-packaged executable. Real projects point closures at their own
-  binaries instead.
-- **Tasks** — `ping-api` and `ping-worker`, each requiring its service ready
-  while it runs, plus the adapter's `smoke-query` (referenced as a step — the
-  converse-reuse pattern that replaced environment membership).
-- **Composite** — `release`: `db-check` (the `SELECT 1`) runs first, then
-  `api-check` and `worker-check` once the database has answered, then the
-  `gate` over the whole stack. Running it brings up exactly the services its
-  leaves require — `servicesRequired` is derived, never curated.
-- **Verbs** — `nixfied.surface.verbs.release = "Run the downstream release workflow"`
-  marks the composite for export and supplies its generated app description
-  when an adopter wires `projectApps`.
-- **Slots** — `slotPolicy.max = 1`, so two slots can run side by side with
-  disjoint ports, state, and registries.
+The example combines a reusable database adapter with first-party API and
+worker services. Its release workflow composes adapter checks and local tasks;
+running it brings up exactly the services its leaves require. Real projects
+replace the small packaged service executable with their own binaries.
+
+The workflow first verifies that the database answers, then checks the API and
+worker after that verification succeeds. Once both checks pass, a final gate
+exercises the whole stack. These step dependencies express the release order;
+each leaf's service requirements determine what must be ready while it runs.
+The adapter's check participates because the composite explicitly references it,
+so the project can reuse the adapter without adopting a separate workflow.
+
+Read the exact tasks, services, derived requirements, composite steps and slot
+windows from the compiled example rather than a separately maintained list:
+
+```sh
+nix build --no-write-lock-file ./examples/downstream#model
+less result/views/docs.md
+```
+
+The declaration exports the release workflow through `nixfied.surface.verbs`
+when an adopter wires `projectApps`. For that framework interface, use
+`nix run .#docs -- option nixfied.surface.verbs` from the framework checkout.
 
 ## Build and run
 

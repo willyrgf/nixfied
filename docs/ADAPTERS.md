@@ -1,5 +1,7 @@
 # Adapters
 
+## Import and compose adapters
+
 An adapter is a Nix module that compiles one concrete service into the generic
 model primitives. The runtime never learns the domain — an adapter is pure
 model authorship, importable by any project:
@@ -16,16 +18,21 @@ types and defaults used below.
 }
 ```
 
-`adapters` is provided to every compiled `nixfied.nix` via `specialArgs`;
-the publication descriptors live in `nix/adapters/default.nix` (`synthetic`, `postgres`,
-`reth`).
+`adapters` is provided to every compiled `nixfied.nix` via `specialArgs`.
+Discover the published modules and read their contributions from their
+definitions:
+
+```sh
+nix run .#docs -- api module
+nix run .#docs -- api module adapter/postgres
+```
 
 ## What an adapter provides
 
 | Piece | Contract |
 | --- | --- |
 | Closures | One per executable, with declared `effects` (the one hand-declared attestation). `operationBindings` are derived from the invocation graph; declare a list only as a narrowing gate. |
-| Service | A lifecycle of inline invocations: `prepare` (a **task reference** — see below) / `start` / `ready` / `health` / `stop` / `clean`, endpoints where the service listens, `stateRefs = [ "slot" ]`, containment. Operation ids and terminal tokens are derived; declare only to override (postgres overrides `stop.signal`). |
+| Service | A lifecycle of inline invocations: `prepare` (a **task reference** — see `docs topic services`) / `start` / `ready` / `health` / `stop` / `clean`, endpoints where the service listens, state labels, containment. Operation ids and terminal tokens are derived; declare only to override (postgres overrides `stop.signal`). |
 | Tasks | Named smoke/verification tasks (`smoke-query`, `reth-smoke`). **This is how adapter checks enter an adopter's pipeline**: the adopter references them as steps in its own composites — membership does not exist, so importing an adapter contributes *definitions only* and adds zero startup to tasks that require nothing of it. |
 
 There is no Execs piece (invocations are inline and anonymous — reuse is a

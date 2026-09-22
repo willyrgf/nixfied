@@ -11,6 +11,7 @@ pkgs.writeShellApplication {
     pkgs.jq
     pkgs.coreutils
     pkgs.diffutils
+    pkgs.gnused
     pkgs.gnutar
     pkgs.gzip
   ];
@@ -103,7 +104,9 @@ current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
 for variant in one two; do
   cp -R "$source" "$work/framework-$variant"
   chmod -R u+w "$work/framework-$variant"
-  printf '\nRevision binding fixture: source-%s\n' "$variant" >> "$work/framework-$variant/docs/GUIDE.md"
+  sed "/^## Author /a\\Revision binding fixture: source-$variant" \
+    "$work/framework-$variant/docs/GUIDE.md" > "$work/guide-$variant"
+  cat "$work/guide-$variant" > "$work/framework-$variant/docs/GUIDE.md"
   project="$work/project-$variant"
   mkdir "$project"
   cat > "$project/flake.nix" <<FIXTURE
@@ -129,6 +132,9 @@ MODULE
   nix run --no-write-lock-file "$project#docs" -- topic authoring > "$work/topic-$variant"
   grep -Fq "Revision binding fixture: source-$variant" "$work/topic-$variant" \
     || fail 'reference: downstream content did not follow its pin'
+  if grep -Fq '## Upgrade and recover' "$work/topic-$variant"; then
+    fail 'reference: downstream topic included unrelated sections'
+  fi
   nix run --no-write-lock-file "$project#docs" -- source > "$work/source-$variant"
   grep -Fxq "path: $expected_source" "$work/source-$variant" \
     || fail 'reference: provenance did not match the supplying input'
