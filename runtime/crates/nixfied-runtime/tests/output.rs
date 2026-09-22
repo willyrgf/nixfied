@@ -561,7 +561,7 @@ fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(bytes)
 }
 
 fn tempfile_marker(label: &str) -> PathBuf {

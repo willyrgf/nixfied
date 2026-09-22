@@ -1,15 +1,15 @@
 
 #[test]
-fn required_nullable_and_required_open_json_reject_missing() {
-    let accepted = r#"{"nullable":null,"details":null}"#;
+fn required_open_json_rejects_missing() {
+    let accepted = r#"{"details":null}"#;
     let value: PresenceFixture = serde_json::from_str(accepted).unwrap();
     assert_eq!(serde_json::to_string(&value).unwrap(),
-        r#"{"nullable":null,"optional":null,"details":null}"#);
-    for rejected in [r#"{"details":null}"#, r#"{"nullable":null}"#, r#"{}"#] {
+        r#"{"optional":null,"details":null}"#);
+    for rejected in [r#"{"optional":null}"#, r#"{}"#] {
         assert!(serde_json::from_str::<PresenceFixture>(rejected).is_err(), "{rejected}");
     }
     for details in ["null", "[]", "{}", "42", "false", "\"secret-bearing text\""] {
-        let input = format!(r#"{{"nullable":"text","optional":null,"details":{details}}}"#);
+        let input = format!(r#"{{"optional":null,"details":{details}}}"#);
         let parsed: PresenceFixture = serde_json::from_str(&input).unwrap();
         assert_eq!(serde_json::to_string(&parsed).unwrap(), input);
     }

@@ -141,14 +141,11 @@ let
   binding =
     rust:
     require (
-      exact [ "file" "module" "name" "emission" "visibility" "derives" ] rust
+      exact [ "file" "name" "emission" "visibility" "derives" ] rust
       && nonBlank (rust.file or null)
       && lib.hasSuffix ".rs" rust.file
       && !(lib.hasPrefix "/" rust.file)
       && !(builtins.elem ".." (lib.splitString "/" rust.file))
-      && builtins.isList (rust.module or null)
-      && rust.module != [ ]
-      && builtins.all ident rust.module
       && ident (rust.name or null)
       && visibility (rust.visibility or null)
       && derivesValid (rust.derives or null)
@@ -355,52 +352,73 @@ let
     record: field:
     let
       value = normalizeValue field.value;
-      decode = field.decode;
-      kind = decode.kind or "";
-      decodeValid =
-        builtins.elem kind [
-          "Required"
-          "Nullable"
-          "Optional"
-          "Default"
-        ]
-        && exact ([ "kind" ] ++ lib.optional (kind == "Default") "literal") decode
-        && (kind != "Default" || decode ? literal);
+      presence = field.presence;
+      kind = presence.kind or "";
+      policyOf = decode: rustEncode: { inherit decode rustEncode; };
+      required = {
+        kind = "Required";
+      };
+      optional = {
+        kind = "Optional";
+      };
+      empty = {
+        kind = "Default";
+        literal = emptyValue value;
+      };
+      policies = {
+        Required = policyOf required "Present";
+        Optional = policyOf optional "Present";
+        OptionalOmitted = policyOf optional "OmitAbsent";
+        Empty = policyOf empty "Present";
+        EmptyOmitted = policyOf empty "OmitEmpty";
+        EnumDefault = policyOf {
+          kind = "Default";
+          literal = presence.member;
+        } "Present";
+        OmitEmpty = policyOf required "OmitEmpty";
+      };
+      policy = policies.${kind} or (fail "unsupported field presence");
       rust = {
         name = snake field.name;
+        visibility = record.rust.visibility;
+        storage = "Direct";
       }
       // field.rust;
-      omission = field.rustEncode == "OmitEmpty" || field.nixEncode == "RequiredOmitEmpty";
-      normalized = field // {
-        inherit value rust;
-      };
+      normalized =
+        field
+        // policy
+        // {
+          inherit value rust;
+          nixEncode = field.nixEncode or "NotProduced";
+        };
     in
     require (
-      exact [
-        "name"
-        "description"
-        "value"
-        "decode"
-        "rustEncode"
-        "nixEncode"
-        "rust"
-      ] field
-      && nonBlank (field.name or null)
-      && nonBlank (field.description or null)
-      && decodeValid
-      && !(kind == "Nullable" && value.kind == "OpenJson")
-      && builtins.elem field.rustEncode [
-        "Present"
-        "OmitAbsent"
-        "OmitEmpty"
-      ]
-      && builtins.elem field.nixEncode [
-        "NotProduced"
-        "RequiredPresent"
-        "RequiredOmitAbsent"
-        "RequiredOmitEmpty"
-        "PreserveSupplied"
-      ]
+      exact (
+        [
+          "name"
+          "description"
+          "value"
+          "presence"
+          "rust"
+        ]
+        ++ lib.optional record.produced "nixEncode"
+      ) field
+      && nonBlank field.name
+      && nonBlank field.description
+      && exact ([ "kind" ] ++ lib.optional (kind == "EnumDefault") "member") presence
+      && (
+        !(builtins.elem kind [
+          "Empty"
+          "EmptyOmitted"
+          "OmitEmpty"
+        ])
+        || collection value
+      )
+      && (
+        kind != "EnumDefault"
+        || (value.kind == "Enum" && builtins.elem presence.member vocabularyMap.${value.coordinate}.members)
+      )
+      && (kind != "OmitEmpty" || record.decoder == "NoDecoder")
       && exact [ "name" "visibility" "storage" ] rust
       && ident rust.name
       && visibility rust.visibility
@@ -409,21 +427,27 @@ let
         "Box"
       ]
       && (record.rust.emission == "Owned" || rust.storage == "Direct")
-      && (!(builtins.elem field.rustEncode [ "OmitAbsent" ]) || kind == "Optional")
-      && (field.nixEncode != "RequiredOmitAbsent" || kind == "Optional")
       && (
-        !omission
+        !record.produced
         || (
-          collection value
-          && !(builtins.elem kind [
-            "Optional"
-            "Nullable"
-          ])
-          && (record.decoder == "NoDecoder" || (kind == "Default" && decode.literal == emptyValue value))
+          builtins.elem field.nixEncode [
+            "RequiredPresent"
+            "RequiredOmitAbsent"
+            "RequiredOmitEmpty"
+            "PreserveSupplied"
+          ]
+          && (field.nixEncode != "RequiredOmitAbsent" || policy.decode.kind == "Optional")
+          && (
+            field.nixEncode != "RequiredOmitEmpty"
+            || builtins.elem kind [
+              "Empty"
+              "EmptyOmitted"
+            ]
+          )
+          && (field.nixEncode != "PreserveSupplied" || acceptsMissing normalized)
         )
       )
-      && (field.nixEncode != "PreserveSupplied" || acceptsMissing normalized)
-    ) "invalid field or incompatible presence policy in ${record.id}.${field.name or "?"}" normalized;
+    ) "invalid field or presence in ${record.id}.${field.name or "?"}" normalized;
   normalizeRecord =
     declaration:
     let
@@ -431,6 +455,7 @@ let
       rust = binding declaration.rust;
       record = declaration // {
         inherit id rust;
+        produced = declaration.producer == "Nix";
       };
       fields = map (normalizeField record) declaration.fields;
       names = map (field: field.name) fields;
@@ -440,11 +465,14 @@ let
           map (lib.removeSuffix "?") inventory.${declaration.identity.coordinate}
         else
           names;
-      produced = map (field: field.nixEncode != "NotProduced") fields;
     in
     require
       (
-        exact [ "identity" "description" "decoder" "fields" "rust" ] declaration
+        exact [ "identity" "description" "decoder" "producer" "fields" "rust" ] declaration
+        && builtins.elem declaration.producer [
+          "Nix"
+          "None"
+        ]
         && nonBlank (declaration.description or null)
         && builtins.isList declaration.fields
         && fields != [ ]
@@ -457,7 +485,6 @@ let
           "NoDecoder"
         ]
         && (rust.emission == "Owned" || declaration.decoder == "NoDecoder")
-        && (builtins.all (x: x) produced || builtins.all (x: !x) produced)
         && (rust.emission != "MemberNamesOnly" || builtins.length fields == 1)
       )
       "invalid record or inventory coverage"
@@ -465,7 +492,6 @@ let
         record
         // {
           inherit fields;
-          produced = builtins.head produced;
         }
       );
   recordList = map normalizeRecord records;
@@ -485,76 +511,48 @@ let
     || builtins.isFloat value
     || (builtins.isList value && builtins.all isJson value)
     || (builtins.isAttrs value && builtins.all isJson (builtins.attrValues value));
-  matches = matchesWith "NixWire";
-  matchesWith =
-    purpose: value: input:
+  matches =
+    value: input:
     if value.kind == "Text" then
       builtins.isString input
     else if value.kind == "Boolean" then
       builtins.isBool input
     else if value.kind == "Integer" then
-      builtins.isInt input
-      && (!value.nonzero || input != 0)
-      && (value.signed || input >= 0)
-      && (
-        if value.bits == 16 then
-          input <= 65535
-        else if value.bits == 32 then
-          input <= (if value.signed then 2147483647 else 4294967295)
-          && (!value.signed || input >= -2147483648)
+      (
+        if value.bits == 64 then
+          (if value.signed then lib.types.int else lib.types.ints.unsigned)
         else
-          true
-      ) # Nix is signed 64-bit; Rust u64 admission is not narrowed.
+          lib.types.ints.${"${if value.signed then "s" else "u"}${toString value.bits}"}
+      ).check
+        input
+      && (!value.nonzero || input != 0)
     else if value.kind == "Enum" then
       builtins.isString input && builtins.elem input vocabularyMap.${value.coordinate}.members
     else if value.kind == "List" then
       builtins.isList input
-      && builtins.all (matchesWith purpose value.element) input
-      && (!(purpose == "DecoderLiteral" && value.unique && input != [ ]) || refs value.element == [ ])
+      && builtins.all (matches value.element) input
       && (!value.unique || lib.unique input == input)
     else if value.kind == "Map" then
-      builtins.isAttrs input && builtins.all (matchesWith purpose value.value) (builtins.attrValues input)
+      builtins.isAttrs input && builtins.all (matches value.value) (builtins.attrValues input)
     else if value.kind == "RecordRef" then
-      recordMatches purpose recordMap.${value.id} input
+      recordMatches recordMap.${value.id} input
     else if value.kind == "NativeDomain" then
-      purpose == "NixWire"
-      && matchesWith purpose value.wire input
-      && (value.producerCheck == null || value.producerCheck input)
+      matches value.wire input && (value.producerCheck == null || value.producerCheck input)
     else
       isJson input;
   fieldMatches =
-    purpose: field: input:
-    if
-      input == null
-      && builtins.elem field.decode.kind [
-        "Nullable"
-        "Optional"
-      ]
-    then
-      true
-    else
-      matchesWith purpose field.value input;
+    field: input: (input == null && field.decode.kind == "Optional") || matches field.value input;
   recordMatches =
-    purpose: record: input:
+    record: input:
     builtins.isAttrs input
-    && (if purpose == "NixWire" then record.produced else record.decoder != "NoDecoder")
-    && (
-      (purpose == "DecoderLiteral" && record.decoder == "IgnoreUnknown")
-      || builtins.removeAttrs input (map (field: field.name) record.fields) == { }
-    )
+    && record.produced
+    && builtins.removeAttrs input (map (field: field.name) record.fields) == { }
     && builtins.all (
       field:
       if input ? ${field.name} then
-        fieldMatches purpose field input.${field.name}
-        && (
-          purpose != "NixWire"
-          || (
-            (field.nixEncode != "RequiredOmitAbsent" || input.${field.name} != null)
-            && (field.nixEncode != "RequiredOmitEmpty" || input.${field.name} != emptyValue field.value)
-          )
-        )
-      else if purpose == "DecoderLiteral" then
-        acceptsMissing field
+        fieldMatches field input.${field.name}
+        && (field.nixEncode != "RequiredOmitAbsent" || input.${field.name} != null)
+        && (field.nixEncode != "RequiredOmitEmpty" || input.${field.name} != emptyValue field.value)
       else
         field.nixEncode != "RequiredPresent"
     ) record.fields;
@@ -611,7 +609,7 @@ let
       }
     ) record.fields;
   }) recordList;
-  bindingNames = map (r: builtins.toJSON { inherit (r.rust) file module name; }) (
+  bindingNames = map (r: builtins.toJSON { inherit (r.rust) file name; }) (
     recordList ++ vocabularyList
   );
   valid =
@@ -625,18 +623,9 @@ let
       (
         builtins.deepSeq metadata (
           builtins.deepSeq vocabularyList (
-            require (builtins.all (checkGraph [ ]) recordList && builtins.all checkBorrowed recordList)
-              "unsupported borrowed collection projection"
-              (
-                require (builtins.all (
-                  record:
-                  builtins.all (
-                    field:
-                    field.decode.kind != "Default"
-                    || (isJson field.decode.literal && matchesWith "DecoderLiteral" field.value field.decode.literal)
-                  ) record.fields
-                ) recordList) "invalid structural default literal" true
-              )
+            require (
+              builtins.all (checkGraph [ ]) recordList && builtins.all checkBorrowed recordList
+            ) "unsupported borrowed collection projection" true
           )
         )
       );
@@ -659,9 +648,9 @@ let
                   let
                     supplied = input ? ${field.name};
                     value = input.${field.name};
-                    checked = require (fieldMatches "NixWire" field
-                      value
-                    ) "invalid constructor value for ${record.id}.${field.name}" value;
+                    checked =
+                      require (fieldMatches field value) "invalid constructor value for ${record.id}.${field.name}"
+                        value;
                     omit =
                       !supplied
                       || (field.nixEncode == "RequiredOmitAbsent" && checked == null)

@@ -4,12 +4,7 @@ checked:
 let
   quote = import ./rust-quote.nix { inherit lib; };
   visibility = value: if value == "private" then "" else "${value} ";
-  optional =
-    field:
-    builtins.elem field.decode.kind [
-      "Optional"
-      "Nullable"
-    ];
+  optional = field: field.decode.kind == "Optional";
   owned =
     value:
     if value.kind == "Text" then
@@ -61,37 +56,21 @@ let
     in
     if field.rust.storage == "Box" then "Box<${nullable}>" else nullable;
   helperName = record: field: "__default${checked.snake record.rust.name}_${field.rust.name}";
-  defaultValue =
-    value: literal:
-    if value.kind == "Enum" then
-      "${owned value}::${checked.variant literal}"
-    else if value.kind == "List" && literal == [ ] then
-      if value.unique then "UniqueVec::default()" else "Vec::new()"
-    else if value.kind == "Map" && literal == { } then
-      "BTreeMap::new()"
-    else
-      ''serde_json::from_str(${quote (builtins.toJSON literal)}).expect("checked structural decoder default")'';
-  # These helpers construct immutable decoder defaults from checked literals,
-  # not a second native object graph. Native scalar deserialization remains the
-  # authority for its representation; declarations never supply Rust expressions.
   helper =
     record: field:
     if record.decoder == "NoDecoder" then
       ""
-    else if field.decode.kind == "Default" then
+    else if field.presence.kind == "EnumDefault" then
       ''
         fn ${helperName record field}() -> ${fieldType record field} {
             ${
               lib.optionalString (field.rust.storage == "Box") "Box::new("
-            }${defaultValue field.value field.decode.literal}${
+            }${owned field.value}::${checked.variant field.presence.member}${
               lib.optionalString (field.rust.storage == "Box") ")"
             }
         }
       ''
-    else if
-      field.decode.kind == "Nullable"
-      || (field.decode.kind == "Required" && field.value.kind == "OpenJson")
-    then
+    else if field.decode.kind == "Required" && field.value.kind == "OpenJson" then
       ''
         fn ${helperName record field}<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<${fieldType record field}, D::Error> {
             serde::Deserialize::deserialize(deserializer)
@@ -103,14 +82,16 @@ let
     record: field:
     let
       decode = lib.optionals (record.decoder != "NoDecoder") (
-        if field.decode.kind == "Default" then
+        if field.presence.kind == "EnumDefault" then
           [ "default = ${quote (helperName record field)}" ]
-        else if field.decode.kind == "Optional" then
-          [ "default" ]
         else if
-          field.decode.kind == "Nullable"
-          || (field.decode.kind == "Required" && field.value.kind == "OpenJson")
+          builtins.elem field.decode.kind [
+            "Optional"
+            "Default"
+          ]
         then
+          [ "default" ]
+        else if field.decode.kind == "Required" && field.value.kind == "OpenJson" then
           [ "deserialize_with = ${quote (helperName record field)}" ]
         else
           [ ]
@@ -135,8 +116,15 @@ let
           ]
         else
           [ ];
+      # Only canonical lowerCamelCase fields use the container convention.
+      rename = lib.optional (
+        !(
+          builtins.match "[a-z][a-zA-Z0-9]*" field.name != null && field.rust.name == checked.snake field.name
+        )
+      ) "rename = ${quote field.name}";
+      attrs = rename ++ decode ++ omit;
     in
-    "#[serde(${lib.concatStringsSep ", " ([ "rename = ${quote field.name}" ] ++ decode ++ omit)})]";
+    lib.optionalString (attrs != [ ]) "#[serde(${lib.concatStringsSep ", " attrs})]\n";
   renderRecord =
     record:
     if record.rust.emission == "MemberNamesOnly" then
@@ -150,13 +138,14 @@ let
             ++ lib.optional (record.decoder != "NoDecoder") "serde::Deserialize"
           )
         })]
-        ${lib.optionalString (record.decoder == "RejectUnknown") "#[serde(deny_unknown_fields)]"}
+        #[serde(rename_all = "camelCase"${
+          lib.optionalString (record.decoder == "RejectUnknown") ", deny_unknown_fields"
+        })]
         ${visibility record.rust.visibility}struct ${record.rust.name}${
           lib.optionalString (record.rust.emission == "Borrowed") "<'a>"
         } {
-        ${lib.concatMapStringsSep "\n" (field: ''
-          ${attributes record field}
-          ${visibility field.rust.visibility}${field.rust.name}: ${fieldType record field},
+        ${lib.concatMapStrings (field: ''
+          ${attributes record field}${visibility field.rust.visibility}${field.rust.name}: ${fieldType record field},
         '') record.fields}
         }
         ${lib.concatMapStrings (helper record) record.fields}
@@ -183,7 +172,7 @@ let
           )
         })]
         ${visibility vocabulary.rust.visibility}enum ${vocabulary.rust.name} {
-        ${lib.concatMapStringsSep "\n" (member: ''
+        ${lib.concatMapStrings (member: ''
           #[serde(rename = ${quote member})]
           ${checked.variant member},
         '') vocabulary.members}

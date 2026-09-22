@@ -45,15 +45,7 @@ impl Serialize for LoopbackHost {
 impl<'de> Deserialize<'de> for LoopbackHost {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        let ip: std::net::IpAddr = raw
-            .parse()
-            .map_err(|_| serde::de::Error::custom(format!("host {raw} is not an IP literal")))?;
-        if !ip.is_loopback() {
-            return Err(serde::de::Error::custom(format!(
-                "host {raw} is not a loopback address"
-            )));
-        }
-        Ok(Self(ip))
+        Self::parse(&raw).map_err(serde::de::Error::custom)
     }
 }
 

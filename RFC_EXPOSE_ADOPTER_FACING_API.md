@@ -299,9 +299,9 @@ maps; generating plain Vec/String substitutes must not weaken deserialization.
 Native domains cannot recursively disguise record graphs or implementation code.
 
 Each record declares its identity, Rust binding name/owner, explanation,
-ordered fields, and record decoder policy (RejectUnknown, IgnoreUnknown, or
-NoDecoder). Each field declares its name, value form, explanation, field decode
-policy, rustEncode, and nixEncode. Numeric units are explained in field metadata;
+ordered fields, producer ownership, and record decoder policy (RejectUnknown, IgnoreUnknown, or
+NoDecoder). Each field declares its name, value form, explanation, presence
+alternative and, for Nix producers only, nixEncode. Numeric units are explained in field metadata;
 implementation storage is not part of that metadata. All policy fields are
 explicit; there is no backend-specific fallback that silently changes meaning.
 Field names/record identities are unique. References resolve to the appropriate
@@ -320,78 +320,42 @@ Inventory-linked records must cover their inventoried members exactly, after
 normalizing member-name notation. Local records require the same metadata,
 structural checks, and independent native-output evidence.
 
-A field separates **accepted decoder input** from **producer emission**:
+A field selects one closed **presence alternative**, rather than authoring
+independent decoder and Rust-emission switches:
 
-| Decode form | Meaning |
-| --- | --- |
-| Required(value) | Field required; supplied value must satisfy its domain |
-| Nullable(value) | Field required; null accepted |
-| Optional(value) | Missing or null means absence |
-| Default(value, literal) | Missing means the checked literal; supplied value must satisfy its domain |
+| Presence | Decoding | Rust emission |
+| --- | --- | --- |
+| Required | Required value | Present |
+| Optional | Missing/null means absence | Present, including null |
+| OptionalOmitted | Missing/null means absence | Omit absence |
+| Empty | Missing means empty collection | Present |
+| EmptyOmitted | Missing means empty collection | Omit empty |
+| EnumDefault(member) | Missing means the named inventory member | Present |
+| OmitEmpty | Serialization-only collection; no decoder | Omit empty |
 
-OpenJson intrinsically includes every JSON value, including null. Thus
-Required(OpenJson) requires a member whose value may be null; it lowers directly
-to serde_json::Value, not Option<Value>. Other value domains reject null unless
-the field uses Nullable or Optional. Nullable(OpenJson) is redundant and rejected
-at declaration checking. Optional retains its explicit missing/null-as-absence
-meaning; a Default on OpenJson substitutes only for a missing member, not null.
-These rules add no validator to native open-detail composition.
+Empty defaults apply only to lists/maps. Enum defaults must name a member of
+the field's checked vocabulary. Arbitrary literals, record defaults and required
+nullable fields are unsupported. This intentionally removes the earlier general
+DecoderLiteral language; no production record used it. Empty collections reuse
+native Default; enum wire defaults remain explicit and separate from native
+convenience defaults. No default is constructed by parsing JSON at runtime.
 
-For NoDecoder records, field forms determine value representation and nullability,
-while rustEncode determines emitted member presence. They do not promise an
-accepted input language or cause a deserializer to be generated. For example,
-a Required list with OmitEmpty can omit its member when empty; it does not need
-a fictional decoder default. Decoder-default compatibility checks apply only
-when a record actually has a decoder.
+OpenJson includes null intrinsically. Required(OpenJson) retains a required
+member and plain serde_json::Value; the generated deserialize_with helper rejects
+missing input. Optional(OpenJson) has ordinary missing/null-as-absence semantics.
+Native open-detail composition is unaffected.
 
-| Rust encode form | Meaning |
-| --- | --- |
-| Present | Emit the field, including null only where allowed |
-| OmitAbsent | Omit absence for Optional fields |
-| OmitEmpty | Omit an empty list/map |
+The record declares producer = Nix or None. Only Nix-produced fields declare
+one of RequiredPresent, RequiredOmitAbsent, RequiredOmitEmpty or PreserveSupplied.
+Output fields cannot declare a producer policy. The normalized reference still
+reports decoder/Rust/Nix policies, derived from the checked presence alternative.
 
-Nix producer policy is separately explicit:
-
-| Nix encode form | Constructor input and output |
-| --- | --- |
-| NotProduced | No Nix constructor for this output-only record |
-| RequiredPresent | Require the named value and emit it; a decoder default does not excuse a missing producer input |
-| RequiredOmitAbsent | Require an Optional-typed input; explicit null is omitted |
-| RequiredOmitEmpty | Require a collection; omit it when empty |
-| PreserveSupplied | Allow a missing key only when the field's decoder accepts omission; emit supplied values, including empty collections |
-
-NotProduced must apply consistently to all fields of a record. Other policies
-apply only to Nix-produced records. Every applicable encoding is checked against
-the decoder: omission must be admitted, null must be admitted if emitted, and
-OmitEmpty requires a collection with the matching empty default when decoding
-exists. Serialization-only outputs do not acquire fictional decoder defaults.
-OmitAbsent requires Optional; Nullable plus Present never means optional.
-Default literals must be JSON-representable and satisfy the value form under
-decoder rules. The existing `isJson` check also covers members ignored by an
-`IgnoreUnknown` decoder; ignored JSON values remain accepted. The existing
-recursive matcher has two explicit internal purposes: `NixWire` validates
-already-emitted nested values using Nix presence/omission policies, while
-`DecoderLiteral` validates declared defaults using decoder rules. These purposes
-share one recursive implementation; no second validator, intermediate
-representation or reconstruction-and-comparison mechanism is introduced.
-
-`DecoderLiteral` rejects an encountered `NativeDomain` value. Empty collections
-and optional absence/null remain supported when they construct no native value.
-It also rejects a nonempty unique-list default whose element type contains a
-`RecordRef`, using the existing reference traversal. Record defaults must
-reference decoder-capable records and obey their decoder policies. Other
-structural defaults remain supported subject to the ordinary value checks.
-
-Native-free alone is not a sufficient default restriction: with optional
-`Child.value`, the raw unique-list default `[ {} { value = null; } ]` contains
-distinct Nix records that decode identically, causing Rust `UniqueVec` rejection.
-The restriction above rejects this declaration without implementing decoded-value
-normalization or another equality algorithm.
-
-Required nullable decoding must reject missing while accepting explicit null;
-a plain serde Option field alone does not prove this. Preserve the separate
-baseline case Optional plus Present: missing and null both decode as absence,
-and serialization emits explicit null.
+RequiredPresent always requires an input even when Rust has a decoder default.
+RequiredOmitAbsent requires optional presence; RequiredOmitEmpty requires an
+empty-default collection. PreserveSupplied permits omission only for a decoder
+that accepts missing input, retaining explicitly supplied empties. Nested values
+are checked as already-emitted Nix wire values. There is one recursive wire
+matcher, without a decoder-default interpreter.
 
 The Nix constructor rejects unknown keys, missing Required inputs, and invalid
 values. PreserveSupplied is a deliberate conditional-field boundary: native
@@ -400,7 +364,7 @@ omission is allowed. For example, baseline leaf tasks supply empty ref lists,
 while composites omit them; Rust may omit empties for both. servicesRequired
 remains RequiredPresent even though Rust can default it when decoding.
 The outer constructor accepts pre-emission inputs, including the explicit null
-or empty values its policy requires it to omit. `NixWire` checking of nested
+or empty values its policy requires it to omit. Wire checking of nested
 already-emitted values must not reject those outer inputs before omission.
 
 Model decode rejects unknown fields. An output has NoDecoder unless a real
@@ -454,7 +418,7 @@ behavior. Do not make all paths lossy or invent a formatting-policy language.
 #### 4.2.1 Private Rust bindings and deterministic lowering
 
 Each structural declaration carries its private Rust binding beside it, not in
-a second catalog. Every binding supplies its owning generated file/native module
+a second catalog. Every binding supplies its owning generated file
 and emission choice: Owned, Borrowed, or MemberNamesOnly. Owned/Borrowed supply
 type name and record/field visibility; MemberNamesOnly supplies constant naming
 and visibility, never a fictitious type. Generated definitions enter their owning
@@ -492,7 +456,7 @@ values; no arbitrary trait/attribute language is needed.
 
 Owned lowering uses String, the specified integer/nonzero types, native scalar
 types, generated enums, Vec or native UniqueVec, BTreeMap with String keys,
-referenced owned records, and serde_json::Value for OpenJson. Nullable/Optional
+referenced owned records, and serde_json::Value for OpenJson. Optional
 wrap the lowered value in Option; their distinct decode policies remain enforced.
 Apply an outer Box last. Existing native constructor/serde checks remain intact.
 
@@ -509,7 +473,7 @@ Borrowed lowering has one lifetime and NoDecoder:
 | Map of owned values | &BTreeMap<String, T> |
 | Reference to Owned | &T |
 | Reference to Borrowed | T with the view lifetime, nested by value |
-| Nullable/Optional | Option of the corresponding representation |
+| Optional | Option of the corresponding representation |
 
 Declaration checking rejects value-type references to MemberNamesOnly, Owned
 references to Borrowed records, a Borrowed
@@ -537,7 +501,7 @@ RegistryIdentityDiagnostic has five required, always-present fields: projectId,
 environment, slot, runtimeAbi, toolchainId. All are Text except signed i64 slot.
 The observed SQLite identity may contain an invalid negative slot; a diagnostic
 must report it without forcing admission into an unsigned slot type. It is a
-Borrowed, NoDecoder, NotProduced view over native RegistryIdentity. Replace only
+Borrowed, NoDecoder, producer=None view over native RegistryIdentity. Replace only
 registry/schema.rs::registry_identity_json's field list. Keep native storage,
 constructors, mismatch classification, human rendering and safe-cause selection.
 This Local declaration preserves public bytes without modifying capability.txt.
@@ -614,6 +578,13 @@ Complete reference coverage still includes the native lexical behaviors and
 effects. Sharing syntax facts does not claim to generate or statically prove
 those behaviors. This boundary avoids a policy language whose main purpose
 would be to re-express seven small native parsing loops.
+
+Shared command arguments carry an explicit Shared binding; ordinary arguments
+carry Command bindings. All uses of a shared id must agree on token, value domain
+and initial value, while help may describe its command context. One checked symbol
+map owns token/default/type names for both collision validation and projection.
+Runtime model, state, allow-non-store and slot arguments use shared bindings.
+Native parsers retain all acquisition, repetition, help precedence and effects.
 
 ### 4.4 Publication descriptors
 
@@ -863,9 +834,8 @@ Use these baseline cases, with separately authored raw JSON and expected bytes:
 | RuntimeError.modelPath/computedModelHash | Absent values serialize as explicit null; do not infer omission from the inventory |
 | RuntimeError.details | Required(OpenJson) plus Present keeps plain Value and emits explicit null for Value::Null; objects, arrays and scalars remain valid |
 
-A synthetic Required-Nullable field must accept explicit null and reject a
-missing key, independently of the baseline Optional-plus-Present example.
-Reject Nullable(OpenJson) in a declaration-negative case. Independently assert
+A synthetic Required(OpenJson) field must accept null and reject a missing key.
+Reject unsupported presence/default forms at declaration checking. Independently assert
 that native with_details(Value::Null) serializes a present null details member,
 and that converting an error with non-object details into a cause still yields
 empty-object cause details. Neither behavior may be inferred from the schema.
@@ -1394,15 +1364,13 @@ new fields/options are fixture exercises, not additions authorized by this RFC:
   digest/snapshot/constants and coverage evidence atomically. Raw JSON tests
   independently cover missing, null and valid values. No Rust backend edit.
 - **Command argument:** add a visible optional Unsigned64 argument to a run
-  fixture. Edit its syntax entry, native options state/parser/handler and independent
-  operand/overflow/repetition expectations. Tokens, alias, default, all-visible
-  help rows and reference regenerate. Existing native renderHelp needs no edit;
-  an exceptional new synopsis would be an explicit presentation change.
-- **Native behavior:** change failure selection in a native output fixture while
-  preserving its JSON shape. Edit the native selection branch and independent
-  behavioral expectations, with owning contract prose for a real behavior change.
-  Any real ABI amendment follows normal contract handling. No structural field,
-  binding, generator or serializer declaration changes merely to record progress.
+  fixture. Compile a native consumer of its generated token/type/default and
+  assert its long help row and packaged reference. Keep actual acquisition,
+  repetition and precedence tests against the production parser. Do not patch
+  production source text to insert a synthetic parser branch.
+- **Native behavior:** actual native error/output tests own failure selection,
+  redaction and persistence proof. A local before/after demonstration of invented
+  branches is not evidence about production precedence and needs no recurring gate.
 
 Record the actual edit path after implementing these changes in a small fixture
 or a reviewed demonstration. Expected results must not be generated from the

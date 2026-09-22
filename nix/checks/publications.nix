@@ -1,9 +1,5 @@
 # Independent rejection/laziness vectors for the publication boundary.
-{
-  lib,
-  pkgs,
-  system,
-}:
+{ lib }:
 let
   assemble =
     declarations:
@@ -78,17 +74,6 @@ let
   };
   actualArgs = resolved._module.specialArgs;
   actualAdapters = actualArgs.adapters;
-  sentinel = pkgs.runCommand "nixfied-docs-unused-sentinel" { } "exit 1";
-  docs = import ../docs/reference.nix {
-    inherit lib pkgs system;
-    options = poisoned.options;
-    publications =
-      (assemble [
-        (function // { description = "Display ${sentinel}"; })
-        package
-      ]).entries;
-    source.path = "${sentinel}/source";
-  };
 in
 assert (checked.project "function" "library").identity 42 == 42;
 assert builtins.length checked.entries == 4;
@@ -231,7 +216,4 @@ assert rejects (
 assert rejects (
   poisoned.publication.audit "module" "adapter" (builtins.removeAttrs actualAdapters [ "postgres" ])
 );
-assert builtins.length poisoned.options == 128;
-assert builtins.getContext docs.serialized == { };
-assert builtins.hasContext "${sentinel}/bin/native";
 true

@@ -258,7 +258,7 @@ impl<'a> RunSession<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSelection {
-    slot: Option<CheckSlotValue>,
+    slot: Option<RuntimeSlotValue>,
 }
 
 impl RunOutputMode {
@@ -483,22 +483,22 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, CHECK_HELP) {
         return Ok(());
     }
-    let mut model_path = CHECK_MODEL_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = CHECK_ALLOW_NON_STORE_MODEL_INITIAL;
-    let mut slot = CHECK_SLOT_INITIAL;
+    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut slot = RUNTIME_SLOT_INITIAL;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            CHECK_MODEL => {
+            RUNTIME_MODEL => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            CHECK_ALLOW_NON_STORE_MODEL => {
+            RUNTIME_ALLOW_NON_STORE_MODEL => {
                 allow_non_store = true;
             }
-            CHECK_SLOT => {
+            RUNTIME_SLOT => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), CHECK_SLOT)?);
+                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
             }
             other => {
                 return Err(RuntimeError::new(
@@ -512,7 +512,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {CHECK_MODEL} path"),
+            format!("missing {RUNTIME_MODEL} path"),
         )
     })?;
     let (loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
@@ -1601,30 +1601,30 @@ fn run_control_admitted(
 }
 
 fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> {
-    let mut model_path = RUN_MODEL_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUN_ALLOW_NON_STORE_MODEL_INITIAL;
-    let mut state_base = RUN_STATE_BASE_INITIAL.map(PathBuf::from);
+    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = RUN_TIMEOUT_MS_INITIAL;
     let mut output_mode = RUN_OUTPUT_INITIAL;
-    let mut slot = RUN_SLOT_INITIAL;
+    let mut slot = RUNTIME_SLOT_INITIAL;
     let mut task = RUN_TASK_INITIAL.map(str::to_string);
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            RUN_MODEL => {
+            RUNTIME_MODEL => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            RUN_ALLOW_NON_STORE_MODEL => {
+            RUNTIME_ALLOW_NON_STORE_MODEL => {
                 allow_non_store = true;
             }
-            RUN_STATE_BASE => {
+            RUNTIME_STATE_BASE => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
             }
-            RUN_SLOT => {
+            RUNTIME_SLOT => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), RUN_SLOT)?);
+                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
             }
             RUN_TASK => {
                 index += 1;
@@ -1696,7 +1696,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {RUN_MODEL} path"),
+            format!("missing {RUNTIME_MODEL} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
@@ -1745,52 +1745,11 @@ fn parse_control_options(
     command: ControlCommand,
     args: &[String],
 ) -> Result<ControlOptions, RuntimeError> {
-    let (
-        model_token,
-        model_initial,
-        allow_token,
-        allow_initial,
-        state_token,
-        state_initial,
-        slot_token,
-        slot_initial,
-    ) = match command {
-        ControlCommand::Ps => (
-            PS_MODEL,
-            PS_MODEL_INITIAL,
-            PS_ALLOW_NON_STORE_MODEL,
-            PS_ALLOW_NON_STORE_MODEL_INITIAL,
-            PS_STATE_BASE,
-            PS_STATE_BASE_INITIAL,
-            PS_SLOT,
-            PS_SLOT_INITIAL,
-        ),
-        ControlCommand::Down => (
-            DOWN_MODEL,
-            DOWN_MODEL_INITIAL,
-            DOWN_ALLOW_NON_STORE_MODEL,
-            DOWN_ALLOW_NON_STORE_MODEL_INITIAL,
-            DOWN_STATE_BASE,
-            DOWN_STATE_BASE_INITIAL,
-            DOWN_SLOT,
-            DOWN_SLOT_INITIAL,
-        ),
-        ControlCommand::Clean => (
-            CLEAN_MODEL,
-            CLEAN_MODEL_INITIAL,
-            CLEAN_ALLOW_NON_STORE_MODEL,
-            CLEAN_ALLOW_NON_STORE_MODEL_INITIAL,
-            CLEAN_STATE_BASE,
-            CLEAN_STATE_BASE_INITIAL,
-            CLEAN_SLOT,
-            CLEAN_SLOT_INITIAL,
-        ),
-    };
-    let mut model_path = model_initial.map(PathBuf::from);
-    let mut allow_non_store = allow_initial;
-    let mut state_base = state_initial.map(PathBuf::from);
+    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = DOWN_TIMEOUT_MS_INITIAL;
-    let mut slot = slot_initial;
+    let mut slot = RUNTIME_SLOT_INITIAL;
     let mut cleanup_mode = if CLEAN_PURGE_INITIAL {
         nixfied_runtime::state::CleanupMode::Purge
     } else {
@@ -1799,20 +1758,20 @@ fn parse_control_options(
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            value if value == model_token => {
+            value if value == RUNTIME_MODEL => {
                 index += 1;
                 model_path = args.get(index).map(PathBuf::from);
             }
-            value if value == allow_token => {
+            value if value == RUNTIME_ALLOW_NON_STORE_MODEL => {
                 allow_non_store = true;
             }
-            value if value == state_token => {
+            value if value == RUNTIME_STATE_BASE => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
             }
-            value if value == slot_token => {
+            value if value == RUNTIME_SLOT => {
                 index += 1;
-                slot = Some(parse_slot_arg(args.get(index), slot_token)?);
+                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
             }
             CLEAN_PURGE if matches!(command, ControlCommand::Clean) => {
                 cleanup_mode = nixfied_runtime::state::CleanupMode::Purge;
@@ -1844,7 +1803,7 @@ fn parse_control_options(
     let model_path = model_path.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {model_token} path"),
+            format!("missing {RUNTIME_MODEL} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
@@ -1858,14 +1817,14 @@ fn parse_control_options(
     })
 }
 
-fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<CheckSlotValue, RuntimeError> {
+fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<RuntimeSlotValue, RuntimeError> {
     let value = value.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             format!("missing {flag} value"),
         )
     })?;
-    value.parse::<CheckSlotValue>().map_err(|error| {
+    value.parse::<RuntimeSlotValue>().map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             format!("invalid {flag} value {value}: {error}"),

@@ -311,153 +311,41 @@ existing adoption and upgrade goldens cover its continuation. The gate's
 runtime-generated, native crate and reference/declaration inputs. It requires
 changes only in the owning Rust product's filtered source and derivation.
 
-## Adopter API delivery audit
+## Adopter API maintenance
 
-This audit records the five owner cutovers from the reviewed handoff at
-`d5562f1a79d4f46af6ef3afde782e4c5d1152ba5`, whose production baseline is
-`c3d9111c861d40b0885a49f3d62950f9871702e1`. The implementation was written from
-that reviewed tree without consulting or recovering the abandoned implementation.
-The committed install/upgrade golden archives remained verification fixtures,
-as explicitly allowed by the handoff. No commit was made for this delivery.
-The RFC remains the settled design and acceptance checklist; this section
-records implemented owners and proof entry points, rather than another plan.
+The original delivery audit and recovery receipts are preserved in commit
+`48fc137`. Current checks grade the working tree; a historical receipt is not
+acceptance evidence for later changes.
 
-The corrective review retained the same owners and fixtures. Structural matching
-now distinguishes `NixWire` from `DecoderLiteral`: nested emitted values obey
-Nix omission policies, while outer constructor inputs still accept values to
-omit. Decoder literals reject encountered native values and nonempty unique
-lists containing record references; record literals require decoders. Empty
-collections and optional absence/null remain supported. The existing structure
-vectors cover these restrictions, including raw-distinct records that decode
-identically. Default admission also uses the existing `isJson` helper to reject
-non-JSON ignored members before generation; ignored JSON values remain accepted.
-
-Option metadata is audited on native records and `getSubOptions` before Nixpkgs
-renders it, preserving native `option.loc` through keyed mounts. The mounted
-prefix and ignored-function regressions both failed before their boundary fixes.
-Redundant rendered-entry checks were removed. Publication tests
-observe resolver specialArgs and adapters with poisoned packages: two positive
-audits and four added/missing-name negatives. The existing downstream seven-app
-check remains the project-app proof. Both Rust generators share `rust-quote.nix`,
-and the compiled structural fixture asserts independent bytes for an unusual
-wire field name. Help padding has a minimum of one space; the existing budget
-fixture uses a long metavar and checks native help and packaged reference.
-Production generated Rust and the baseline help fixtures remain unchanged.
-
-### Coverage and retained native owners
-
-The checked reference contains 128 option paths; three library functions, three
-adapter modules and four injected arguments; 23 package/check/shell identities;
-15 root/project app identities; seven commands; 48 records; 23 closed
-vocabularies; and all 27 error codes. Package aliases remain distinct exports.
-Project verbs still derive directly from configured task names/descriptions.
-`coverage.nix` accounts for every authored capability coordinate exactly once;
-final export audits separately inspect the actual flake namespaces and app sets.
-
-| Surface or inventory coordinates | Owner and reference route | Independent proof |
-| --- | --- | --- |
-| Native options, nested invocation mounts, module arguments, adapters, authoring algebra | Native modules/compiler; `docs options`, `docs api`, authoring/adapters/context topics | `option-metadata.nix`, `publications.nix`, compiler negatives and adopter fixtures |
-| All 29 `primitive` records; model enums and signals | `meta/model.nix`, shared structure checker; model/derivation topics | Raw presence vectors, model validation, Nix/Rust derivation goldens, admission tests |
-| All 19 result/error bindings: 13 Owned, five Borrowed, one MemberNamesOnly | `meta/outputs.nix`, same checker/renderer; record/error queries and outputs/errors topics | `output_structure.rs`, native main/output/process/status tests, real output and registry tests |
-| `surface`, `surface-help`, run output modes, install and upgrade | `meta/commands.nix`, native parsers; command queries and commands topic | Seven exact helps, real parser/encoding/precedence vectors, packaged upgrade parser and adoption goldens |
-| `model-version` | Native constants and model admission; model topic | Capability digest/snapshot, model and admission tests |
-| `substitution` | Compiler and native execution lowering; placeholders topic | Compiler negatives, lowering vectors and service/endpoint tests |
-| `endpoint-acquisition`, `endpoint-reuse` | Native service process/kernel/registry proof; runtime topic | Cross-root endpoint fixtures, exact reuse, listener ownership and readiness tests |
-| `lease-authority` | Native registry and lifecycle; runtime/state topics | Open borrower/owner refusal, expiry, reservation and persistent/until-idle tests |
-| `escape-settlement`, `escaped-port-reconciliation` | Native registry/process/control/cleanup; runtime/state topics | Atomic transition/row-count tests, unresolved escape, down and cleanup refusal tests |
-| `output-schema run-summary-text`, `run-error-summary-text`, `run-task-output` | Native main/output/task finalization; outputs/runtime topics | Human/JSON/binary output, default selection, redaction, failure/replay and gate fixtures |
-| State/secret directories, source roots and hermetic child context | Native placement, admission and execution; context/secrets topics | Isolated `context.rs`, actual file material, admission source tests, hermetic child tests and optional Linux port advisory |
-| State epochs/markers, containment, liveness, cancellation, cleanup and recovery | Native state/registry/service/control; state/runtime/recovery topics | State, registry, lifecycle, service, endpoint and upgrade suites |
-| Install/upgrade ownership, reports, transactions and preflight | Native CLI and upgrade script; authoring/recovery topics | CLI preservation/refusal cases and committed upgrade golden/adoption checks |
-| Help/docs queries, source identity and fixed model seam | Native help/query/compiler view owners; discovery/model topics | Reference queries, poisoned dependencies, revision switching, source/closure isolation and model/help gate checks |
-
-Known inventory gaps remain explicit: CheckOutput, DownReport, CleanupOutcome
-and RegistryIdentityDiagnostic use local record identities; OutputStream and
-ProjectionOperation remain native scalar serializers. Their public fields and
-spellings are documented and tested without silently adding inventory entries.
-Status transition/terminal policy, open error-detail production, host observations,
-text/byte emission and cleanup decisions stay native. No context/text/byte
-schema or behavior dispatcher was introduced.
-
-### Replacement ledger
-
-| Cutover | Removed ownership | Resulting owner |
-| --- | --- | --- |
-| Authoring/publication | Direct option-constructor imports and repeated invocation declarations; adapter export/reserved-name catalogs; separate public export/name/description attrsets | Checked native option wrapper, shared invocation fragment, provider/publication descriptors and actual final-export audit |
-| Model structure | Handwritten model structs/enums and repeated native enum membership lists; Nix wire-shaping omission/filtering copies | One checked structure vocabulary, inventory-linked enum members, lazy per-field Nix construction and generated native Rust includes |
-| Results/errors | Handwritten result/error payload structs, diagnostic object shapes, conflict envelope key, error/status enum definitions and status macro member lists | The same structure mechanism; borrowed temporary views at native serialization sites; native macro implementations and producer policy retained |
-| Command syntax | Five runtime help constants, installer usage/default pin, upgrade syntax/default/help literals, duplicated parser/wrapper tokens and handwritten RunOutputMode | One syntax checker/projection and ordinary native help formatters; all seven native loops, acquisition rules and continuations retained |
-| Reference/delivery | Disconnected option-only discovery and an implementation-start handoff | One static source-bound docs product, exact queries and native topics; this implemented-owner/verification audit |
-
-The runtime's unused direct `thiserror` dependency was removed; the model's
-existing dependency remains. No new Cargo/Nix input dependency, semantic seam,
-mutable authority, compatibility reader or migration alias was added. All model
-bytes still cross `model.json`; the runtime neither evaluates Nix nor consumes
-the reference artifact. Generated files are checked in and freshness-checked;
-ordinary product builds never regenerate or overlay them.
-
-The separate non-UTF-8 environment-secret correction is the explicit baseline
-amendment in the handoff. Its before-fix regression failed, and its four-mode
-binary proof now checks status 33, unchanged error code/class, no rejected
-material, and no child/state effects. This restores REDACT-1 without changing
-capability bytes or versions. It is not attributed to structural generation.
-
-### Maintenance traces and cost
-
-| Exercise | Authored change sites | Derived outputs and independent evidence |
-| --- | --- | --- |
-| Ordinary option | Shared invocation option fragment fixture plus nested expected override | Task/start/probe native mounts and reference paths; no compiler or renderer edit |
-| Shared bound | One fixture domain minimum changes from one to two | Both mounted native types/descriptions change; literal one-rejects/two-accepts vectors; unrelated runtime timeout domains stay separate |
-| Required wire field | TaskSpec-shaped local fixture adds one boolean; constructor inputs and native use change | Nix construction, generated Rust and record reference; missing/null/wrong-type rejection and true/false use. A real inventoried amendment additionally requires ABI inventory/snapshot/producer/consumer updates |
-| Command argument | Run fixture adds optional Unsigned64 syntax, native parsed state/branch and timeout continuation | Generated token/type/default/help/reference; actual native parser operand, overflow and repetition checks. The long metavar also exercises minimum row padding |
-| Native behavior | Two native fixture failure-selection branches and independent byte expectations | Same generated error type and metadata, different primary/cause values with unchanged shape |
-| Supported export | Publication descriptor and native binding fixture | Actual selected export/reference and audit observe the addition without checker or name-registry edits |
-
-`nix/checks/maintenance.nix` implements the wire/argument/native examples in a
-copied test workspace. Insertions reject native-source drift; fixture-only
-sources are never installed into products. The reference builder accepts the
-same checked metadata as normal delivery. The option/publication exercises live
-in their existing boundary checks. This is executable change-site evidence,
-not a promise that metadata proves native behavior.
-
-Measured handwritten machinery footprint: 2085 lines across the checked
-metadata/projection/reference/query/generation components listed in the delivery
-receipt. Structural and command declarations: 1194 lines; publication
-and native option declarations/bindings are additionally visible in their native
-files. Checked-in generated Rust: 1346 lines. Fixture scripts and tests,
-changed native code and prose are included in the gross diff, not hidden inside
-the machinery estimate.
-
-Gross implementation diff against the reviewed handoff: 113 files,
-+10172/-1386 lines. Against the agreed production baseline, including the
-three reviewed design documents: 114 files, +12071/-3407
-lines. Counts include this audit and generated outputs. The largest growth is
-explicit field policies/declarations, generated definitions and independent
-boundary/OS/maintenance evidence. The structure checker (694 lines) and syntax
-checker (247 lines) exceed their preliminary component estimates because they
-check bounded reference/storage/presence and generated-name combinations. They
-remain one structural pass and one syntax pass; no extra behavior engine or
-parallel object graph accounts for the excess. Source/regeneration checks reuse
-the same renderers and pinned formatter.
-
-### Stable acceptance evidence
-
-| Acceptance | Evidence entry point |
+| Owner | Proof |
 | --- | --- |
-| A1 clean origin | Recorded reviewed HEAD/production baseline and per-unit frozen source receipts; abandoned implementation excluded |
-| A2 complete coverage | 128-path native collection, actual final-export audits, `coverage.nix`, command/record/error queries and native-topic routing above |
-| A3 native authoring | Option/module override/default/apply/laziness/provider fixtures and poisoned project dependencies |
-| A4 structural ownership | Shared structure checker/renderer, independent presence/unknown-field/raw-byte tests, retained native domain checks and conversions |
-| A5 independent admission | Malformed model/false derivation negatives, no-child admission tests, independent Nix and Rust goldens |
-| A6 command preservation | All seven exact helps and section-7 native parser fixtures; upgrade continuation independently byte-compared after parsing |
-| A7 native behavior | Output/registry/state/lifecycle/service/endpoint suites, isolated context and secret regression; metadata is not OS proof |
-| A8 product delivery | Static docs root/project apps, exact queries, stateRefs/placeholder answers, source provenance and useful failure tests |
-| A9 isolation/freshness | Reference revision/poison/closure tests; CLI/runtime/model/test-child/generated-source variation matrix; pinned regeneration diffs |
-| A10 complete replacement | Ledger above, native owner scans and no competing implementation-start assignment |
-| A11 demonstrated maintenance | Six executable traces above, full component and gross-diff accounting |
-| A12 final verification | Frozen-tree `nix run .#ci -- --dirty`, all-system evaluation and affected release products, recorded with exact source/diff identities |
+| Native options and shared invocation fragment | `option-metadata.nix`: mounted suboptions, overrides, bounds, lazy defaults and context |
+| Publication metadata and actual exports | `publications.nix`, final flake audits, poisoned bindings and downstream app-set checks |
+| Structural fields and closed inventory vocabularies | `structure.nix`, `coverage.nix`, compiled projection fixtures, raw `wire_presence.rs` and independent Nix/Rust derivation vectors |
+| Native output/error views | `output_structure.rs`, main/output/registry/process tests and real redaction/write boundaries |
+| Shared command facts and native parsers | `syntax.nix`, seven exact helps, native parser/encoding tests and packaged upgrade parser |
+| Static revision-bound reference | `reference.nix`, downstream source switching, context/closure isolation and exact queries |
+| Product source isolation and generated freshness | `runtime-sources.sh`, `generated.nix`, pinned `regenerate.sh` |
 
-Execution and release validation cover aarch64-linux. aarch64-darwin and
-x86_64-linux have evaluation coverage only; hosted CI and macOS execution are
-not claimed. Final delivery receipts identify the exact checked tree and logs;
-an earlier unit's green gate is not final acceptance.
+`nix/meta/declarations.nix` contains ordinary shared value/field constructors.
+Fields select coherent presence alternatives; the checker derives decoder and
+Rust emission facts. Nix producer policy is required only on Nix-produced records.
+Defaults are limited to empty collections and explicit enum members. Empty defaults
+use native Default; the enum wire default remains independent of convenience
+Default. There is no recursive decoder-default interpreter or runtime JSON parsing
+of defaults. Required OpenJson still rejects a missing member and accepts null.
+
+Shared command arguments retain one token/type/default binding across native
+consumers. The checked symbol names also drive collision checks and projection.
+Native parsers retain acquisition/repetition/encoding/help precedence and effects.
+
+`maintenance.nix` proves an added required wire field and optional command argument
+reach generated definitions, small native consumers and the packaged reference.
+The command consumer compiles separately within the native test scope; it never
+rewrites the production parser. Actual parser goldens remain in their native tests.
+The option-bound/export exercises remain in their existing boundary checks.
+`cargo-fixture.nix` shares only isolated fixture-build plumbing, not product behavior.
+
+The raw option audit and independent no-child, redaction, cleanup and OS ownership
+proofs remain required. Reductions in generated formatting or historical prose
+must be accounted separately from maintained production/test code.
