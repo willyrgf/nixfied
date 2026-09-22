@@ -8,13 +8,13 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, SourceMode};
+use nixfied_model::{CleanupPolicy, Model};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
     derive_host_placement, materialize_registry_root, materialize_run_roots, prepare_slot_state,
 };
-use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
+use nixfied_runtime::{Admission, ErrorCode};
 use serde_json::Value;
 
 mod common;
@@ -453,30 +453,7 @@ fn admission(model: &Model, source_root: &Path, hash: &str) -> Admission {
     Admission {
         model_path: PathBuf::from(format!("/nix/store/model-{hash}/model.json")),
         computed_model_hash: hash.to_string(),
-        raw_len: 100,
-        project_id: model.project.project_id.clone(),
-        runtime_abi: model.runtime_abi.clone(),
-        toolchain_id: model.toolchain_id.clone(),
-        target_system: model.target.system.clone(),
-        source: Some(admitted_source(source_root)),
-        generator_json: serde_json::to_string(&model.generator).expect("generator serializes"),
-        target_json: serde_json::to_string(&model.target).expect("target serializes"),
-        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
-        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
-    }
-}
-
-fn admitted_source(source_root: &Path) -> AdmittedSource {
-    AdmittedSource {
-        codebase_id: "main".to_string(),
-        logical_root: ".".to_string(),
-        observed_root: source_root
-            .canonicalize()
-            .expect("source root should canonicalize"),
-        source_mode: SourceMode::LiveWorkspace,
-        source_identity: "live".to_string(),
-        dirty_policy: DirtyPolicy::Warn,
-        admission_fingerprint_policy: "live-fingerprint".to_string(),
+        ..common::synthetic_admission(model, source_root)
     }
 }
 

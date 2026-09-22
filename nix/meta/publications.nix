@@ -136,7 +136,19 @@ let
         builtins.all validReference entry.references
       ) entries
     );
-  select = kind: scope: builtins.filter (entry: entry.kind == kind && entry.scope == scope) entries;
+  namespaces = builtins.mapAttrs (
+    _: scoped:
+    builtins.mapAttrs (
+      _: declarations:
+      builtins.listToAttrs (
+        map (d: {
+          name = d.name;
+          value = d;
+        }) declarations
+      )
+    ) (lib.groupBy (d: d.scope) scoped)
+  ) (lib.groupBy (d: d.kind) declarations);
+  select = kind: scope: namespaces.${kind}.${scope} or { };
   bound =
     declaration:
     let
@@ -168,22 +180,12 @@ let
 in
 builtins.seq valid {
   inherit entries;
-  project =
-    kind: scope:
-    builtins.listToAttrs (
-      map
-        (declaration: {
-          name = declaration.name;
-          value = bound declaration;
-        })
-        (builtins.filter (declaration: declaration.kind == kind && declaration.scope == scope) declarations)
-    );
-  names = kind: scope: map (entry: entry.name) (select kind scope);
+  project = kind: scope: builtins.mapAttrs (_: bound) (select kind scope);
+  names = kind: scope: builtins.attrNames (select kind scope);
   audit =
     kind: scope: actual:
     assert lib.assertMsg (
-      builtins.attrNames actual
-      == builtins.sort builtins.lessThan (map (entry: entry.name) (select kind scope))
+      builtins.attrNames actual == builtins.attrNames (select kind scope)
     ) "Nixfied publication: final exports differ from descriptors (${kind}/${scope})";
     true;
 }

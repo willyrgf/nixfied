@@ -146,20 +146,21 @@
           declarations =
             authoring.declarations
             ++ libraryDeclarations args
-            ++ packageDeclarations.${system}
-            ++ appDeclarations.${system}
-            ++ checkDeclarations.${system}
-            ++ shellDeclarations.${system}
+            ++ packageDeclarations args
+            ++ appDeclarations args
+            ++ checkDeclarations args
+            ++ shellDeclarations args
             ++ import ./nix/project-publications.nix { };
         };
-      mkNixfiedLib = args: (publicationFor args).project "function" "library";
+      publications = forAllSystems publicationFor;
+      mkNixfiedLib = { system, ... }: publications.${system}.project "function" "library";
       docsFor =
         args:
         import ./nix/docs/reference.nix (
           {
             inherit (nixpkgs) lib;
             options = (authoringFor args).options;
-            publications = (publicationFor args).entries;
+            publications = publications.${args.system}.entries;
             source = {
               path = toString self.outPath;
               revision = self.rev or null;
@@ -192,7 +193,7 @@
           inherit pkgs;
           package = "nixfied-test-child";
         };
-      packageDeclarations = forAllSystems (
+      packageDeclarations =
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
@@ -602,10 +603,9 @@
               inherit pkgs system;
             })
           )
-        ]
-      );
+        ];
 
-      appDeclarations = forAllSystems (
+      appDeclarations =
         { pkgs, system }:
         let
           app =
@@ -674,10 +674,9 @@
             { topic = "development"; }
             (program "ci")
           )
-        ]
-      );
+        ];
 
-      checkDeclarations = forAllSystems (
+      checkDeclarations =
         { pkgs, system }:
         let
           optionsDoc = import ./nix/docs/options.nix {
@@ -715,18 +714,16 @@
                 inherit (nixpkgs) lib;
               };
               assert import ./nix/checks/publications.nix {
-                inherit pkgs system;
                 inherit (nixpkgs) lib;
               };
               assert import ./nix/checks/structure.nix { inherit (nixpkgs) lib; };
               assert import ./nix/checks/syntax.nix { inherit (nixpkgs) lib; };
               assert import ./nix/checks/coverage.nix { inherit (nixpkgs) lib; };
-              assert (publicationFor { inherit pkgs system; }).audit "function" "library" self.lib.${system};
-              assert (publicationFor { inherit pkgs system; }).audit "package" "root" self.packages.${system};
-              assert (publicationFor { inherit pkgs system; }).audit "app" "root" self.apps.${system};
-              assert (publicationFor { inherit pkgs system; }).audit "package" "check" self.checks.${system};
-              assert (publicationFor { inherit pkgs system; }).audit "package" "devShell"
-                self.devShells.${system};
+              assert publications.${system}.audit "function" "library" self.lib.${system};
+              assert publications.${system}.audit "package" "root" self.packages.${system};
+              assert publications.${system}.audit "app" "root" self.apps.${system};
+              assert publications.${system}.audit "package" "check" self.checks.${system};
+              assert publications.${system}.audit "package" "devShell" self.devShells.${system};
               import ./nix/packages/rust-workspace-check.nix {
                 inherit pkgs optionsDoc;
                 referenceCheck = import ./nix/checks/reference.nix {
@@ -737,10 +734,9 @@
               }
             )
           )
-        ]
-      );
+        ];
 
-      shellDeclarations = forAllSystems (
+      shellDeclarations =
         { pkgs, ... }:
         let
           nixfiedTestChild = mkNixfiedTestChild pkgs;
@@ -762,15 +758,14 @@
               }
             )
           )
-        ]
-      );
+        ];
 
     in
     {
       lib = forAllSystems mkNixfiedLib;
-      packages = forAllSystems (args: (publicationFor args).project "package" "root");
-      apps = forAllSystems (args: (publicationFor args).project "app" "root");
-      checks = forAllSystems (args: (publicationFor args).project "package" "check");
-      devShells = forAllSystems (args: (publicationFor args).project "package" "devShell");
+      packages = forAllSystems ({ system, ... }: publications.${system}.project "package" "root");
+      apps = forAllSystems ({ system, ... }: publications.${system}.project "app" "root");
+      checks = forAllSystems ({ system, ... }: publications.${system}.project "package" "check");
+      devShells = forAllSystems ({ system, ... }: publications.${system}.project "package" "devShell");
     };
 }

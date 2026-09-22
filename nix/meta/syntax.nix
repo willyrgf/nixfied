@@ -21,8 +21,36 @@ let
     lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] (lib.removePrefix "_" (structure.snake value)));
   typeName =
     command: argument:
-    structure.variant command.name + structure.variant (structure.snake argument.id) + "Value";
-  prefix = command: argument: "${upper command.name}_${upper argument.id}";
+    (if argument.binding == "Shared" then "Runtime" else structure.variant command.name)
+    + structure.variant (structure.snake argument.id)
+    + "Value";
+  prefix =
+    command: argument:
+    "${if argument.binding == "Shared" then "RUNTIME" else upper command.name}_${upper argument.id}";
+  argumentSymbols =
+    command: arg:
+    {
+      token = prefix command arg;
+      initial = "${prefix command arg}_INITIAL";
+    }
+    // lib.optionalAttrs (builtins.elem arg.valueDomain.kind [
+      "Unsigned"
+      "Enum"
+    ]) { type = typeName command arg; };
+  commandSymbols = name: {
+    command = "${upper name}_COMMAND";
+    help = "${upper name}_HELP";
+  };
+  vocabularySymbols =
+    coordinate:
+    let
+      v = structure.vocabularyMap.${coordinate};
+      prefix = upper v.rust.name;
+    in
+    {
+      choices = "${prefix}_CHOICES";
+      members = lib.genAttrs v.members (member: "${prefix}_${upper member}");
+    };
   domain =
     value:
     require
@@ -59,7 +87,7 @@ let
     if value.kind == "Flag" then
       builtins.isBool literal
     else if value.kind == "Unsigned" then
-      builtins.isInt literal && literal >= 0 && (value.bits == 64 || literal <= 4294967295)
+      (if value.bits == 64 then lib.types.ints.unsigned else lib.types.ints.u32).check literal
     else if value.kind == "Enum" then
       builtins.isString literal
       && builtins.elem literal structure.vocabularyMap.${value.coordinate}.members
@@ -67,47 +95,53 @@ let
       builtins.isString literal;
   argument =
     value:
-    require (exact [ "id" "token" "valueDomain" "initialValue" "help" ] value) "invalid argument keys" (
-      let
-        valueDomain = domain value.valueDomain;
-        initial = value.initialValue;
-        help = value.help;
-      in
-      require
-        (
-          identifier value.id
-          && builtins.isString value.token
-          && builtins.match "--[a-z][a-z0-9-]*" value.token != null
-        )
-        "invalid argument identity"
-        (
-          require
-            (
-              builtins.isAttrs initial
-              && (
-                (initial.kind or null) == "Absent" && exact [ "kind" ] initial
-                ||
-                  (initial.kind or null) == "Literal"
-                  && exact [ "kind" "value" ] initial
-                  && matches valueDomain initial.value
-              )
-            )
-            "invalid initial value"
-            (
-              require (
-                builtins.isAttrs help
+    require (exact [ "id" "token" "binding" "valueDomain" "initialValue" "help" ] value)
+      "invalid argument keys"
+      (
+        let
+          valueDomain = domain value.valueDomain;
+          initial = value.initialValue;
+          help = value.help;
+        in
+        require
+          (
+            builtins.elem value.binding [
+              "Shared"
+              "Command"
+            ]
+            && identifier value.id
+            && builtins.isString value.token
+            && builtins.match "--[a-z][a-z0-9-]*" value.token != null
+          )
+          "invalid argument identity"
+          (
+            require
+              (
+                builtins.isAttrs initial
                 && (
-                  (help.kind or null) == "Hidden" && exact [ "kind" "explanation" ] help && nonBlank help.explanation
+                  (initial.kind or null) == "Absent" && exact [ "kind" ] initial
                   ||
-                    (help.kind or null) == "Visible"
-                    && exact [ "kind" "text" "metavar" ] help
-                    && nonBlank help.text
-                    && (if valueDomain.kind == "Flag" then help.metavar == null else nonBlank help.metavar)
+                    (initial.kind or null) == "Literal"
+                    && exact [ "kind" "value" ] initial
+                    && matches valueDomain initial.value
                 )
-              ) "invalid help visibility" (value // { inherit valueDomain; })
-            )
-        )
-    );
+              )
+              "invalid initial value"
+              (
+                require (
+                  builtins.isAttrs help
+                  && (
+                    (help.kind or null) == "Hidden" && exact [ "kind" "explanation" ] help && nonBlank help.explanation
+                    ||
+                      (help.kind or null) == "Visible"
+                      && exact [ "kind" "text" "metavar" ] help
+                      && nonBlank help.text
+                      && (if valueDomain.kind == "Flag" then help.metavar == null else nonBlank help.metavar)
+                  )
+                ) "invalid help visibility" (value // { inherit valueDomain; })
+              )
+          )
+      );
   reference =
     value:
     exact [ "kind" "id" ] value
@@ -143,7 +177,12 @@ let
             require (lib.unique tokens == tokens && lib.unique ids == ids)
               "duplicate argument token or identifier"
               {
-                inherit (value) name description references;
+                inherit (value)
+                  name
+                  description
+                  references
+                  renderHelp
+                  ;
                 inherit arguments;
                 args = builtins.listToAttrs (
                   map (arg: {
@@ -172,6 +211,21 @@ let
       ) entry.arguments
     ) commands
   );
+  # Shared argument identity deliberately excludes command-specific help text.
+  shared = lib.concatMap (c: builtins.filter (a: a.binding == "Shared") c.arguments) commands;
+  sharedGroups = lib.groupBy (a: a.id) shared;
+  sharedFacts = a: builtins.removeAttrs a [ "help" ];
+  argumentsFor =
+    names:
+    lib.unique (
+      lib.concatMap (
+        c:
+        map (arg: {
+          symbols = argumentSymbols c arg;
+          facts = sharedFacts arg;
+        }) c.arguments
+      ) (builtins.filter (c: builtins.elem c.name names) commands)
+    );
   generatedNames = [
     "HELP_SHORT"
     "HELP_LONG"
@@ -179,32 +233,23 @@ let
   ++ lib.concatMap (
     coordinate:
     let
-      vocabulary = structure.vocabularyMap.${coordinate};
-      prefix = upper vocabulary.rust.name;
+      s = vocabularySymbols coordinate;
     in
-    [ "${prefix}_CHOICES" ] ++ map (member: "${prefix}_${upper member}") vocabulary.members
+    [ s.choices ] ++ builtins.attrValues s.members
   ) enumCoordinates
-  ++ lib.concatMap (
-    entry:
-    [
-      "${upper entry.name}_COMMAND"
-      "${upper entry.name}_HELP"
-    ]
-    ++ lib.concatMap (
-      arg:
-      [
-        (prefix entry arg)
-        "${prefix entry arg}_INITIAL"
-      ]
-      ++ lib.optional (builtins.elem arg.valueDomain.kind [
-        "Unsigned"
-        "Enum"
-      ]) (typeName entry arg)
-    ) entry.arguments
-  ) commands;
-  valid = require (
-    lib.unique names == names && lib.unique generatedNames == generatedNames
-  ) "conflicting generated names" (builtins.deepSeq commands true);
+  ++ lib.concatMap (c: builtins.attrValues (commandSymbols c.name)) commands
+  ++ lib.concatMap (a: builtins.attrValues a.symbols) (argumentsFor names);
+  valid =
+    require
+      (
+        lib.unique names == names
+        && lib.unique generatedNames == generatedNames
+        && builtins.all (args: builtins.all (a: sharedFacts a == sharedFacts (builtins.head args)) args) (
+          builtins.attrValues sharedGroups
+        )
+      )
+      "conflicting generated names or shared argument facts"
+      (builtins.deepSeq (map (c: builtins.removeAttrs c [ "renderHelp" ]) commands) true);
   apps = builtins.listToAttrs (
     map (entry: {
       name = entry.command;
@@ -226,6 +271,10 @@ builtins.seq valid {
     helpTokens
     prefix
     typeName
+    argumentSymbols
+    commandSymbols
+    vocabularySymbols
+    argumentsFor
     upper
     ;
   byName = builtins.listToAttrs (
@@ -235,11 +284,11 @@ builtins.seq valid {
     }) commands
   );
   help = builtins.listToAttrs (
-    lib.imap0 (index: entry: {
+    map (entry: {
       name = entry.name;
       value =
         let
-          rendered = (builtins.elemAt declarations index).renderHelp (facts entry);
+          rendered = entry.renderHelp (facts entry);
         in
         require (builtins.isString rendered) "renderHelp must return text" rendered;
     }) commands

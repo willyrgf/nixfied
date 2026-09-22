@@ -26,6 +26,7 @@ let
   invalidArg = f: rejects (check (changeArg f)).commands;
   extra = {
     id = "budgetMs";
+    binding = "Command";
     token = "--budget-ms";
     valueDomain = {
       kind = "Unsigned";
@@ -92,6 +93,34 @@ assert invalid (
   command:
   command // { arguments = command.arguments ++ [ (extra // { id = "outputModeChoices"; }) ]; }
 );
+# A shared binding cannot change token/domain/default in one command only.
+assert rejects
+  (check (
+    map (
+      command:
+      if command.name != "down" then
+        command
+      else
+        command
+        // {
+          arguments = map (
+            arg: if arg.id != "slot" then arg else arg // { token = "--other-slot"; }
+          ) command.arguments;
+        }
+    ) declarations
+  )).commands;
+assert
+  builtins.length (
+    builtins.filter (arg: arg.symbols.token == "RUNTIME_SLOT") (
+      checked.argumentsFor [
+        "check"
+        "run"
+        "ps"
+        "down"
+        "clean"
+      ]
+    )
+  ) == 1;
 assert invalidArg (arg: arg // { token = "--help"; });
 assert invalidArg (arg: arg // { id = "task"; });
 assert invalidArg (arg: arg // { id = "timeoutMsInitial"; });

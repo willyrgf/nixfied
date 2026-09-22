@@ -36,7 +36,7 @@ in
       coordinate:
       let
         vocabulary = structure.vocabularyMap.${coordinate};
-        name = checked.upper vocabulary.rust.name;
+        symbols = checked.vocabularySymbols coordinate;
       in
       lib.optionalString
         (lib.any (
@@ -47,42 +47,39 @@ in
           ) command.arguments
         ) checked.commands)
         (
-          "const ${name}_CHOICES: &str = ${quote (presentation.choices vocabulary.members)};\n"
+          "const ${symbols.choices}: &str = ${quote (presentation.choices vocabulary.members)};\n"
           + lib.concatMapStrings (
-            member: "const ${name}_${checked.upper member}: &str = ${quote member};\n"
+            member: "const ${symbols.members.${member}}: &str = ${quote member};\n"
           ) vocabulary.members
         )
     ) checked.enumCoordinates
     + lib.concatMapStrings (
       name:
       let
-        command = checked.byName.${name};
+        symbols = checked.commandSymbols name;
       in
-      "const ${checked.upper name}_COMMAND: &str = ${quote name};\nconst ${checked.upper name}_HELP: &str = ${quote checked.help.${name}};\n"
-      + lib.concatMapStrings (
-        arg:
-        let
-          prefix = checked.prefix command arg;
-          hasAlias = builtins.elem arg.valueDomain.kind [
-            "Unsigned"
-            "Enum"
-          ];
-          type = if hasAlias then checked.typeName command arg else rustType arg;
-        in
-        "const ${prefix}: &str = ${quote arg.token};\n"
-        + lib.optionalString hasAlias "type ${checked.typeName command arg} = ${rustType arg};\n"
-        + "const ${prefix}_INITIAL: ${
-          if arg.initialValue.kind == "Absent" then "Option<${type}>" else type
-        } = ${rustInitial arg};\n"
-      ) command.arguments
-    ) names;
+      "const ${symbols.command}: &str = ${quote name};\nconst ${symbols.help}: &str = ${quote checked.help.${name}};\n"
+    ) names
+    + lib.concatMapStrings (
+      entry:
+      let
+        arg = entry.facts;
+        symbols = entry.symbols;
+        type = symbols.type or (rustType arg);
+      in
+      "const ${symbols.token}: &str = ${quote arg.token};\n"
+      + lib.optionalString (symbols ? type) "type ${symbols.type} = ${rustType arg};\n"
+      + "const ${symbols.initial}: ${
+        if arg.initialValue.kind == "Absent" then "Option<${type}>" else type
+      } = ${rustInitial arg};\n"
+    ) (checked.argumentsFor names);
   shell =
     name:
     let
       command = checked.byName.${name};
     in
     "HELP_SHORT=${lib.escapeShellArg (builtins.head checked.helpTokens)}\nHELP_LONG=${lib.escapeShellArg (lib.last checked.helpTokens)}\n"
-    + "${checked.upper name}_HELP=${lib.escapeShellArg checked.help.${name}}\n"
+    + "${(checked.commandSymbols name).help}=${lib.escapeShellArg checked.help.${name}}\n"
     + lib.concatMapStrings (
       arg:
       let
@@ -95,6 +92,6 @@ in
           else
             toString initial.value;
       in
-      "${checked.prefix command arg}=${lib.escapeShellArg arg.token}\n${checked.prefix command arg}_INITIAL=${lib.escapeShellArg value}\n"
+      "${(checked.argumentSymbols command arg).token}=${lib.escapeShellArg arg.token}\n${(checked.argumentSymbols command arg).initial}=${lib.escapeShellArg value}\n"
     ) command.arguments;
 }

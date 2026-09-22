@@ -24,10 +24,9 @@ let
         value = {
           kind = "Boolean";
         };
-        decode = {
+        presence = {
           kind = "Required";
         };
-        rustEncode = "Present";
         nixEncode = "RequiredPresent";
         rust = {
           visibility = "pub";
@@ -59,6 +58,7 @@ let
           arguments = command.arguments ++ [
             {
               id = "budgetMs";
+              binding = "Command";
               token = "--budget-ms";
               valueDomain = {
                 kind = "Unsigned";
@@ -105,31 +105,7 @@ let
     servicesRequired = [ ];
   };
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
-  # Exact edits at the current native owner, with drift rejection. This is test
-  # orchestration, not a syntax backend or a generated production parser.
-  replaceOnce =
-    before: after: text:
-    assert lib.assertMsg (
-      builtins.length (lib.splitString before text) == 2
-    ) "native maintenance fixture insertion drifted";
-    lib.replaceStrings [ before ] [ after ] text;
-  runtime = lib.pipe (builtins.readFile ../../runtime/crates/nixfied-runtime/src/main.rs) [
-    (replaceOnce "    let mut task = RUN_TASK_INITIAL.map(str::to_string);" "    let mut budget_ms = RUN_BUDGET_MS_INITIAL;\n    let mut task = RUN_TASK_INITIAL.map(str::to_string);")
-    (replaceOnce "            RUN_OUTPUT => {" ''
-      RUN_BUDGET_MS => {
-          index += 1;
-          let value = args.get(index).ok_or_else(|| RuntimeError::new(
-              nixfied_runtime::ErrorCode::ModelAdmission, "missing fixture budget"))?;
-          budget_ms = Some(value.parse::<RunBudgetMsValue>().map_err(|_| RuntimeError::new(
-              nixfied_runtime::ErrorCode::ModelAdmission, "invalid fixture budget"))?);
-      }
-      RUN_OUTPUT => {
-    '')
-    (replaceOnce "struct ParsedRunOptions {" "struct ParsedRunOptions {\n    budget_ms: Option<RunBudgetMsValue>,")
-    (replaceOnce "    Ok(ParsedRunOptions {" "    Ok(ParsedRunOptions {\n        budget_ms,")
-    (replaceOnce "            timeout_ms: self.timeout_ms," "            timeout_ms: self.budget_ms.unwrap_or(self.timeout_ms),")
-  ];
-  toolchain = (import ../toolchain.nix { inherit pkgs; }).dev;
+
 in
 assert rejects (construct input);
 assert rejects (construct (input // { fixtureEnabled = null; }));
@@ -138,15 +114,9 @@ assert
   == ''{"defaultOutput":"summary","fixtureEnabled":true,"kind":"composite","serviceLifetime":"run-scoped","servicesRequired":[]}'';
 assert (construct (input // { fixtureEnabled = false; })).fixtureEnabled == false;
 assert lib.hasInfix "--budget-ms <operation-budget-milliseconds>" syntax.help.run;
-pkgs.stdenv.mkDerivation {
+import ./cargo-fixture.nix { inherit pkgs; } {
   name = "nixfied-maintenance-exercises";
-  src = ../../runtime;
-  cargoDeps = pkgs.rustPlatform.importCargoLock { lockFile = ../../runtime/Cargo.lock; };
-  nativeBuildInputs = [
-    toolchain
-    pkgs.rustPlatform.cargoSetupHook
-  ];
-  buildPhase = ''
+  script = ''
     ${reference}/bin/nixfied-docs api record local/FixtureTaskSpec > wire-reference.txt
     grep -Fq 'fixtureEnabled' wire-reference.txt
     grep -Fq 'Decode: Required' wire-reference.txt
@@ -156,11 +126,9 @@ pkgs.stdenv.mkDerivation {
     grep -Fq 'Fixture operation budget' command-reference.txt
     cp ${generated}/crates/nixfied-model/src/generated/types.rs crates/nixfied-model/src/generated/types.rs
     cp ${./maintenance-wire.rs} crates/nixfied-model/tests/maintenance_wire.rs
-    cp ${generated}/crates/nixfied-runtime/src/generated/commands.rs crates/nixfied-runtime/src/generated/commands.rs
-    cp ${pkgs.writeText "maintenance-main.rs" runtime} crates/nixfied-runtime/src/main.rs
+    cp ${generated}/crates/nixfied-runtime/src/generated/commands.rs crates/nixfied-runtime/src/generated/maintenance_commands.rs
     cat ${./maintenance-native.rs} >> crates/nixfied-runtime/src/main_tests.rs
     cargo test --offline --locked -p nixfied-model --test maintenance_wire
     cargo test --offline --locked -p nixfied-runtime --bin nixfied-runtime maintenance_
   '';
-  installPhase = ''touch "$out"'';
 }

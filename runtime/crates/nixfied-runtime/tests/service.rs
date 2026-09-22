@@ -8,9 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{
-    ContainmentRequirement, DirtyPolicy, Model, ServiceLifetime, SourceMode, Validate,
-};
+use nixfied_model::{ContainmentRequirement, Model, ServiceLifetime, Validate};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
@@ -26,7 +24,7 @@ use nixfied_runtime::state::{
     CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
     derive_host_placement_for_slot, materialize_run_roots,
 };
-use nixfied_runtime::{Admission, AdmittedSource, ErrorCode, RuntimeError, RuntimeResult};
+use nixfied_runtime::{Admission, ErrorCode, RuntimeError, RuntimeResult};
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
@@ -621,7 +619,7 @@ fn slot_one_service_uses_slot_placement_port_window() {
     let mut value = fixture_model("/bin/sleep", &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let admission = admission(&model, &tmp.path);
+    let admission = synthetic_admission(&model, &tmp.path);
     let selected_slot = select_slot(&model, Some(1)).expect("slot 1 should select");
     let placement = derive_host_placement_for_slot(&model, &selected_slot, "run-slot-1", &tmp.path)
         .expect("slot 1 layout should derive");
@@ -666,7 +664,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let mut value = test_child_listener_value(23210);
     add_slot_one(&mut value, 23310, 23320);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let admission = admission(&model, &tmp.path);
+    let admission = synthetic_admission(&model, &tmp.path);
 
     let mut slot0 = StartedSlot::start(&model, &admission, &tmp.path, 0, "run-slot-0", 23210);
     let mut slot1 = StartedSlot::start(&model, &admission, &tmp.path, 1, "run-slot-1", 23310);
@@ -4049,7 +4047,7 @@ impl ServiceFixture {
 
     fn from_model(model: Model) -> Self {
         let tmp = TempDir::new();
-        let admission = admission(&model, &tmp.path);
+        let admission = synthetic_admission(&model, &tmp.path);
         let placement =
             derive_host_placement(&model, "run-service", &tmp.path).expect("layout should derive");
         materialize_run_roots(&placement).expect("roots should materialize");
@@ -4530,37 +4528,6 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
 
     restore_executable_fixture(&executable);
     assert_prepared_retry(&mut fixture, "run-after-spawn-failed", port);
-}
-
-fn admission(model: &Model, source_root: &Path) -> Admission {
-    Admission {
-        model_path: PathBuf::from("/nix/store/test-model/model.json"),
-        computed_model_hash: "computed-hash".to_string(),
-        raw_len: 100,
-        project_id: model.project.project_id.clone(),
-        runtime_abi: model.runtime_abi.clone(),
-        toolchain_id: model.toolchain_id.clone(),
-        target_system: model.target.system.clone(),
-        source: Some(admitted_source(source_root)),
-        generator_json: serde_json::to_string(&model.generator).unwrap(),
-        target_json: serde_json::to_string(&model.target).unwrap(),
-        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
-        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
-    }
-}
-
-fn admitted_source(source_root: &Path) -> AdmittedSource {
-    AdmittedSource {
-        codebase_id: "main".to_string(),
-        logical_root: ".".to_string(),
-        observed_root: source_root
-            .canonicalize()
-            .expect("source root should canonicalize"),
-        source_mode: SourceMode::LiveWorkspace,
-        source_identity: "live".to_string(),
-        dirty_policy: DirtyPolicy::Warn,
-        admission_fingerprint_policy: "live-fingerprint".to_string(),
-    }
 }
 
 fn model(executable: &str, start_args: &[&str], port: u16) -> Model {

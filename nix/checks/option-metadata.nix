@@ -364,7 +364,7 @@ assert (fixtureEntry 2 "services.<name>.probe.timeoutMs").type == "integer >= 2"
 assert defaultOf "contextual" == "nativeContext";
 assert defaultOf "empty" == "{ }";
 assert !(lib.findFirst (entry: entry.name == "required") null lazyEntries ? default);
-assert builtins.length (metadata.collect poisoned.options) == 128;
+assert map (entry: entry.loc) (metadata.collect poisoned.options) == map (entry: entry.loc) entries;
 assert builtins.hasContext transformed;
 assert transformed == source.outPath;
 true

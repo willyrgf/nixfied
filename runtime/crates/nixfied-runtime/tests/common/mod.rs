@@ -99,8 +99,7 @@ pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
 
 pub use nixfied_model::fixtures::{host_arch, host_os, host_system};
 
-use nixfied_model::Model;
-use nixfied_model::ServiceLifetime;
+use nixfied_model::{DirtyPolicy, Model, ServiceLifetime, SourceMode};
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
     ServiceSelection, SlotEndpoints, StartedService, record_run_created, run_slot_clean,
@@ -108,7 +107,35 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
 use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
-use nixfied_runtime::{Admission, RuntimeResult};
+use nixfied_runtime::{Admission, AdmittedSource, RuntimeResult};
+
+/// Synthetic run admission for lifecycle/state tests; real admission checks are bypassed.
+pub fn synthetic_admission(model: &Model, source_root: &Path) -> Admission {
+    Admission {
+        model_path: PathBuf::from("/nix/store/test-model/model.json"),
+        computed_model_hash: "computed-hash".to_string(),
+        raw_len: 100,
+        project_id: model.project.project_id.clone(),
+        runtime_abi: model.runtime_abi.clone(),
+        toolchain_id: model.toolchain_id.clone(),
+        target_system: model.target.system.clone(),
+        source: Some(AdmittedSource {
+            codebase_id: "main".to_string(),
+            logical_root: ".".to_string(),
+            observed_root: source_root
+                .canonicalize()
+                .expect("source root should canonicalize"),
+            source_mode: SourceMode::LiveWorkspace,
+            source_identity: "live".to_string(),
+            dirty_policy: DirtyPolicy::Warn,
+            admission_fingerprint_policy: "live-fingerprint".to_string(),
+        }),
+        generator_json: serde_json::to_string(&model.generator).unwrap(),
+        target_json: serde_json::to_string(&model.target).unwrap(),
+        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
+        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
+    }
+}
 
 /// The fixture service name. The production runtime crate is service-name
 /// agnostic — it starts whatever `ServiceSelection` names — so the concrete

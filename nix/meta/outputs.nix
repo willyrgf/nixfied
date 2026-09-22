@@ -2,43 +2,22 @@
 # redaction, failure selection, formatting and persistence remain native.
 { lib }:
 let
-  text = {
-    kind = "Text";
-  };
-  boolean = {
-    kind = "Boolean";
-  };
-  integer = signed: bits: {
-    kind = "Integer";
-    inherit signed bits;
-    nonzero = false;
-  };
-  u16 = integer false 16;
-  u32 = integer false 32;
-  u64 = integer false 64;
-  i32 = integer true 32;
-  i64 = integer true 64;
-  output = name: {
-    kind = "Inventory";
-    coordinate = "output-schema ${name}";
-  };
-  local = name: {
-    kind = "Local";
-    inherit name;
-  };
-  ref = identity: {
-    kind = "RecordRef";
-    inherit identity;
-  };
-  list = element: {
-    kind = "List";
-    inherit element;
-    unique = false;
-  };
-  enum = coordinate: {
-    kind = "Enum";
-    inherit coordinate;
-  };
+  d = import ./declarations.nix;
+  inherit (d)
+    text
+    boolean
+    u16
+    u32
+    u64
+    i32
+    i64
+    local
+    ref
+    list
+    enum
+    field
+    ;
+  output = name: d.inventory "output-schema ${name}";
   native = id: wire: description: {
     kind = "NativeDomain";
     inherit id wire description;
@@ -50,29 +29,10 @@ let
       "Native path serialization; non-UTF-8 paths retain serde's failure behavior.";
   host = native "LoopbackHost" text "The independently validated native IP loopback scalar.";
   usize = native "usize" u64 "Native address-sized byte length; Rust retains its platform domain.";
-  field = name: value: decode: rustEncode: description: {
-    inherit
-      name
-      value
-      decode
-      rustEncode
-      description
-      ;
-    nixEncode = "NotProduced";
-    rust = {
-      visibility = "private";
-      storage = "Direct";
-    };
-  };
-  required =
-    name: value: description:
-    field name value { kind = "Required"; } "Present" description;
-  optional =
-    name: value: encode: description:
-    field name value { kind = "Optional"; } encode description;
-  omitEmpty =
-    name: value: description:
-    field name value { kind = "Required"; } "OmitEmpty" description;
+  required = name: value: field name value { kind = "Required"; };
+  optional = name: value: field name value { kind = "Optional"; };
+  omitted = name: value: field name value { kind = "OptionalOmitted"; };
+  omitEmpty = name: value: field name value { kind = "OmitEmpty"; };
   boxed =
     field:
     field
@@ -89,36 +49,24 @@ let
         inherit name;
       };
     };
-  owner = file: module: {
-    file = "crates/nixfied-runtime/src/generated/${file}.rs";
-    inherit module;
-  };
-  main = owner "main" [ "main" ];
-  control = owner "control" [ "control" ];
-  cleanup = owner "cleanup" [
-    "state"
-    "cleanup"
-  ];
-  task = owner "task" [
-    "service"
-    "task"
-  ];
-  process = owner "process" [
-    "service"
-    "process"
-  ];
-  error = owner "error" [ "error" ];
-  projection = owner "output" [ "output" ];
-  registry = owner "registry_identity" [
-    "registry"
-    "schema"
-  ];
-  status = owner "status" [
-    "registry"
-    "status"
-  ];
+  owner = file: { file = "crates/nixfied-runtime/src/generated/${file}.rs"; };
+  main = owner "main";
+  control = owner "control";
+  cleanup = owner "cleanup";
+  task = owner "task";
+  process = owner "process";
+  error = owner "error";
+  projection = owner "output";
+  registry = owner "registry_identity";
+  status = owner "status";
   record = identity: name: owner: visibility: derives: emission: decoder: description: fields: {
-    inherit identity description decoder;
+    inherit
+      identity
+      description
+      decoder
+      fields
+      ;
+    producer = "None";
     rust = owner // {
       inherit
         name
@@ -127,15 +75,6 @@ let
         emission
         ;
     };
-    fields = map (
-      field:
-      field
-      // {
-        rust = field.rust // {
-          inherit visibility;
-        };
-      }
-    ) fields;
   };
   comparable = [
     "Debug"
@@ -200,9 +139,9 @@ in
         (required "serviceId" text "Declared service identity.")
         (required "serviceInstanceId" text "Native service reuse identity.")
         (required "processKey" text "Registry evidence key for the selected service process.")
-        (optional "selectedEndpoint" (ref (
+        (omitted "selectedEndpoint" (ref (
           output "selected-endpoint"
-        )) "OmitAbsent" "Primary selected endpoint; absent for endpoint-less services.")
+        )) "Primary selected endpoint; absent for endpoint-less services.")
       ]
     )
     (record (output "run-node") "NodeResult" main "private" [ "Debug" "Clone" ] "Owned" "NoDecoder"
@@ -212,7 +151,7 @@ in
           (required "nodeId" text "Flattened node identity.")
           (required "taskId" text "Declared leaf task identity.")
           (required "success" boolean "Native success classification.")
-          (optional "exitCode" i32 "Present" "Observed child code, or explicit null when unavailable.")
+          (optional "exitCode" i32 "Observed child code, or explicit null when unavailable.")
           (required "durationMs" u64 "Observed node duration in milliseconds.")
         ]
         ++ evidencePaths
@@ -229,14 +168,12 @@ in
           ref (output "run-service")
         )) "Selected service evidence in native order.")
         (required "tasks" (list (ref (output "run-task"))) "Completed task evidence in native order.")
-        (optional "task" (ref (
-          output "run-task"
-        )) "OmitAbsent" "Directly selected task evidence, when present.")
-        (optional "summaryPath" path "OmitAbsent" "Direct task summary path, when present.")
+        (omitted "task" (ref (output "run-task")) "Directly selected task evidence, when present.")
+        (omitted "summaryPath" path "Direct task summary path, when present.")
         (omitEmpty "nodes" (list (
           ref (output "run-node")
         )) "Flattened node outcomes; empty list is omitted without a decoder default.")
-        (optional "runSummaryPath" path "OmitAbsent" "Aggregate run summary path, when written.")
+        (omitted "runSummaryPath" path "Aggregate run summary path, when written.")
       ]
     )
     (record (output "run-summary-json") "RunSummaryOutput" main "private" [ ] "Borrowed" "NoDecoder"
@@ -259,9 +196,7 @@ in
             "Flattened step path or direct leaf id; repeated leaf invocations retain distinct evidence."
           )
           (required "processKey" text "Registry process evidence key.")
-          (optional "exitCode" i32 "Present"
-            "Missing or null means absence; serialization always emits the member."
-          )
+          (optional "exitCode" i32 "Missing or null means absence; serialization always emits the member.")
           (required "timedOut" boolean "Native timeout observation.")
           (required "canceled" boolean "Native cancellation observation.")
           (required "success" boolean "Native exit-policy success classification.")
@@ -289,14 +224,12 @@ in
       [
         (required "processKey" text "Registry process key.")
         (required "runId" text "Owning run id.")
-        (optional "serviceInstanceId" text "Present"
-          "Service instance identity or explicit null for task processes."
-        )
+        (optional "serviceInstanceId" text "Service instance identity or explicit null for task processes.")
         (required "pid" u32 "Observed process id.")
         (required "pgid" i32 "Observed signed process-group id.")
         (required "registryStatus" text "Native registry status string.")
         (required "reconciledStatus" text "Native reconciled status string.")
-        (optional "serviceLifetime" text "Present" "Native service lifetime spelling or explicit null.")
+        (optional "serviceLifetime" text "Native service lifetime spelling or explicit null.")
         (required "borrowerCount" i64 "Signed count read through native SQLite handling.")
         (required "live" boolean "Native host liveness observation.")
       ]
@@ -330,8 +263,8 @@ in
               ref (output "runtime-error-cause")
             )) "Native ordered non-recursive causes; empty list omitted."
           ))
-          (optional "modelPath" path "Present" "Associated model path or explicit null.")
-          (optional "computedModelHash" text "Present" "Associated computed hash or explicit null.")
+          (optional "modelPath" path "Associated model path or explicit null.")
+          (optional "computedModelHash" text "Associated computed hash or explicit null.")
         ]
       )
     )
@@ -379,9 +312,9 @@ in
         (required "reason" (enum "enum PortConflictReason") "Native choice of the proven conflict fact.")
         (required "projectId" text "Requesting project identity.")
         (required "endpoint" (ref (output "port-conflict-endpoint")) "Nested borrowed endpoint view.")
-        (optional "nixfiedOwner" (ref (
+        (omitted "nixfiedOwner" (ref (
           output "nixfied-owner"
-        )) "OmitAbsent" "Present only when native ownership proof identifies a Nixfied owner.")
+        )) "Present only when native ownership proof identifies a Nixfied owner.")
       ]
     )
     (record (output "nixfied-owner") "NixfiedOwner" process "private" [ "Debug" ] "Owned" "NoDecoder"

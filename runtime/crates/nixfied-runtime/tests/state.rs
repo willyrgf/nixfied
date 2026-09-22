@@ -1,8 +1,9 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, PersistencePolicy, SourceMode};
+use nixfied_model::{CleanupPolicy, Model, PersistencePolicy};
+use nixfied_runtime::ErrorCode;
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
@@ -11,7 +12,6 @@ use nixfied_runtime::state::{
     clean_marked_state, commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
     evaluate_slot_marker, inspect_cleanup_target, materialize_run_roots,
 };
-use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
 
 mod common;
@@ -90,7 +90,7 @@ fn slot_one_marker_records_selected_identity() {
     let mut value = fixture_model();
     add_slot_one(&mut value, 23180, 23190);
     let model: Model = serde_json::from_value(value).expect("model should parse");
-    let admission = admission(&model, &tmp.path);
+    let admission = synthetic_admission(&model, &tmp.path);
     let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
     let layout = derive_host_placement_for_slot(&model, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
@@ -933,7 +933,7 @@ impl StateFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
         let model = model();
-        let admission = admission(&model, &tmp.path);
+        let admission = synthetic_admission(&model, &tmp.path);
         let layout =
             derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
@@ -958,37 +958,6 @@ impl StateFixture {
             ),
         )
         .expect("registry should open")
-    }
-}
-
-fn admission(model: &Model, source_root: &Path) -> Admission {
-    Admission {
-        model_path: PathBuf::from("/nix/store/test-model/model.json"),
-        computed_model_hash: "computed-hash".to_string(),
-        raw_len: 100,
-        project_id: model.project.project_id.clone(),
-        runtime_abi: model.runtime_abi.clone(),
-        toolchain_id: model.toolchain_id.clone(),
-        target_system: model.target.system.clone(),
-        source: Some(admitted_source(source_root)),
-        generator_json: serde_json::to_string(&model.generator).unwrap(),
-        target_json: serde_json::to_string(&model.target).unwrap(),
-        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
-        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
-    }
-}
-
-fn admitted_source(source_root: &Path) -> AdmittedSource {
-    AdmittedSource {
-        codebase_id: "main".to_string(),
-        logical_root: ".".to_string(),
-        observed_root: source_root
-            .canonicalize()
-            .expect("source root should canonicalize"),
-        source_mode: SourceMode::LiveWorkspace,
-        source_identity: "live".to_string(),
-        dirty_policy: DirtyPolicy::Warn,
-        admission_fingerprint_policy: "live-fingerprint".to_string(),
     }
 }
 

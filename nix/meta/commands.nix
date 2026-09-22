@@ -13,6 +13,7 @@ let
     inherit value;
   };
   argument = id: token: valueDomain: initialValue: help: {
+    binding = "Command";
     inherit
       id
       token
@@ -30,19 +31,28 @@ let
     kind = "Hidden";
     inherit explanation;
   };
-  model = argument "model" "--model" (domain "Path") absent (
-    hidden "Framework-supplied compiled model path; native admission requires a model and checks its origin."
+  shared = arg: arg // { binding = "Shared"; };
+  model = shared (
+    argument "model" "--model" (domain "Path") absent (
+      hidden "Framework-supplied compiled model path; native admission requires a model and checks its origin."
+    )
   );
-  allow = argument "allowNonStoreModel" "--allow-non-store-model" (domain "Flag") (literal false) (
-    hidden "Test-only origin-policy escape hatch; generated apps do not supply it."
+  allow = shared (
+    argument "allowNonStoreModel" "--allow-non-store-model" (domain "Flag") (literal false) (
+      hidden "Test-only origin-policy escape hatch; generated apps do not supply it."
+    )
   );
-  state = argument "stateBase" "--state-base" (domain "Path") absent (
-    hidden "Explicit host state base; native environment precedence applies when absent."
+  state = shared (
+    argument "stateBase" "--state-base" (domain "Path") absent (
+      hidden "Explicit host state base; native environment precedence applies when absent."
+    )
   );
-  slot = argument "slot" "--slot" {
-    kind = "Unsigned";
-    bits = 32;
-  } absent (visible "Select a declared project slot" "<number>");
+  slot = shared (
+    argument "slot" "--slot" {
+      kind = "Unsigned";
+      bits = 32;
+    } absent (visible "Select a declared project slot" "<number>")
+  );
   timeout =
     text:
     argument "timeoutMs" "--timeout-ms" {
