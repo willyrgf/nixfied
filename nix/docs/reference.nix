@@ -94,13 +94,17 @@ let
           (
             state: line:
             let
-              fence = builtins.match " *(`{3,}|~{3,})(.*)" line;
+              # Four-space indentation is code, not an opening/closing fence.
+              fence = builtins.match " {0,3}(`{3,}|~{3,})(.*)" line;
               marker = if fence == null then null else builtins.elemAt fence 0;
+              tail = if fence == null then "" else builtins.elemAt fence 1;
+              opens =
+                state.fence == null && marker != null && (lib.hasPrefix "~" marker || !(lib.hasInfix "`" tail));
               closes =
                 state.fence != null
                 && marker != null
                 && lib.hasPrefix state.fence marker
-                && builtins.match " *" (builtins.elemAt fence 1) != null;
+                && builtins.match "[ \t]*" tail != null;
               header =
                 if state.fence == null && marker == null then builtins.match "(#{1,6}) +(.+)" line else null;
               selected = header != null && line == heading;
@@ -111,7 +115,7 @@ let
               fence =
                 if closes then
                   null
-                else if state.fence == null then
+                else if opens then
                   marker
                 else
                   state.fence;
