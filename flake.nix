@@ -750,6 +750,7 @@
               pkgs.mkShell {
                 packages = [
                   (import ./nix/toolchain.nix { inherit pkgs; }).dev
+                  (import ./nix/meta/regenerate.nix { inherit pkgs; })
                   pkgs.sqlite
                   pkgs.nix
                   pkgs.git
