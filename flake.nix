@@ -674,6 +674,17 @@
             { topic = "development"; }
             (program "ci")
           )
+          (app "regenerate" "Regenerate Nixfied's checked-in Rust declarations"
+            "Builds declarations with the pinned formatter and writes generated Rust in the Nixfied checkout."
+            {
+              topic = "development";
+              usage = "nix run .#regenerate";
+            }
+            {
+              type = "app";
+              program = "${import ./nix/meta/regenerate.nix { inherit pkgs; }}/bin/nixfied-regenerate";
+            }
+          )
         ];
 
       checkDeclarations =
@@ -750,7 +761,6 @@
               pkgs.mkShell {
                 packages = [
                   (import ./nix/toolchain.nix { inherit pkgs; }).dev
-                  (import ./nix/meta/regenerate.nix { inherit pkgs; })
                   pkgs.sqlite
                   pkgs.nix
                   pkgs.git

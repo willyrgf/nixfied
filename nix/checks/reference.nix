@@ -68,6 +68,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
   printf '%s\n' library/compileModel library/projectApps library/seq > expected.txt
   diff -u expected.txt functions.txt
   "$docs" api app project/docs | grep -Fq 'no model admission'
+  "$docs" api app root/regenerate | grep -Fq 'nix run .#regenerate'
   "$docs" api package check/rust-workspace | grep -Fq 'Clippy'
   "$docs" api error > errors.txt
   test "$(wc -l < errors.txt)" -eq 27
@@ -115,6 +116,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
   reject topic state extra
   reject api missing
   reject api function root/compileModel
+  reject api app project/regenerate
   reject api function library/compileModel extra
   reject source extra
   reject --help extra

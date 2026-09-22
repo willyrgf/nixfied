@@ -108,12 +108,12 @@ loopback, graph, admission and execution rules remain in their existing owners.
 Regenerate checked-in Rust after changing the shared structure or inventory:
 
 ```sh
-nix develop --command nixfied-regenerate
+nix run .#regenerate
 ```
 
-The development shell supplies this Nix-packaged application. Its generated-file
-input uses the locked Nix inputs and pinned rustfmt; run it from the repository
-root. Shell orchestration lives in Nix-packaged applications with declared tools,
+This app is published only by the Nixfied flake, not by adopter `projectApps`.
+Its generated-file input uses the locked Nix inputs and pinned rustfmt; run it
+from the Nixfied repository root. Shell orchestration lives in Nix-packaged applications with declared tools,
 not standalone shell files. Ordinary Cargo and package builds compile checked-in
 generated files without regeneration or an
 overlay. They do not prove freshness; the `rust-workspace` check does. The Nix
@@ -300,7 +300,7 @@ parsers retain input collection, entry routing, acquisition, repetition, errors
 and all effects. Generated app wrappers consume the same tokens.
 
 `generated-files.nix` routes structure and syntax fragments to existing native
-include scopes. `nix develop --command nixfied-regenerate` formats them with the
+include scopes. `nix run .#regenerate` formats them with the
 pinned toolchain. Product builds compile checked-in files; the source
 check compares freshly rendered files for both runtime and CLI. Its synthetic
 structural fixture supplies its own file map to the same formatting step.
