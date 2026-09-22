@@ -329,11 +329,45 @@ acceptance evidence for later changes.
 
 `nix/meta/declarations.nix` contains ordinary shared value/field constructors.
 Fields select coherent presence alternatives; the checker derives decoder and
-Rust emission facts. Nix producer policy is required only on Nix-produced records.
+Rust emission facts:
+
+| Presence | Decoder meaning | Rust emission |
+| --- | --- | --- |
+| Required | Member required | Present |
+| Optional | Missing or null means absence | Present, including null |
+| OptionalOmitted | Missing or null means absence | Omit absence |
+| Empty | Missing means empty collection | Present |
+| EmptyOmitted | Missing means empty collection | Omit empty |
+| EnumDefault(member) | Missing means the named inventory member | Present |
+| OmitEmpty | Serialization-only collection; no decoder | Omit empty |
+
 Defaults are limited to empty collections and explicit enum members. Empty defaults
 use native Default; the enum wire default remains independent of convenience
 Default. There is no recursive decoder-default interpreter or runtime JSON parsing
-of defaults. Required OpenJson still rejects a missing member and accepts null.
+of defaults. Arbitrary literal/record defaults and required-nullable fields are
+unsupported. Required OpenJson rejects a missing member and accepts null.
+
+Records declare producer ownership (`Nix` or `None`); only Nix-produced fields
+carry a Nix policy. `RequiredPresent` requires and emits an input even when the
+decoder has a default. `RequiredOmitAbsent` requires an optional input and omits
+null; `RequiredOmitEmpty` requires a collection and omits empties.
+`PreserveSupplied` permits missing input only when decoding accepts omission,
+and retains explicitly supplied values, including empties. Outer constructors
+accept pre-emission values; nested record values must already obey their Nix
+emission policies. Neither boundary reconstructs or defaults a child record.
+
+Record identities are either `Inventory(coordinate)` or `Local(name)`. Local
+identities cannot evade existing inventory coverage. References and generated
+names must resolve without collisions; recursive structural record graphs are
+unsupported. Model decoders reject unknown fields; output records have no
+decoder unless an actual consumer needs one, with its explicit unknown-field
+policy retained.
+
+The raw option audit uses native `option.loc` and `type.getSubOptions`, including
+keyed mounts, before documentation filtering. Framework options cannot hide
+behind visibility settings; native `_module` exclusions remain explicit.
+Metadata inspection preserves lazy defaults, examples, configured values and
+bindings. Nixpkgs still owns option-documentation normalization.
 
 Shared command arguments retain one token/type/default binding across native
 consumers. The checked symbol names also drive collision checks and projection.

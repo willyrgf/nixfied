@@ -5,8 +5,8 @@ the normative [contract](CONTRACT.md) or authorize an implementation.
 
 ## Incomplete semantic parity validation between framework and runtime
 
-**Status:** open; broader runtime-consumption enforcement is deferred beyond
-the [contract meta-framework RFC](../RFC_EXPOSE_ADOPTER_FACING_API.md).
+**Status:** open; broader runtime-consumption enforcement is separate from the
+delivered authoring reference and shared structural declarations.
 
 ### Gap
 
@@ -40,17 +40,18 @@ Parity does not require identical Nix and Rust representations.
 
 ### Concrete evidence
 
-The `stateRefs` description in
-[primitives.nix](../nix/modules/primitives.nix) claims participation in service
-identity. The runtime's
-[identity calculation](../runtime/crates/nixfied-runtime/src/service/identity.rs)
-excludes it, and execution lowering discards it. The field remains serialized
-model data, so changing it changes the raw model hash without changing service
-reuse identity through that field.
+The former `stateRefs` description incorrectly claimed participation in service
+identity. [primitives.nix](../nix/modules/primitives.nix) and the
+[state guide](GUIDE.md#services-slots-and-state) now explain its actual role:
+execution lowering discards it, while it remains serialized model data.
+The `descriptive_refs_change_model_bytes_but_not_service_reuse_identity` test in
+[execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
+independently proves changed model bytes with unchanged service reuse identity.
 
-This demonstrates disagreement between the explanation and implementation.
-It does not establish that the runtime should start using `stateRefs`: correcting
-the description, changing behavior, and removing the field are distinct decisions.
+That specific documentation defect is resolved. It illustrates why shared
+structural declarations alone cannot establish complete behavioral parity.
+Correcting an explanation, changing behavior and removing a field remain
+distinct decisions.
 
 ### Ownership and follow-up evidence
 
@@ -78,3 +79,34 @@ this gap does not prescribe a runtime interpreter or per-field tracking system.
 Correct inaccurate explanations independently of that broader work. Changes to
 model fields, identity, or runtime behavior follow the existing atomic contract
 procedure and verification guidance in [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## Separately scoped review candidates
+
+These were explicitly outside the completed reference delivery. They are not
+merge blockers or approved implementation assignments:
+
+- **Descriptive refs:** consider removing service `stateRefs`/`logRefs` and task
+  `artifactRefs`/`logRefs`/`summaryRefs`. They remain model/ABI data despite their
+  execution non-effects; removal requires an atomic contract change.
+- **State policies:** review possible consolidation of `cleanupPolicy` and
+  `persistence`. Similar cleanup permissions do not establish equivalent service
+  identity, marker matching, adoption or existing-state behavior.
+- **Placeholder typos:** define reserved grammar and literal child-program syntax
+  before considering rejection of unknown `${...}` forms.
+- **Declaration diagnostics:** consider naming offending references and legal
+  alternatives more precisely; diagnostics do not replace discovery.
+- **Adapter catalog:** consider a derived view of adapter defaults, clearly
+  distinguished from supported module overrides and native wrapper conventions.
+
+Each candidate needs its own invariant, owner, rejection boundary and proof.
+Do not bundle unrelated changes merely to share an ABI rotation.
+
+## PostgreSQL lifecycle test reliability
+
+One integration run timed out after 90 seconds waiting for PostgreSQL startup.
+The focused test and full CI then passed on the unchanged tree. The cause remains
+unestablished; the retries do not prove an environmental cause or a runtime fix.
+If it recurs, retain startup diagnostics when investigating
+`interrupt_and_recover_adopts_orphaned_postgres` in
+[lifecycle.rs](../runtime/crates/nixfied-runtime/tests/lifecycle.rs). This isolated
+observation is separate from the completed reference feature.
