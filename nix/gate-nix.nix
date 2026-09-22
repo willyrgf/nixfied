@@ -95,18 +95,158 @@ pkgs.writeShellApplication {
     printf '  framework_help: %ds\n' "$((SECONDS - t0))" >&2
 
     framework_reference() {
-      ${builtins.readFile ./checks/reference-sources.sh}
+      # Gate-only fixtures copy the current supplying source, never historical work.
+local work source current_system variant project expected_source executable
+work=$(mktemp -d)
+source=$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)
+current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+for variant in one two; do
+  cp -R "$source" "$work/framework-$variant"
+  chmod -R u+w "$work/framework-$variant"
+  printf '\nRevision binding fixture: source-%s\n' "$variant" >> "$work/framework-$variant/docs/GUIDE.md"
+  project="$work/project-$variant"
+  mkdir "$project"
+  cat > "$project/flake.nix" <<FIXTURE
+{
+  inputs.nixfied.url = "path:$work/framework-$variant";
+  outputs = { nixfied, ... }: {
+    apps.$current_system = nixfied.lib.$current_system.projectApps ./nixfied.nix;
+    supplyingSource = nixfied.outPath;
+  };
+}
+FIXTURE
+  cat > "$project/nixfied.nix" <<'MODULE'
+{ ... }: {
+  nixfied.project.projectId = throw "docs forced invalid project identity";
+  nixfied.project.name = throw "docs forced invalid project name";
+  nixfied.closures.unused.package = throw "docs forced project executable";
+  nixfied.surface.verbs = { };
+}
+MODULE
+  nix flake lock "$project" >&2 || fail 'reference: downstream lock failed'
+  expected_source=$(nix eval --raw "$project#supplyingSource")
+  executable=$(nix eval --raw "$project#apps.$current_system.docs.program")
+  nix run --no-write-lock-file "$project#docs" -- topic authoring > "$work/topic-$variant"
+  grep -Fq "Revision binding fixture: source-$variant" "$work/topic-$variant" \
+    || fail 'reference: downstream content did not follow its pin'
+  nix run --no-write-lock-file "$project#docs" -- source > "$work/source-$variant"
+  grep -Fxq "path: $expected_source" "$work/source-$variant" \
+    || fail 'reference: provenance did not match the supplying input'
+  if grep -Eq '^revision:' "$work/source-$variant"; then
+    fail 'reference: a path source claimed a committed revision'
+  fi
+  # Invoke the already realised executable from another project: no current
+  # directory, Nix registry or runtime state lookup may redirect its content.
+  (cd "$work"; NIXFIED_STATE_DIR="$work/no-state" "$executable" source) > "$work/direct-$variant"
+  cmp "$work/source-$variant" "$work/direct-$variant" \
+    || fail 'reference: realised docs changed source with its caller'
+  test ! -e "$work/no-state" || fail 'reference: docs materialised runtime state'
+  # Help retains its native final-app evaluation boundary. Supply valid model
+  # metadata for that separate discovery proof after the poisoned docs queries.
+  cat > "$project/nixfied.nix" <<'MODULE'
+{ adapters, ... }: {
+  imports = [ adapters.synthetic ];
+  nixfied.project.projectId = "reference-fixture";
+  nixfied.project.name = "Reference fixture";
+}
+MODULE
+  (cd "$project"; nix run --no-write-lock-file .#help) > "$work/help-$variant"
+  grep -Eq '^  docs +' "$work/help-$variant" || fail 'reference: project help omitted docs'
+done
+if cmp -s "$work/source-one" "$work/source-two"; then
+  fail 'reference: distinct supplying sources produced identical provenance'
+fi
+rm -rf "$work"
     }
     t0=$SECONDS
     echo "  framework reference (pinned sources, invalid project, no runtime dependency)" >&2
     framework_reference
     runtime_sources() {
-      ${builtins.readFile ./checks/runtime-sources.sh}
+      # Executable source-identity matrix. Only current checkout files are copied.
+local work source variant product
+work=$(mktemp -d)
+source=$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)
+cat > "$work/identity.nix" <<'NIX'
+{ framework, variant }:
+let
+  flake = builtins.getFlake ("path:" + framework);
+  pkgs = import flake.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ flake.inputs.rust-overlay.overlays.default ];
+  };
+  product = package:
+    let built = import (variant + "/nix/packages/runtime.nix") {
+      inherit pkgs package; source = builtins.toPath (variant + "/runtime");
+    };
+    in { source = built.src.drvPath; derivation = built.drvPath; };
+in builtins.listToAttrs (map (name: { inherit name; value = product name; })
+  [ "nixfied-cli" "nixfied-runtime" "nixfied-test-child" ])
+NIX
+for variant in baseline cli runtime model generated runtime-generated cli-generated child reference declaration; do
+  mkdir -p "$work/$variant"
+  cp -R "$source/." "$work/$variant/"
+  chmod -R u+w "$work/$variant"
+  case "$variant" in
+    cli) printf '\n// CLI source variation.\n' >> "$work/$variant/runtime/crates/nixfied-cli/src/main.rs" ;;
+    runtime) printf '\n// Runtime source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/main.rs" ;;
+    model) printf '\n// Native model source variation.\n' >> "$work/$variant/runtime/crates/nixfied-model/src/types.rs" ;;
+    generated) printf '\n// Generated model source variation.\n' >> "$work/$variant/runtime/crates/nixfied-model/src/generated/types.rs" ;;
+    runtime-generated) printf '\n// Generated output source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/generated/output.rs" ;;
+    cli-generated) printf '\n// Generated CLI source variation.\n' >> "$work/$variant/runtime/crates/nixfied-cli/src/generated/commands.rs" ;;
+    child) printf '\n// Test child source variation.\n' >> "$work/$variant/runtime/crates/nixfied-test-child/src/main.rs" ;;
+    reference) printf '\nReference variation\n' >> "$work/$variant/docs/GUIDE.md" ;;
+    declaration) printf '\n# Declaration variation\n' >> "$work/$variant/nix/meta/model.nix" ;;
+  esac
+  NIXFIED_MATRIX_EXPR="$work/identity.nix" NIXFIED_MATRIX_FRAMEWORK="$source" NIXFIED_MATRIX_VARIANT="$work/$variant" \
+    nix eval --impure --json --expr 'import (builtins.getEnv "NIXFIED_MATRIX_EXPR") {
+      framework = builtins.getEnv "NIXFIED_MATRIX_FRAMEWORK";
+      variant = builtins.getEnv "NIXFIED_MATRIX_VARIANT";
+    }'  > "$work/$variant.json" || fail 'source matrix evaluation failed'
+done
+for variant in cli runtime model generated runtime-generated cli-generated child reference declaration; do
+  for product in nixfied-cli nixfied-runtime nixfied-test-child; do
+    local changed=false
+    case "$variant:$product" in
+      cli:nixfied-cli|cli-generated:nixfied-cli|runtime:nixfied-runtime|model:nixfied-runtime|generated:nixfied-runtime|runtime-generated:nixfied-runtime|child:nixfied-test-child) changed=true ;;
+    esac
+    jq -en --arg product "$product" --argjson changed "$changed" \
+      --slurpfile baseline "$work/baseline.json" --slurpfile variant "$work/$variant.json" '
+        ($baseline[0][$product].source != $variant[0][$product].source) == $changed and
+        ($baseline[0][$product].derivation != $variant[0][$product].derivation) == $changed
+      ' >/dev/null || fail "source isolation: $variant affected the wrong product $product"
+  done
+done
+rm -rf "$work"
     }
     echo "  Rust product source variation matrix" >&2
     runtime_sources
     inventory_mutation() {
-      ${builtins.readFile ./checks/inventory-mutation.sh}
+      # Mutate the actual single authored inventory in an isolated current-source copy.
+local work source capability
+work=$(mktemp -d)
+source=$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)
+cp -R "$source/." "$work/"
+chmod -R u+w "$work"
+capability=$(<"$work/runtime/crates/nixfied-model/capability.txt")
+printf '%s\n' "''${capability/enum StdinPolicy: null inherit/enum StdinPolicy: null pipe}" \
+  > "$work/runtime/crates/nixfied-model/capability.txt"
+NIXFIED_MUTATION_SOURCE="$work" nix build --impure --no-link --expr '
+  let
+    root = builtins.getEnv "NIXFIED_MUTATION_SOURCE";
+    f = builtins.getFlake ("path:" + root);
+    pkgs = import f.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ f.inputs.rust-overlay.overlays.default ];
+    };
+  in import (root + "/nix/checks/inventory-mutation.nix") { inherit pkgs; }
+' || fail 'inventory mutation: Nix/Rust projection failed'
+nix run --no-write-lock-file "path:$work#docs" -- option 'nixfied.tasks.<name>.invocation.stdin' > "$work/option.txt"
+grep -Fq '"pipe"' "$work/option.txt" || fail 'inventory mutation: native option reference did not change'
+if grep -Fq '"inherit"' "$work/option.txt"; then fail 'inventory mutation: stale native enum members'; fi
+nix run --no-write-lock-file "path:$work#docs" -- api record primitive/Invocation > "$work/record.txt"
+grep -Fq 'enum StdinPolicy: null, pipe' "$work/record.txt" || fail 'inventory mutation: record reference did not change'
+if grep -Fq 'enum StdinPolicy: null, inherit' "$work/record.txt"; then fail 'inventory mutation: stale record members'; fi
+rm -rf "$work"
     }
     echo "  Shared inventory mutation (Nix, Rust, reference)" >&2
     inventory_mutation
