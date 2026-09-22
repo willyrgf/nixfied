@@ -1,4 +1,4 @@
-# Run from the repository root through the pinned development shell.
+# Framework-only app; run from the Nixfied repository root.
 { pkgs }:
 let
   generated = import ./generated.nix { inherit pkgs; };
@@ -12,7 +12,7 @@ pkgs.writeShellApplication {
   inheritPath = false;
   text = ''
     if [[ $# != 0 || ! -f runtime/Cargo.toml || ! -d nix/meta ]]; then
-      echo 'Run nix develop --command nixfied-regenerate from the repository root, without arguments.' >&2
+      echo 'Run nix run .#regenerate from the Nixfied repository root, without arguments.' >&2
       exit 2
     fi
     generated=${generated}
