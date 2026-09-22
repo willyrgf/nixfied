@@ -64,6 +64,96 @@ let
   composed = docs.composeFragments fragmentSelections;
   rejectedFragments =
     fragments: !(builtins.tryEval (builtins.deepSeq (docs.composeFragments fragments) true)).success;
+  # Exercise provenance collisions through the complete serialization boundary.
+  # Either source alone is valid, so the combined rejection isolates basename identity.
+  rootReadme = {
+    file = ../../README.md;
+    heading = "# Nixfied";
+  };
+  downstreamReadme = {
+    file = ../../examples/downstream/README.md;
+    heading = "# Downstream Worked Example";
+  };
+  documentFixture =
+    fragments:
+    (import ../docs/reference.nix {
+      inherit lib pkgs system;
+      options = [ ];
+      publications = [ ];
+      syntax.commands = [ ];
+      structure = {
+        records = [ ];
+        vocabularies = [ ];
+        vocabularyMap.error-code.annotations = { };
+      };
+      topics.provenance = {
+        inherit fragments;
+        select = [ ];
+        related = [ ];
+      };
+      source = {
+        path = "document-provenance-fixture";
+        revision = null;
+      };
+    }).serialized;
+  fenceVectors = [
+    {
+      document = "## Selected\n    ```\n## Next\nexcluded";
+      expected = "## Selected\n    ```";
+    }
+    {
+      document = "## Selected\n    ~~~\n## Next\nexcluded";
+      expected = "## Selected\n    ~~~";
+    }
+    {
+      document = "## Selected\n```\n## Hidden\n```\n## Next\nexcluded";
+      expected = "## Selected\n```\n## Hidden\n```";
+    }
+    {
+      document = "## Selected\n ~~~\n## Hidden\n ~~~\n## Next\nexcluded";
+      expected = "## Selected\n ~~~\n## Hidden\n ~~~";
+    }
+    {
+      document = "## Selected\n  ```\n## Hidden\n  ```\n## Next\nexcluded";
+      expected = "## Selected\n  ```\n## Hidden\n  ```";
+    }
+    {
+      document = "## Selected\n   ~~~\n## Hidden\n   ~~~\n## Next\nexcluded";
+      expected = "## Selected\n   ~~~\n## Hidden\n   ~~~";
+    }
+    {
+      document = "## Selected\n```text\n## Hidden\n```\t\n## Next\nexcluded";
+      expected = "## Selected\n```text\n## Hidden\n```\t";
+    }
+    {
+      document = "## Selected\n~~~text\n## Hidden\n~~~ \t\n## Next\nexcluded";
+      expected = "## Selected\n~~~text\n## Hidden\n~~~ \t";
+    }
+    {
+      document = "## Selected\n```\n## Hidden\n````\n## Next\nexcluded";
+      expected = "## Selected\n```\n## Hidden\n````";
+    }
+    {
+      document = "## Selected\n~~~~\n~~~\n## Hidden\n~~~~\n## Next\nexcluded";
+      expected = "## Selected\n~~~~\n~~~\n## Hidden\n~~~~";
+    }
+    {
+      document = "## Selected\n```\n~~~\n## Hidden\n```\n## Next\nexcluded";
+      expected = "## Selected\n```\n~~~\n## Hidden\n```";
+    }
+    {
+      document = "## Selected\n```bad`info\n## Next\nexcluded";
+      expected = "## Selected\n```bad`info";
+    }
+    {
+      document = "## Selected\n~~~info`allowed\n## Hidden\n~~~\n## Next\nexcluded";
+      expected = "## Selected\n~~~info`allowed\n## Hidden\n~~~";
+    }
+    {
+      document = "## Selected\n```\n    ```\n## Hidden\n```\n## Next\nexcluded";
+      expected = "## Selected\n```\n    ```\n## Hidden\n```";
+    }
+  ];
   closure = pkgs.closureInfo {
     rootPaths = [
       docs
@@ -73,6 +163,23 @@ let
   };
 in
 assert import ./docs-navigation.nix { inherit lib; };
+# These literal results are the independent fence-boundary expectations.
+assert lib.all (
+  vector: docs.extractSection vector.document "## Selected" == vector.expected
+) fenceVectors;
+assert
+  (builtins.fromJSON (documentFixture [ rootReadme ])).documents."README.md"
+  == builtins.readFile rootReadme.file;
+assert
+  (builtins.fromJSON (documentFixture [ downstreamReadme ])).documents."README.md"
+  == builtins.readFile downstreamReadme.file;
+assert
+  !(builtins.tryEval (
+    builtins.deepSeq (documentFixture [
+      rootReadme
+      downstreamReadme
+    ]) true
+  )).success;
 assert
   docs.extractSection "# Title\n## Selected\nbody\n### Child\nchild\n```sh\n## Fake\n```\n~~~\n## Fake too\n~~~\n## Next\nexcluded" "## Selected"
   == "## Selected\nbody\n### Child\nchild\n```sh\n## Fake\n```\n~~~\n## Fake too\n~~~";
@@ -162,7 +269,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     if grep -Eq '^## (The problem|Shared contracts|Verification boundary)' runtime-topic.txt; then
       echo 'runtime topic leaked unrelated sections' >&2; exit 1
     fi
-    # Independent heading-boundary oracle for every shipped topic.
+    # Source-composition integration check; literal vectors above prove fence boundaries.
     ${pkgs.python3}/bin/python3 - "$docs" ${docs}/share/nixfied/reference/index.json <<'PYTHON'
   import json, re, subprocess, sys
   with open(sys.argv[2]) as source:
@@ -178,12 +285,13 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
           fence = None
           while end < len(lines):
               line = lines[end]
-              marker = re.match(r' *(`{3,}|~{3,})(.*)', line)
+              marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)$', line)
               if marker:
                   token, tail = marker.groups()
                   if fence is None:
-                      fence = token
-                  elif token.startswith(fence) and not tail.strip():
+                      if token[0] == '~' or '`' not in tail:
+                          fence = token
+                  elif token.startswith(fence) and re.fullmatch(r'[ \t]*', tail):
                       fence = None
               elif fence is None and re.match(r'#{1,' + str(level) + r'} ', line):
                   break
