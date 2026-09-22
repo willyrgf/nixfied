@@ -90,8 +90,11 @@ when the model/runtime contract changes.
   does not identify, place, create, lock, report, retain, or selectively clean
   cache artifacts. Child tools and projects own those concerns through ordinary
   invocation environment or arguments.
-- **VERB-1:** `help`, `docs`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
-  project-app names. `nixfied.surface.verbs` is an attrset mapping each
+- **VERB-1:** framework project-app names are reserved; their publication
+  declarations supply both validation and the reference inventory. Use
+  `nix run .#docs -- topic discovery` for the related apps and
+  `nix run .#docs -- api app` for exact publication names.
+  `nixfied.surface.verbs` is an attrset mapping each
   explicitly exported task id to its exact nonempty user-facing app
   description. Project verbs derive only from those task names; undeclared ids,
   reserved-name collisions, empty/non-string descriptions, and the former list
@@ -117,6 +120,14 @@ when the model/runtime contract changes.
   `bin/nixfied-docs` and `share/nixfied/reference/API.md`. Exact option/API queries,
   namespace listing, topic navigation and source provenance are read-only after
   realization: no Nix invocation, model admission, runtime or secret lookup.
+  Topic queries compose ordered, explicitly selected sections from their authored
+  documents, including each section's subsections, with concise entries from
+  their owning definitions and related references. Cross-document composition
+  preserves one authored source for each explanation.
+  Forward and reverse navigation derive from checked relationships; a reference
+  does not establish a behavioral prerequisite. Missing or ambiguous section
+  headings, unknown or wrong-kind reference targets, and invalid topic selectors
+  fail reference construction before packaging.
   Private lookup files are presentation data, not model artifacts. Outer flake
   evaluation still occurs; recovery from broken project evaluation uses that
   project's explicit supplying framework source, never an unpinned substitute.
@@ -207,9 +218,9 @@ when the model/runtime contract changes.
   documentation and candidate verification as skipped. This surface is Nix-only
   and does not enter `model.json`, `runtimeAbi`, or Rust runtime behavior.
 - `run` resolves its output projection as explicit `--output <mode>`, then the
-  selected root task's `defaultOutput`, then `summary`. The canonical modes are
-  `summary`, `json`, `both`, and `task-output`; the older mode-specific flags
-  are not accepted. `task-output` is valid only for exactly one directly
+  selected root task's `defaultOutput`, then `summary`. The canonical mode domain
+  is rendered by `nix run .#docs -- api command run`; the older mode-specific
+  flags are not accepted. `task-output` is valid only for exactly one directly
   selected leaf: stdout is the selected task's exact redacted captured stdout,
   while stderr contains runtime diagnostics and the exact redacted captured
   stderr. It emits no runtime JSON metadata to stdout. Callers must check the
@@ -227,10 +238,11 @@ when the model/runtime contract changes.
   lease release, aggregate summary, footer, or final error projection. Cleanup
   and finalization continue after a replay failure.
 - Runtime errors may carry a non-recursive `causes` array. Projection failures
-  use typed redaction-safe `details.projections` entries containing stream,
-  operation, kind, path, and committed byte count; captured bytes, secrets, and
-  raw OS messages are never serialized. Containment, registry, lease, and state
-  failures take precedence over `OUTPUT_PROJECTION_FAILED`, which takes
+  use typed redaction-safe `details.projections` entries, whose fields are
+  rendered by `nix run .#docs -- api record output-schema/runtime-error-projection`.
+  Captured bytes, secrets, and raw OS messages are never serialized.
+  Containment, registry, lease, and state failures take precedence over
+  `OUTPUT_PROJECTION_FAILED`, which takes
   precedence over task outcomes. Post-admission failures use lifecycle,
   registry, state, or selection codes; `MODEL_ADMISSION` is never a late phase
   projection.
@@ -243,18 +255,28 @@ when the model/runtime contract changes.
 
 ## Runtime error diagnostics
 
-`docs api error` lists the exact error vocabulary and recovery topics. Native
-constructors select the exit class; the command's native exit mapping produces
-statuses 12–38 for these failures. Neither the record declarations nor the error
-reference select failure precedence or retry behavior.
+Read an error's `code` to identify the failure, then its redacted `message` and
+`details` for the affected task, path, endpoint or ownership evidence. When
+`causes` is present, read those additional failures alongside the primary error;
+they are non-recursive diagnostics, not a sequence of recovery commands. Use
+`nix run .#docs -- api error <code>` for the code's meaning and related topic.
+The related topic explains the relevant ownership and operating constraints;
+it does not promise that retrying is safe or will succeed.
 
-Error `details` is open JSON and may be explicitly null. Fixed nested diagnostics
-have declared shapes: `taskRun` uses `run-task`, `projections` uses
-`runtime-error-projection`, and `portConflict` contains its endpoint and optional
-proven Nixfied owner. `expectedRegistryIdentity` and `foundRegistryIdentity` share
-the five-field registry identity diagnostic; observed slot values stay signed,
-including negative corrupt values. Replay diagnostic paths deliberately use
-lossy display strings. Task, model and cleanup paths retain native path
+`nix run .#docs -- api error` lists the exact error vocabulary. Native constructors
+select the exit class; the command's native exit mapping produces statuses 12–38
+for these failures. Neither the record declarations nor the error reference
+select failure precedence or retry behavior.
+
+Error `details` is open JSON and may be explicitly null. Fixed nested diagnostic
+shapes have separate structural definitions.
+Native producers place task evidence under `taskRun`, projection issues under
+`projections`, and verified endpoint/owner evidence under `portConflict`.
+`expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
+rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
+observed slot values stay signed, including negative corrupt values.
+Replay diagnostic paths deliberately use lossy display strings. Task, model and
+cleanup paths retain native path
 serialization and its failure behavior.
 
 Other detail keys are native producer facts, not a closed record or an executable
@@ -305,8 +327,9 @@ A contract change must be explicit and atomic:
 
 ## Native command parsing
 
-The five runtime commands (`check`, `run`, `ps`, `down`, `clean`), installer and
-upgrade share checked syntax declarations. `docs api command <name>` lists each
+Runtime, installer and upgrade commands share checked syntax declarations.
+`nix run .#docs -- api command` lists the declared commands;
+`nix run .#docs -- api command <name>` lists each
 argument's domain, initial value and visibility. Native parsers own acquisition,
 repetition, errors and effects; declarations do not implement parsing policy.
 

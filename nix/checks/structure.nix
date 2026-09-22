@@ -13,9 +13,12 @@ let
       bundle
       // {
         inherit inventory;
-        recoveryTopics = builtins.attrNames (import ../docs/topics.nix);
+        contextTopics = builtins.attrNames (import ../docs/topics.nix);
       }
     );
+  errorAnnotationInventory =
+    (builtins.head (builtins.filter (v: v.coordinate == "error-code") outputs.vocabularies))
+    .annotations;
   checked = check model;
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
   changeRecord =
@@ -487,12 +490,31 @@ let
           )
           [
             { }
-            {
-              TASK_FAILED = {
-                description = "Known";
-                recoveryTopic = "missing";
-              };
-            }
+            (
+              errorAnnotationInventory
+              // {
+                TASK_FAILED = errorAnnotationInventory.TASK_FAILED // {
+                  contextTopic = "missing";
+                };
+              }
+            )
+            # The old private field is neither accepted nor silently ignored.
+            (
+              errorAnnotationInventory
+              // {
+                TASK_FAILED = builtins.removeAttrs errorAnnotationInventory.TASK_FAILED [ "contextTopic" ] // {
+                  recoveryTopic = "tasks";
+                };
+              }
+            )
+            (
+              errorAnnotationInventory
+              // {
+                TASK_FAILED = errorAnnotationInventory.TASK_FAILED // {
+                  recoveryTopic = "tasks";
+                };
+              }
+            )
           ];
       expected = true;
     };

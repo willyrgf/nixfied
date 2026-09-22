@@ -17,8 +17,9 @@ nix run github:willyrgf/nixfied#install -- \
   --name "My Project"
 ```
 
-Use `--root PATH` to target another directory and `--nixfied-url URL` to choose
-a different input pin. The installer creates `flake.nix` and `nixfied.nix` only
+For installer arguments and defaults, use
+`nix run github:willyrgf/nixfied#docs -- api command install`.
+The installer creates `flake.nix` and `nixfied.nix` only
 when they do not already exist. If `flake.nix` exists, it changes nothing and
 prints the exact integration fragment to merge manually. It never overwrites an
 existing `nixfied.nix`.
@@ -62,9 +63,9 @@ Outside a Git worktree, only `nix flake lock` is required.
 The installer and generated apps intentionally use different framework
 products. `.#install` contains only the dependency-free `nixfied-cli`, so
 scaffolding does not build or retain the process runtime. Once the project is
-locked, generated `run`, `model-check`, `ps`, `down`, `clean`, and exported task
-apps reference the release `nixfied-runtime`. The debug runtime and test child
-remain private to Nixfied's own checks and gates.
+locked, runtime-backed project apps reference the release `nixfied-runtime`.
+Use `nix run .#docs -- api app project/run` for an app and its command
+relationships. The debug runtime and test child remain private to Nixfied's own checks and gates.
 
 If the adopting flake already has a compatible `nixpkgs` input, it may opt into
 input convergence explicitly:
@@ -79,12 +80,17 @@ inputs.nixfied = {
 Test this follows relationship against the project's pinned Nixfied revision;
 the package expressions still require a compatible nixpkgs package set.
 
-`compileModel` evaluates, validates, derives, and emits the model package.
-`projectApps` returns the framework discovery/control apps plus the task verbs
-explicitly mapped in `nixfied.surface.verbs`. That option is an attrset from
-task id to the exact nonempty description for its generated app; descriptions are
-Nix-only app metadata and do not enter the model. `projectApps` accepts only the
-project-local, root-level `./nixfied.nix` form shown above in a flake with
+Read the function inputs/results and exported-verb declaration from their
+owning definitions:
+
+```sh
+nix run .#docs -- api function library/compileModel
+nix run .#docs -- api function library/projectApps
+nix run .#docs -- option nixfied.surface.verbs
+```
+
+Verb descriptions are Nix-only app metadata and do not enter the model.
+`projectApps` accepts only the project-local, root-level `./nixfied.nix` form shown above in a flake with
 `flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
 sourced modules are unsupported so help can bind its catalog to the defining
 source.
@@ -148,6 +154,9 @@ nix run .#docs -- source
 
 `docs --help` shows the full query interface. Option lookup is exact, including
 literal `<name>` segments; namespace listing matches whole path segments.
+Topic lookup combines selected authored sections with related definitions and
+commands for further reference queries. For example, `docs topic runtime` explains runtime
+responsibilities, admission, execution, lifecycle, state ownership and cleanup.
 Unknown names and empty queries fail with guidance. The realised command reads
 static content without a browser, pager, network, model admission or runtime
 state. It reports the supplying source path and revision when available;
@@ -176,9 +185,9 @@ only semantic input to the runtime.
 
 ## Author `nixfied.nix`
 
-A declaration is a Nix module. The common arguments are `pkgs`, `adapters`, and
-`nixfiedLib`. This example combines a packaged API, the Postgres adapter, leaf
-tasks, and one exported composite:
+A declaration is a Nix module. Use `nix run .#docs -- api argument` to discover
+the framework-supplied module arguments. This example combines a packaged API,
+the Postgres adapter, leaf tasks, and one exported composite:
 
 ```nix
 { pkgs, adapters, ... }:
@@ -257,10 +266,9 @@ The main rules are:
   Service `connectsTo` declarations order transitive dependencies and make
   their named endpoints addressable. Composite service requirements are
   derived from their leaves.
-- A leaf's `exitPolicy.successCodes` is a nonempty, duplicate-free list that
-  classifies child exit codes as task success; it defaults to `[ 0 ]`. The raw
-  child code remains in task evidence, but is not passed through as the `nix run`
-  status. An accepted code contributes success to the overall run, while any
+- A leaf's `exitPolicy.successCodes` classifies child exit codes as task
+  success. The raw child code remains in task evidence, but is not passed through
+  as the `nix run` status. An accepted code contributes success to the overall run, while any
   other code produces `TASK_FAILED`.
 - Importing an adapter contributes ordinary service and task definitions. It
   starts nothing until a selected leaf requires one of those services.
@@ -273,6 +281,8 @@ The main rules are:
   them through ordinary invocation arguments or `env`; Nixfied does not place,
   lock, report, retain, or clean them.
 
+Read the accepted values and default with
+`nix run .#docs -- option 'nixfied.tasks.<name>.exitPolicy.successCodes'`.
 For example, a tool whose exit codes `0` and `1` are both successful can declare:
 
 ```nix
@@ -283,12 +293,14 @@ If `inspect` exits `1`, Nixfied records that raw code but treats the task as
 successful; the overall command therefore returns success unless another task,
 lifecycle operation, or runtime phase fails.
 
-The source defaults to the live workspace. `logicalRoot`, `sourceMode`,
-`sourceIdentity`, and `dirtyPolicy` define whether invocations observe that
-workspace or an immutable snapshot/flake input. In live-workspace mode, invoke
-the apps from the intended project root; source resolution starts at the
-invocation root. See [OPTIONS.md](OPTIONS.md) for the exact option types,
-defaults, lifecycle fields, probe forms, endpoint forms, and validation
+Invocations observe the live workspace by default, so invoke the apps from the
+intended project root: source resolution starts at the invocation root.
+Source policy can instead select an immutable snapshot or flake input. Read
+`nix run .#docs -- topic context` for source resolution and child environment
+behavior. Inspect the declarations with
+`nix run .#docs -- options nixfied.codebases.main`, and use `option` with an exact
+path for its type and default. See [OPTIONS.md](OPTIONS.md) for the exact option
+types, defaults, lifecycle fields, probe forms, endpoint forms, and validation
 vocabulary.
 
 After a declaration change, compile and admit it before running a workflow:
@@ -311,10 +323,20 @@ the leaf or flattened composite DAG. Selecting a leaf directly does not run
 steps that happen to precede it in some composite; select the composite when
 those dependencies are part of the intended workflow.
 
-Pass runtime flags after Nix's `--` separator. `run` and exported verbs accept
-`--slot`, `--timeout-ms`, and `--output <mode>`. `model-check` and `ps` accept
-`--slot`; `down` also accepts `--timeout-ms`; `clean` accepts `--purge`. Use the
-app's `--help` as the exact flag reference.
+Pass runtime flags after Nix's `--` separator. Use the app's `--help` for its
+flags, or read command arguments, defaults and related records together:
+
+```sh
+nix run .#docs -- topic commands
+nix run .#docs -- api command run
+```
+
+### Choose output
+
+For an interactive run, use `summary` to follow progress and find the evidence
+paths. For automation that consumes the runtime's structured result, use
+`--output json`; use `--output both` when you also want the human projection.
+When a caller needs the selected leaf program's own output, use `task-output`.
 
 The default run projection is `summary`: it writes human progress, the result
 summary, and evidence paths to stderr while leaving stdout empty. A task may
@@ -336,8 +358,10 @@ stdout to stdout and its exact captured stderr among runtime diagnostics on
 stderr. It preserves binary bytes and missing final newlines, and replays on
 success, task failure, timeout, and cancellation. Check the command status
 before treating stdout as a valid result; a child exit accepted by
-`exitPolicy.successCodes` still returns success. Composite selections and
-metadata output modes are rejected before runtime state or child side effects.
+`exitPolicy.successCodes` still returns success. Requesting `task-output` for a
+composite is rejected before runtime state or child side effects. Use `summary`,
+`json`, or `both` when you need runtime results rather than the selected leaf's
+captured bytes.
 There are no mode-specific flag aliases. There is no framework `logs`
 command: metadata modes report the evidence paths for inspection.
 
@@ -394,10 +418,34 @@ requires `clean --purge`; purge relaxes only that policy gate, never the
 ownership, confinement, or live-process checks. Do not manually rewrite state
 markers or the registry.
 
+### Diagnose a state refusal
+
+Before retrying a state or cleanup failure, use the reported error and any
+evidence paths to answer these questions:
+
+- Which check failed: access to the state path, marker identity, registry
+  integrity, live lease/process ownership, or cleanup policy? A failure to read
+  evidence does not establish that the slot is idle or unowned.
+- Are the framework pin, project identity, slot, and state base the ones used
+  for the affected run? Keep that context consistent when using `ps`, `down`,
+  and `clean`. Use `docs topic context` to check how the state base is selected.
+- Does `ps` successfully establish the slot's current state? If inspection
+  fails, preserve its diagnostic and existing evidence; do not treat failure
+  as an empty process list or delete registry/marker files to proceed.
+- Is cleanup blocked only by the declared protected/persistent policy, or by
+  ownership, confinement, leases, or processes? `--purge` addresses only the
+  policy gate. Use `down` for owned processes; a failed ownership proof needs
+  investigation, not a broader deletion command.
+
+Keep the original diagnostics and reported evidence paths when investigating.
+For a failure following an upgrade, use `docs topic recovery` to separate
+model admission from preparation of existing state.
+
 ### Descriptive references and state roots
 
-`services.<name>.stateRefs` accepts a list of arbitrary strings and defaults to
-`[ "slot" ]`. It is not a storage-backend selector or a registry of state roots.
+Read the declaration and default with
+`nix run .#docs -- option 'nixfied.services.<name>.stateRefs'`.
+These labels are not a storage-backend selector or a registry of state roots.
 Execution lowering discards these labels, so changing them does not move state
 or change service reuse identity. They remain serialized in `model.json` and
 shown in `views/docs.md`; changing them therefore changes the raw model hash.
@@ -413,21 +461,28 @@ example `${stateDir}/pgdata`); `stateRefs` does not create them. Configure state
 compatibility and cleanup with `nixfied.state`, and use `down`/`clean` for owned
 state as described above. Child-tool caches remain project-owned.
 
-### Source and invocation context
+## Source and invocation context
 
-Native module arguments include `pkgs`, `system`, `adapters` and `nixfiedLib`.
+Use `nix run .#docs -- api argument` for the framework's module argument
+inventory, then query an entry such as
+`nix run .#docs -- api argument module-argument/system` for its provider and use.
 Nixpkgs supplies `lib`, `config`, `options` and `_module` through ordinary module
 evaluation; these are native module facilities, not additional framework
 providers. Imports, `mkDefault`, `mkForce`, submodule merging and native `apply`
 retain their normal meanings. Required values need not be supplied to read the
 static framework reference.
 
-The compiler's `system` supplies the contextual `target.system` default.
-`sourceIdentity` accepts paths or nonempty strings and converts them with native
-`toString`, retaining dependency context. Live source roots resolve from the
-invocation root; immutable source roots come from the model's store source.
+Inspect contextual defaults and source identity types in their option entries:
+
+```sh
+nix run .#docs -- option nixfied.target.system
+nix run .#docs -- option nixfied.codebases.main.sourceIdentity
+```
+
+Source identity conversion retains dependency context. Live source roots resolve
+from the invocation root; immutable source roots come from the model's store source.
 Children receive only declared environment variables and the runtime-owned
-`PATH` built from invocation tools. See the secrets section for secret values.
+`PATH` built from invocation tools. Use `docs topic secrets` for secret values.
 
 Host directories are resolved natively, outside `model.json`:
 
@@ -453,7 +508,7 @@ native listener/process proof. A host without that observation produces no
 such advisory.
 
 
-### Secrets
+## Secrets
 
 The model contains secret descriptors, never values. An environment-backed
 secret and its use look like this:
@@ -477,8 +532,9 @@ by a child remains the child's responsibility.
 ## Use and extend adapters
 
 Adapters are Nix modules that compile a concrete service into the same generic
-tasks, services, closures, and lifecycle invocations. Nixfied includes
-`synthetic`, `postgres`, and `reth` adapters:
+tasks, services, closures, and lifecycle invocations. Discover the available
+adapters and their contributions with `nix run .#docs -- api module`.
+For example:
 
 ```nix
 { adapters, ... }:
@@ -516,10 +572,9 @@ nix build .#model
 nix run .#model-check
 ```
 
-`upgrade` refreshes only the `nixfied` input/lock entry. Pass
-`--nixfied-url URL` to rewrite the pin, or `--no-lock` to skip lock refresh. A
-checked upgrade requires the existing `flake.lock`: it uses that exact locked
-Nixfied source as the old side of the comparison, resolves a candidate lock in
+`upgrade` refreshes only the `nixfied` input/lock entry. Read its arguments and
+defaults with `nix run .#docs -- api command upgrade`. A checked upgrade requires
+the existing `flake.lock`: it uses that exact locked Nixfied source as the old side of the comparison, resolves a candidate lock in
 a temporary file, and applies it only after the candidate model passes
 preflight. It does not edit `nixfied.nix` or translate old models or state.
 
@@ -551,9 +606,16 @@ only when that checked inspection is intentionally unavailable.
 If the new model is rejected, restore the previous input and lock from version
 control and use that pin for recovery. `model-check` checks model origin and
 shape, ABI and target, closures, secret references, and plan feasibility without
-resolving source or secret material or preparing state. If that check passes but
-a run fails while preparing existing state, retry the same task against an empty
-temporary state base:
+resolving source or secret material or preparing state. First identify whether
+the failure occurred in that model check or later while preparing or executing
+the run; retain the error and any reported evidence paths. Confirm the affected
+pin, project identity, slot, and state base before issuing control commands.
+Use `docs topic state` for the checks that govern inspection and cleanup.
+
+If the model check passes but a run fails while preparing existing state,
+an empty temporary state base can help isolate whether the failure depends on
+that state. Only retry a task whose effects are appropriate to repeat; this
+starts a new run and does not repair the original state:
 
 ```sh
 probe_state="$(mktemp -d)"

@@ -43,7 +43,7 @@ let
     inherit inventory;
     records = model.records ++ outputs.records ++ [ fixtureTask ];
     vocabularies = model.vocabularies ++ outputs.vocabularies;
-    recoveryTopics = topics;
+    contextTopics = topics;
   };
   syntax = import ../meta/syntax.nix { inherit lib; } {
     inherit inventory structure topics;
@@ -93,6 +93,8 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     options = [ ];
     publications = [ ];
+    # This structural fixture has no publication/option inventory to select.
+    topics = builtins.mapAttrs (_: topic: topic // { select = [ ]; }) (import ../docs/topics.nix);
     source = {
       path = "maintenance-fixture";
     };

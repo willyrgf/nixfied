@@ -81,8 +81,8 @@ targets. The flake checks also build the debug runtime and minimal example model
 and run the Nix derivation golden vectors. The process- and port-using Cargo tests
 run outside the Nix sandbox through `.#test`.
 
-The public package surface contains `nixfied-cli` and the release
-`nixfied-runtime`; `install` wraps only the CLI. The debug runtime and
+The installer wraps only the CLI; generated adopter apps use the release
+runtime. The debug runtime and
 `nixfied-test-child` are private transitive inputs of checks, gates, the dev
 shell, and the fixture-backed test wrapper. `runtime-source.nix` creates a real
 Cargo workspace root for each product, so CLI, runtime/model, and test-child
@@ -165,18 +165,50 @@ five manually named flake export attrsets. Native app scripts, config-derived
 verbs, package builders and module/compiler behavior remain in their owners.
 
 `packages.<system>.docs` and both docs apps use `nix/docs/reference.nix`.
-Its private presentation data comes from native option normalization, checked
-publication metadata, existing prose and the supplying source identity. The
+`nix/docs/topics.nix` selects ordered `{ file, heading }` fragments and relevant
+API entries and options. Fragments can compose explanations from different
+owning documents without copying their prose. Topic output combines them with
+bounded definition summaries and exact-query links. Keep explanations and
+examples in their authored document; use the native definitions for types,
+defaults, names and descriptions.
+
+Each selected section must make sense without its surrounding document. Include
+its necessary context and examples together, and use explicit topic commands or
+section links instead of positional directions such as "see below" when the
+referenced section is outside the selection. The renderer preserves selected
+prose; it does not infer missing context or rewrite navigation sentences.
+The builder includes selected sections' subsections, ignores headings in fenced
+examples, and rejects missing or ambiguous headings and invalid selectors or
+reference targets before packaging.
+
+The private presentation index retains checked references from publications,
+commands and structures alongside topic selections. Forward links and backlinks
+derive from the same relationships; add a missing topic association once rather
+than maintaining a second reverse list. These links describe related reference
+entries. Execution prerequisites and behavioral guarantees remain with their
+native owners and independent tests. Option and record guidance follows their
+actual relationships instead of a fixed list of generic topics.
+
+Presentation data comes from native option normalization, checked metadata,
+authored prose and the supplying source identity. The
 serialized presentation boundary discards string context; native values and
 executable bindings retain it. Static docs do not import an adopter module or
 realise model/runtime products. `docs/OPTIONS.md` retains its checked snapshot
 and upgrade-report role; the full API reference is a disposable build artifact.
+The upgrade documentation report still compares source README/docs files; it
+does not compare built references or metadata source files. Replace removed manual
+inventories with concise explanations and exact docs commands; metadata-only
+reference changes need not appear in that source diff.
 
 The existing `rust-workspace` check includes `nix/checks/option-metadata.nix`,
 `publications.nix`, and the private `reference.nix` check. They cover native
 mounts/overrides/defaults/apply, malformed metadata, hidden/manual bypasses,
 whole-assembly validation, lazy bindings, scope identities, exact docs queries,
-and presentation-context/closure isolation. The Nix gate runs
+and presentation-context/closure isolation. Reference checks must independently
+assert each topic's relevant inclusions and exclusions, forward/backlink
+agreement, rejection of invalid selections, and propagation of definition changes
+to both exact queries and topic summaries. A relationship does not prove native
+behavior. The Nix gate runs
 the reference-source checks in `nix/gate-nix.nix` against two distinguishable
 current-source copies and pinned downstream flakes, including poisoned project values and
 caller-directory independence. Run `nix run .#gate -- --dirty` when these fixtures
@@ -239,6 +271,8 @@ The interrupt-and-recover lifecycle scenario remains a white-box Cargo test. It
 requires registry access and precise process timing that a bounded leaf task
 cannot provide.
 
+## Verify uncommitted downstream changes
+
 The installer executed by `.#gate` is built from the working tree. By default,
 however, the generated downstream project pins its Nixfied dependency to the
 current Git `HEAD`, so it does not consume other uncommitted framework changes.
@@ -283,7 +317,8 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Task-output replay/projection | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/build change | CLI/runtime/install builds |
-| Generated docs or public output | affected model build + `.#gate` |
+| Static docs, selectors or reference relationships | focused metadata/reference checks + `.#gate -- --dirty` for downstream/source isolation |
+| Generated model docs or public output | affected model build + `.#gate` |
 | Adapter or example | build the affected model + `.#gate` |
 | Contract or cross-layer change | `.#ci`; use `--dirty` when the generated project must consume the working tree |
 
@@ -291,7 +326,8 @@ Report any platform, release, or integration coverage that was not run.
 
 ## Command syntax ownership
 
-`nix/meta/commands.nix` declares the seven baseline command syntaxes.
+`nix/meta/commands.nix` declares the shared command syntaxes; list their current
+identifiers with `nix run .#docs -- api command`.
 `syntax.nix` checks domains, defaults, visibility, references and generated names
 without invoking native help functions. `command-help.nix` supplies ordinary row
 and compact-usage formatting; `syntax-project.nix` emits Rust constants/type

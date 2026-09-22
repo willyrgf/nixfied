@@ -9,7 +9,7 @@ in
 import ./structure.nix { inherit lib; } {
   records = lib.concatMap (bundle: bundle.records) bundles;
   vocabularies = lib.concatMap (bundle: bundle.vocabularies) bundles;
-  recoveryTopics = builtins.attrNames (import ../docs/topics.nix);
+  contextTopics = builtins.attrNames (import ../docs/topics.nix);
   inventory = import ./inventory.nix { inherit lib; } (
     builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
   );

@@ -115,7 +115,7 @@ let
       emission = "Owned";
     };
   };
-  annotation = description: recoveryTopic: { inherit description recoveryTopic; };
+  annotation = description: contextTopic: { inherit description contextTopic; };
 in
 {
   records = [
@@ -177,7 +177,7 @@ in
       ]
     )
     (record (output "run-summary-json") "RunSummaryOutput" main "private" [ ] "Borrowed" "NoDecoder"
-      "Temporary aggregate-summary view; native success calculation, redaction, pretty serialization and writes remain unchanged."
+      "Aggregate run summary combining overall success with service, node and task evidence."
       [
         (required "runId" text "Native run evidence identity.")
         (required "success" boolean "Native run success combined with all node outcomes.")
@@ -188,7 +188,7 @@ in
       ]
     )
     (record (output "run-task") "TaskRun" task "pub" comparable "Owned" "IgnoreUnknown"
-      "The existing owned task evidence type, retained by CompletedEvidence; real readers accept unknown fields."
+      "Evidence for one task execution: its outcome, timeout or cancellation, duration and paths to captured output."
       (
         [
           (required "taskId" text "Declared leaf identity.")
@@ -270,7 +270,7 @@ in
     )
     (record (output "runtime-error-projection") "ProjectionDiagnostic" projection "pub" [ ] "Borrowed"
       "NoDecoder"
-      "Temporary view of native projection failures; replay paths are deliberately converted lossily before borrowing."
+      "A failure while reading or writing an output projection: the affected stream, operation, redaction-safe error kind, display path and committed byte count."
       [
         (required "stream" (native "OutputStream" text
           "Native stdout/stderr enum serialization."
@@ -286,7 +286,7 @@ in
     (record (output "runtime-error-port-conflict") "PORT_CONFLICT_KEY" process "private" [ ]
       "MemberNamesOnly"
       "NoDecoder"
-      "One native with_detail insertion key; no envelope object or insertion helper is generated."
+      "The portConflict member of error details identifies the contended endpoint and any verified Nixfied owner."
       [
         (required "portConflict" (ref (
           output "port-conflict"
@@ -365,7 +365,7 @@ in
           CLEANUP_REFUSED = annotation "Native cleanup policy or ownership checks refused deletion." "state";
           PORT_CONFLICT = annotation "A startup lock or listener proves a conflict at a planned endpoint." "placeholders";
           PORT_UNVERIFIABLE = annotation "Native endpoint ownership cannot be proved safely." "placeholders";
-          PROC_ESCAPE = annotation "Native process containment observed an escape." "recovery";
+          PROC_ESCAPE = annotation "Required process containment or foreground-process identity could not be maintained or verified." "recovery";
           READINESS_TIMEOUT = annotation "The native service readiness budget expired." "services";
           CANCELED = annotation "Native cancellation interrupted the operation." "recovery";
           LEASE_STALE = annotation "Required run/service lease evidence is no longer current." "state";
