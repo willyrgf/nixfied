@@ -89,6 +89,50 @@ mode:
   every model/runtime contract change, while numeric versions change only for
   their separately defined semantics.
 
+## Shared contracts and the static reference
+
+Adopters use ordinary Nix modules and the public library. The private declaration
+machinery has four responsibilities:
+
+| Mechanism | Shared facts | Native owner retained |
+| --- | --- | --- |
+| Option metadata | Paths, types, defaults and explanations | Nixpkgs evaluation, merging and transformations |
+| Serialized structures | Model, result and error fields; inventory-linked vocabularies | Native scalar types, relational validation, derivation and runtime behavior |
+| Command syntax | Tokens, value domains, literal defaults and help | Native parsers, encoding, precedence, contextual defaults and effects |
+| Publications | Exported names, descriptions and lazy bindings | Native functions, modules, apps and packages |
+
+Model, result and error records share one structural vocabulary and Rust
+renderer. `NativeDomain` binds an existing scalar representation and preserves
+its validation and serialization; it cannot hide an entire record. Native IDs,
+LoopbackHost, paths and unique collections retain their native guarantees.
+Algorithms, cross-field checks, host observations and lifecycle decisions do not
+become declaration interpreters. Covering a public behavior in the reference
+does not justify generating its implementation or adding another semantic seam.
+
+Owned definitions remain in their native Rust module scopes alongside native
+imports and implementations. Borrowed views temporarily project other native
+data; they do not create another mutable object graph or convert through JSON
+to reconstruct one. Generated views enter the existing conversion, redaction,
+formatting and write boundaries, preserving native failure and path behavior.
+
+Each declaration assembly normalizes and checks static metadata before exposing
+projections. This forces malformed declarations without forcing configured
+values, native defaults, package bindings or host inputs. Declaration-only option
+evaluation uses the same raw lazy providers as normal compilation, before the
+checked publication facade exists. Independent audits observe final exports;
+the projections never depend on their own audits.
+
+The reference is built from those facts and existing authored documents at the
+supplying framework revision. Its lookup index is disposable presentation data.
+Only serialized presentation data loses Nix string context; executable values
+keep their dependencies. Reference queries need no admitted model or runtime.
+Structural agreement and reference freshness do not prove behavioral parity:
+native guarantees still require independent admission, output and OS evidence.
+
+The supported field forms, generation workflow and proof owners are documented
+in [DEVELOPMENT.md](DEVELOPMENT.md#adopter-api-maintenance). New declaration
+families or behavioral machinery require a contract-consistent design review.
+
 ## The task–service algebra (the composition rewrite)
 
 The first external adoption exposed the original sin of the authoring

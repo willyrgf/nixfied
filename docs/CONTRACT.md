@@ -127,6 +127,16 @@ when the model/runtime contract changes.
 
 ## Source, identity, and endpoints
 
+- **Invocation substitution:** arguments and environment values follow the
+  supported forms, endpoint scopes and primary-selection rules in
+  [Endpoints and placeholders](ADAPTERS.md#endpoints-and-placeholders).
+  Named endpoint references must resolve in their directly declared scope;
+  bare task references use the first authored dependency, without skipping an
+  endpoint-less service. `${secret:<id>}` requires a declared secret and is
+  restricted to environment values. `stdin` is a null/inherit policy, not a
+  template. Nix validation and independent runtime lowering reject invalid
+  references before child execution. This does not introduce blanket rejection
+  of arbitrary `${...}` child-program syntax.
 - **SOURCE-1:** runtime operations observe source only through declared
   `codebaseId`s. `live-workspace` roots resolve from the invocation root;
   immutable `snapshot` and `flake-input` roots resolve from the Nix store path in
