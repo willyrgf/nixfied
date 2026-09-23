@@ -1615,11 +1615,12 @@ pub(super) fn start_service_with_lock_root(
     })()
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
     let pid = child.id();
-    let pgid = match get_process_group(pid) {
-        Ok(pgid) => pgid,
-        Err(error) => {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
-            let containment = terminate_unrecorded_child(&mut child, None, service, run_timeout_ms);
+    // Before the start record commits, cleanup owns the child and capture, but
+    // may release the reservation only after proving containment.
+    let mut fail_unrecorded =
+        |registry: &mut Registry, context: &LifecycleEventContext, pgid, error: RuntimeError| {
+            let _ = record_lifecycle_failure(registry, context, &start_record, &error);
+            let containment = terminate_unrecorded_child(&mut child, pgid, service, run_timeout_ms);
             let contained = containment.is_ok();
             let error = completion_error(
                 containment,
@@ -1627,17 +1628,14 @@ pub(super) fn start_service_with_lock_root(
                 Some(error),
             )
             .unwrap();
-            if !contained {
-                return Err(error);
+            if contained {
+                settle_reserved_failure(registry, &run_id, &service_instance_id, error)
+            } else {
+                error
             }
-            return Err(settle_reserved_failure(
-                registry,
-                &run_id,
-                &service_instance_id,
-                error,
-            ));
-        }
-    };
+        };
+    let pgid = get_process_group(pid)
+        .map_err(|error| fail_unrecorded(registry, &lifecycle_context, None, error))?;
     let platform_start = platform_start_identity(pid);
     let start_identity =
         super::StoredProcessIdentity::encode(pid, pgid, platform_start.as_deref(), Some(&[]));
@@ -1648,7 +1646,7 @@ pub(super) fn start_service_with_lock_root(
         process_key: Some(process_key.clone()),
         computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
-    if let Err(error) = record_service_start(
+    record_service_start(
         registry,
         &run_id,
         &owner_token,
@@ -1662,27 +1660,8 @@ pub(super) fn start_service_with_lock_root(
             command_json: &command_json,
         },
         &reservations,
-    ) {
-        let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
-        let containment =
-            terminate_unrecorded_child(&mut child, Some(pgid), service, run_timeout_ms);
-        let contained = containment.is_ok();
-        let error = completion_error(
-            containment,
-            shutdown_service_capture(log_relays.take()),
-            Some(error),
-        )
-        .unwrap();
-        if !contained {
-            return Err(error);
-        }
-        return Err(settle_reserved_failure(
-            registry,
-            &run_id,
-            &service_instance_id,
-            error,
-        ));
-    }
+    )
+    .map_err(|error| fail_unrecorded(registry, &started_context, Some(pgid), error))?;
     let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
     let monitor = spawn_process_monitor(pid, pgid, strict_process_group);
     let mut started = StartingService {
