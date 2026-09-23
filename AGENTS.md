@@ -120,4 +120,5 @@ than separate implementations.
   `.#test` is fixture-backed, not raw Cargo; use `.#ci` for cross-layer changes
   and `--dirty` when a downstream gate must consume uncommitted changes. Report
   checks run and unverified platform, release, or integration coverage.
-- Do not commit unless explicitly requested.
+- Commit subjects are lower case.
+- Divide non-trivial work into ordered logical commits. Each commit must leave one coherent current
