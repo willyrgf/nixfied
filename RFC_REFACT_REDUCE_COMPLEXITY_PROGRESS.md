@@ -37,11 +37,15 @@ removed state owners, coordinated change sites, and capture correctness addition
    descriptor record the diagnostic change; the independent ABI snapshot rotates.
    Linux evidence: both named-reference tests, all 71 service tests, all 13
    registry tests, and all 32 manifest tests passed; workspace/all-target Clippy
-   passed with warnings denied. `nix run .#ci -- --dirty` is running as exec
-   session `90410`, with output in `/tmp/nixfied-complexity-ci-step1.log`.
+   passed with warnings denied. `nix run .#ci -- --dirty` (session `90410`)
+   finished: checks, the fixture-backed Cargo floor, and runtime gate passed;
+   the Nix adoption gate failed with `PORT_CONFLICT` on 127.0.0.1:23080.
+   Output is in `/tmp/nixfied-complexity-ci-step1.log`; failure diagnostics are
+   in `/tmp/tmp.l3SWDPWwkw/direct-default.stderr`. The listener was Postgres PID
+   508781 using `/home/willyrgf.linux/.local/state/nixfied/mfm/dev/0/pgdata`,
+   outside this task's test state. It was preserved. Full gate remains outstanding.
    The first CI attempt rejected the missing native inventory coverage entry;
-   that entry is now included. Re-poll the current handle before deciding its
-   outcome. macOS remains unverified.
+   that entry is now included. macOS remains unverified.
 2. Impossible outcomes/dead ceremony: endpoint refinement now returns errors
    directly, deleting the fabricated success fallback. Cleanup terminal writes
    accept only `Deleted` or `Failed { safe_reason }`, and prior cleanup evidence
@@ -59,7 +63,14 @@ removed state owners, coordinated change sites, and capture correctness addition
    Deleted the test-only `first_candidate_port` production helper; actual
    service slot-window and planner allocation proofs remain. All 26 state tests
    pass on Linux, including cleanup registry survival and interrupted deletion.
-4. Atomic registry initialization: pending.
+4. Atomic registry initialization: one immediate transaction now owns database
+   classification, existing shape/identity validation, creation, metadata,
+   `user_version`, and commit. Deleted create-if-absent guards and new-write
+   self-checks; required columns are read once per table. Schema version and
+   diagnostics are unchanged. Independent proofs cover same/different-identity
+   concurrent creators, metadata-insert rollback, denied version-write rollback,
+   and process loss at SQLite's commit hook followed by reopen. All 18 registry
+   tests, all 26 state tests, and workspace/all-target Clippy pass on Linux.
 5. Finalization error/cancellation ownership: pending.
 6. Closed loaded/admitted construction: pending.
 7. Graph, invocation, template, and placement ABI cutover: pending.

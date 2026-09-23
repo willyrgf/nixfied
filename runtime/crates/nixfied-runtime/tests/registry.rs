@@ -6,6 +6,186 @@ mod common;
 use common::*;
 
 #[test]
+fn concurrent_initializers_publish_one_complete_identity() {
+    for differing_identity in [false, true] {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("registry.sqlite3");
+        // Fix WAL before the race: this test targets locked schema classification,
+        // independently of SQLite's journal-mode negotiation.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        drop(conn);
+        let start = std::sync::Barrier::new(2);
+        let identities = [identity(), {
+            let mut other = identity();
+            if differing_identity {
+                other.project_id = "other-project".into();
+            }
+            other
+        }];
+        let results = std::thread::scope(|scope| {
+            let creators: Vec<_> = identities
+                .iter()
+                .map(|identity| {
+                    scope.spawn(|| {
+                        start.wait();
+                        Registry::open_or_create(&path, identity)
+                    })
+                })
+                .collect();
+            creators
+                .into_iter()
+                .map(|creator| creator.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            if differing_identity { 1 } else { 2 }
+        );
+        let winner = results
+            .iter()
+            .find_map(|result| result.as_ref().ok())
+            .unwrap();
+        for error in results.iter().filter_map(|result| result.as_ref().err()) {
+            assert_eq!(error.code, ErrorCode::StateUnowned);
+        }
+        let persisted: (i64, String, i64) = winner.connection().query_row(
+            "SELECT schema_version, project_id, (SELECT count(*) FROM registry_meta) FROM registry_meta",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(
+            persisted,
+            (
+                nixfied_runtime::registry::SCHEMA_VERSION,
+                winner.identity().project_id.clone(),
+                1
+            )
+        );
+        assert_eq!(
+            winner
+                .connection()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            nixfied_runtime::registry::SCHEMA_VERSION
+        );
+        let owner = winner.identity().clone();
+        drop(results);
+        Registry::open_or_create(&path, &owner).expect("the winning complete schema must reopen");
+    }
+}
+
+#[test]
+fn failed_metadata_insert_rolls_back_schema_creation() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let mut invalid = identity();
+    invalid.slot = -1; // Fail the real metadata CHECK after all CREATE statements.
+    let error = Registry::open_or_create(&path, &invalid).err().unwrap();
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert_empty_unversioned_database(&path);
+    Registry::open_or_create(&path, &identity()).expect("rolled-back creation must be retryable");
+}
+
+fn assert_empty_unversioned_database(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn failed_version_write_rolls_back_tables_and_metadata() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let mut conn = rusqlite::Connection::open(&path).unwrap();
+    unsafe extern "C" fn deny_version_write(
+        _: *mut std::ffi::c_void,
+        action: std::ffi::c_int,
+        name: *const std::ffi::c_char,
+        value: *const std::ffi::c_char,
+        _: *const std::ffi::c_char,
+        _: *const std::ffi::c_char,
+    ) -> std::ffi::c_int {
+        if action == rusqlite::ffi::SQLITE_PRAGMA && !name.is_null() && !value.is_null()
+            // SAFETY: SQLite supplies a NUL-terminated pragma name for this call.
+            && unsafe { std::ffi::CStr::from_ptr(name) } == c"user_version"
+        {
+            rusqlite::ffi::SQLITE_DENY
+        } else {
+            rusqlite::ffi::SQLITE_OK
+        }
+    }
+    // SAFETY: no callback state is borrowed, and the connection owns its lifetime.
+    assert_eq!(
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(
+                conn.handle(),
+                Some(deny_version_write),
+                std::ptr::null_mut(),
+            )
+        },
+        rusqlite::ffi::SQLITE_OK
+    );
+    let error = nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap_err();
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    drop(conn);
+    assert_empty_unversioned_database(&path);
+    Registry::open_or_create(&path, &identity()).expect("failed version write must be retryable");
+}
+
+#[test]
+fn interrupted_creation_commits_neither_schema_nor_version() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "registry_creation_crash_child", "--nocapture"])
+        .env("NIXFIED_TEST_REGISTRY_CRASH_PATH", &path)
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(73),
+        "child must exit at the SQLite commit boundary"
+    );
+    assert_empty_unversioned_database(&path);
+    Registry::open_or_create(&path, &identity()).expect("interrupted creation must be retryable");
+}
+
+#[test]
+fn registry_creation_crash_child() {
+    let Some(path) = std::env::var_os("NIXFIED_TEST_REGISTRY_CRASH_PATH") else {
+        return;
+    };
+    let mut conn = rusqlite::Connection::open(path).unwrap();
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    unsafe extern "C" fn exit_before_commit(_: *mut std::ffi::c_void) -> std::ffi::c_int {
+        // Do not unwind or run Connection/Transaction destructors: model process loss.
+        unsafe { libc::_exit(73) }
+    }
+    // SAFETY: the connection outlives the callback and the callback reads no data.
+    unsafe {
+        rusqlite::ffi::sqlite3_commit_hook(
+            conn.handle(),
+            Some(exit_before_commit),
+            std::ptr::null_mut(),
+        );
+    }
+    nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap();
+    panic!("creation must reach the installed commit hook");
+}
+
+#[test]
 fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
