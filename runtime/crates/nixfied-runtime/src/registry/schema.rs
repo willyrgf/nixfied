@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{Value, json};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -11,6 +11,7 @@ pub const SCHEMA_VERSION: i64 = 7;
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
         "
+        PRAGMA busy_timeout = 5000;
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
         -- A run's heartbeat thread opens its own connection and writes the lease
@@ -18,11 +19,13 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
         -- without a busy timeout a transient collision returns SQLITE_BUSY, which
         -- the runtime maps to REGISTRY_CORRUPT and would fail an otherwise healthy
         -- run. Wait instead of erroring.
-        PRAGMA busy_timeout = 5000;
         ",
     )
     .map_err(sql_error)?;
-    let starting_user_version = conn
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let starting_user_version = transaction
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .map_err(sql_error)?;
     if starting_user_version != 0 && starting_user_version != SCHEMA_VERSION {
@@ -31,19 +34,26 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
             format!("expected registry user_version {SCHEMA_VERSION}, got {starting_user_version}"),
         ));
     }
-    let sqlite_table_count = user_table_count(conn)?;
+    let sqlite_table_count = user_table_count(&transaction)?;
     let is_new_registry = starting_user_version == 0 && sqlite_table_count == 0;
     if !is_new_registry {
-        verify_existing(conn)?;
-        verify_identity(conn, identity)?;
-        return Ok(());
+        if starting_user_version != SCHEMA_VERSION {
+            return Err(RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!(
+                    "expected registry user_version {SCHEMA_VERSION}, got {starting_user_version}"
+                ),
+            ));
+        }
+        verify_required_columns(&transaction)?;
+        verify_identity(&transaction, identity)?;
+        return transaction.commit().map_err(sql_error);
     }
 
-    let transaction = conn.transaction().map_err(sql_error)?;
     transaction
         .execute_batch(
             "
-            CREATE TABLE IF NOT EXISTS registry_meta (
+            CREATE TABLE registry_meta (
               id INTEGER PRIMARY KEY CHECK (id = 1),
               schema_version INTEGER NOT NULL,
               project_id TEXT NOT NULL,
@@ -54,7 +64,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               created_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS events (
+            CREATE TABLE events (
               seq INTEGER PRIMARY KEY,
               at TEXT NOT NULL,
               environment TEXT NOT NULL,
@@ -67,7 +77,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               payload_json TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS runs (
+            CREATE TABLE runs (
               run_id TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -82,7 +92,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               summary_path TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS services (
+            CREATE TABLE services (
               service_instance_id TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -96,7 +106,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               state_root TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS processes (
+            CREATE TABLE processes (
               process_key TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -109,7 +119,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               status TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS ports (
+            CREATE TABLE ports (
               endpoint_key TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -122,7 +132,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             -- One lease row per (run, service): a multi-service run reserves each
             -- service independently, so each carries its own cross-run lease.
-            CREATE TABLE IF NOT EXISTS run_leases (
+            CREATE TABLE run_leases (
               run_id TEXT NOT NULL,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -134,7 +144,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               PRIMARY KEY (run_id, service_instance_id)
             );
 
-            CREATE TABLE IF NOT EXISTS cleanups (
+            CREATE TABLE cleanups (
               cleanup_id TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -168,20 +178,10 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
         )
         .map_err(sql_error)?;
 
-    transaction.commit().map_err(sql_error)?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(sql_error)?;
-    let user_version = conn
-        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .map_err(sql_error)?;
-    if user_version != SCHEMA_VERSION {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("expected registry user_version {SCHEMA_VERSION}, got {user_version}"),
-        ));
-    }
-    verify_identity(conn, identity)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 pub fn verify_existing(conn: &Connection) -> RuntimeResult<()> {
@@ -211,8 +211,16 @@ fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
         ),
         ("cleanups", &["environment", "slot", "purge"][..]),
     ] {
+        let mut statement = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(sql_error)?;
+        let found = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(sql_error)?
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .map_err(sql_error)?;
         for column in columns {
-            if !has_column(conn, table, column)? {
+            if !found.contains(*column) {
                 return Err(RuntimeError::new(
                     ErrorCode::RegistryCorrupt,
                     format!("registry table {table} is missing required column {column}"),
@@ -221,20 +229,6 @@ fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
         }
     }
     Ok(())
-}
-
-fn has_column(conn: &Connection, table: &str, column: &str) -> RuntimeResult<bool> {
-    let mut statement = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(sql_error)?;
-    let mut rows = statement.query([]).map_err(sql_error)?;
-    while let Some(row) = rows.next().map_err(sql_error)? {
-        let name = row.get::<_, String>(1).map_err(sql_error)?;
-        if name == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
