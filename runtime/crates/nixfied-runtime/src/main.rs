@@ -38,11 +38,6 @@ mod tests;
 include!("generated/main.rs");
 include!("generated/commands.rs");
 
-enum ReplayPlan {
-    None,
-    Selected(ReplayTicket),
-}
-
 struct RunSession<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
     admission: &'a Admission,
@@ -60,7 +55,7 @@ struct RunSession<'a> {
     task_runs: Vec<TaskRun>,
     selected_task_run: Option<TaskRun>,
     node_results: Vec<NodeResult>,
-    replay: ReplayPlan,
+    replay: Option<ReplayTicket>,
     diagnostic_failures: Vec<RuntimeError>,
 }
 
@@ -141,7 +136,7 @@ impl<'a> RunSession<'a> {
             failures.push(error);
         }
 
-        if let ReplayPlan::Selected(ticket) = std::mem::replace(&mut self.replay, ReplayPlan::None)
+        if let Some(ticket) = self.replay.take()
             && let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error()
         {
             failures.push(error);
@@ -254,11 +249,6 @@ impl<'a> RunSession<'a> {
             Err(error) => Err(with_failure_summary(error, run_summary_path)),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeSelection {
-    slot: Option<RuntimeSlotValue>,
 }
 
 impl RunOutputMode {
@@ -553,12 +543,12 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         parsed_options.output_mode,
         parsed_options.task.as_deref(),
     );
-    validate_run_selection(
+    let selected_task = validate_run_selection(
         &admission.execution_manifest,
         output_mode,
         parsed_options.task.as_deref(),
     )?;
-    let options = parsed_options.resolve(output_mode);
+    let options = parsed_options.resolve(output_mode, selected_task);
     let redactor = Redactor::from_secrets(&admission.secrets);
     let manifest_path = admission.manifest_path.clone();
     let computed_manifest_hash = admission.computed_manifest_hash.clone();
@@ -588,8 +578,7 @@ fn run_m0_admitted(
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
     cancellation.check()?;
-    let selected_slot =
-        select_slot(manifest, options.selection.slot).map_err(post_admission_error)?;
+    let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
     let placement =
         derive_host_placement_for_slot(manifest, &selected_slot, &run_id, &options.state_base)
             .map_err(post_admission_error)?;
@@ -708,23 +697,16 @@ fn run_m0_placed(
     // a pure function of the lowered manifest, the task, and the slot, already
     // proven feasible at admission. `run` with no selection refuses and lists
     // the declared tasks — there is no implicit default.
-    let Some(task_name) = options.task.as_deref() else {
-        return Err(RuntimeError::new(
-            nixfied_runtime::ErrorCode::LifecycleFailed,
-            "admitted run selection lost its task identity",
-        ));
-    };
-    let selected_task = nixfied_manifest::TaskId::new(task_name);
     let plan = plan(
         &admission.execution_manifest,
-        &selected_task,
+        &options.task,
         selected_slot.slot,
     )
     .map_err(post_admission_error)?;
     let direct_selected = admission
         .execution_manifest
-        .tasks
-        .contains_key(&selected_task);
+        .leaf(options.task.as_str())
+        .is_some();
 
     // Record the run row before any service starts, so even a service-less
     // selection (a task tree whose leaves require nothing) leaves durable run
@@ -741,7 +723,7 @@ fn run_m0_placed(
         .filter_map(|binding| {
             let service = admission
                 .execution_manifest
-                .services
+                .services()
                 .get(binding.service_name.as_str())?;
             let primary_id = service.primary_endpoint.as_ref()?;
             let primary = service.endpoints.get(primary_id)?;
@@ -759,39 +741,31 @@ fn run_m0_placed(
 
     // Start each required service on its planned port block, waiting readiness
     // then health before the next.
-    let mut started: Vec<StartedService> = Vec::new();
-    let mut lease: Option<RunLeaseHeartbeat> = None;
-    let mut prepare_runs: Vec<TaskRun> = Vec::new();
-    let mut task_runs: Vec<TaskRun> = Vec::new();
-    let mut selected_task_run: Option<TaskRun> = None;
-    let mut node_results: Vec<NodeResult> = Vec::new();
-    let mut replay_ticket: Option<ReplayTicket> = None;
+    let mut session = RunSession {
+        placement,
+        admission,
+        options,
+        redactor,
+        cancellation,
+        run_id,
+        run_started,
+        registry,
+        started: Vec::new(),
+        extra_services: Vec::new(),
+        service_lifetime: plan.service_lifetime,
+        direct_selected,
+        lease: None,
+        task_runs: Vec::new(),
+        selected_task_run: None,
+        node_results: Vec::new(),
+        replay: None,
+        diagnostic_failures,
+    };
     macro_rules! finish_run {
         ($error:expr, $extra_services:expr) => {{
-            task_runs.extend(prepare_runs.drain(..));
-            let session = RunSession {
-                placement,
-                admission,
-                options,
-                redactor,
-                cancellation,
-                run_id,
-                run_started,
-                registry,
-                started,
-                extra_services: $extra_services,
-                service_lifetime: plan.service_lifetime,
-                direct_selected,
-                lease,
-                task_runs,
-                selected_task_run,
-                node_results,
-                replay: replay_ticket
-                    .map(ReplayPlan::Selected)
-                    .unwrap_or(ReplayPlan::None),
-                diagnostic_failures,
-            };
-            return session.finalize(Some($error));
+            let error = $error;
+            session.extra_services = $extra_services;
+            return session.finalize(Some(error));
         }};
     }
     let source_root = match admission.require_source() {
@@ -806,14 +780,14 @@ fn run_m0_placed(
                 format_args!("  starting service {service_name}"),
             )
         {
-            diagnostic_failures.push(error);
+            session.diagnostic_failures.push(error);
         }
 
         // prepare-as-task: the runner executes the prepare task's flattened
         // nodes inside the service reservation, resolving each leaf's
         // requirements against the services already started (the combined
         // connectsTo + prepare-requires ordering guarantees they are ready).
-        let Some(service_def) = admission.execution_manifest.services.get(service_name) else {
+        let Some(service_def) = admission.execution_manifest.services().get(service_name) else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -825,9 +799,9 @@ fn run_m0_placed(
         let output_mode = options.output_mode;
         let prepare_runner: Option<PrepareRunner<'_>> =
             service_def.prepare.clone().map(|prepare_task| {
-                let started_services = &started;
+                let started_services = &session.started;
                 let source_root = source_root.clone();
-                let diagnostic_failures = &mut diagnostic_failures;
+                let diagnostic_failures = &mut session.diagnostic_failures;
                 Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
                     let mut task_runs = Vec::new();
                     let nodes = match nixfied_runtime::execution::flatten_task(
@@ -843,7 +817,7 @@ fn run_m0_placed(
                         }
                     };
                     for node in nodes {
-                        let Some(task) = admission.execution_manifest.tasks.get(node.task_id.as_str())
+                        let Some(task) = admission.execution_manifest.leaf(node.task_id.as_str())
                         else {
                             return Err(PrepareTaskError::new(
                                 RuntimeError::new(
@@ -935,7 +909,7 @@ fn run_m0_placed(
         let mut current_service = match start_service_for_slot(
             admission,
             placement,
-            &mut registry,
+            &mut session.registry,
             run_id,
             selected_slot,
             ServiceSelection {
@@ -948,24 +922,29 @@ fn run_m0_placed(
                 prepare_runner,
             },
         ) {
-            Ok(service) => service,
+            Ok(start) => {
+                session.task_runs.extend(start.prepare_runs);
+                start.service
+            }
             Err(start_error) => {
                 let (error, evidence) = start_error.into_parts();
-                task_runs.extend(evidence);
+                session.task_runs.extend(evidence);
                 finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
-        if lease.is_none() {
-            lease = Some(RunLeaseHeartbeat::start(
+        if session.lease.is_none() {
+            session.lease = Some(RunLeaseHeartbeat::start(
                 placement.registry_path().to_path_buf(),
-                registry.identity().clone(),
+                session.registry.identity().clone(),
                 current_service.run_id.clone(),
                 current_service.owner_token.clone(),
             ));
         }
         let startup_result = current_service
-            .wait_for_probe_ready_cancellable(&mut registry, cancellation)
-            .and_then(|()| current_service.check_health_cancellable(&mut registry, cancellation));
+            .wait_for_probe_ready_cancellable(&mut session.registry, cancellation)
+            .and_then(|()| {
+                current_service.check_health_cancellable(&mut session.registry, cancellation)
+            });
         if let Err(error) = startup_result {
             let failed_service_output = ServiceRunOutput {
                 service_id: current_service.service_name().to_string(),
@@ -973,8 +952,11 @@ fn run_m0_placed(
                 process_key: current_service.process_key.clone(),
                 selected_endpoint: current_service.selected_endpoint().cloned(),
             };
-            let error =
-                current_service.finalize_failed_start(&mut registry, options.timeout_ms, error);
+            let error = current_service.finalize_failed_start(
+                &mut session.registry,
+                options.timeout_ms,
+                error,
+            );
             finish_run!(
                 error.with_detail("failedService", service_name),
                 vec![failed_service_output]
@@ -992,7 +974,7 @@ fn run_m0_placed(
                             endpoint.port
                         ),
                     ) {
-                        diagnostic_failures.push(error);
+                        session.diagnostic_failures.push(error);
                     }
                 }
                 None => {
@@ -1003,15 +985,14 @@ fn run_m0_placed(
                             current_service.service_name()
                         ),
                     ) {
-                        diagnostic_failures.push(error);
+                        session.diagnostic_failures.push(error);
                     }
                 }
             }
         }
-        started.push(current_service);
+        session.started.push(current_service);
     }
 
-    task_runs.append(&mut prepare_runs);
     if let Err(error) = cancellation.check() {
         finish_run!(error, Vec::new());
     }
@@ -1022,7 +1003,7 @@ fn run_m0_placed(
     // composite's step dependencies.
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let Some(task) = admission.execution_manifest.tasks.get(task_id.as_str()) else {
+        let Some(task) = admission.execution_manifest.leaf(task_id.as_str()) else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -1037,7 +1018,8 @@ fn run_m0_placed(
         let mut dep_indices = Vec::new();
         let mut missing_dependency = None;
         for name in &task.requires {
-            match started
+            match session
+                .started
                 .iter()
                 .position(|service| service.service_name() == name.as_str())
             {
@@ -1056,8 +1038,10 @@ fn run_m0_placed(
             .with_detail("failedNodeId", node.node_id.as_str());
             finish_run!(error, Vec::new());
         }
-        let dependencies: Vec<&StartedService> =
-            dep_indices.iter().map(|&index| &started[index]).collect();
+        let dependencies: Vec<&StartedService> = dep_indices
+            .iter()
+            .map(|&index| &session.started[index])
+            .collect();
         let run_context = RunContext {
             run_id,
             computed_manifest_hash: &admission.computed_manifest_hash,
@@ -1068,7 +1052,7 @@ fn run_m0_placed(
         };
         let task_result = run_dependent_task_cancellable(
             placement,
-            &mut registry,
+            &mut session.registry,
             run_context,
             &dependencies,
             node.node_id.as_str(),
@@ -1083,9 +1067,9 @@ fn run_m0_placed(
         match task_result {
             Ok(TaskExecution::Succeeded(evidence)) => {
                 let (task_run, ticket) = evidence.into_task_and_replay();
-                replay_ticket = ticket.or(replay_ticket);
+                session.replay = ticket.or(session.replay);
                 if direct_selected {
-                    selected_task_run = Some(task_run.clone());
+                    session.selected_task_run = Some(task_run.clone());
                 }
                 if options.output_mode.emit_summary()
                     && let Err(error) = write_diagnostic(
@@ -1097,9 +1081,9 @@ fn run_m0_placed(
                         ),
                     )
                 {
-                    diagnostic_failures.push(error);
+                    session.diagnostic_failures.push(error);
                 }
-                node_results.push(NodeResult {
+                session.node_results.push(NodeResult {
                     node_id: node.node_id.as_str().to_string(),
                     task_id: task_id.as_str().to_string(),
                     success: task_run.success,
@@ -1109,13 +1093,13 @@ fn run_m0_placed(
                     stderr_path: task_run.stderr_path.clone(),
                     summary_path: task_run.summary_path.clone(),
                 });
-                task_runs.push(task_run);
+                session.task_runs.push(task_run);
             }
             Ok(TaskExecution::Failed { error, evidence }) => {
                 let (task_run, ticket) = evidence.into_task_and_replay();
-                replay_ticket = ticket.or(replay_ticket);
+                session.replay = ticket.or(session.replay);
                 if direct_selected {
-                    selected_task_run = Some(task_run.clone());
+                    session.selected_task_run = Some(task_run.clone());
                 }
                 let error = task_failure_with_evidence(
                     error,
@@ -1123,9 +1107,9 @@ fn run_m0_placed(
                     task_id.as_str(),
                     &task_run,
                     options.output_mode,
-                    &mut node_results,
-                    &mut task_runs,
-                    &mut diagnostic_failures,
+                    &mut session.node_results,
+                    &mut session.task_runs,
+                    &mut session.diagnostic_failures,
                 );
                 let error = error.with_detail("failedNodeId", node.node_id.as_str());
                 finish_run!(error, Vec::new());
@@ -1138,9 +1122,9 @@ fn run_m0_placed(
                 let error = *error;
                 let evidence = *evidence;
                 let (task_run, ticket) = evidence.into_task_and_replay();
-                replay_ticket = ticket.or(replay_ticket);
+                session.replay = ticket.or(session.replay);
                 if direct_selected {
-                    selected_task_run = Some(task_run.clone());
+                    session.selected_task_run = Some(task_run.clone());
                 }
                 let error = task_failure_with_evidence(
                     error,
@@ -1148,9 +1132,9 @@ fn run_m0_placed(
                     task_id.as_str(),
                     &task_run,
                     options.output_mode,
-                    &mut node_results,
-                    &mut task_runs,
-                    &mut diagnostic_failures,
+                    &mut session.node_results,
+                    &mut session.task_runs,
+                    &mut session.diagnostic_failures,
                 )
                 .with_detail("failedNodeId", node.node_id.as_str());
                 finish_run!(error, Vec::new());
@@ -1161,28 +1145,6 @@ fn run_m0_placed(
     if cancellation.is_canceled() {
         finish_run!(nixfied_runtime::cancellation::canceled_error(), Vec::new());
     }
-    let session = RunSession {
-        placement,
-        admission,
-        options,
-        redactor,
-        cancellation,
-        run_id,
-        run_started,
-        registry,
-        started,
-        extra_services: Vec::new(),
-        service_lifetime: plan.service_lifetime,
-        direct_selected,
-        lease,
-        task_runs,
-        selected_task_run,
-        node_results,
-        replay: replay_ticket
-            .map(ReplayPlan::Selected)
-            .unwrap_or(ReplayPlan::None),
-        diagnostic_failures,
-    };
     session.finalize(None)
 }
 
@@ -1202,14 +1164,7 @@ fn write_diagnostic(output_mode: RunOutputMode, line: impl Display) -> Result<()
     if !output_mode.emit_summary() {
         return Ok(());
     }
-    writeln!(io::stderr().lock(), "{line}").map_err(|error| {
-        output_projection_io_error(
-            OutputStream::Stderr,
-            ProjectionOperation::Write,
-            "<stderr>",
-            error,
-        )
-    })
+    write_stderr_line(line)
 }
 
 fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
@@ -1435,7 +1390,7 @@ struct ControlOptions {
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: u64,
-    selection: RuntimeSelection,
+    slot: Option<RuntimeSlotValue>,
     cleanup_mode: nixfied_runtime::state::CleanupMode,
 }
 
@@ -1464,12 +1419,7 @@ fn control_help(command: ControlCommand) -> &'static str {
 fn selection_required_error(
     manifest: &nixfied_runtime::execution::ExecutionManifest,
 ) -> RuntimeError {
-    let declared: Vec<&str> = manifest
-        .tasks
-        .keys()
-        .chain(manifest.composites.keys())
-        .map(|task| task.as_str())
-        .collect();
+    let declared: Vec<&str> = manifest.task_ids().map(|task| task.as_str()).collect();
     RuntimeError::new(
         nixfied_runtime::ErrorCode::TaskSelectionInvalid,
         format!(
@@ -1484,15 +1434,18 @@ fn validate_run_selection(
     manifest: &nixfied_runtime::execution::ExecutionManifest,
     output_mode: RunOutputMode,
     task: Option<&str>,
-) -> Result<(), RuntimeError> {
+) -> Result<nixfied_manifest::TaskId, RuntimeError> {
     let Some(task) = task else {
         return Err(selection_required_error(manifest));
     };
     let task_id = nixfied_manifest::TaskId::new(task);
-    if manifest.tasks.contains_key(&task_id) {
-        return validate_selection_nodes(manifest, &task_id, task);
+    if manifest.leaf(task).is_some() {
+        validate_selection_nodes(manifest, &task_id, task)?;
+        return Ok(task_id);
     }
-    if let Some(composite) = manifest.composites.get(&task_id) {
+    if let Some(nixfied_runtime::execution::ExecutableTask::Composite(composite)) =
+        manifest.tasks().get(&task_id)
+    {
         if output_mode.is_task_output() {
             return Err(RuntimeError::new(
                 nixfied_runtime::ErrorCode::TaskSelectionInvalid,
@@ -1501,7 +1454,8 @@ fn validate_run_selection(
             .with_detail("task", task)
             .with_detail("compositeSteps", composite.steps.len()));
         }
-        return validate_selection_nodes(manifest, &task_id, task);
+        validate_selection_nodes(manifest, &task_id, task)?;
+        return Ok(task_id);
     }
     Err(selection_required_error(manifest).with_detail("unknownTask", task))
 }
@@ -1570,8 +1524,7 @@ fn run_control_admitted(
     admission: &Admission,
     options: &ControlOptions,
 ) -> Result<(), RuntimeError> {
-    let selected_slot =
-        select_slot(manifest, options.selection.slot).map_err(post_admission_error)?;
+    let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
     let placement =
         derive_host_placement_for_slot(manifest, &selected_slot, "control", &options.state_base)
             .map_err(post_admission_error)?;
@@ -1713,7 +1666,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
         state_base,
         timeout_ms,
         output_mode,
-        selection: RuntimeSelection { slot },
+        slot,
         task,
     })
 }
@@ -1724,18 +1677,18 @@ struct ParsedRunOptions {
     state_base: PathBuf,
     timeout_ms: RunTimeoutMsValue,
     output_mode: Option<RunOutputValue>,
-    selection: RuntimeSelection,
+    slot: Option<RuntimeSlotValue>,
     task: Option<String>,
 }
 
 impl ParsedRunOptions {
-    fn resolve(self, output_mode: RunOutputValue) -> RunOptions {
+    fn resolve(self, output_mode: RunOutputValue, task: nixfied_manifest::TaskId) -> RunOptions {
         RunOptions {
             state_base: self.state_base,
             timeout_ms: self.timeout_ms,
             output_mode,
-            selection: self.selection,
-            task: self.task,
+            slot: self.slot,
+            task,
         }
     }
 }
@@ -1744,8 +1697,8 @@ struct RunOptions {
     state_base: PathBuf,
     timeout_ms: RunTimeoutMsValue,
     output_mode: RunOutputValue,
-    selection: RuntimeSelection,
-    task: Option<String>,
+    slot: Option<RuntimeSlotValue>,
+    task: nixfied_manifest::TaskId,
 }
 
 fn parse_control_options(
@@ -1819,7 +1772,7 @@ fn parse_control_options(
         allow_non_store,
         state_base,
         timeout_ms,
-        selection: RuntimeSelection { slot },
+        slot,
         cleanup_mode,
     })
 }

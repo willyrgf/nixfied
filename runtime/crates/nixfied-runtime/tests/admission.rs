@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
 use nixfied_runtime::{
@@ -153,11 +153,7 @@ fn unstable_escape_hatch_admits_non_store_manifest() {
 fn source_admission_records_invocation_root() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let admission = Admission::check(&loaded, &context).expect("source should admit");
     let invocation_root = std::env::current_dir()
         .expect("current dir should exist")
@@ -186,11 +182,7 @@ fn lowering_failure_carries_manifest_provenance() {
     });
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let error =
         Admission::check(&loaded, &context).expect_err("undeclared step task must be refused");
 
@@ -212,11 +204,7 @@ fn control_admission_does_not_resolve_a_live_source() {
     // caller is outside the project root or the workspace has gone.
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let admission =
         Admission::check_for_control(&loaded, &context).expect("control admission should succeed");
 
@@ -233,11 +221,7 @@ fn dirty_policy_reject_fails_closed() {
     manifest["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let error = Admission::check(&loaded, &context)
         .expect_err("dirtyPolicy=reject cannot be proven for live-workspace");
 
@@ -260,11 +244,7 @@ fn env_var_secret_resolves_during_admission() {
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let admission = Admission::check(&loaded, &context).expect("secret should resolve");
     unsafe { std::env::remove_var(&env_var) };
@@ -284,11 +264,7 @@ fn missing_secret_fails_admission_before_execution() {
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context).expect_err("missing secret must fail");
 
@@ -311,11 +287,7 @@ fn empty_secret_material_is_unavailable() {
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context).expect_err("empty secret must fail");
     unsafe { std::env::remove_var(&env_var) };
@@ -339,11 +311,7 @@ fn file_secret_is_confined_and_normalized() {
     value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let admission = Admission::check(&loaded, &context).expect("file secret should resolve");
     unsafe { std::env::remove_var("NIXFIED_SECRETS_DIR") };
@@ -357,11 +325,7 @@ fn undeclared_secret_reference_is_manifest_admission_error() {
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:missing}");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context).expect_err("undeclared secret must fail");
 
@@ -380,11 +344,7 @@ fn secret_reference_in_args_is_manifest_admission_error() {
     manifest["tasks"]["smoke"]["invocation"]["run"][1] = json!("${secret:api-token}");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context).expect_err("arg secret must fail");
     unsafe { std::env::remove_var(&env_var) };
@@ -458,11 +418,7 @@ fn immutable_source_must_be_under_store_root() {
     value["codebases"][0]["sourceIdentity"] = json!(outside_source.to_string_lossy());
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context)
         .expect_err("immutable source outside store root must fail");
@@ -501,11 +457,7 @@ fn logical_root_escape_is_rejected() {
     manifest["codebases"][0]["logicalRoot"] = json!("..");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let error = Admission::check(&loaded, &context)
         .expect_err("logicalRoot must not escape invocation root");
 
@@ -519,11 +471,7 @@ fn protected_persistent_state_is_valid_manifest_data() {
     manifest["state"]["persistence"] = json!("persistent");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("protected persistent state should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     Admission::check(&loaded, &context).expect("protected persistent state should admit");
 
     assert_eq!(
@@ -614,11 +562,7 @@ fn invocation_executable_must_match_run_resolution() {
         json!(closure_root.join("bin/other-helper").to_string_lossy());
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let error = Admission::check(&loaded, &context)
         .expect_err("invocation executable mismatch should fail");
 
@@ -641,11 +585,7 @@ fn exec_bound_closure_without_executable_bit_is_rejected() {
     value["closures"]["synthetic-helper"]["requiresExecutable"] = json!(false);
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     let error = Admission::check(&loaded, &context)
         .expect_err("non-executable exec-bound closure should fail");
 
@@ -654,18 +594,15 @@ fn exec_bound_closure_without_executable_bit_is_rejected() {
 
 #[test]
 fn target_os_and_arch_must_match_host() {
-    let mut manifest = fixture_manifest();
-    manifest["target"]["os"] = json!("definitely-not-this-os");
-    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
-    let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
-    let error = Admission::check(&loaded, &context).expect_err("target OS mismatch should fail");
-
-    assert_eq!(error.code, ErrorCode::PlatformUnsupported);
+    for field in ["os", "arch"] {
+        let mut manifest = fixture_manifest();
+        manifest["target"][field] = json!("definitely-not-this-host");
+        let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+        let loaded = load_manifest(&manifest_path).expect("fixture should load");
+        let error = Admission::check(&loaded, &admission_context(&closure_root))
+            .expect_err("target mismatch should fail");
+        assert_eq!(error.code, ErrorCode::PlatformUnsupported, "field {field}");
+    }
 }
 
 #[test]
@@ -683,11 +620,7 @@ fn symlinked_closure_executable_is_admitted() {
     fs::rename(&declared, &real).unwrap();
     std::os::unix::fs::symlink(&real, &declared).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
     Admission::check(&loaded, &context).expect("symlinked executable should admit");
 }
 
@@ -701,11 +634,7 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
     fs::rename(&declared, &outside).unwrap();
     std::os::unix::fs::symlink(&outside, &declared).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = AdmissionContext {
-        policy: StoreOriginPolicy::AllowNonStoreForTests,
-        store_root: closure_root.parent().unwrap().to_path_buf(),
-        host_system: host_system(),
-    };
+    let context = admission_context(&closure_root);
 
     let error = Admission::check(&loaded, &context)
         .expect_err("symlink target outside the store root should fail");
@@ -716,6 +645,14 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
         "unexpected error message: {}",
         error.message
     );
+}
+
+fn admission_context(closure_root: &Path) -> AdmissionContext {
+    AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    }
 }
 
 fn write_fixture_manifest(

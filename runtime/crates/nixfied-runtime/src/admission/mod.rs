@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use nixfied_manifest::Manifest;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecutionManifest, lower, prove_all_plans_feasible};
+use crate::execution::{ExecutionManifest, lower};
 use crate::manifest_loader::LoadedManifest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +120,6 @@ impl Admission {
         };
         closures::check_closures(&loaded.manifest, loaded, context)?;
         let execution_manifest = lower(&loaded.manifest)?;
-        prove_all_plans_feasible(&execution_manifest)?;
         Ok(from_loaded(
             &loaded.manifest,
             loaded,

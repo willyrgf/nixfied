@@ -425,17 +425,14 @@ mod tests {
     }
 
     struct FailingReader {
-        bytes: Vec<u8>,
+        bytes: &'static [u8],
         failed: bool,
     }
 
     impl Read for FailingReader {
         fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
             if !self.bytes.is_empty() {
-                let amount = self.bytes.len().min(target.len());
-                target[..amount].copy_from_slice(&self.bytes[..amount]);
-                self.bytes.drain(..amount);
-                return Ok(amount);
+                return self.bytes.read(target);
             }
             if !self.failed {
                 self.failed = true;
@@ -544,7 +541,7 @@ mod tests {
             OutputStream::Stdout,
             Path::new("/evidence/stdout.log"),
             FailingReader {
-                bytes: b"partial".to_vec(),
+                bytes: b"partial",
                 failed: false,
             },
             &mut Vec::new(),

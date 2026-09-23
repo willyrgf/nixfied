@@ -3,16 +3,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy};
-use nixfied_runtime::ErrorCode;
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
-    CleanupMode, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
+    CleanupMode, CleanupOutcome, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
     clean_marked_state, commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
     evaluate_slot_marker, inspect_cleanup_target, materialize_run_roots,
 };
-use serde_json::{Value, json};
+use nixfied_runtime::{ErrorCode, RuntimeResult};
+use serde_json::Value;
 
 mod common;
 use common::*;
@@ -161,14 +161,9 @@ fn clean_accepts_old_provenance_marker() {
     old.manifest_path = PathBuf::from("/nix/store/older-manifest/manifest.json");
     commit_slot_marker(&fixture.layout, &old).expect("old-provenance marker should be written");
 
-    let outcome = clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    )
-    .expect("old-provenance marker should be cleanable by the slot owner");
+    let outcome = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect("old-provenance marker should be cleanable by the slot owner");
 
     assert!(outcome.cleanup_id.starts_with("cleanup-"));
     assert!(!fixture.layout.state_root.exists());
@@ -442,14 +437,9 @@ fn purge_refuses_symlink_target_but_unlinks_tree_symlinks() {
     std::os::unix::fs::symlink(&outside, fixture.layout.state_root.join("escape-link"))
         .expect("tree symlink should be created");
     let mut registry = fixture.registry();
-    clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Purge,
-    )
-    .expect("purge should unlink tree symlink entries");
+    fixture
+        .clean(&mut registry, CleanupMode::Purge)
+        .expect("purge should unlink tree symlink entries");
     assert!(!fixture.layout.state_root.exists());
     assert_eq!(
         fs::read_to_string(&outside).expect("outside target should survive"),
@@ -467,14 +457,9 @@ fn cleanup_unlinks_tree_symlinks_without_following() {
         .expect("symlink should be created");
 
     let mut registry = fixture.registry();
-    clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    )
-    .expect("cleanup should unlink tree symlink entries");
+    fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect("cleanup should unlink tree symlink entries");
 
     assert!(!fixture.layout.state_root.exists());
     assert_eq!(
@@ -518,14 +503,9 @@ fn cleanup_deletes_matching_inactive_state() {
     fs::write(&child_written, b"opaque child data")
         .expect("child-owned artifact should be written");
 
-    let outcome = clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    )
-    .expect("inactive marked state should be deleted");
+    let outcome = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect("inactive marked state should be deleted");
 
     assert!(outcome.cleanup_id.starts_with("cleanup-"));
     assert!(
@@ -702,14 +682,9 @@ fn cleanup_finishes_interrupted_delete_when_target_is_already_absent() {
         .expect("interrupted cleanup intent should be inserted");
     fs::remove_dir_all(&fixture.layout.state_root).expect("interrupted delete should remove root");
 
-    let outcome = clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    )
-    .expect("missing target with intent evidence should finish as deleted");
+    let outcome = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect("missing target with intent evidence should finish as deleted");
     let cleanup_status: String = registry
         .connection()
         .query_row(
@@ -753,13 +728,7 @@ fn cleanup_delete_failure_records_failed_without_deleted_success() {
     fs::set_permissions(&state_parent, fs::Permissions::from_mode(0o500))
         .expect("state parent should be made non-writable");
 
-    let result = clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    );
+    let result = fixture.clean(&mut registry, CleanupMode::Standard);
     drop(restore);
     let error = result.expect_err("delete failure should refuse cleanup");
     let cleanup_status: String = registry
@@ -879,14 +848,9 @@ fn assert_cleanup_refused_with_active_ref(sql: &str) {
         .execute_batch(sql)
         .expect("active ref should be inserted");
 
-    let error = clean_marked_state(
-        &fixture.layout.state_base,
-        &fixture.layout.state_root,
-        &fixture.identity,
-        &mut registry,
-        CleanupMode::Standard,
-    )
-    .expect_err("active registry refs should refuse cleanup");
+    let error = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect_err("active registry refs should refuse cleanup");
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.exists());
@@ -947,6 +911,16 @@ impl StateFixture {
         }
     }
 
+    fn clean(&self, registry: &mut Registry, mode: CleanupMode) -> RuntimeResult<CleanupOutcome> {
+        clean_marked_state(
+            &self.layout.state_base,
+            &self.layout.state_root,
+            &self.identity,
+            registry,
+            mode,
+        )
+    }
+
     fn registry(&self) -> Registry {
         Registry::open_or_create(
             self.layout.registry_path(),
@@ -964,17 +938,6 @@ impl StateFixture {
 
 fn manifest() -> Manifest {
     serde_json::from_value(fixture_manifest()).expect("fixture manifest should parse")
-}
-
-fn add_slot_one(value: &mut Value, start: u16, end: u16) {
-    value["slotPolicy"]["max"] = json!(1);
-    value["placement"]["slotPlacements"]["1"] = json!({
-        "slot": 1,
-        "candidatePorts": {
-            "start": start,
-            "end": end
-        }
-    });
 }
 
 fn fixture_manifest() -> Value {

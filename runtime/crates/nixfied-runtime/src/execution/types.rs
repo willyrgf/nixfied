@@ -5,10 +5,11 @@
 //! reads `Manifest` directly.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
-pub use nixfied_manifest::{LoopbackHost, StdinPolicy};
+pub use nixfied_manifest::{LoopbackHost, StdinPolicy, StopSignal};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
 /// contract — never supplied by the manifest. The four components hash the endpoint,
@@ -24,16 +25,46 @@ pub struct ServiceIdentity {
     pub target_identity_hash: String,
 }
 
-/// The whole executable program for a run: services to start, tasks to run
-/// (leaves and the composites the planner flattens), and the per-slot port
-/// windows the planner assigns from. `tasks` holds the leaves; `composites` the named-step DAGs the
-/// planner flattens onto the run plan with stable step paths.
+/// A checked executable program. Only lowering constructs it; consumers receive
+/// shared references so graph validity cannot be invalidated after admission.
 #[derive(Debug, Clone)]
 pub struct ExecutionManifest {
-    pub services: BTreeMap<ServiceId, ExecService>,
-    pub tasks: BTreeMap<TaskId, ExecTask>,
-    pub composites: BTreeMap<TaskId, ExecComposite>,
-    pub slot_windows: BTreeMap<u32, PortWindow>,
+    pub(super) services: BTreeMap<ServiceId, ExecService>,
+    pub(super) tasks: BTreeMap<TaskId, ExecutableTask>,
+    pub(super) slot_windows: BTreeMap<u32, PortWindow>,
+}
+
+impl ExecutionManifest {
+    pub fn services(&self) -> &BTreeMap<ServiceId, ExecService> {
+        &self.services
+    }
+
+    pub fn tasks(&self) -> &BTreeMap<TaskId, ExecutableTask> {
+        &self.tasks
+    }
+
+    pub fn leaf(&self, task: &str) -> Option<&ExecTask> {
+        match self.tasks.get(task)? {
+            ExecutableTask::Leaf(leaf) => Some(leaf),
+            ExecutableTask::Composite(_) => None,
+        }
+    }
+
+    /// Retain the established leaf-then-composite diagnostic/proof order.
+    pub fn task_ids(&self) -> impl Iterator<Item = &TaskId> {
+        self.tasks
+            .iter()
+            .filter_map(|(id, task)| matches!(task, ExecutableTask::Leaf(_)).then_some(id))
+            .chain(self.tasks.iter().filter_map(|(id, task)| {
+                matches!(task, ExecutableTask::Composite(_)).then_some(id)
+            }))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ExecutableTask {
+    Leaf(ExecTask),
+    Composite(ExecComposite),
 }
 
 /// A composite task: a static named-step DAG over task references (leaf or
@@ -57,11 +88,23 @@ pub struct ExecStep {
 /// from.
 #[derive(Debug, Clone, Copy)]
 pub struct PortWindow {
-    pub start: u16,
-    pub end: u16,
+    start: u16,
+    end: u16,
 }
 
 impl PortWindow {
+    pub(super) fn new(start: u16, end: u16) -> Option<Self> {
+        (start > 0 && start <= end).then_some(Self { start, end })
+    }
+
+    pub(super) fn start(self) -> u16 {
+        self.start
+    }
+
+    pub(super) fn end(self) -> u16 {
+        self.end
+    }
+
     /// Number of distinct ports the window can host.
     pub fn capacity(&self) -> u32 {
         u32::from(self.end - self.start) + 1
@@ -143,7 +186,7 @@ pub struct ExecProbe {
     pub exec: ResolvedInvocation,
     pub timeout: Duration,
     pub retry_interval: Duration,
-    pub max_attempts: u32,
+    pub max_attempts: NonZeroU32,
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +240,7 @@ pub struct TcpProbe {
     pub label: String,
     pub timeout: Duration,
     pub retry_interval: Duration,
-    pub max_attempts: u32,
+    pub max_attempts: NonZeroU32,
 }
 
 /// The endpoint the runtime binds and verifies ownership of. The port is assigned
@@ -206,57 +249,6 @@ pub struct TcpProbe {
 pub struct ResolvedEndpoint {
     pub endpoint_id: String,
     pub host: LoopbackHost,
-}
-
-/// A stop signal the runtime can send. Replaces the free-form `stopPolicy.signal`
-/// string with the closed set the runtime honors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopSignal {
-    Term,
-    Int,
-    Quit,
-    Hup,
-}
-
-impl StopSignal {
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "TERM" => Some(Self::Term),
-            "INT" => Some(Self::Int),
-            "QUIT" => Some(Self::Quit),
-            "HUP" => Some(Self::Hup),
-            _ => None,
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Term => "TERM",
-            Self::Int => "INT",
-            Self::Quit => "QUIT",
-            Self::Hup => "HUP",
-        }
-    }
-
-    pub fn libc(&self) -> i32 {
-        match self {
-            Self::Term => libc::SIGTERM,
-            Self::Int => libc::SIGINT,
-            Self::Quit => libc::SIGQUIT,
-            Self::Hup => libc::SIGHUP,
-        }
-    }
-}
-
-impl From<nixfied_manifest::StopSignal> for StopSignal {
-    fn from(signal: nixfied_manifest::StopSignal) -> Self {
-        match signal {
-            nixfied_manifest::StopSignal::Term => Self::Term,
-            nixfied_manifest::StopSignal::Int => Self::Int,
-            nixfied_manifest::StopSignal::Quit => Self::Quit,
-            nixfied_manifest::StopSignal::Hup => Self::Hup,
-        }
-    }
 }
 
 /// A resolved leaf task: its invocation, the services it requires ready while
@@ -295,15 +287,6 @@ mod tests {
     fn loopback_host_rejects_non_loopback_ip() {
         assert!(LoopbackHost::parse("0.0.0.0").is_err());
         assert!(LoopbackHost::parse("10.0.0.1").is_err());
-    }
-
-    #[test]
-    fn stop_signal_round_trips_known_names() {
-        for name in ["TERM", "INT", "QUIT", "HUP"] {
-            let signal = StopSignal::from_name(name).expect("known signal parses");
-            assert_eq!(signal.name(), name);
-        }
-        assert!(StopSignal::from_name("KILL").is_none());
     }
 
     #[test]

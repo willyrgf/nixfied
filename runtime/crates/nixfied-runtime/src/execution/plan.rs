@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use nixfied_manifest::{NodeId, ServiceId, ServiceLifetime, TaskId};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecutionManifest, PortWindow};
+use crate::execution::types::{ExecService, ExecutableTask, ExecutionManifest, PortWindow};
 
 /// A concrete, executable plan for one slot: services bound to ports in start
 /// order, and tasks in execution order.
@@ -50,17 +50,14 @@ pub fn plan(manifest: &ExecutionManifest, task: &TaskId, slot: u32) -> RuntimeRe
     // leaves' requires, closed over connectsTo, in canonical (byte) order —
     // ports are assigned from the sorted set, so a service's port depends only
     // on membership, never on authoring order.
-    let mut union: BTreeSet<ServiceId> = nodes
-        .iter()
-        .filter_map(|node| manifest.tasks.get(&node.task_id))
-        .flat_map(|leaf| leaf.requires.iter().cloned())
-        .collect();
+    let mut union = BTreeSet::new();
+    for node in &nodes {
+        union.extend(leaf_requires(manifest, &node.task_id)?.iter().cloned());
+    }
     loop {
         let mut additions: Vec<ServiceId> = Vec::new();
         for name in union.iter() {
-            let Some(service) = manifest.services.get(name) else {
-                continue;
-            };
+            let service = service(manifest, name)?;
             additions.extend(
                 service
                     .connects_to
@@ -94,7 +91,7 @@ pub fn plan(manifest: &ExecutionManifest, task: &TaskId, slot: u32) -> RuntimeRe
     let services = order_for_start(
         assign_ports(&service_names, manifest, *window, slot)?,
         manifest,
-    );
+    )?;
     Ok(RunPlan {
         service_lifetime,
         services,
@@ -106,16 +103,41 @@ fn selected_service_lifetime(
     manifest: &ExecutionManifest,
     task: &TaskId,
 ) -> RuntimeResult<ServiceLifetime> {
-    if let Some(task) = manifest.tasks.get(task) {
-        return Ok(task.service_lifetime);
+    match manifest.tasks.get(task) {
+        Some(ExecutableTask::Leaf(task)) => Ok(task.service_lifetime),
+        Some(ExecutableTask::Composite(task)) => Ok(task.service_lifetime),
+        None => Err(RuntimeError::new(
+            ErrorCode::ManifestAdmission,
+            format!("task {task} is missing"),
+        )),
     }
-    if let Some(task) = manifest.composites.get(task) {
-        return Ok(task.service_lifetime);
-    }
-    Err(RuntimeError::new(
-        ErrorCode::ManifestAdmission,
-        format!("task {task} is missing"),
-    ))
+}
+
+fn service<'a>(
+    manifest: &'a ExecutionManifest,
+    name: &ServiceId,
+) -> RuntimeResult<&'a ExecService> {
+    manifest.services.get(name).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ManifestAdmission,
+            format!("service {name} is missing"),
+        )
+    })
+}
+
+fn leaf_requires<'a>(
+    manifest: &'a ExecutionManifest,
+    task: &TaskId,
+) -> RuntimeResult<&'a [ServiceId]> {
+    manifest
+        .leaf(task.as_str())
+        .map(|leaf| leaf.requires.as_slice())
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ManifestAdmission,
+                format!("leaf task {task} is missing"),
+            )
+        })
 }
 
 /// The services a prepare task's leaves require — the prepare-requires edges
@@ -124,11 +146,11 @@ fn prepare_requires(
     manifest: &ExecutionManifest,
     prepare_task: &TaskId,
 ) -> RuntimeResult<Vec<ServiceId>> {
-    Ok(flatten_task(manifest, prepare_task)?
-        .iter()
-        .filter_map(|node| manifest.tasks.get(&node.task_id))
-        .flat_map(|leaf| leaf.requires.iter().cloned())
-        .collect())
+    let mut required = Vec::new();
+    for node in flatten_task(manifest, prepare_task)? {
+        required.extend(leaf_requires(manifest, &node.task_id)?.iter().cloned());
+    }
+    Ok(required)
 }
 
 /// Stable topological order over the combined connectsTo + prepare-requires
@@ -137,39 +159,36 @@ fn prepare_requires(
 fn order_for_start(
     bindings: Vec<ServiceBinding>,
     manifest: &ExecutionManifest,
-) -> Vec<ServiceBinding> {
-    let mut remaining = bindings;
+) -> RuntimeResult<Vec<ServiceBinding>> {
+    // Calculate each edge set once; failed prepare traversal is never ignored.
+    let mut remaining = bindings
+        .into_iter()
+        .map(|binding| {
+            let service = service(manifest, &binding.service_name)?;
+            let mut edges = service.connects_to.clone();
+            if let Some(prepare) = &service.prepare {
+                edges.extend(prepare_requires(manifest, prepare)?);
+            }
+            Ok((binding, edges))
+        })
+        .collect::<RuntimeResult<Vec<_>>>()?;
     let mut ordered = Vec::with_capacity(remaining.len());
-    let mut started: BTreeSet<ServiceId> = BTreeSet::new();
-    let edges_of = |name: &ServiceId| -> Vec<ServiceId> {
-        let Some(service) = manifest.services.get(name) else {
-            return Vec::new();
-        };
-        let mut edges: Vec<ServiceId> = service.connects_to.clone();
-        if let Some(Ok(required)) = service
-            .prepare
-            .as_ref()
-            .map(|prepare_task| prepare_requires(manifest, prepare_task))
-        {
-            edges.extend(required);
-        }
-        edges
-    };
+    let mut started = BTreeSet::new();
     while !remaining.is_empty() {
-        let ready = remaining.iter().position(|binding| {
-            edges_of(&binding.service_name).iter().all(|target| {
-                started.contains(target)
-                    || !remaining.iter().any(|other| other.service_name == *target)
-            })
-        });
-        // Lowering guarantees acyclicity; a missing ready node would mean a
-        // cycle leaked through, so falling back to declared order is the only
-        // defensive option left.
-        let next = remaining.remove(ready.unwrap_or(0));
+        let ready = remaining
+            .iter()
+            .position(|(_, edges)| edges.iter().all(|target| started.contains(target)))
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::ManifestAdmission,
+                    "service startup dependencies contain a cycle or leave the selected union",
+                )
+            })?;
+        let (next, _) = remaining.remove(ready);
         started.insert(next.service_name.clone());
         ordered.push(next);
     }
-    ordered
+    Ok(ordered)
 }
 
 /// Assign each service a contiguous block of ports from the window — one per
@@ -184,34 +203,27 @@ fn assign_ports(
 ) -> RuntimeResult<Vec<ServiceBinding>> {
     let demand: usize = service_names
         .iter()
-        .filter_map(|name| manifest.services.get(name))
-        .map(|service| service.endpoints.len())
-        .sum();
+        .map(|name| service(manifest, name).map(|service| service.endpoints.len()))
+        .sum::<RuntimeResult<_>>()?;
     if demand > window.capacity() as usize {
         return Err(RuntimeError::new(
             ErrorCode::ManifestAdmission,
             format!(
                 "slot {slot} candidate window {}-{} cannot host {demand} endpoints across {} services",
-                window.start,
-                window.end,
+                window.start(),
+                window.end(),
                 service_names.len()
             ),
         ));
     }
 
     let mut bindings = Vec::with_capacity(service_names.len());
-    let mut cursor = window.start;
+    let mut cursor = window.start();
     for service_name in service_names {
-        // Lowering proved every selected service resolves; an absent one would be
-        // a planner/lowering skew, so treat it as an empty endpoint set.
-        let endpoint_ids = manifest
-            .services
-            .get(service_name)
-            .map(|service| service.endpoints.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let endpoint_ids = service(manifest, service_name)?.endpoints.keys();
         let mut endpoint_ports = BTreeMap::new();
         for endpoint_id in endpoint_ids {
-            endpoint_ports.insert(endpoint_id, cursor);
+            endpoint_ports.insert(endpoint_id.clone(), cursor);
             cursor = cursor.saturating_add(1);
         }
         bindings.push(ServiceBinding {
@@ -245,19 +257,22 @@ pub fn flatten_task(manifest: &ExecutionManifest, root: &TaskId) -> RuntimeResul
         visiting: &mut Vec<TaskId>,
         out: &mut Vec<FlatNode>,
     ) -> RuntimeResult<()> {
-        if manifest.tasks.contains_key(task) {
-            out.push(FlatNode {
-                step_path: path,
-                leaf: task.clone(),
-                depends_on: BTreeSet::new(),
-            });
-            return Ok(());
-        }
-        let Some(composite) = manifest.composites.get(task) else {
-            return Err(RuntimeError::new(
-                ErrorCode::ManifestAdmission,
-                format!("task {task} is missing"),
-            ));
+        let composite = match manifest.tasks.get(task) {
+            Some(ExecutableTask::Leaf(_)) => {
+                out.push(FlatNode {
+                    step_path: path,
+                    leaf: task.clone(),
+                    depends_on: BTreeSet::new(),
+                });
+                return Ok(());
+            }
+            Some(ExecutableTask::Composite(composite)) => composite,
+            None => {
+                return Err(RuntimeError::new(
+                    ErrorCode::ManifestAdmission,
+                    format!("task {task} is missing"),
+                ));
+            }
         };
         if visiting.contains(task) {
             let chain = visiting
@@ -349,9 +364,9 @@ pub fn flatten_task(manifest: &ExecutionManifest, root: &TaskId) -> RuntimeResul
 /// declared task. Admission calls this so "admitted" implies "runnable for any
 /// slot/task the user can select" — including composite acyclicity and the
 /// derived union's port feasibility.
-pub fn prove_all_plans_feasible(manifest: &ExecutionManifest) -> RuntimeResult<()> {
+pub(super) fn prove_all_plans_feasible(manifest: &ExecutionManifest) -> RuntimeResult<()> {
     for &slot in manifest.slot_windows.keys() {
-        for task in manifest.tasks.keys().chain(manifest.composites.keys()) {
+        for task in manifest.task_ids() {
             plan(manifest, task, slot)?;
         }
     }
@@ -396,7 +411,7 @@ mod tests {
             label: "ready".to_string(),
             timeout: Duration::from_millis(1000),
             retry_interval: Duration::from_millis(100),
-            max_attempts: 10,
+            max_attempts: 10.try_into().unwrap(),
         }
     }
 
@@ -457,11 +472,10 @@ mod tests {
                 .into_iter()
                 .map(|name| (ServiceId::new(name), service(name)))
                 .collect(),
-            tasks: BTreeMap::from([(TaskId::new("all"), leaf)]),
-            composites: BTreeMap::new(),
+            tasks: BTreeMap::from([(TaskId::new("all"), ExecutableTask::Leaf(leaf))]),
             slot_windows: windows
                 .into_iter()
-                .map(|(slot, start, end)| (slot, PortWindow { start, end }))
+                .map(|(slot, start, end)| (slot, PortWindow::new(start, end).unwrap()))
                 .collect(),
         }
     }
@@ -544,10 +558,12 @@ mod tests {
         let mut em = manifest(vec![], vec![], vec![(0, 23080, 23090)]);
         em.tasks.clear();
         for leaf in leaves {
-            em.tasks.insert(TaskId::new(leaf), leaf_task(leaf));
+            em.tasks
+                .insert(TaskId::new(leaf), ExecutableTask::Leaf(leaf_task(leaf)));
         }
         for comp in composites {
-            em.composites.insert(comp.task_id.clone(), comp);
+            em.tasks
+                .insert(comp.task_id.clone(), ExecutableTask::Composite(comp));
         }
         em
     }
@@ -620,8 +636,10 @@ mod tests {
         let mut composite = composite("stack", vec![("smoke", "smoke", vec![])]);
         composite.service_lifetime = ServiceLifetime::UntilIdle;
         let mut em = manifest(vec!["db"], vec![], vec![(0, 23080, 23090)]);
-        em.tasks = BTreeMap::from([(TaskId::new("smoke"), leaf)]);
-        em.composites = BTreeMap::from([(TaskId::new("stack"), composite)]);
+        em.tasks = BTreeMap::from([
+            (TaskId::new("smoke"), ExecutableTask::Leaf(leaf)),
+            (TaskId::new("stack"), ExecutableTask::Composite(composite)),
+        ]);
 
         let direct = plan(&em, &TaskId::new("smoke"), 0).expect("leaf plan exists");
         assert_eq!(
@@ -756,8 +774,15 @@ mod tests {
 
     #[test]
     fn rejects_when_window_cannot_host_all_endpoints() {
-        // Two single-endpoint services need two ports; a one-port window cannot.
-        let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
+        // One service with two endpoints must reserve both ports atomically.
+        let mut em = manifest(vec!["a"], vec!["a"], vec![(0, 23080, 23080)]);
+        em.services.get_mut("a").unwrap().endpoints.insert(
+            "second".into(),
+            ResolvedEndpoint {
+                endpoint_id: "second".into(),
+                host: LoopbackHost::parse("127.0.0.1").unwrap(),
+            },
+        );
         assert_eq!(
             plan(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")

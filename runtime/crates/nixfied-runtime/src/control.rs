@@ -27,7 +27,7 @@ pub fn ps(registry: &mut Registry) -> RuntimeResult<PsReport> {
 pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
     let rows = process_rows(registry)?;
     for row in rows {
-        let active = is_active_status(&row.status);
+        let active = status::PROCESS_ACTIVE.contains(&row.status);
         let live = if active || row.unresolved_escape {
             row.reconciled_liveness()?
         } else {
@@ -47,7 +47,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
     let rows = process_rows(registry)?;
     let mut observations = Vec::with_capacity(rows.len());
     for row in rows {
-        let active = is_active_status(&row.status);
+        let active = status::PROCESS_ACTIVE.contains(&row.status);
         let live = if active || row.unresolved_escape {
             row.reconciled_liveness()?
         } else {
@@ -56,7 +56,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
         let reconciled_status = if active && live {
             ProcessStatus::Running.as_str().to_string()
         } else {
-            row.status.clone()
+            row.status.as_str().to_string()
         };
         let borrower_count = match row.service_instance_id.as_deref() {
             Some(service_instance_id) => {
@@ -70,7 +70,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
             service_instance_id: row.service_instance_id,
             pid: row.pid,
             pgid: row.pgid,
-            registry_status: row.status,
+            registry_status: row.status.as_str().to_string(),
             reconciled_status,
             service_lifetime: row.service_lifetime,
             borrower_count,
@@ -124,7 +124,8 @@ pub fn down_processes(
     let rows = process_rows(registry)?;
     let mut stopped = Vec::new();
     for row in rows.into_iter().filter(|row| {
-        (is_active_status(&row.status) || row.unresolved_escape) && filter.matches(row)
+        (status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
+            && filter.matches(row)
     }) {
         if let Some(service_instance_id) = row.service_instance_id.as_deref() {
             let borrower_count = active_borrower_count(registry, service_instance_id, &row.run_id)?;
@@ -200,7 +201,7 @@ struct ProcessRow {
     command_json: String,
     run_id: String,
     service_instance_id: Option<String>,
-    status: String,
+    status: ProcessStatus,
     computed_manifest_hash: String,
     service_lifetime: Option<String>,
     unresolved_escape: bool,
@@ -330,7 +331,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                          )
                    THEN 1 ELSE 0 END
             FROM processes p
-            JOIN runs r ON r.run_id = p.run_id
+            LEFT JOIN runs r ON r.run_id = p.run_id
             LEFT JOIN services s ON s.service_instance_id = p.service_instance_id
             ORDER BY p.process_key
             ",
@@ -390,7 +391,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                     command_json,
                     run_id,
                     service_instance_id,
-                    status,
+                    status: ProcessStatus::parse_db(&status)?,
                     computed_manifest_hash,
                     service_lifetime,
                     unresolved_escape,
@@ -429,7 +430,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     let payload_json = serde_json::json!({
         "pid": row.pid,
         "pgid": row.pgid,
-        "previousStatus": row.status,
+        "previousStatus": row.status.as_str(),
         "command": row.command_json,
     })
     .to_string();
@@ -555,7 +556,7 @@ fn reconcile_until_idle_services(
 ) -> RuntimeResult<()> {
     for row in rows
         .iter()
-        .filter(|row| is_active_status(&row.status))
+        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status))
         .filter(|row| {
             row.service_lifetime.as_deref()
                 == Some(service_lifetime_as_str(ServiceLifetime::UntilIdle))
@@ -873,10 +874,6 @@ fn reconcile_unresolved_escape(registry: &mut Registry, row: &ProcessRow) -> Run
         service_instance_id,
         &row.computed_manifest_hash,
     )
-}
-
-fn is_active_status(status: &str) -> bool {
-    ProcessStatus::from_db(status).is_some_and(|status| status::PROCESS_ACTIVE.contains(&status))
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
