@@ -349,14 +349,19 @@ fn rejects_previous_model_columns_without_rewriting_history() {
 }
 
 #[test]
-fn rejects_existing_v1_registry_missing_required_shape() {
+fn rejects_current_registry_missing_required_shape() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
     {
         let conn = rusqlite::Connection::open(&path).expect("test DB should open");
+        conn.pragma_update(
+            None,
+            "user_version",
+            nixfied_runtime::registry::SCHEMA_VERSION,
+        )
+        .expect("test DB should use the current schema version");
         conn.execute_batch(
             "
-            PRAGMA user_version = 1;
             CREATE TABLE events (
               seq INTEGER PRIMARY KEY,
               at TEXT NOT NULL,
@@ -369,14 +374,18 @@ fn rejects_existing_v1_registry_missing_required_shape() {
             );
             ",
         )
-        .expect("test DB should be initialized as corrupt v1");
+        .expect("test DB should be initialized as corrupt current schema");
     }
 
     let error = match Registry::open_or_create(&path, &identity()) {
-        Ok(_) => panic!("existing v1 registry without required shape should fail"),
+        Ok(_) => panic!("current registry without required shape should fail"),
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert_eq!(
+        error.message,
+        "registry table events is missing required column environment"
+    );
 }
 
 #[test]

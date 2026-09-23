@@ -188,6 +188,9 @@ impl StartedService {
             }
             let probe_attempt = self.probe_attempt(probe, cancellation)?;
             cancellation.check()?;
+            if let Err(error) = self.ensure_start_process_live() {
+                return self.override_after_primary_exit_with_endpoint_evidence(registry, error);
+            }
             let observation = self.observe_endpoint_ownership();
             match observation {
                 OwnershipObservation::Complete(ownership) => {

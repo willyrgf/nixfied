@@ -25,6 +25,7 @@ let
     endpoint-reuse = "runtime";
     lease-authority = "runtime";
     escape-settlement = "runtime";
+    probe-settlement = "runtime";
     escaped-port-reconciliation = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;
