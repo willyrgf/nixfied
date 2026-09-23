@@ -1726,7 +1726,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+    let mut value = test_child_fixture_value(
         &[
             "detached-sleeper",
             "after-marker",
@@ -1735,18 +1735,23 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
             &detached_arg,
         ],
         port,
-    ));
-    let probe = &mut fixture
-        .manifest
-        .services
-        .get_mut("synthetic")
-        .expect("fixture has service")
-        .lifecycle
-        .ready
-        .probe;
-    probe.max_attempts = 30u32.try_into().unwrap();
-    probe.retry_interval_ms = 20u64.try_into().unwrap();
-    fixture.relower();
+    );
+    // Only the running exec probe requests the escape. It then stays blocked,
+    // so containment must be reconciled while the probe is in flight.
+    let mut invocation = value["services"]["synthetic"]["lifecycle"]["start"]["invocation"].clone();
+    let program = invocation["run"][0].clone();
+    invocation["run"] = json!([program, "output", "hex-block", "", "", request_arg]);
+    let tool = invocation["tools"][0].as_str().unwrap().to_owned();
+    value["closures"][&tool]["operationBindings"] = json!([
+        "service.synthetic.ready",
+        "service.synthetic.start",
+        "task.smoke.run"
+    ]);
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "kind": "exec", "invocation": invocation,
+        "timeoutMs": 1000, "retryIntervalMs": 20, "maxAttempts": 1
+    });
+    let mut fixture = ServiceFixture::from_value(value);
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -1760,16 +1765,24 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         wait_for_path(&armed, Duration::from_secs(3)),
         "service child should arm the escape request"
     );
-    fs::write(&request, []).expect("escape request should be written");
+    assert!(!request.exists(), "no escape request before the exec probe");
     assert!(
-        wait_for_path(&detached, Duration::from_secs(3)),
-        "detached child should exist before readiness reconciliation"
+        !detached.exists(),
+        "no detached child before the exec probe"
     );
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("readiness should report the monitored escape");
 
+    assert!(
+        request.exists(),
+        "the exec probe must have requested the escape"
+    );
+    assert!(
+        detached.exists(),
+        "the service must have escaped during the probe"
+    );
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ProcEscape);

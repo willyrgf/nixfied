@@ -186,6 +186,10 @@ when the manifest/runtime contract changes.
   process group, cancellation reaches the whole group, and a long-lived process
   counts as started only after its registry process record exists. Admission
   fails when a service requires stronger containment than the host supports.
+- Readiness and health reobserve service liveness after each completed probe,
+  before accepting readiness or settling probe timeout. A monitored service
+  escape during a probe remains `PROC_ESCAPE`, including on the last attempt;
+  endpoint evidence retains its existing failure precedence.
 - **REDACT-1:** runtime-owned persistent output is redacted before write,
   including captured child output, summaries, registry payloads, and runtime
   error JSON. Resolved secrets exist only in runtime memory and hermetic child

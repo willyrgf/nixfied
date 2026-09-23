@@ -1981,12 +1981,16 @@ mod tests {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
         value["services"]["svc"]["connectsTo"] = json!(["worker"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
             json!(["svc", "serve", "--peer", "${port:worker}"]);
         let error =
             lower(&manifest_from(value)).expect_err("named ref toward endpoint-less must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("worker"), "{}", error.message);
+        assert_eq!(
+            error.message,
+            "service svc references the endpoint of worker without declaring it in own endpoints or addressable connectsTo"
+        );
     }
 
     #[test]
@@ -2000,7 +2004,10 @@ mod tests {
         let error =
             lower(&manifest_from(value)).expect_err("named ref toward endpoint-less must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("worker"), "{}", error.message);
+        assert_eq!(
+            error.message,
+            "task t references the endpoint of worker without declaring it in addressable requires"
+        );
     }
 
     #[test]
