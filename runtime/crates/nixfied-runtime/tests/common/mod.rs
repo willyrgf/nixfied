@@ -132,7 +132,7 @@ pub fn test_child_manifest(port_start: u16, port_end: u16) -> Value {
 
 pub use nixfied_manifest::fixtures::{host_arch, host_os, host_system};
 
-use nixfied_manifest::{DirtyPolicy, Manifest, ServiceLifetime, SourceMode};
+use nixfied_manifest::{Manifest, ServiceLifetime};
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
     ServiceSelection, SlotEndpoints, StartedService, record_run_created, run_slot_clean,
@@ -140,38 +140,27 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
 use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
-use nixfied_runtime::{Admission, AdmittedSource, RuntimeResult};
+use nixfied_runtime::{Admission, RuntimeResult};
 
-/// Synthetic run admission for lifecycle/state tests; real admission checks are bypassed.
-pub fn synthetic_admission(manifest: &Manifest, source_root: &Path) -> Admission {
-    Admission {
-        manifest_path: PathBuf::from("/nix/store/test-manifest/manifest.json"),
-        computed_manifest_hash: "computed-hash".to_string(),
-        raw_len: 100,
-        project_id: manifest.project.project_id.clone(),
-        runtime_abi: manifest.runtime_abi.clone(),
-        toolchain_id: manifest.toolchain_id.clone(),
-        target_system: manifest.target.system.clone(),
-        source: Some(AdmittedSource {
-            codebase_id: "main".to_string(),
-            logical_root: ".".to_string(),
-            observed_root: source_root
-                .canonicalize()
-                .expect("source root should canonicalize"),
-            source_mode: SourceMode::LiveWorkspace,
-            source_identity: "live".to_string(),
-            dirty_policy: DirtyPolicy::Warn,
-            admission_fingerprint_policy: "live-fingerprint".to_string(),
-        }),
-        generator_json: serde_json::to_string(&manifest.generator).unwrap(),
-        target_json: serde_json::to_string(&manifest.target).unwrap(),
-        execution_manifest: nixfied_runtime::execution::lower(
-            &nixfied_manifest::ValidatedManifest::try_from(manifest.clone())
-                .expect("fixture must validate"),
-        )
-        .expect("manifest should lower"),
-        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
-    }
+/// Admit raw fixture bytes with explicit workspace and store boundaries.
+pub fn admit_fixture_bytes(raw: &[u8], source_root: &Path, store_root: &Path) -> Admission {
+    use nixfied_runtime::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
+    let path = source_root.join("manifest.json");
+    fs::write(&path, raw).expect("fixture manifest should write");
+    let loaded = nixfied_runtime::manifest_loader::load_manifest(&path)
+        .expect("fixture manifest should load");
+    let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
+    context.invocation_root = InvocationRoot::Path(source_root.to_owned());
+    context.store_root = store_root.to_owned();
+    Admission::check(&loaded, &context).expect("fixture manifest should admit")
+}
+
+pub fn fixture_admission(manifest: &Manifest, source_root: &Path) -> Admission {
+    admit_fixture_bytes(
+        &serde_json::to_vec(manifest).expect("fixture should serialize"),
+        source_root,
+        Path::new("/nix/store"),
+    )
 }
 
 /// The fixture service name. The production runtime crate is service-name

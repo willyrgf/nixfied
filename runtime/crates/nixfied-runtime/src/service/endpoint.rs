@@ -1444,18 +1444,16 @@ mod tests {
 
     #[test]
     fn unsafe_lock_root_fails_the_real_start_path_before_prepare() {
-        use crate::admission::secrets::ResolvedSecrets;
+        use crate::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
         use crate::cancellation::CancellationToken;
         use crate::registry::{Registry, RegistryIdentity};
         use crate::service::process::{ServiceSelection, start_service_for_slot};
         use crate::service::record_run_created;
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
-        use crate::{Admission, AdmittedSource, ErrorCode};
+        use crate::{Admission, ErrorCode};
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
-        use nixfied_manifest::{
-            DirtyPolicy, Manifest, ServiceLifetime, SourceMode, ValidatedManifest,
-        };
+        use nixfied_manifest::{Manifest, ServiceLifetime};
         use serde_json::json;
 
         let unsafe_root = TestRoot::new();
@@ -1468,7 +1466,7 @@ mod tests {
         let port = held.local_addr().unwrap().port();
         drop(held);
         let mut value = synthetic_manifest(&SyntheticManifestOptions {
-            executable: "/bin/sleep".to_string(),
+            executable: std::env::var("NIXFIED_TEST_SLEEP").expect("Nix-built sleep fixture"),
             start_args: vec!["30".to_string()],
             port_start: port,
             port_end: port,
@@ -1479,7 +1477,12 @@ mod tests {
         value["tasks"]["smoke"]["servicesRequired"] = json!([]);
         value["tasks"]["smoke"]["invocation"]["run"] = json!(["sleep", "0"]);
         let manifest: Manifest = serde_json::from_value(value).unwrap();
-        ValidatedManifest::try_from(manifest.clone()).unwrap();
+        let manifest_path = workspace.0.join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let loaded = crate::manifest_loader::load_manifest(&manifest_path).unwrap();
+        let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
+        context.invocation_root = InvocationRoot::Path(workspace.0.clone());
+        let admission = Admission::check(&loaded, &context).unwrap();
         let selected = select_slot(&manifest, None).unwrap();
         let placement = derive_host_placement_for_slot(
             &manifest,
@@ -1500,32 +1503,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let admission = Admission {
-            manifest_path: workspace.0.join("manifest.json"),
-            computed_manifest_hash: "unsafe-root-test-hash".to_string(),
-            raw_len: 1,
-            project_id: manifest.project.project_id.clone(),
-            runtime_abi: manifest.runtime_abi.clone(),
-            toolchain_id: manifest.toolchain_id.clone(),
-            target_system: manifest.target.system.clone(),
-            source: Some(AdmittedSource {
-                codebase_id: "main".to_string(),
-                logical_root: ".".to_string(),
-                observed_root: workspace.0.canonicalize().unwrap(),
-                source_mode: SourceMode::LiveWorkspace,
-                source_identity: "live".to_string(),
-                dirty_policy: DirtyPolicy::Warn,
-                admission_fingerprint_policy: "live-fingerprint".to_string(),
-            }),
-            generator_json: serde_json::to_string(&manifest.generator).unwrap(),
-            target_json: serde_json::to_string(&manifest.target).unwrap(),
-            execution_manifest: crate::execution::lower(
-                &nixfied_manifest::ValidatedManifest::try_from(manifest.clone())
-                    .expect("fixture must validate"),
-            )
-            .unwrap(),
-            secrets: ResolvedSecrets::empty(),
-        };
         record_run_created(
             &mut registry,
             "run-unsafe-lock-root",

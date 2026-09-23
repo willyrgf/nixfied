@@ -107,7 +107,7 @@ fn slot_one_marker_records_selected_identity() {
     let mut value = fixture_manifest();
     add_slot_one(&mut value, 23180, 23190);
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should parse");
-    let admission = synthetic_admission(&manifest, &tmp.path);
+    let admission = fixture_admission(&manifest, &tmp.path);
     let selected = select_slot(&manifest, Some(1)).expect("slot 1 should select");
     let layout = derive_host_placement_for_slot(&manifest, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
@@ -977,7 +977,7 @@ impl StateFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
         let manifest = manifest();
-        let admission = synthetic_admission(&manifest, &tmp.path);
+        let admission = fixture_admission(&manifest, &tmp.path);
         let layout =
             derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
