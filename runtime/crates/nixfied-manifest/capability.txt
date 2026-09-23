@@ -92,6 +92,7 @@ lease-authority: open-lease-blocks-replacement exact-reuse-adds-borrower expired
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence
 service-ownership: guarded-ready-rollback initial-health-failed-start-settlement failed-standing-owned-cleanup settlement-error-retains-lifecycle-cause committed-standing-transfer borrower-lease-only
+bounded-capture: always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown persistent-transfer
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation
 escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 

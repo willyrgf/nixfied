@@ -26,6 +26,15 @@ fn cause_message(error: &RuntimeError) -> String {
         ErrorCode::TaskFailed => task_failure_cause_message(&error.details)
             .unwrap_or_else(|| format!("cause: {}", error_code_wire(error.code))),
         ErrorCode::Canceled | ErrorCode::DependencyUnavailable => error.message.clone(),
+        ErrorCode::SecretLeakBlocked
+            if matches!(
+                error.message.as_str(),
+                "captured stdout did not reach EOF before shutdown deadline"
+                    | "captured stderr did not reach EOF before shutdown deadline"
+            ) =>
+        {
+            error.message.clone()
+        }
         _ => format!("cause: {}", error_code_wire(error.code)),
     }
 }

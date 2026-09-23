@@ -76,6 +76,32 @@ fn listen(args: &[String]) -> Result<(), String> {
 
 fn output(args: &[String]) -> Result<(), String> {
     match args {
+        [mode, activity, pid_path, acknowledgement, stdout, stderr] if mode == "escaped-writer" => {
+            if !matches!(activity.as_str(), "idle" | "continuous") {
+                return Err("escaped-writer activity must be idle or continuous".into());
+            }
+            let pid_path = Path::new(pid_path);
+            let acknowledgement = Path::new(acknowledgement);
+            if fork_process()? == 0 {
+                child_exit((|| {
+                    create_session()?;
+                    write_hex_output(stdout, stderr)?;
+                    write_pid(pid_path)?;
+                    wait_for_path(acknowledgement, MARKER_TIMEOUT)?;
+                    if activity == "continuous" {
+                        let chunk = [b'x'; 8192];
+                        while io::stdout().write_all(&chunk).is_ok()
+                            && io::stderr().write_all(&chunk).is_ok()
+                        {}
+                    }
+                    // Capture completion cannot claim that this escaped process died.
+                    park_forever()
+                })());
+            }
+            wait_for_path(pid_path, MARKER_TIMEOUT)?;
+            wait_for_path(acknowledgement, MARKER_TIMEOUT)?;
+            std::process::exit(7)
+        }
         [mode, stdout, stderr] if mode == "literal" => {
             io::stdout()
                 .write_all(stdout.as_bytes())

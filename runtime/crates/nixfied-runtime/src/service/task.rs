@@ -1,21 +1,18 @@
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 
 use crate::admission::RunAdmission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecTask, ResolvedInvocation};
+use crate::execution::ExecTask;
 use crate::output::{EvidenceMode, ReplayTicket};
-use crate::redaction::{RedactedLogRelays, Redactor, child_output};
+use crate::redaction::Redactor;
 use crate::registry::Registry;
 use crate::service::process::{
-    BoundedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity,
-    resolve_exec_cwd, terminate_and_reap,
+    BoundedExec, BoundedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService,
+    TerminationReason, platform_start_identity, resolve_exec_cwd, spawn_bounded_exec,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
@@ -243,17 +240,20 @@ pub fn run_dependent_task_cancellable(
     })?;
     cancellation.check().map_err(TaskExecutionError::before)?;
     let started = Instant::now();
-    let mut child = spawn_task(
-        exec,
-        &args,
-        &env,
-        &command_cwd,
-        &stdout_path,
-        &stderr_path,
-        run_context.redactor,
-    )
+    let child = spawn_bounded_exec(&BoundedExec {
+        executable: &exec.executable,
+        args: &args,
+        env: &env,
+        cwd: &command_cwd,
+        stdin: exec.stdin,
+        timeout: task.timeout,
+        stdout_path: &stdout_path,
+        stderr_path: &stderr_path,
+        redactor: run_context.redactor,
+        label: "task process",
+    })
     .map_err(TaskExecutionError::before)?;
-    let pid = child.child.id();
+    let pid = child.pid();
     // process_group(0) establishes the owned group before the child execs.
     let pgid = pid as i32;
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
@@ -270,55 +270,41 @@ pub fn run_dependent_task_cancellable(
             computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
         },
     ) {
-        return Err(TaskExecutionError::before(cleanup_unrecorded_task(
-            child, error,
-        )));
+        return Err(TaskExecutionError::before(child.abort(error)));
     }
-    let outcome = wait_for_task(
-        registry,
-        &mut child.child,
-        pgid,
-        task.timeout.as_millis() as u64,
-        cancellation,
-        TaskCancellationContext {
-            run_id: run_context.run_id,
-            task_id,
-            process_key: &process_key,
-            computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
-        },
-    )
-    .map_err(TaskExecutionError::before)?;
-    child.logs.join().map_err(TaskExecutionError::before)?;
+    let outcome = child
+        .complete(cancellation, |reason| {
+            record_task_cancellation_intent(
+                registry,
+                &TaskCancellationContext {
+                    run_id: run_context.run_id,
+                    task_id,
+                    process_key: &process_key,
+                    computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
+                },
+                pgid,
+                match reason {
+                    TerminationReason::Canceled => "run canceled",
+                    TerminationReason::TimedOut => "task timeout",
+                },
+            )
+        })
+        .map_err(|failure| {
+            let mut error = *failure.error;
+            if let Some(outcome) = failure.outcome {
+                let (_, terminal) = task_terminal(task, &outcome);
+                if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
+                    error = error.with_cause(outcome_error);
+                }
+            }
+            TaskExecutionError::before(error)
+        })?;
     let duration_ms = elapsed_ms(started);
-    let (exit_code, terminal_status) = match outcome {
-        BoundedExecOutcome::Exited(status) => {
-            let code = status.code();
-            let terminal = if code.is_some_and(|code| task.success_codes.contains(&code)) {
-                TaskTerminalStatus::Succeeded
-            } else {
-                TaskTerminalStatus::Failed
-            };
-            (code, terminal)
-        }
-        BoundedExecOutcome::TimedOut => (None, TaskTerminalStatus::TimedOut),
-        BoundedExecOutcome::Canceled => (None, TaskTerminalStatus::Canceled),
-    };
+    let (exit_code, terminal_status) = task_terminal(task, &outcome);
     let success = terminal_status == TaskTerminalStatus::Succeeded;
     let timed_out = terminal_status == TaskTerminalStatus::TimedOut;
     let canceled = terminal_status == TaskTerminalStatus::Canceled;
-    let failure_message = if timed_out {
-        format!(
-            "task {task_id} timed out after {}ms",
-            task.timeout.as_millis()
-        )
-    } else {
-        format!(
-            "task {task_id} exited with code {}",
-            exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        )
-    };
+    let outcome_error = task_outcome_error(task, &outcome, terminal_status);
     let run = TaskRun {
         task_id: task_id.to_string(),
         step_path: node_id.to_string(),
@@ -380,18 +366,62 @@ pub fn run_dependent_task_cancellable(
     // carry it on the error so the failure surface links to it instead of
     // discarding it. A timeout is an execution failure, not an operator
     // cancellation — only a canceled run reports CANCELED.
-    if success {
-        Ok(TaskExecution::Succeeded(evidence))
-    } else if canceled {
-        Ok(TaskExecution::Failed {
-            error: RuntimeError::new(ErrorCode::Canceled, canceled_error().message),
-            evidence,
-        })
-    } else {
-        Ok(TaskExecution::Failed {
-            error: RuntimeError::new(ErrorCode::TaskFailed, failure_message),
-            evidence,
-        })
+    match outcome_error {
+        None => Ok(TaskExecution::Succeeded(evidence)),
+        Some(error) => Ok(TaskExecution::Failed { error, evidence }),
+    }
+}
+
+fn task_terminal(
+    task: &ExecTask,
+    outcome: &BoundedExecOutcome,
+) -> (Option<i32>, TaskTerminalStatus) {
+    match outcome {
+        BoundedExecOutcome::Exited(status) => {
+            let code = status.code();
+            let terminal = if code.is_some_and(|code| task.success_codes.contains(&code)) {
+                TaskTerminalStatus::Succeeded
+            } else {
+                TaskTerminalStatus::Failed
+            };
+            (code, terminal)
+        }
+        BoundedExecOutcome::TimedOut => (None, TaskTerminalStatus::TimedOut),
+        BoundedExecOutcome::Canceled => (None, TaskTerminalStatus::Canceled),
+    }
+}
+
+fn task_outcome_error(
+    task: &ExecTask,
+    outcome: &BoundedExecOutcome,
+    terminal: TaskTerminalStatus,
+) -> Option<RuntimeError> {
+    match terminal {
+        TaskTerminalStatus::Succeeded => None,
+        TaskTerminalStatus::Canceled => Some(canceled_error()),
+        TaskTerminalStatus::TimedOut => Some(RuntimeError::new(
+            ErrorCode::TaskFailed,
+            format!(
+                "task {} timed out after {}ms",
+                task.task_id,
+                task.timeout.as_millis()
+            ),
+        )),
+        TaskTerminalStatus::Failed => {
+            let code = match outcome {
+                BoundedExecOutcome::Exited(status) => status.code(),
+                _ => None,
+            };
+            Some(RuntimeError::new(
+                ErrorCode::TaskFailed,
+                format!(
+                    "task {} exited with code {}",
+                    task.task_id,
+                    code.map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".into())
+                ),
+            ))
+        }
     }
 }
 
@@ -423,95 +453,6 @@ fn ensure_task_dependencies(
         )?;
     }
     Ok(())
-}
-
-fn spawn_task(
-    exec: &ResolvedInvocation,
-    args: &[String],
-    env: &std::collections::BTreeMap<String, String>,
-    command_cwd: &Path,
-    stdout_path: &Path,
-    stderr_path: &Path,
-    redactor: &Redactor,
-) -> RuntimeResult<SpawnedTask> {
-    let output = child_output(stdout_path, stderr_path, redactor)?;
-    let mut command = Command::new(&exec.executable);
-    // Hermetic child environment: declared env + runtime-owned PATH only.
-    command
-        .env_clear()
-        .args(args)
-        .current_dir(command_cwd)
-        .envs(env)
-        .stdin(crate::service::process::stdin_for(exec.stdin))
-        .stdout(output.stdout)
-        .stderr(output.stderr);
-    command.process_group(0);
-    let child = command.spawn().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to spawn task process: {error}"),
-        )
-    })?;
-    Ok(SpawnedTask {
-        child,
-        logs: output.relays,
-    })
-}
-
-struct SpawnedTask {
-    child: Child,
-    logs: RedactedLogRelays,
-}
-
-fn cleanup_unrecorded_task(mut task: SpawnedTask, error: RuntimeError) -> RuntimeError {
-    let pgid = task.child.id() as i32;
-    if let Err(cleanup) = terminate_and_reap(&mut task.child, pgid) {
-        return cleanup.with_cause(error);
-    }
-    match task.logs.join() {
-        Ok(()) => error,
-        Err(relay) => error.with_cause(relay),
-    }
-}
-
-fn wait_for_task(
-    registry: &mut Registry,
-    child: &mut Child,
-    pgid: i32,
-    timeout_ms: u64,
-    cancellation: &CancellationToken,
-    context: TaskCancellationContext<'_>,
-) -> RuntimeResult<BoundedExecOutcome> {
-    let timeout = Duration::from_millis(timeout_ms);
-    let deadline = Instant::now() + timeout;
-    let outcome = loop {
-        if cancellation.is_canceled() {
-            break record_task_cancellation_intent(registry, &context, pgid, "run canceled")
-                .map(|()| BoundedExecOutcome::Canceled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                break Ok(BoundedExecOutcome::Exited(status));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                break Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to inspect task process: {error}"),
-                ));
-            }
-        }
-        if Instant::now() >= deadline {
-            break record_task_cancellation_intent(registry, &context, pgid, "task timeout")
-                .map(|()| BoundedExecOutcome::TimedOut);
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    match (terminate_and_reap(child, pgid), outcome) {
-        (Ok(()), outcome) => outcome,
-        (Err(cleanup), Ok(_)) => Err(cleanup),
-        (Err(cleanup), Err(error)) => Err(cleanup.with_cause(error)),
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -589,7 +530,7 @@ struct TaskCommandRecord<'a> {
 mod tests {
     use super::*;
     use crate::registry::RegistryIdentity;
-    use std::process::Stdio;
+    use std::time::Duration;
 
     #[test]
     fn cancellation_recording_failure_still_contains_and_reaps_child() {
@@ -611,40 +552,51 @@ mod tests {
             .connection()
             .execute("DROP TABLE events", [])
             .unwrap();
-        let mut child = Command::new("/bin/sleep")
-            .arg("30")
-            .process_group(0)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let pgid = child.id() as i32;
+        let child = spawn_bounded_exec(&BoundedExec {
+            executable: &std::env::var("NIXFIED_TEST_SLEEP").unwrap(),
+            args: &["30".into()],
+            env: &std::collections::BTreeMap::new(),
+            cwd: &root,
+            stdin: nixfied_manifest::StdinPolicy::Null,
+            timeout: Duration::from_secs(5),
+            stdout_path: &root.join("stdout"),
+            stderr_path: &root.join("stderr"),
+            redactor: &Redactor::empty(),
+            label: "task process",
+        })
+        .unwrap();
+        let pgid = child.pid() as i32;
         let cancellation = CancellationToken::new();
         cancellation.cancel();
-        let error = wait_for_task(
-            &mut registry,
-            &mut child,
-            pgid,
-            5000,
-            &cancellation,
-            TaskCancellationContext {
-                run_id: "test",
-                task_id: "task",
-                process_key: "process",
-                computed_manifest_hash: "hash",
-            },
-        )
-        .err()
-        .unwrap();
-        let exited = child.try_wait().unwrap().is_some();
-        if !exited {
-            child.kill().unwrap();
-            child.wait().unwrap();
-        }
+        let failure = child
+            .complete(&cancellation, |_| {
+                assert_eq!(
+                    unsafe { libc::kill(pgid, 0) },
+                    0,
+                    "intent precedes termination"
+                );
+                record_task_cancellation_intent(
+                    &mut registry,
+                    &TaskCancellationContext {
+                        run_id: "test",
+                        task_id: "task",
+                        process_key: "process",
+                        computed_manifest_hash: "hash",
+                    },
+                    pgid,
+                    "task canceled",
+                )
+            })
+            .err()
+            .unwrap();
+        let exited = unsafe { libc::kill(pgid, 0) } == -1;
+        assert!(matches!(
+            failure.outcome,
+            Some(BoundedExecOutcome::Canceled)
+        ));
         drop(registry);
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert_eq!(failure.error.code, ErrorCode::RegistryCorrupt);
         assert!(
             exited,
             "failed intent recording must not bypass owned child containment"

@@ -30,6 +30,7 @@ let
     escape-settlement = "runtime";
     probe-settlement = "runtime";
     service-ownership = "runtime";
+    bounded-capture = "runtime";
     finalization = "runtime";
     escaped-port-reconciliation = "runtime";
   };
