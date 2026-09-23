@@ -21,12 +21,12 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: macOS endpoint observer
+      - name: macOS process, endpoint, and capture proofs
         run: |
           nix develop --command bash -euo pipefail -c '
             cd runtime
             cargo test -p nixfied-runtime --lib
-            cargo test -p nixfied-runtime --test endpoint
+            cargo test -p nixfied-runtime --test endpoint --test service --test output
           '
 
   checks:
