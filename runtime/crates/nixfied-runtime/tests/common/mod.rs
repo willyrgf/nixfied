@@ -140,22 +140,20 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
 use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
-use nixfied_runtime::{Admission, RuntimeResult};
+use nixfied_runtime::{RunAdmission, RuntimeResult};
 
 /// Admit raw fixture bytes with explicit workspace and store boundaries.
-pub fn admit_fixture_bytes(raw: &[u8], source_root: &Path, store_root: &Path) -> Admission {
+pub fn admit_fixture_bytes(raw: &[u8], source_root: &Path, store_root: &Path) -> RunAdmission {
     use nixfied_runtime::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
     let path = source_root.join("manifest.json");
     fs::write(&path, raw).expect("fixture manifest should write");
-    let loaded = nixfied_runtime::manifest_loader::load_manifest(&path)
-        .expect("fixture manifest should load");
     let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
     context.invocation_root = InvocationRoot::Path(source_root.to_owned());
     context.store_root = store_root.to_owned();
-    Admission::check(&loaded, &context).expect("fixture manifest should admit")
+    nixfied_runtime::admit_run(&path, &context).expect("fixture manifest should admit")
 }
 
-pub fn fixture_admission(manifest: &Manifest, source_root: &Path) -> Admission {
+pub fn fixture_admission(manifest: &Manifest, source_root: &Path) -> RunAdmission {
     admit_fixture_bytes(
         &serde_json::to_vec(manifest).expect("fixture should serialize"),
         source_root,
@@ -241,7 +239,7 @@ fn service_lifetime_wire(lifetime: ServiceLifetime) -> &'static str {
 /// generic runtime API.
 pub fn start_synthetic_service(
     manifest: &Manifest,
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -260,7 +258,7 @@ pub fn start_synthetic_service(
 
 pub fn start_synthetic_service_with_lifetime(
     manifest: &Manifest,
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -282,7 +280,7 @@ pub fn start_synthetic_service_with_lifetime(
 /// Start the fixture's `synthetic` service on a chosen slot through the generic
 /// runtime API, with no wired endpoints.
 pub fn start_synthetic_service_for_slot(
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -301,7 +299,7 @@ pub fn start_synthetic_service_for_slot(
 }
 
 pub fn start_synthetic_service_for_slot_with_lifetime(
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -338,15 +336,14 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
 /// `[synthetic]`, so the generic slot clean equals cleaning the single service
 /// plus the slot state.
 pub fn run_synthetic_service_clean_for_slot(
-    manifest: &Manifest,
-    admission: &Admission,
+    _manifest: &Manifest,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
     run_slot_clean(
-        manifest,
-        admission,
+        admission.common(),
         placement,
         registry,
         selected_slot,

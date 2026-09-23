@@ -1,10 +1,10 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy, Target};
+use nixfied_manifest::{CleanupPolicy, PersistencePolicy, Target};
 use serde::{Deserialize, Serialize};
 
-use crate::admission::Admission;
+use crate::admission::ControlAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::slot::SelectedSlot;
 use crate::state::placement::HostPlacement;
@@ -28,29 +28,19 @@ pub struct StateIdentity {
 }
 
 impl StateIdentity {
-    pub fn from_manifest(manifest: &Manifest, admission: &Admission) -> Self {
-        Self::for_slot(manifest, admission, "dev", 0)
+    pub fn from_admission(admission: &ControlAdmission) -> Self {
+        Self::for_slot(admission, "dev", 0)
     }
 
     pub fn from_selected_slot(
-        manifest: &Manifest,
-        admission: &Admission,
+        admission: &ControlAdmission,
         selected_slot: &SelectedSlot<'_>,
     ) -> Self {
-        Self::for_slot(
-            manifest,
-            admission,
-            selected_slot.environment,
-            selected_slot.slot,
-        )
+        Self::for_slot(admission, selected_slot.environment, selected_slot.slot)
     }
 
-    pub fn for_slot(
-        manifest: &Manifest,
-        admission: &Admission,
-        environment: &str,
-        slot: u32,
-    ) -> Self {
+    pub fn for_slot(admission: &ControlAdmission, environment: &str, slot: u32) -> Self {
+        let manifest = admission.manifest();
         Self {
             marker_identity: manifest.state.marker_identity.clone(),
             project_id: manifest.project.project_id.clone(),
@@ -59,10 +49,10 @@ impl StateIdentity {
             state_epoch: manifest.state.state_epoch.clone(),
             cleanup_policy: manifest.state.cleanup_policy.clone(),
             persistence: manifest.state.persistence.clone(),
-            manifest_path: admission.manifest_path.clone(),
-            computed_manifest_hash: admission.computed_manifest_hash.clone(),
-            runtime_abi: admission.runtime_abi.clone(),
-            toolchain_id: admission.toolchain_id.clone(),
+            manifest_path: admission.manifest_path().to_path_buf(),
+            computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
+            runtime_abi: admission.runtime_abi().to_owned(),
+            toolchain_id: admission.toolchain_id().to_owned(),
             target: manifest.target.clone(),
         }
     }

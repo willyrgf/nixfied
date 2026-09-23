@@ -1,6 +1,6 @@
 use crate::admission::{AdmissionContext, StoreOriginPolicy};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::manifest_loader::{LoadedManifest, RawManifest};
+use crate::manifest_loader::RawManifest;
 
 pub fn check_raw_store_origin(
     raw_manifest: &RawManifest,
@@ -21,28 +21,6 @@ pub fn check_raw_store_origin(
             ),
         )
         .with_manifest(&raw_manifest.path, &raw_manifest.computed_manifest_hash))
-    }
-}
-
-pub fn check_store_origin(
-    loaded: &LoadedManifest,
-    context: &AdmissionContext,
-) -> RuntimeResult<()> {
-    if context.policy == StoreOriginPolicy::AllowNonStoreForTests {
-        return Ok(());
-    }
-    if canonical_under_store(loaded.path(), &context.store_root).is_some() {
-        Ok(())
-    } else {
-        Err(RuntimeError::new(
-            ErrorCode::ManifestNotStoreOutput,
-            format!(
-                "manifest path {} is not under {}",
-                loaded.path().display(),
-                context.store_root.display()
-            ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()))
     }
 }
 

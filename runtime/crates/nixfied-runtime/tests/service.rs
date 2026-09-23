@@ -24,7 +24,7 @@ use nixfied_runtime::state::{
     CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
     derive_host_placement_for_slot, materialize_run_roots,
 };
-use nixfied_runtime::{Admission, ErrorCode, RuntimeError};
+use nixfied_runtime::{ErrorCode, RunAdmission, RuntimeError};
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
@@ -105,14 +105,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .expect("process command should exist");
     assert_eq!(
         command_json["cwd"],
-        json!(
-            fixture
-                .admission
-                .require_source()
-                .unwrap()
-                .observed_root
-                .to_string_lossy()
-        )
+        json!(fixture.admission.source().observed_root.to_string_lossy())
     );
 
     service
@@ -384,8 +377,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .expect("service should stop");
 
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
-    let identity =
-        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
+    let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup = run_synthetic_service_clean_for_slot(
         &fixture.manifest,
@@ -712,7 +704,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
             .any(|process| process.live)
     );
 
-    let slot0_identity = StateIdentity::from_selected_slot(&manifest, &admission, &slot0.selected);
+    let slot0_identity = StateIdentity::from_selected_slot(admission.common(), &slot0.selected);
     clean_marked_state(
         &slot0.placement.state_base,
         &slot0.placement.state_root,
@@ -724,7 +716,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     assert!(!slot0.placement.state_root.exists());
     assert!(slot1.placement.state_root.exists());
 
-    let slot1_identity = StateIdentity::from_selected_slot(&manifest, &admission, &slot1.selected);
+    let slot1_identity = StateIdentity::from_selected_slot(admission.common(), &slot1.selected);
     clean_marked_state(
         &slot1.placement.state_base,
         &slot1.placement.state_root,
@@ -793,11 +785,17 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     let task = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext::from_service(&service),
+        RunContext::new(
+            &fixture.admission,
+            &service.run_id,
+            &fixture.placement.state_root,
+            &service.redactor,
+        ),
         &[&service],
         fixture
             .admission
-            .execution_manifest
+            .common()
+            .execution_manifest()
             .leaf("smoke")
             .expect("smoke task"),
     )
@@ -875,11 +873,17 @@ fn dependent_task_refuses_to_run_before_service_ready() {
     let error = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext::from_service(&service),
+        RunContext::new(
+            &fixture.admission,
+            &service.run_id,
+            &fixture.placement.state_root,
+            &service.redactor,
+        ),
         &[&service],
         fixture
             .admission
-            .execution_manifest
+            .common()
+            .execution_manifest()
             .leaf("smoke")
             .expect("smoke task"),
     )
@@ -1303,12 +1307,18 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     let result = run_dependent_task_cancellable(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext::from_service(&service),
+        RunContext::new(
+            &fixture.admission,
+            &service.run_id,
+            &fixture.placement.state_root,
+            &service.redactor,
+        ),
         &[&service],
         "smoke",
         fixture
             .admission
-            .execution_manifest
+            .common()
+            .execution_manifest()
             .leaf("smoke")
             .expect("smoke task"),
         &cancellation,
@@ -1431,11 +1441,17 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     let result = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext::from_service(&service),
+        RunContext::new(
+            &fixture.admission,
+            &service.run_id,
+            &fixture.placement.state_root,
+            &service.redactor,
+        ),
         &[&service],
         fixture
             .admission
-            .execution_manifest
+            .common()
+            .execution_manifest()
             .leaf("smoke")
             .expect("smoke task"),
     )
@@ -2596,8 +2612,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
-    let identity =
-        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
+    let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let mut owner = start_synthetic_service_with_lifetime(
         &fixture.manifest,
@@ -2921,7 +2936,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
     assert_eq!(lease_stale_events, 1);
     assert_eq!(
         lease_stale_hash.as_deref(),
-        Some(fixture.admission.computed_manifest_hash.as_str())
+        Some(fixture.admission.common().computed_manifest_hash())
     );
 
     // The old runtime handle still owns the startup lock even though its child
@@ -3083,8 +3098,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     assert_eq!(escaped.reconciled_status, "escaped");
 
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
-    let identity =
-        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
+    let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup_error = clean_marked_state(
         &fixture.placement.state_base,
@@ -3401,7 +3415,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .expect("test should mark lease canceling");
     commit_slot_marker(
         &fixture.placement,
-        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
+        &StateIdentity::from_admission(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -3446,7 +3460,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
-        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
+        &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -3572,7 +3586,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let task_command_json = json!({
         "executable": &test_sleep(),
         "args": ["30"],
-        "cwd": fixture.admission.require_source().unwrap().observed_root.to_string_lossy(),
+        "cwd": fixture.admission.source().observed_root.to_string_lossy(),
         "stdoutPath": fixture.placement.logs_dir.join("task.smoke.stdout.log").to_string_lossy(),
         "stderrPath": fixture.placement.logs_dir.join("task.smoke.stderr.log").to_string_lossy(),
     })
@@ -3615,7 +3629,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .expect("test should mark lease canceling");
     commit_slot_marker(
         &fixture.placement,
-        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
+        &StateIdentity::from_admission(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -3679,7 +3693,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
-        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
+        &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -3766,28 +3780,21 @@ fn task_child_path_is_assembled_from_tool_roots() {
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
-        .execution_manifest
+        .common()
+        .execution_manifest()
         .leaf("smoke")
         .expect("task lowered")
-        .clone();
-    let source_root = fixture
-        .admission
-        .require_source()
-        .expect("run admission resolves source")
-        .observed_root
         .clone();
     let redactor = Redactor::empty();
     let run = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext {
-            run_id: "run-path-proof",
-            computed_manifest_hash: &fixture.admission.computed_manifest_hash,
-            source_root: &source_root,
-            state_root: &fixture.placement.state_root,
-            secrets: &fixture.admission.secrets,
-            redactor: &redactor,
-        },
+        RunContext::new(
+            &fixture.admission,
+            "run-path-proof",
+            &fixture.placement.state_root,
+            &redactor,
+        ),
         &[],
         &task,
     )
@@ -3827,28 +3834,21 @@ fn task_child_environment_is_hermetic() {
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
-        .execution_manifest
+        .common()
+        .execution_manifest()
         .leaf("smoke")
         .expect("task lowered")
-        .clone();
-    let source_root = fixture
-        .admission
-        .require_source()
-        .expect("run admission resolves source")
-        .observed_root
         .clone();
     let redactor = Redactor::empty();
     let run = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
-        RunContext {
-            run_id: "run-hermetic-proof",
-            computed_manifest_hash: &fixture.admission.computed_manifest_hash,
-            source_root: &source_root,
-            state_root: &fixture.placement.state_root,
-            secrets: &fixture.admission.secrets,
-            redactor: &redactor,
-        },
+        RunContext::new(
+            &fixture.admission,
+            "run-hermetic-proof",
+            &fixture.placement.state_root,
+            &redactor,
+        ),
         &[],
         &task,
     )
@@ -4109,7 +4109,7 @@ fn start_endpoint_less_service(
 struct ServiceFixture {
     _tmp: TempDir,
     manifest: Manifest,
-    admission: Admission,
+    admission: RunAdmission,
     placement: nixfied_runtime::state::HostPlacement,
     registry: Registry,
 }
@@ -4163,7 +4163,7 @@ impl ServiceFixture {
 
 fn record_fixture_run(
     registry: &mut Registry,
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &nixfied_runtime::state::HostPlacement,
     run_id: &str,
 ) {
@@ -4247,7 +4247,7 @@ struct StartedSlot<'a> {
 impl<'a> StartedSlot<'a> {
     fn start(
         manifest: &'a Manifest,
-        admission: &Admission,
+        admission: &RunAdmission,
         state_base: &Path,
         slot: u32,
         run_id: &str,
@@ -4257,7 +4257,7 @@ impl<'a> StartedSlot<'a> {
         let placement = derive_host_placement_for_slot(manifest, &selected, run_id, state_base)
             .expect("slot placement should derive");
         materialize_run_roots(&placement).expect("slot roots should materialize");
-        let identity = StateIdentity::from_selected_slot(manifest, admission, &selected);
+        let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
         commit_slot_marker(&placement, &identity).expect("slot marker should be written");
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
@@ -4297,7 +4297,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
-    let service = &fixture.admission.execution_manifest.services()["synthetic"];
+    let service = &fixture.admission.common().execution_manifest().services()["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
     let endpoint_key = format!("{instance_id}:synthetic-tcp");
@@ -4366,7 +4366,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
 #[test]
 fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
     let mut fixture = endpoint_less_fixture();
-    let service = &fixture.admission.execution_manifest.services()["synthetic"];
+    let service = &fixture.admission.common().execution_manifest().services()["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
     insert_crashed_reservation(

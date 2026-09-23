@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use nixfied_manifest::{DirtyPolicy, Manifest, SourceMode};
+use nixfied_manifest::{DirtyPolicy, SourceMode, ValidatedManifest};
 use serde::Serialize;
 
 use crate::admission::origin;
@@ -19,22 +19,11 @@ pub struct AdmittedSource {
     pub admission_fingerprint_policy: String,
 }
 
-pub fn check_source(
-    manifest: &Manifest,
+pub(super) fn check_source(
+    manifest: &ValidatedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<AdmittedSource> {
-    let [codebase] = manifest.codebases.as_slice() else {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            "requires exactly one codebase",
-        ));
-    };
-    if codebase.codebase_id.as_str() != "main" {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            "requires codebase main",
-        ));
-    }
+    let codebase = &manifest.codebases[0]; // Structural construction proves one main codebase.
     let observed_root = match codebase.source_mode {
         SourceMode::LiveWorkspace => {
             match codebase.source_policy.dirty_policy {

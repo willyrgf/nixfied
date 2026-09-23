@@ -1,16 +1,16 @@
-pub mod closures;
-pub mod origin;
+mod closures;
+mod origin;
 pub mod secrets;
 pub mod source;
-pub mod target;
+mod target;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nixfied_manifest::Manifest;
 
-use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::error::RuntimeResult;
 use crate::execution::{ExecutionManifest, lower};
-use crate::manifest_loader::LoadedManifest;
+use crate::manifest_loader::{LoadedManifest, parse_loaded_manifest, read_raw_manifest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreOriginPolicy {
@@ -44,131 +44,134 @@ impl AdmissionContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct Admission {
-    pub manifest_path: PathBuf,
-    pub computed_manifest_hash: String,
-    pub raw_len: usize,
-    pub project_id: String,
-    pub runtime_abi: String,
-    pub toolchain_id: String,
-    pub target_system: String,
-    /// The resolved source root. Present for run admission; `None` for control
-    /// admission (`ps`/`down`/`clean`), which must operate on a slot from the store
-    /// manifest and registry alone and so does not resolve source from the caller.
-    pub source: Option<source::AdmittedSource>,
-    /// Provenance serialized once at admission for the run record, so the executor
-    /// records it without reading the raw `Manifest`.
-    pub generator_json: String,
-    pub target_json: String,
-    /// The lowered, executable view of the manifest. Admission proves a concrete plan
-    /// exists for every slot/selection; the executor consumes only this.
-    pub execution_manifest: ExecutionManifest,
-    /// Secret material resolved once during run/check admission. Control admission
-    /// only proves references and leaves this empty because ps/down/clean never
-    /// spawn children.
-    pub secrets: secrets::ResolvedSecrets,
-}
-
-impl Admission {
-    /// Run admission: admit and lower the manifest, and resolve the declared source
-    /// root so the executor can spawn execs from it.
-    pub fn check(loaded: &LoadedManifest, context: &AdmissionContext) -> RuntimeResult<Self> {
-        Self::admit(loaded, context, true)
-    }
-
-    /// Control admission for recovery commands (`ps`/`down`/`clean`). Admits and
-    /// lowers the manifest but does NOT resolve the live workspace: control must
-    /// reconcile, stop, and clean a slot from the store manifest and registry alone,
-    /// so it cannot fail because the caller is outside the project root or the
-    /// workspace has moved or been deleted while services stay registered.
-    pub fn check_for_control(
-        loaded: &LoadedManifest,
-        context: &AdmissionContext,
-    ) -> RuntimeResult<Self> {
-        Self::admit(loaded, context, false)
-    }
-
-    fn admit(
-        loaded: &LoadedManifest,
-        context: &AdmissionContext,
-        resolve_source: bool,
-    ) -> RuntimeResult<Self> {
-        // Attach manifest provenance to every admission failure, including lowering
-        // and plan-feasibility errors which propagate raw. The bytes were already
-        // read and hashed, so a `null` manifestPath/computedManifestHash on an invalid
-        // manifest would be an inconsistent, weaker diagnostic than parse/origin/abi/
-        // closure errors carry.
-        Self::admit_checks(loaded, context, resolve_source).map_err(|error| {
-            error.with_manifest_if_missing(
-                loaded.path().to_path_buf(),
-                loaded.computed_manifest_hash().to_owned(),
-            )
-        })
-    }
-
-    fn admit_checks(
-        loaded: &LoadedManifest,
-        context: &AdmissionContext,
-        resolve_source: bool,
-    ) -> RuntimeResult<Self> {
-        origin::check_store_origin(loaded, context)?;
-        target::check_target(loaded.manifest(), context)?;
-        let source = if resolve_source {
-            Some(source::check_source(loaded.manifest(), context)?)
-        } else {
-            None
-        };
-        let secrets = if resolve_source {
-            secrets::resolve_secrets(loaded.manifest())?
-        } else {
-            secrets::check_secret_references(loaded.manifest())?;
-            secrets::ResolvedSecrets::empty()
-        };
-        closures::check_closures(loaded.manifest(), context)?;
-        let execution_manifest = lower(loaded.manifest())?;
-        Ok(from_loaded(
-            loaded.manifest(),
-            loaded,
-            source,
-            execution_manifest,
-            secrets,
-        ))
-    }
-
-    /// The resolved source root, or a `SOURCE_MISMATCH` error when this is a
-    /// control admission that did not resolve one. Every run-path caller holds a
-    /// run admission, so the error is only reachable through a misuse.
-    pub fn require_source(&self) -> RuntimeResult<&source::AdmittedSource> {
-        self.source.as_ref().ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::SourceMismatch,
-                "operation requires an admitted source that control admission does not resolve",
-            )
-        })
-    }
-}
-
-fn from_loaded(
-    manifest: &Manifest,
-    loaded: &LoadedManifest,
-    source: Option<source::AdmittedSource>,
+pub struct ControlAdmission {
+    loaded: LoadedManifest,
     execution_manifest: ExecutionManifest,
-    secrets: secrets::ResolvedSecrets,
-) -> Admission {
-    Admission {
-        manifest_path: loaded.path().to_path_buf(),
-        computed_manifest_hash: loaded.computed_manifest_hash().to_owned(),
-        raw_len: loaded.raw_len(),
-        project_id: manifest.project.project_id.clone(),
-        runtime_abi: manifest.runtime_abi.clone(),
-        toolchain_id: manifest.toolchain_id.clone(),
-        target_system: manifest.target.system.clone(),
-        source,
-        generator_json: serde_json::to_string(&manifest.generator).unwrap_or_default(),
-        target_json: serde_json::to_string(&manifest.target).unwrap_or_default(),
-        execution_manifest,
-        secrets,
+    generator_json: String,
+    target_json: String,
+}
+
+impl ControlAdmission {
+    fn new(loaded: LoadedManifest, execution_manifest: ExecutionManifest) -> Self {
+        Self {
+            generator_json: serde_json::to_string(&loaded.manifest().generator).unwrap_or_default(),
+            target_json: serde_json::to_string(&loaded.manifest().target).unwrap_or_default(),
+            loaded,
+            execution_manifest,
+        }
     }
+
+    pub fn manifest(&self) -> &nixfied_manifest::ValidatedManifest {
+        self.loaded.manifest()
+    }
+    pub fn manifest_path(&self) -> &Path {
+        self.loaded.path()
+    }
+    pub fn computed_manifest_hash(&self) -> &str {
+        self.loaded.computed_manifest_hash()
+    }
+    pub fn raw_len(&self) -> usize {
+        self.loaded.raw_len()
+    }
+    pub fn project_id(&self) -> &str {
+        &self.manifest().project.project_id
+    }
+    pub fn runtime_abi(&self) -> &str {
+        &self.manifest().runtime_abi
+    }
+    pub fn toolchain_id(&self) -> &str {
+        &self.manifest().toolchain_id
+    }
+    pub fn target_system(&self) -> &str {
+        &self.manifest().target.system
+    }
+    pub fn execution_manifest(&self) -> &ExecutionManifest {
+        &self.execution_manifest
+    }
+    pub fn generator_json(&self) -> &str {
+        &self.generator_json
+    }
+    pub fn target_json(&self) -> &str {
+        &self.target_json
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RunAdmission {
+    common: ControlAdmission,
+    source: source::AdmittedSource,
+    secrets: secrets::ResolvedSecrets,
+}
+
+impl RunAdmission {
+    pub fn common(&self) -> &ControlAdmission {
+        &self.common
+    }
+    pub fn source(&self) -> &source::AdmittedSource {
+        &self.source
+    }
+    pub fn secrets(&self) -> &secrets::ResolvedSecrets {
+        &self.secrets
+    }
+}
+
+/// Run/check admission owns the bytes and every prerequisite for child execution.
+pub fn admit_run(path: &Path, context: &AdmissionContext) -> RuntimeResult<RunAdmission> {
+    let loaded = load_for_admission(path, context)?;
+    let (source, secrets, execution_manifest) = (|| {
+        let source = source::check_source(loaded.manifest(), context)?;
+        let secrets = secrets::resolve_secrets(loaded.manifest())?;
+        let execution_manifest = finish_admission(&loaded, context)?;
+        Ok((source, secrets, execution_manifest))
+    })()
+    .map_err(|error: crate::error::RuntimeError| {
+        error.with_manifest_if_missing(
+            loaded.path().to_path_buf(),
+            loaded.computed_manifest_hash().to_owned(),
+        )
+    })?;
+    Ok(RunAdmission {
+        common: ControlAdmission::new(loaded, execution_manifest),
+        source,
+        secrets,
+    })
+}
+
+/// Recovery admits source-independent facts without fetching source or secret values.
+pub fn admit_control(path: &Path, context: &AdmissionContext) -> RuntimeResult<ControlAdmission> {
+    let loaded = load_for_admission(path, context)?;
+    let execution_manifest = (|| {
+        secrets::check_secret_references(loaded.manifest())?;
+        finish_admission(&loaded, context)
+    })()
+    .map_err(|error| {
+        error.with_manifest_if_missing(
+            loaded.path().to_path_buf(),
+            loaded.computed_manifest_hash().to_owned(),
+        )
+    })?;
+    Ok(ControlAdmission::new(loaded, execution_manifest))
+}
+
+fn load_for_admission(path: &Path, context: &AdmissionContext) -> RuntimeResult<LoadedManifest> {
+    let raw = read_raw_manifest(path)?;
+    origin::check_raw_store_origin(&raw, context)?;
+    let loaded = parse_loaded_manifest(raw)?;
+    target::check_target(loaded.manifest(), context).map_err(|error| {
+        error.with_manifest_if_missing(
+            loaded.path().to_path_buf(),
+            loaded.computed_manifest_hash().to_owned(),
+        )
+    })?;
+    Ok(loaded)
+}
+
+fn finish_admission(
+    loaded: &LoadedManifest,
+    context: &AdmissionContext,
+) -> RuntimeResult<ExecutionManifest> {
+    closures::check_closures(loaded.manifest(), context)?;
+    lower(loaded.manifest())
 }
 
 fn host_system() -> String {

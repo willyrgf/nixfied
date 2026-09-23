@@ -25,8 +25,7 @@ use nixfied_runtime::state::{
     state_base_from_env,
 };
 use nixfied_runtime::{
-    Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_manifest,
-    read_raw_manifest,
+    AdmissionContext, ControlAdmission, RunAdmission, RuntimeError, StoreOriginPolicy,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -40,7 +39,7 @@ include!("generated/commands.rs");
 
 struct RunSession<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
-    admission: &'a Admission,
+    admission: &'a RunAdmission,
     options: &'a RunOptions,
     redactor: &'a Redactor,
     cancellation: &'a CancellationToken,
@@ -229,8 +228,8 @@ impl<'a> RunSession<'a> {
         };
         let output = RunOutput {
             run_id: self.run_id.to_string(),
-            manifest_path: self.admission.manifest_path.clone(),
-            computed_manifest_hash: self.admission.computed_manifest_hash.clone(),
+            manifest_path: self.admission.common().manifest_path().to_path_buf(),
+            computed_manifest_hash: self.admission.common().computed_manifest_hash().to_owned(),
             duration_ms,
             services,
             summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
@@ -500,16 +499,17 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
             format!("missing {RUNTIME_MANIFEST} path"),
         )
     })?;
-    let (loaded, admission) = load_admitted_manifest(manifest_path, allow_non_store)?;
-    let selected_slot = select_slot(loaded.manifest(), slot).map_err(post_admission_error)?;
+    let admission = load_admitted_manifest(manifest_path, allow_non_store)?;
+    let selected_slot =
+        select_slot(admission.common().manifest(), slot).map_err(post_admission_error)?;
     let output = CheckOutput {
-        manifest_path: admission.manifest_path,
-        computed_manifest_hash: admission.computed_manifest_hash,
-        raw_len: admission.raw_len,
-        project_id: admission.project_id,
-        runtime_abi: admission.runtime_abi,
-        toolchain_id: admission.toolchain_id,
-        target_system: admission.target_system,
+        manifest_path: admission.common().manifest_path().to_path_buf(),
+        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
+        raw_len: admission.common().raw_len(),
+        project_id: admission.common().project_id().to_owned(),
+        runtime_abi: admission.common().runtime_abi().to_owned(),
+        toolchain_id: admission.common().toolchain_id().to_owned(),
+        target_system: admission.common().target_system().to_owned(),
         environment: selected_slot.environment.to_string(),
         slot: selected_slot.slot,
     };
@@ -529,35 +529,30 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let parsed_options = parse_run_options(args)?;
     let cancellation = CancellationToken::new();
     let run_id = new_run_id();
-    let (loaded, admission) = load_admitted_manifest(
+    let admission = load_admitted_manifest(
         parsed_options.manifest_path.clone(),
         parsed_options.allow_non_store,
     )?;
     let output_mode = resolve_run_output_mode(
-        loaded.manifest(),
+        admission.common().manifest(),
         parsed_options.output_mode,
         parsed_options.task.as_deref(),
     );
     let selected_task = validate_run_selection(
-        &admission.execution_manifest,
+        admission.common().execution_manifest(),
         output_mode,
         parsed_options.task.as_deref(),
     )?;
     let options = parsed_options.resolve(output_mode, selected_task);
-    let redactor = Redactor::from_secrets(&admission.secrets);
-    let manifest_path = admission.manifest_path.clone();
-    let computed_manifest_hash = admission.computed_manifest_hash.clone();
-    let output = run_m0_admitted(
-        loaded.manifest(),
-        &admission,
-        &redactor,
-        &options,
-        run_id,
-        &cancellation,
-    )
-    .map_err(|error| {
-        redactor.redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
-    })?;
+    let redactor = Redactor::from_secrets(admission.secrets());
+    let manifest_path = admission.common().manifest_path().to_path_buf();
+    let computed_manifest_hash = admission.common().computed_manifest_hash().to_owned();
+    let output = run_m0_admitted(&admission, &redactor, &options, run_id, &cancellation).map_err(
+        |error| {
+            redactor
+                .redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
+        },
+    )?;
     if options.output_mode.emit_json() {
         print_json_redacted(&output, &redactor)?;
     }
@@ -565,13 +560,13 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
 }
 
 fn run_m0_admitted(
-    manifest: &nixfied_manifest::Manifest,
-    admission: &Admission,
+    admission: &RunAdmission,
     redactor: &Redactor,
     options: &RunOptions,
     run_id: String,
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
+    let manifest = admission.common().manifest();
     cancellation.check()?;
     let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
     let placement =
@@ -581,7 +576,6 @@ fn run_m0_admitted(
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
     run_m0_placed(
-        manifest,
         admission,
         redactor,
         options,
@@ -640,8 +634,7 @@ fn enrich_placed_error(
 
 #[allow(clippy::too_many_arguments)]
 fn run_m0_placed(
-    manifest: &nixfied_manifest::Manifest,
-    admission: &Admission,
+    admission: &RunAdmission,
     redactor: &Redactor,
     options: &RunOptions,
     run_id: &str,
@@ -649,13 +642,14 @@ fn run_m0_placed(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
+    let manifest = admission.common().manifest();
     let run_started = Instant::now();
     let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
     // The registry opens before the marker decision: when the slot was last
     // used by a different manifest build, the upgrade path needs registry evidence
     // to tear down what that build left running.
     materialize_registry_root(placement)?;
-    let identity = StateIdentity::from_selected_slot(manifest, admission, selected_slot);
+    let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
@@ -693,13 +687,14 @@ fn run_m0_placed(
     // proven feasible at admission. `run` with no selection refuses and lists
     // the declared tasks — there is no implicit default.
     let plan = plan(
-        &admission.execution_manifest,
+        admission.common().execution_manifest(),
         &options.task,
         selected_slot.slot,
     )
     .map_err(post_admission_error)?;
     let direct_selected = admission
-        .execution_manifest
+        .common()
+        .execution_manifest()
         .leaf(options.task.as_str())
         .is_some();
 
@@ -717,7 +712,8 @@ fn run_m0_placed(
         .iter()
         .filter_map(|binding| {
             let service = admission
-                .execution_manifest
+                .common()
+                .execution_manifest()
                 .services()
                 .get(binding.service_name.as_str())?;
             let primary_id = service.primary_endpoint.as_ref()?;
@@ -763,10 +759,6 @@ fn run_m0_placed(
             return session.finalize(Some(error));
         }};
     }
-    let source_root = match admission.require_source() {
-        Ok(source) => source.observed_root.clone(),
-        Err(error) => finish_run!(error, Vec::new()),
-    };
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
         if options.output_mode.emit_summary()
@@ -782,7 +774,12 @@ fn run_m0_placed(
         // nodes inside the service reservation, resolving each leaf's
         // requirements against the services already started (the combined
         // connectsTo + prepare-requires ordering guarantees they are ready).
-        let Some(service_def) = admission.execution_manifest.services().get(service_name) else {
+        let Some(service_def) = admission
+            .common()
+            .execution_manifest()
+            .services()
+            .get(service_name)
+        else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -795,12 +792,11 @@ fn run_m0_placed(
         let prepare_runner: Option<PrepareRunner<'_>> =
             service_def.prepare.clone().map(|prepare_task| {
                 let started_services = &session.started;
-                let source_root = source_root.clone();
                 let diagnostic_failures = &mut session.diagnostic_failures;
                 Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
                     let mut task_runs = Vec::new();
                     let nodes = match nixfied_runtime::execution::flatten_task(
-                        &admission.execution_manifest,
+                        admission.common().execution_manifest(),
                         &prepare_task,
                     ) {
                         Ok(nodes) => nodes,
@@ -812,7 +808,7 @@ fn run_m0_placed(
                         }
                     };
                     for node in nodes {
-                        let Some(task) = admission.execution_manifest.leaf(node.task_id.as_str())
+                        let Some(task) = admission.common().execution_manifest().leaf(node.task_id.as_str())
                         else {
                             return Err(PrepareTaskError::new(
                                 RuntimeError::new(
@@ -855,14 +851,7 @@ fn run_m0_placed(
                         let task_result = run_dependent_task_cancellable(
                             placement,
                             registry,
-                            RunContext {
-                                run_id,
-                                computed_manifest_hash: &admission.computed_manifest_hash,
-                                source_root: &source_root,
-                                state_root: &placement.state_root,
-                                secrets: &admission.secrets,
-                                redactor,
-                            },
+                            RunContext::new(admission, run_id, &placement.state_root, redactor),
                             &dependencies,
                             node.node_id.as_str(),
                             task,
@@ -998,7 +987,11 @@ fn run_m0_placed(
     // composite's step dependencies.
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let Some(task) = admission.execution_manifest.leaf(task_id.as_str()) else {
+        let Some(task) = admission
+            .common()
+            .execution_manifest()
+            .leaf(task_id.as_str())
+        else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -1037,14 +1030,7 @@ fn run_m0_placed(
             .iter()
             .map(|&index| &session.started[index])
             .collect();
-        let run_context = RunContext {
-            run_id,
-            computed_manifest_hash: &admission.computed_manifest_hash,
-            source_root: &source_root,
-            state_root: &placement.state_root,
-            secrets: &admission.secrets,
-            redactor,
-        };
+        let run_context = RunContext::new(admission, run_id, &placement.state_root, redactor);
         let task_result = run_dependent_task_cancellable(
             placement,
             &mut session.registry,
@@ -1505,20 +1491,20 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
         return Ok(());
     }
     let options = parse_control_options(command, args)?;
-    let (loaded, admission) =
+    let admission =
         load_admitted_manifest_for_control(options.manifest_path.clone(), options.allow_non_store)?;
-    let manifest_path = admission.manifest_path.clone();
-    let computed_manifest_hash = admission.computed_manifest_hash.clone();
-    run_control_admitted(command, loaded.manifest(), &admission, &options)
+    let manifest_path = admission.manifest_path().to_path_buf();
+    let computed_manifest_hash = admission.computed_manifest_hash().to_owned();
+    run_control_admitted(command, &admission, &options)
         .map_err(|error| error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
 }
 
 fn run_control_admitted(
     command: ControlCommand,
-    manifest: &nixfied_manifest::Manifest,
-    admission: &Admission,
+    admission: &ControlAdmission,
     options: &ControlOptions,
 ) -> Result<(), RuntimeError> {
+    let manifest = admission.manifest();
     let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
     let placement =
         derive_host_placement_for_slot(manifest, &selected_slot, "control", &options.state_base)
@@ -1543,7 +1529,6 @@ fn run_control_admitted(
                 )?)
             }
             ControlCommand::Clean => print_json(&run_slot_clean(
-                manifest,
                 admission,
                 &placement,
                 &mut registry,
@@ -1795,45 +1780,32 @@ fn new_run_id() -> String {
     format!("run-{}-{now}", std::process::id())
 }
 
-fn load_admitted_manifest(
-    manifest_path: PathBuf,
-    allow_non_store: bool,
-) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
-    load_manifest_admitted(manifest_path, allow_non_store, true)
-}
-
-/// Load and admit a manifest for a recovery/control command (`ps`/`down`/`clean`)
-/// without resolving the live workspace, so control can reconcile, stop, and
-/// clean a slot from the store manifest and registry even when run outside the
-/// project root or after the workspace has moved or been deleted.
-fn load_admitted_manifest_for_control(
-    manifest_path: PathBuf,
-    allow_non_store: bool,
-) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
-    load_manifest_admitted(manifest_path, allow_non_store, false)
-}
-
-fn load_manifest_admitted(
-    manifest_path: PathBuf,
-    allow_non_store: bool,
-    resolve_source: bool,
-) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
-    let policy = if allow_non_store {
+fn admission_context(allow_non_store: bool) -> AdmissionContext {
+    AdmissionContext::current(if allow_non_store {
         StoreOriginPolicy::AllowNonStoreForTests
     } else {
         StoreOriginPolicy::RequireStore
-    };
-    let context = AdmissionContext::current(policy);
-    let raw_manifest = read_raw_manifest(&manifest_path)?;
-    nixfied_runtime::admission::origin::check_raw_store_origin(&raw_manifest, &context)?;
-    let loaded = parse_loaded_manifest(raw_manifest)?;
-    let admission = if resolve_source {
-        Admission::check(&loaded, &context)?
-    } else {
-        Admission::check_for_control(&loaded, &context)?
-    };
-    warn_on_ephemeral_port_overlap(loaded.manifest())?;
-    Ok((loaded, admission))
+    })
+}
+
+fn load_admitted_manifest(
+    manifest_path: PathBuf,
+    allow_non_store: bool,
+) -> Result<RunAdmission, RuntimeError> {
+    let admission =
+        nixfied_runtime::admit_run(&manifest_path, &admission_context(allow_non_store))?;
+    warn_on_ephemeral_port_overlap(admission.common().manifest())?;
+    Ok(admission)
+}
+
+fn load_admitted_manifest_for_control(
+    manifest_path: PathBuf,
+    allow_non_store: bool,
+) -> Result<ControlAdmission, RuntimeError> {
+    let admission =
+        nixfied_runtime::admit_control(&manifest_path, &admission_context(allow_non_store))?;
+    warn_on_ephemeral_port_overlap(admission.manifest())?;
+    Ok(admission)
 }
 
 /// Warn (stderr, non-fatal) when a slot's candidate port window overlaps the
