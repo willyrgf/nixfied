@@ -36,7 +36,7 @@ pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    for invocation in invocations(manifest) {
+    for invocation in super::invocations(manifest) {
         for value in &invocation.run {
             if value.contains("${secret:") {
                 return Err(RuntimeError::new(
@@ -156,20 +156,6 @@ fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
 
 pub(crate) fn secret_refs(value: &str) -> Vec<&str> {
     refs_after_prefix("${secret:", value)
-}
-
-fn invocations(manifest: &Manifest) -> impl Iterator<Item = &nixfied_manifest::InvocationSpec> {
-    let service_values = manifest.services.values().flat_map(|service| {
-        let lifecycle = &service.lifecycle;
-        std::iter::once(&lifecycle.start.invocation)
-            .chain(lifecycle.ready.probe.invocation.as_ref())
-            .chain(lifecycle.health.probe.invocation.as_ref())
-    });
-    let task_values = manifest
-        .tasks
-        .values()
-        .filter_map(|task| task.invocation.as_ref());
-    service_values.chain(task_values)
 }
 
 fn refs_after_prefix<'a>(prefix: &str, value: &'a str) -> Vec<&'a str> {

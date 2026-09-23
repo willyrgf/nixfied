@@ -104,9 +104,9 @@ impl Admission {
         resolve_source: bool,
     ) -> RuntimeResult<Self> {
         origin::check_store_origin(loaded, context)?;
-        target::check_target(loaded.manifest(), loaded, context)?;
+        target::check_target(loaded.manifest(), context)?;
         let source = if resolve_source {
-            Some(source::check_source(loaded.manifest(), loaded, context)?)
+            Some(source::check_source(loaded.manifest(), context)?)
         } else {
             None
         };
@@ -116,7 +116,7 @@ impl Admission {
             secrets::check_secret_references(loaded.manifest())?;
             secrets::ResolvedSecrets::empty()
         };
-        closures::check_closures(loaded.manifest(), loaded, context)?;
+        closures::check_closures(loaded.manifest(), context)?;
         let execution_manifest = lower(loaded.manifest())?;
         Ok(from_loaded(
             loaded.manifest(),
@@ -171,4 +171,19 @@ fn host_system() -> String {
         other => other,
     };
     format!("{arch}-{os}")
+}
+
+/// Borrow raw invocation positions before relational lowering, in secret-check order.
+fn invocations(manifest: &Manifest) -> impl Iterator<Item = &nixfied_manifest::InvocationSpec> {
+    let service_values = manifest.services.values().flat_map(|service| {
+        let lifecycle = &service.lifecycle;
+        std::iter::once(&lifecycle.start.invocation)
+            .chain(lifecycle.ready.probe.invocation.as_ref())
+            .chain(lifecycle.health.probe.invocation.as_ref())
+    });
+    let task_values = manifest
+        .tasks
+        .values()
+        .filter_map(|task| task.invocation.as_ref());
+    service_values.chain(task_values)
 }

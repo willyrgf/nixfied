@@ -9,7 +9,7 @@ pub fn check_raw_store_origin(
     if context.policy == StoreOriginPolicy::AllowNonStoreForTests {
         return Ok(());
     }
-    if canonical_is_under_store(&raw_manifest.path, &context.store_root) {
+    if canonical_under_store(&raw_manifest.path, &context.store_root).is_some() {
         Ok(())
     } else {
         Err(RuntimeError::new(
@@ -31,7 +31,7 @@ pub fn check_store_origin(
     if context.policy == StoreOriginPolicy::AllowNonStoreForTests {
         return Ok(());
     }
-    if canonical_is_under_store(loaded.path(), &context.store_root) {
+    if canonical_under_store(loaded.path(), &context.store_root).is_some() {
         Ok(())
     } else {
         Err(RuntimeError::new(
@@ -46,12 +46,13 @@ pub fn check_store_origin(
     }
 }
 
-pub fn canonical_is_under_store(path: &std::path::Path, store_root: &std::path::Path) -> bool {
-    let Ok(canonical_path) = path.canonicalize() else {
-        return false;
-    };
-    let Ok(canonical_store) = store_root.canonicalize() else {
-        return false;
-    };
-    canonical_path.starts_with(canonical_store)
+pub fn canonical_under_store(
+    path: &std::path::Path,
+    store_root: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let canonical_path = path.canonicalize().ok()?;
+    let canonical_store = store_root.canonicalize().ok()?;
+    canonical_path
+        .starts_with(canonical_store)
+        .then_some(canonical_path)
 }
