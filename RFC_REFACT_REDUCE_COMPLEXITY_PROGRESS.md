@@ -122,6 +122,15 @@ removed state owners, coordinated change sites, and capture correctness addition
    test child. Declared basenames are retained for multicall dispatch, and the
    ready-file probe uses the shell builtin rather than an undeclared external
    `test`. All 71 service, 26 state, 10 upgrade tests and Clippy pass on Linux.
+   Removed every fabricated admission literal from integration fixtures and the
+   real-start endpoint unit proof. Fixtures now write raw JSON and run admission
+   with an explicit workspace root. The executable-removal scenario alone injects
+   its narrow temporary store root before removing the admitted program during
+   prepare. Upgrade tests use compact/pretty valid bytes and independently hashed
+   expectations instead of invented admission hashes. Changed service scenarios
+   re-admit all bytes rather than replacing only the execution graph. All 71
+   service, 26 state, 10 upgrade, and 11 endpoint unit tests pass; the owner
+   attribution case passes after synchronizing its raw scenario; Clippy passes.
    Remaining in this step: private run/control admissions owning the loaded
    document; removal of fabricated admission fixtures; one origin entry point and
    one store-root observation per admission.

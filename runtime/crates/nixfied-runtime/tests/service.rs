@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{ContainmentRequirement, Manifest, ServiceLifetime, ValidatedManifest};
+use nixfied_manifest::{ContainmentRequirement, Manifest, ServiceLifetime};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
@@ -164,7 +164,7 @@ fn service_start_rejects_exec_cwd_escape() {
         .start
         .invocation
         .cwd = "..".to_string();
-    fixture.relower();
+    fixture.readmit();
 
     let error = match start_synthetic_service(
         &fixture.manifest,
@@ -503,11 +503,8 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     let task = other_manifest.tasks.get_mut("smoke").unwrap();
     task.requires = serde_json::from_value(json!(["other"])).unwrap();
     task.services_required = task.requires.clone();
-    fixture.admission.execution_manifest = nixfied_runtime::execution::lower(
-        &nixfied_manifest::ValidatedManifest::try_from(other_manifest.clone())
-            .expect("fixture must validate"),
-    )
-    .expect("alternate service address lowers");
+    fixture.manifest = other_manifest;
+    fixture.readmit();
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     record_fixture_run(
@@ -624,7 +621,7 @@ fn slot_one_service_uses_slot_placement_port_window() {
     let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
-    let admission = synthetic_admission(&manifest, &tmp.path);
+    let admission = fixture_admission(&manifest, &tmp.path);
     let selected_slot = select_slot(&manifest, Some(1)).expect("slot 1 should select");
     let placement =
         derive_host_placement_for_slot(&manifest, &selected_slot, "run-slot-1", &tmp.path)
@@ -670,7 +667,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let mut value = test_child_listener_value(23210);
     add_slot_one(&mut value, 23310, 23320);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
-    let admission = synthetic_admission(&manifest, &tmp.path);
+    let admission = fixture_admission(&manifest, &tmp.path);
 
     let mut slot0 = StartedSlot::start(&manifest, &admission, &tmp.path, 0, "run-slot-0", 23210);
     let mut slot1 = StartedSlot::start(&manifest, &admission, &tmp.path, 1, "run-slot-1", 23310);
@@ -779,7 +776,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     set_smoke_args(&mut fixture.manifest, &["output", "literal", "task-ok", ""]);
-    fixture.relower();
+    fixture.readmit();
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -1280,7 +1277,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &mut fixture.manifest,
         &["term-tree", &started_arg, &marker_arg],
     );
-    fixture.relower();
+    fixture.readmit();
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -1417,7 +1414,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &mut fixture.manifest,
         &["term-tree", &started_arg, &marker_arg],
     );
-    fixture.relower();
+    fixture.readmit();
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2116,7 +2113,7 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
         .get_mut("synthetic")
         .expect("fixture has service")
         .containment = ContainmentRequirement::ProcessTree;
-    fixture.relower();
+    fixture.readmit();
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2922,7 +2919,10 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
     assert_eq!(lease_status, "stale");
     assert_eq!(run_status, "stale");
     assert_eq!(lease_stale_events, 1);
-    assert_eq!(lease_stale_hash.as_deref(), Some("computed-hash"));
+    assert_eq!(
+        lease_stale_hash.as_deref(),
+        Some(fixture.admission.computed_manifest_hash.as_str())
+    );
 
     // The old runtime handle still owns the startup lock even though its child
     // has died. Dropping the handle manifests runtime exit and releases that
@@ -3213,7 +3213,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         .get_mut("synthetic")
         .expect("fixture has service")
         .containment = ContainmentRequirement::ProcessTree;
-    fixture.relower();
+    fixture.readmit();
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -4124,8 +4124,16 @@ impl ServiceFixture {
     }
 
     fn from_manifest(manifest: Manifest) -> Self {
+        Self::from_manifest_in_store(manifest, Path::new("/nix/store"))
+    }
+
+    fn from_manifest_in_store(manifest: Manifest, store_root: &Path) -> Self {
         let tmp = TempDir::new();
-        let admission = synthetic_admission(&manifest, &tmp.path);
+        let admission = admit_fixture_bytes(
+            &serde_json::to_vec(&manifest).unwrap(),
+            &tmp.path,
+            store_root,
+        );
         let placement = derive_host_placement(&manifest, "run-service", &tmp.path)
             .expect("layout should derive");
         materialize_run_roots(&placement).expect("roots should materialize");
@@ -4147,15 +4155,9 @@ impl ServiceFixture {
         }
     }
 
-    /// Re-lower the (mutated) manifest into the admission's ExecutionManifest. Tests that
-    /// edit `self.manifest` after construction must call this so the executor, which
-    /// reads the lowered manifest, sees the change.
-    fn relower(&mut self) {
-        self.admission.execution_manifest = nixfied_runtime::execution::lower(
-            &nixfied_manifest::ValidatedManifest::try_from(self.manifest.clone())
-                .expect("fixture must validate"),
-        )
-        .expect("mutated manifest should lower");
+    /// Re-admit a changed scenario from its raw bytes.
+    fn readmit(&mut self) {
+        self.admission = fixture_admission(&self.manifest, &self._tmp.path);
     }
 }
 
@@ -4562,15 +4564,13 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
 #[test]
 fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     let executable_dir = TempDir::new();
-    let executable = executable_dir.path.join("sleep");
+    let executable = executable_dir.path.join("bin/sleep");
+    fs::create_dir(executable_dir.path.join("bin")).unwrap();
     restore_executable_fixture(&executable);
     let port = available_port_window(1);
-    let mut fixture = service_fixture_with_prepare(
-        executable
-            .to_str()
-            .expect("fixture executable path should be UTF-8"),
-        &["30"],
-        port,
+    let mut fixture = ServiceFixture::from_manifest_in_store(
+        service_manifest_with_prepare(executable.to_str().unwrap(), &["30"], port),
+        &executable_dir.path,
     );
     let removed_executable = executable.clone();
     let cancellation = CancellationToken::new();
@@ -5683,6 +5683,10 @@ fn service_fixture_with_prepare(
     start_args: &[&str],
     port: u16,
 ) -> ServiceFixture {
+    ServiceFixture::from_manifest(service_manifest_with_prepare(executable, start_args, port))
+}
+
+fn service_manifest_with_prepare(executable: &str, start_args: &[&str], port: u16) -> Manifest {
     let mut value = fixture_manifest(executable, start_args, port);
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
     value["closures"]["synthetic-helper"]["operationBindings"] = json!([
@@ -5707,8 +5711,7 @@ fn service_fixture_with_prepare(
 
     let manifest: Manifest =
         serde_json::from_value(value).expect("prepare fixture should deserialize");
-    ValidatedManifest::try_from(manifest.clone()).expect("prepare fixture should validate");
-    ServiceFixture::from_manifest(manifest)
+    manifest
 }
 
 fn start_prepared_service(

@@ -23,7 +23,7 @@ use common::*;
 #[test]
 fn second_run_same_manifest_adopts_marker() {
     let fixture = UpgradeFixture::new();
-    let identity = fixture.identity("hash-a");
+    let identity = fixture.identity(false);
     let first = fixture
         .prepare("run-1", &identity)
         .expect("first run should prepare a fresh slot");
@@ -36,7 +36,10 @@ fn second_run_same_manifest_adopts_marker() {
     assert!(!first.upgraded);
     assert!(!second.upgraded);
     assert!(sentinel.exists(), "adopted state root must be preserved");
-    assert_eq!(fixture.marker().computed_manifest_hash, "hash-a");
+    assert_eq!(
+        fixture.marker().computed_manifest_hash,
+        expected_hash(&fixture.manifest, false)
+    );
     assert_eq!(fixture.upgrade_event_count(), 0);
 }
 
@@ -44,28 +47,40 @@ fn second_run_same_manifest_adopts_marker() {
 fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     let sentinel = fixture.plant_sentinel();
 
     let report = fixture
-        .prepare("run-2", &fixture.identity("hash-b"))
+        .prepare("run-2", &fixture.identity(true))
         .expect("a changed manifest hash should upgrade, not refuse");
 
     assert!(report.upgraded);
     assert!(!report.cleaned);
-    assert_eq!(report.from_manifest_hash.as_deref(), Some("hash-a"));
+    assert_eq!(
+        report.from_manifest_hash.as_deref(),
+        Some(expected_hash(&fixture.manifest, false).as_str())
+    );
     assert!(
         sentinel.exists(),
         "same-epoch upgrade must preserve the state root"
     );
     let marker = fixture.marker();
-    assert_eq!(marker.computed_manifest_hash, "hash-b");
+    assert_eq!(
+        marker.computed_manifest_hash,
+        expected_hash(&fixture.manifest, true)
+    );
     assert_eq!(marker.state_epoch, "1");
     assert_eq!(fixture.upgrade_event_count(), 1);
     let payload = fixture.last_upgrade_event_payload();
-    assert_eq!(payload["fromManifestHash"], "hash-a");
-    assert_eq!(payload["toManifestHash"], "hash-b");
+    assert_eq!(
+        payload["fromManifestHash"],
+        expected_hash(&fixture.manifest, false)
+    );
+    assert_eq!(
+        payload["toManifestHash"],
+        expected_hash(&fixture.manifest, true)
+    );
     assert_eq!(payload["cleaned"], false);
 }
 
@@ -73,7 +88,7 @@ fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
 fn changed_state_epoch_upgrades_and_cleans_state_root() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     let sentinel = fixture.plant_sentinel();
 
@@ -81,7 +96,7 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
     epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
     let epoch2_manifest: Manifest =
         serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
-    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, "hash-b");
+    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
     let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
 
     let report = fixture
@@ -100,7 +115,10 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
     );
     let marker = fixture.marker();
     assert_eq!(marker.state_epoch, "2");
-    assert_eq!(marker.computed_manifest_hash, "hash-b");
+    assert_eq!(
+        marker.computed_manifest_hash,
+        expected_hash(&epoch2_manifest, true)
+    );
     let payload = fixture.last_upgrade_event_payload();
     assert_eq!(payload["fromEpoch"], "1");
     assert_eq!(payload["toEpoch"], "2");
@@ -115,7 +133,7 @@ fn pre_existing_unmarked_state_root_refuses() {
     fs::write(state_root.join("leftover"), b"data").expect("leftover should be written");
 
     let error = fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect_err("a non-empty state root without a marker must be refused, not adopted");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
@@ -132,20 +150,23 @@ fn pre_existing_empty_state_root_is_fresh() {
     fs::create_dir_all(&state_root).expect("state root should be creatable");
 
     let report = fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("an empty state root has no state to adopt and is a fresh slot");
 
     assert!(!report.upgraded);
-    assert_eq!(fixture.marker().computed_manifest_hash, "hash-a");
+    assert_eq!(
+        fixture.marker().computed_manifest_hash,
+        expected_hash(&fixture.manifest, false)
+    );
 }
 
 #[test]
 fn changed_ownership_refuses_state_unowned() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
-    let mut foreign = fixture.identity("hash-a");
+    let mut foreign = fixture.identity(false);
     foreign.project_id = "other-project".to_string();
 
     let error = fixture
@@ -160,14 +181,14 @@ fn changed_ownership_refuses_state_unowned() {
 fn runtime_abi_mismatch_refuses() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     let mut marker = fixture.marker();
     marker.runtime_abi = "nixfied-runtime-abi:0-foreign".to_string();
     fixture.rewrite_marker(&marker);
 
     let error = fixture
-        .prepare("run-2", &fixture.identity("hash-b"))
+        .prepare("run-2", &fixture.identity(true))
         .expect_err("a foreign runtime ABI must be refused, never upgraded");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
@@ -177,7 +198,7 @@ fn runtime_abi_mismatch_refuses() {
 fn epoch_change_on_protected_state_refuses_upgrade_clean() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     let sentinel = fixture.plant_sentinel();
     let mut marker = fixture.marker();
@@ -188,7 +209,7 @@ fn epoch_change_on_protected_state_refuses_upgrade_clean() {
     epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
     let epoch2_manifest: Manifest =
         serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
-    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, "hash-b");
+    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
     let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
 
     let error = fixture
@@ -212,7 +233,7 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
         23990,
     ))
     .expect("manifest should parse");
-    let admission_a = admission(&manifest, &tmp.path, "hash-a");
+    let admission_a = admission(&manifest, &tmp.path, false);
     let placement = derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
     materialize_run_roots(&placement).expect("roots should materialize");
     let identity_a = StateIdentity::from_manifest(&manifest, &admission_a);
@@ -230,7 +251,7 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let pgid = service.pgid;
     let process_key = service.process_key.clone();
 
-    let admission_b = admission(&manifest, &tmp.path, "hash-b");
+    let admission_b = admission(&manifest, &tmp.path, true);
     let identity_b = StateIdentity::from_manifest(&manifest, &admission_b);
     let placement_b = derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
     let report = prepare_slot_state(&placement_b, &identity_b, &mut registry, 5000)
@@ -257,7 +278,7 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
 fn interrupted_run_reconciles_then_upgrade_proceeds() {
     let fixture = UpgradeFixture::new();
     fixture
-        .prepare("run-1", &fixture.identity("hash-a"))
+        .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     // A crashed runtime's leftovers: rows still active, process long dead.
     let mut registry = fixture.registry();
@@ -298,7 +319,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .expect("interrupted process row should insert");
 
     let report = fixture
-        .prepare("run-2", &fixture.identity("hash-b"))
+        .prepare("run-2", &fixture.identity(true))
         .expect("the upgrade must reconcile interrupted leftovers, not trip on them");
 
     assert!(report.upgraded);
@@ -312,7 +333,10 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         )
         .expect("process status should query");
     assert_eq!(process_status, "stale");
-    assert_eq!(fixture.marker().computed_manifest_hash, "hash-b");
+    assert_eq!(
+        fixture.marker().computed_manifest_hash,
+        expected_hash(&fixture.manifest, true)
+    );
 }
 
 fn wait_for_group_exit(pgid: i32, timeout_ms: u64) -> bool {
@@ -365,8 +389,8 @@ impl UpgradeFixture {
         Self { tmp, manifest }
     }
 
-    fn identity(&self, hash: &str) -> StateIdentity {
-        let admission = admission(&self.manifest, &self.tmp.path, hash);
+    fn identity(&self, pretty: bool) -> StateIdentity {
+        let admission = admission(&self.manifest, &self.tmp.path, pretty);
         StateIdentity::from_manifest(&self.manifest, &admission)
     }
 
@@ -454,12 +478,26 @@ fn open_registry(placement: &HostPlacement, manifest: &Manifest) -> Registry {
     .expect("registry should open")
 }
 
-fn admission(manifest: &Manifest, source_root: &Path, hash: &str) -> Admission {
-    Admission {
-        manifest_path: PathBuf::from(format!("/nix/store/manifest-{hash}/manifest.json")),
-        computed_manifest_hash: hash.to_string(),
-        ..common::synthetic_admission(manifest, source_root)
+fn manifest_bytes(manifest: &Manifest, pretty: bool) -> Vec<u8> {
+    if pretty {
+        serde_json::to_vec_pretty(manifest)
+    } else {
+        serde_json::to_vec(manifest)
     }
+    .expect("fixture should serialize")
+}
+
+fn expected_hash(manifest: &Manifest, pretty: bool) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(manifest_bytes(manifest, pretty)))
+}
+
+fn admission(manifest: &Manifest, source_root: &Path, pretty: bool) -> Admission {
+    common::admit_fixture_bytes(
+        &manifest_bytes(manifest, pretty),
+        source_root,
+        Path::new("/nix/store"),
+    )
 }
 
 fn fixture_manifest() -> Value {
