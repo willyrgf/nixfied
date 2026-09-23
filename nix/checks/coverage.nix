@@ -26,6 +26,7 @@ let
     lease-authority = "runtime";
     escape-settlement = "runtime";
     probe-settlement = "runtime";
+    finalization = "runtime";
     escaped-port-reconciliation = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;

@@ -482,6 +482,63 @@ fn cancellation_replays_output_before_reporting_canceled() {
 }
 
 #[test]
+fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
+    use std::io::Read;
+    let count = 1024 * 1024;
+    let manifest = task_manifest(&[
+        "output".into(),
+        "repeat".into(),
+        "78".into(),
+        count.to_string(),
+        "79".into(),
+        "0".into(),
+    ]);
+    let fixture = fixture(manifest);
+    let mut child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    // A byte on the runtime's stdout proves task capture finished and replay
+    // started. Keep the large pipe blocked until the signal has been sent.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0];
+    stdout.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'x']);
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    let reader = std::thread::spawn(move || {
+        let mut bytes = vec![first[0]];
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let output = wait_for_child_output(child, Duration::from_secs(10));
+    assert_eq!(reader.join().unwrap(), vec![b'x'; count]);
+    assert_eq!(output.status.code(), Some(27));
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(diagnostic.matches("CANCELED").count(), 1, "{diagnostic}");
+    let registry = rusqlite::Connection::open(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+    )
+    .unwrap();
+    let unfinished: i64 = registry
+        .query_row(
+            "SELECT (SELECT count(*) FROM processes WHERE status IN ('starting','running','ready'))
+              + (SELECT count(*) FROM run_leases WHERE status IN ('active','canceling'))
+              + (SELECT count(*) FROM ports WHERE status IN ('reserved','active'))",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        unfinished, 0,
+        "cancellation must continue service and lease cleanup"
+    );
+}
+
+#[test]
 fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
     let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
     manifest["tasks"]["pipeline"] = json!({

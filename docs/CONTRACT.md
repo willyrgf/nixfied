@@ -249,6 +249,13 @@ when the manifest/runtime contract changes.
   precedence over task outcomes. Post-admission failures use lifecycle,
   registry, state, or selection codes; `MANIFEST_ADMISSION` is never a late phase
   projection.
+- Finalization retains the first error among equal-priority failures. An incoming
+  lower/equal-priority error appends its existing causes, then its safe root cause.
+  A higher-priority error becomes primary, retaining its own causes before the
+  previous primary's causes and safe root cause. Finalization records its own
+  cancellation observation at most once across replay and teardown checkpoints;
+  distinct errors may still carry distinct cancellation causes. Late cancellation
+  continues service teardown, lease release, and terminal registry settlement.
 - JSON fields, text projection tokens, error codes, and exit classes are public
   for the current exact ABI. Their authoritative inventory is the capability
   descriptor, and the runtime tests enforce agreement with the typed Rust enums.
