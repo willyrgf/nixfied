@@ -385,6 +385,32 @@ acceptance evidence for later changes.
 | Static revision-bound reference | `reference.nix`, downstream source switching, context/closure isolation and exact queries |
 | Product source isolation and generated freshness | `gate-nix.nix`, `generated.nix`, packaged `nixfied-regenerate` |
 
+The retired fixture-token scan and handwritten error/exit inventories are replaced
+by the following checks. Token occurrence in one fixture cannot prove per-record
+coverage, and an exhaustive generated enum is not independent wire evidence.
+
+| Retired assertion | Current owner and independent proof |
+| --- | --- |
+| Fixture field tokens occur somewhere in the descriptor | `nix/meta/structure.nix` requires each inventory record's exact field set, unique wire/Rust names, and valid references; `nix/checks/structure.nix` supplies malformed declaration and literal producer vectors. `coverage.nix` requires exact whole-inventory coverage without duplicate owners. |
+| Historical vocabulary is absent | Exact current inventory/declaration coverage and generated freshness reject drift. Raw `manifest_contract.rs` cases independently reject unknown top-level, invocation, secret, probe, and clean fields, including removed `docs` and `cacheEnv` bytes. |
+| Every handwritten error/exit enum appears in descriptor tokens | Vocabulary members come from `capability.txt`; structure validation checks variant collisions and exact error annotation coverage. `generated.nix` checks emitted Rust against declarations. `output_structure.rs`, error/main unit tests, and command integration tests retain literal error/exit JSON, safe cause details, and process exit results. |
+| Fixed record/vocabulary counts | Exact inventory set equality and per-record field equality, plus explicit routing for native surfaces. Counts cannot establish those relationships. |
+| Assigned raw length and default Error::source readback | The compiled record/error types and adjacent literal JSON tests; no forwarding-accessor test is needed. |
+
+Raw decoder coverage is a policy matrix, not an assertion that every record has
+an independent unknown-field test. `wire_presence.rs` covers required positive
+full-u64 values (missing/null/type/range rejection), optional omission and null
+absence, empty-map omission with null rejection, enum defaults and unknown
+variants, and unique-list rejection. Its Lifecycle unknown-field case represents
+`RejectUnknown`; the additional raw manifest cases above exercise nested owners.
+`output_structure.rs` covers `IgnoreUnknown`, optional explicit null, numeric
+range, native path serialization failure, and open details. Error unit tests cover
+omitted empty causes and safe nonrecursive cause projection. Pair these literal
+boundary proofs with generated decoder freshness and compiled exhaustive native
+lowering. The independent literal `runtime_abi_snapshot` still requires deliberate
+acknowledgment of every authored descriptor change. Keep the required-field
+maintenance exercise below when changing declaration or generation machinery.
+
 `nix/meta/declarations.nix` contains ordinary shared value/field constructors.
 Fields select coherent presence alternatives; the checker derives decoder and
 Rust emission facts:

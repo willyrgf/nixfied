@@ -111,7 +111,10 @@ than separate implementations.
   producers, consumers, tests, fixtures, and docs together. Delete superseded
   readers, aliases, fallbacks, migrations, and dual paths; never reinterpret
   old bytes or rewrite append-only history.
-- New manifest fields update `runtime/crates/nixfied-runtime/tests/capability_coverage.rs`.
+- New manifest fields update their authored declarations and `capability.txt`;
+  verify per-record structure and whole-inventory coverage in `nix/checks/`,
+  generated freshness, and independent raw-wire/behavioral proofs as mapped in
+  `docs/DEVELOPMENT.md`.
   Derived facts update `docs/DERIVATION_SPEC.md`, both derivations, and both
   golden suites. Numeric versions change only when their semantics require it.
 - Edit sources, not generated outputs. `nix/compiler/views.nix` renders
