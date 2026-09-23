@@ -50,8 +50,8 @@ removed state owners, coordinated change sites, and capture correctness addition
    directly, deleting the fabricated success fallback. Cleanup terminal writes
    accept only `Deleted` or `Failed { safe_reason }`, and prior cleanup evidence
    stores a parsed status. All 24 state tests, 11 endpoint tests, six readiness
-   tests, and workspace/all-target Clippy pass on Linux. Remaining: explicit
-   applicable wrapper/ceremony subtractions.
+   tests, and workspace/all-target Clippy pass on Linux. Applicable small
+   subtractions are implemented as described below.
    Explicit lock-root injection now replaces ambient thread-local state and fd
    duplication/restoration. The endpoint owner supplies a validated descriptor;
    a private acquisition loop receives the validated lock directory. Fixed-root
@@ -72,6 +72,25 @@ removed state owners, coordinated change sites, and capture correctness addition
    JSON test pins IPv4 missing/false/true mode evidence; the existing IPv6 missing-
    evidence rejection and dual-stack classification tests remain. Architect review
    agrees with retention (`/tmp/nixfied-listener-representation-tests.log`).
+   Signal installation now shares one native install/save helper. Cancellation
+   and SIGPIPE diagnostic mappings, rollback, and reverse restoration remain
+   explicit. The health convenience wrapper is gone; health callers supply the
+   cancellation token directly. Both stop methods remain intentionally: main uses
+   uncancellable cleanup after failure and cancellation-aware normal completion.
+   Readiness already requires a token; the dependent-task wrapper was removed in
+   step 11. Slot placement validation reuses the already-checked policy and iterates
+   its inclusive range directly, deleting the repeated validation and temporary
+   vector. The sole validation caller preserves rejection order.
+   Identity hashing replaces the unreachable empty-string fallback with expect
+   at its private owner. Architect review verified all concrete inputs serialize
+   strings/string-keyed maps/sequences/enums/booleans/integers; no fallible paths or
+   custom error serializer is admitted. to_string and field order remain unchanged,
+   so there is no reachable rejection-boundary or ABI change. Independent literal
+   endpoint/state component digests pin JSON order and length/domain framing.
+   Clippy, manifest tests, the hash proof, 73 service tests, both CLI signal tests,
+   and 22 output tests pass (`/tmp/nixfied-smaller-subtractions-tests.log`,
+   `/tmp/nixfied-signal-helper-tests.log`). Full fixture-backed floor is running
+   (session `24863`, `/tmp/nixfied-refactor-consolidated-floor.log`).
 3. Placement characterization: exact slot-one registry/run/log/artifact/summary
    paths are pinned alongside existing slot-zero paths. Materialization rejects
    symlinks at each owned root and nested run path without writing through them.

@@ -82,10 +82,12 @@ struct RuntimeIdentityInputs<'a> {
 }
 
 /// Hash a serializable identity component under a domain tag. Serialization of
-/// these admitted-manifest structs cannot fail; an empty string on the impossible
-/// error path still yields a deterministic digest.
+/// these concrete inputs uses only strings, string-keyed maps, sequences, enums,
+/// booleans, and integers. Keep that restriction at this private helper's callers;
+/// a fallible native path or custom serializer would require a checked boundary.
 fn hash_json<T: Serialize>(tag: &str, value: &T) -> String {
-    let json = serde_json::to_string(value).unwrap_or_default();
+    let json =
+        serde_json::to_string(value).expect("service identity inputs must serialize to JSON");
     hash_fields(&[tag, &json])
 }
 
@@ -123,4 +125,38 @@ fn hash_fields(fields: &[&str]) -> String {
         hasher.update(field.as_bytes());
     }
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn component_hashes_preserve_literal_json_order_and_domain_framing() {
+        // Independent digests of the literal JSON below, prefixed by the domain;
+        // each UTF-8 field is framed by its eight-byte big-endian byte length.
+        // {"endpoints":{},"primary_endpoint":null}
+        assert_eq!(
+            hash_json(
+                "endpoint-identity",
+                &EndpointIdentityInputs {
+                    endpoints: &BTreeMap::new(),
+                    primary_endpoint: &None,
+                }
+            ),
+            "bed5fb8ec197df1a21f47c29dec448d0e3b7f8584b5d39048ce5015331b6a337"
+        );
+        // {"state_epoch":"epoch","cleanup_policy":"delete-on-clean","persistence":"run-scoped"}
+        assert_eq!(
+            hash_json(
+                "state-identity",
+                &StateIdentityInputs {
+                    state_epoch: "epoch",
+                    cleanup_policy: &CleanupPolicy::DeleteOnClean,
+                    persistence: &PersistencePolicy::RunScoped,
+                }
+            ),
+            "dedd7c1c2c8a89520eb57927455b8f7b27fcf59def70b941c847416242ec7030"
+        );
+    }
 }

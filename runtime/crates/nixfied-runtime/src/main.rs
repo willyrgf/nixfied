@@ -828,8 +828,7 @@ fn run_m0_placed(
                 );
             }
         };
-        let startup_result =
-            current_service.check_health_cancellable(&mut session.registry, cancellation);
+        let startup_result = current_service.check_health(&mut session.registry, cancellation);
         if let Err(error) = startup_result {
             let failed_service_output = service_output(current_service.info());
             let error = current_service.finalize_failed_start(

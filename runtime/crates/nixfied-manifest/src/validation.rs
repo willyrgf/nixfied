@@ -177,14 +177,12 @@ fn validate_slot_policy(slot_policy: &SlotPolicy) -> Result<(), ValidationError>
     Ok(())
 }
 
-fn expected_slots(slot_policy: &SlotPolicy) -> Result<Vec<u32>, ValidationError> {
-    validate_slot_policy(slot_policy)?;
-    Ok((slot_policy.min..=slot_policy.max).collect())
-}
-
 fn validate_slot_placements(manifest: &Manifest) -> Result<(), ValidationError> {
-    let slots = expected_slots(&manifest.slot_policy)?;
-    let expected_keys = slots.iter().map(u32::to_string).collect::<BTreeSet<_>>();
+    let slots = manifest.slot_policy.min..=manifest.slot_policy.max;
+    let expected_keys = slots
+        .clone()
+        .map(|slot| slot.to_string())
+        .collect::<BTreeSet<_>>();
     let actual_keys = manifest
         .placement
         .slot_placements

@@ -371,7 +371,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("service should become ready");
     service
-        .check_health(&mut fixture.registry)
+        .check_health(&mut fixture.registry, &CancellationToken::new())
         .expect("service health should pass");
     service
         .stop(&mut fixture.registry, 1000)
@@ -1177,7 +1177,7 @@ fn exec_health_probe_failure_records_failed() {
             .expect("service should become ready");
 
         let error = service
-            .check_health(&mut fixture.registry)
+            .check_health(&mut fixture.registry, &CancellationToken::new())
             .expect_err("a failing health probe should fail the service");
 
         assert_ne!(error.code, ErrorCode::Canceled);
