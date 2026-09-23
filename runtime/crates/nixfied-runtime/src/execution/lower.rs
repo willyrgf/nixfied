@@ -12,7 +12,7 @@ use std::time::Duration;
 use nixfied_manifest::{
     ClosureSpec, InvocationSpec, Lifecycle, Manifest, OperationId, ProbeKind, ProbeSpec, ServiceId,
     ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
-    TerminalSemantics,
+    TerminalSemantics, ValidatedManifest,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -20,12 +20,13 @@ use crate::execution::types::*;
 
 /// Lower a validated manifest into the executor's input. The result contains only
 /// what the runtime can execute; anything it cannot is rejected here.
-pub fn lower(manifest: &Manifest) -> RuntimeResult<ExecutionManifest> {
+pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
+    let manifest: &Manifest = document;
     // First prove every cross-reference resolves; the structural map below then
     // builds the executor input from references known to exist.
     prove_references(manifest)?;
     // Exhaustive destructure — no `..`. Static-configuration fields validated by
-    // `Manifest::validate` are bound and intentionally ignored; the executable
+    // `ValidatedManifest::try_from` are bound and intentionally ignored; the executable
     // fields are mapped below. A new schema field breaks this pattern (E0027).
     let Manifest {
         manifest_version: _,
@@ -1179,7 +1180,7 @@ mod tests {
         json!({
             "manifestVersion": 1,
             "toolchainId": "nixfied-toolchain:1",
-            "runtimeAbi": "nixfied-runtime-abi:1",
+            "runtimeAbi": nixfied_manifest::runtime_abi(),
             "generator": { "name": "n", "version": "1", "emitter": "e" },
             "project": { "projectId": "p", "name": "P" },
             "target": {
@@ -1284,8 +1285,11 @@ mod tests {
         value["services"][name] = service;
     }
 
-    fn manifest_from(value: Value) -> Manifest {
-        serde_json::from_value(value).expect("fixture should deserialize")
+    fn manifest_from(value: Value) -> ValidatedManifest {
+        ValidatedManifest::try_from(
+            serde_json::from_value::<Manifest>(value).expect("fixture should deserialize"),
+        )
+        .expect("lowering fixture must be structurally valid")
     }
 
     #[test]
@@ -1334,7 +1338,7 @@ mod tests {
             );
             let manifest = manifest_from(changed);
             assert_eq!(
-                serde_json::to_value(&manifest).unwrap()["services"]["svc"]["stateRefs"],
+                serde_json::to_value(&*manifest).unwrap()["services"]["svc"]["stateRefs"],
                 labels
             );
             let execution = lower(&manifest).expect("descriptive strings remain accepted");
@@ -1828,13 +1832,15 @@ mod tests {
             .remove("invocation");
         // Keep derived bindings coherent so this tests the leaf boundary itself.
         value["closures"]["ct"]["operationBindings"] = json!([]);
-        let error = lower(&manifest_from(value)).expect_err("invocation-less leaf must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(
-            error.message.contains("a leaf task carries an invocation"),
-            "{}",
-            error.message
-        );
+        let error = ValidatedManifest::try_from(serde_json::from_value::<Manifest>(value).unwrap())
+            .expect_err("the structural boundary rejects an invocation-less leaf");
+        assert!(matches!(
+            error,
+            nixfied_manifest::ValidationError::UnsupportedValue {
+                field: "tasks.invocation",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1864,14 +1870,14 @@ mod tests {
     #[test]
     fn lowering_rejects_invalid_or_insufficient_windows() {
         for (placements, diagnostic) in [
-            (json!({}), "no candidate port windows"),
+            (json!({}), "exact slotPolicy range"),
             (
                 json!({"0": {"slot": 0, "candidatePorts": {"start": 0, "end": 1}}}),
-                "ports in 1..65535",
+                "candidatePorts",
             ),
             (
                 json!({"0": {"slot": 0, "candidatePorts": {"start": 2, "end": 1}}}),
-                "ports in 1..65535",
+                "candidatePorts",
             ),
             (
                 json!({"0": {"slot": 0, "candidatePorts": {"start": 23080, "end": 23080}}}),
@@ -1882,9 +1888,18 @@ mod tests {
             value["placement"]["slotPlacements"] = placements;
             value["services"]["svc"]["endpoints"]["second"] =
                 json!({"endpointId": "second", "host": "127.0.0.1"});
-            let error =
-                lower(&manifest_from(value)).expect_err("lower must prove port feasibility");
-            assert!(error.message.contains(diagnostic), "{}", error.message);
+            let raw: Manifest = serde_json::from_value(value).unwrap();
+            match ValidatedManifest::try_from(raw) {
+                Ok(document) => {
+                    assert_eq!(diagnostic, "cannot host 2 endpoints");
+                    let error = lower(&document).expect_err("lower owns capacity rejection");
+                    assert!(error.message.contains(diagnostic), "{}", error.message);
+                }
+                Err(error) => {
+                    assert_ne!(diagnostic, "cannot host 2 endpoints");
+                    assert!(error.to_string().contains(diagnostic), "{error}");
+                }
+            }
         }
     }
 

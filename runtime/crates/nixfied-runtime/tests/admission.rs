@@ -26,8 +26,8 @@ fn load_manifest_hashes_raw_bytes() {
     let raw = fs::read(&manifest_path).expect("fixture should be readable");
     let expected = sha256_hex(&raw);
 
-    assert_eq!(loaded.raw_len, raw.len());
-    assert_eq!(loaded.computed_manifest_hash, expected);
+    assert_eq!(loaded.raw_len(), raw.len());
+    assert_eq!(loaded.computed_manifest_hash(), expected);
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn normal_admission_refuses_non_store_manifest() {
     assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
     assert_eq!(
         error.computed_manifest_hash.as_deref(),
-        Some(loaded.computed_manifest_hash.as_str())
+        Some(loaded.computed_manifest_hash())
     );
 }
 
@@ -144,7 +144,7 @@ fn unstable_escape_hatch_admits_non_store_manifest() {
 
     assert_eq!(
         admission.computed_manifest_hash,
-        loaded.computed_manifest_hash
+        loaded.computed_manifest_hash()
     );
     assert_eq!(admission.project_id, "runtime-test");
 }
@@ -193,7 +193,7 @@ fn lowering_failure_carries_manifest_provenance() {
     );
     assert_eq!(
         error.computed_manifest_hash.as_deref(),
-        Some(loaded.computed_manifest_hash.as_str())
+        Some(loaded.computed_manifest_hash())
     );
 }
 
@@ -228,7 +228,7 @@ fn dirty_policy_reject_fails_closed() {
     assert_eq!(error.code, ErrorCode::SourceMismatch);
     assert_eq!(
         error.computed_manifest_hash.as_deref(),
-        Some(loaded.computed_manifest_hash.as_str())
+        Some(loaded.computed_manifest_hash())
     );
 }
 
@@ -271,7 +271,7 @@ fn missing_secret_fails_admission_before_execution() {
     assert_eq!(error.code, ErrorCode::SecretUnavailable);
     assert_eq!(
         error.computed_manifest_hash.as_deref(),
-        Some(loaded.computed_manifest_hash.as_str())
+        Some(loaded.computed_manifest_hash())
     );
 }
 
@@ -475,11 +475,11 @@ fn protected_persistent_state_is_valid_manifest_data() {
     Admission::check(&loaded, &context).expect("protected persistent state should admit");
 
     assert_eq!(
-        loaded.manifest.state.cleanup_policy,
+        loaded.manifest().state.cleanup_policy,
         CleanupPolicy::Protected
     );
     assert_eq!(
-        loaded.manifest.state.persistence,
+        loaded.manifest().state.persistence,
         PersistencePolicy::Persistent
     );
 }

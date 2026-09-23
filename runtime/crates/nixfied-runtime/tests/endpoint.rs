@@ -7,7 +7,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use nixfied_manifest::{Manifest, Validate};
+use nixfied_manifest::{Manifest, ValidatedManifest};
 use serde_json::{Value, json};
 
 mod common;
@@ -633,9 +633,7 @@ fn endpoint_manifest(
 
 fn write_manifest(directory: &Path, value: Value) -> PathBuf {
     let manifest: Manifest = serde_json::from_value(value).expect("endpoint manifest should parse");
-    manifest
-        .validate()
-        .expect("endpoint manifest should validate");
+    ValidatedManifest::try_from(manifest.clone()).expect("endpoint manifest should validate");
     let path = directory.join("endpoint-manifest.json");
     fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path

@@ -28,13 +28,13 @@ pub fn check_source(
     let [codebase] = manifest.codebases.as_slice() else {
         return Err(
             RuntimeError::new(ErrorCode::SourceMismatch, "requires exactly one codebase")
-                .with_manifest(&loaded.path, &loaded.computed_manifest_hash),
+                .with_manifest(loaded.path(), loaded.computed_manifest_hash()),
         );
     };
     if codebase.codebase_id.as_str() != "main" {
         return Err(
             RuntimeError::new(ErrorCode::SourceMismatch, "requires codebase main")
-                .with_manifest(&loaded.path, &loaded.computed_manifest_hash),
+                .with_manifest(loaded.path(), loaded.computed_manifest_hash()),
         );
     }
     let observed_root = match codebase.source_mode {
@@ -45,7 +45,7 @@ pub fn check_source(
                     ErrorCode::SourceMismatch,
                     "runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
                 )
-                .with_manifest(&loaded.path, &loaded.computed_manifest_hash))?,
+                .with_manifest(loaded.path(), loaded.computed_manifest_hash()))?,
             }
             resolve_live_observed_root(&codebase.logical_root, loaded)?
         }
@@ -78,7 +78,7 @@ fn resolve_live_observed_root(
             ErrorCode::SourceMismatch,
             format!("failed to inspect invocation root: {error}"),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
     })?;
     let invocation_root = invocation_root.canonicalize().map_err(|error| {
         RuntimeError::new(
@@ -88,7 +88,7 @@ fn resolve_live_observed_root(
                 invocation_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
     })?;
     let observed_root = invocation_root
         .join(logical_path)
@@ -98,7 +98,7 @@ fn resolve_live_observed_root(
                 ErrorCode::SourceMismatch,
                 format!("failed to resolve logicalRoot {logical_root}: {error}"),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash())
         })?;
     if !observed_root.is_dir() || !observed_root.starts_with(&invocation_root) {
         return Err(RuntimeError::new(
@@ -108,7 +108,7 @@ fn resolve_live_observed_root(
                 observed_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     Ok(observed_root)
 }
@@ -125,7 +125,7 @@ fn resolve_immutable_observed_root(
             ErrorCode::SourceMismatch,
             format!("immutable sourceIdentity must be an absolute store path: {source_identity}"),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     if !origin::canonical_is_under_store(source_root, &context.store_root) {
         return Err(RuntimeError::new(
@@ -136,7 +136,7 @@ fn resolve_immutable_observed_root(
                 context.store_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     let canonical_source_root = source_root.canonicalize().map_err(|error| {
         RuntimeError::new(
@@ -146,7 +146,7 @@ fn resolve_immutable_observed_root(
                 source_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
     })?;
     if !canonical_source_root.is_dir() {
         return Err(RuntimeError::new(
@@ -156,7 +156,7 @@ fn resolve_immutable_observed_root(
                 canonical_source_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     let logical_path = Path::new(logical_root);
     validate_logical_root(logical_root, logical_path, loaded)?;
@@ -171,7 +171,7 @@ fn resolve_immutable_observed_root(
                     canonical_source_root.display()
                 ),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash())
         })?;
     if !observed_root.is_dir() || !observed_root.starts_with(&canonical_source_root) {
         return Err(RuntimeError::new(
@@ -182,7 +182,7 @@ fn resolve_immutable_observed_root(
                 canonical_source_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     Ok(observed_root)
 }
@@ -200,7 +200,7 @@ fn validate_logical_root(
             ErrorCode::SourceMismatch,
             format!("logicalRoot must be a confined relative path: {logical_root}"),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     Ok(())
 }
