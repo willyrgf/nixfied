@@ -491,7 +491,8 @@ removed state owners, coordinated change sites, and capture correctness addition
 
 The implementation audit, measurements, complete Linux fixture floor, full Linux
 CI, and public package builds are recorded below. macOS execution
-remains unavailable. No full acceptance or completion claim is made.
+remains unavailable and is deferred to the GitHub workflow by explicit user
+authorization. Implementation delivery is finalized on that basis.
 
 ## Final implementation audit
 
@@ -596,9 +597,11 @@ reported as added contract documentation, not hidden as refactor savings.
   and the complete floor passed. The original failure's cause remains unproven.
 - macOS execution is unverified. The current host is aarch64-linux, with no
   extra execution platform or configured remote builder (`/etc/nix/machines`
-  absent). The user has been asked for an available macOS host/runner. The hosted
+  absent). The user confirmed no macOS runner is currently available. The hosted
   macOS workflow now runs service/output suites alongside unit/endpoint tests
   (commit `3b4a70a`); YAML and shell syntax have been checked, not macOS execution.
 
-Implementation evidence is not full RFC acceptance while the required macOS
-process/endpoint/capture proof is missing. No completion claim is made here.
+On 2026-09-23, the user explicitly authorized finalizing this implementation
+with macOS testing deferred to the GitHub workflow. Delivery is complete under
+that authorization. Linux and macOS remain supported targets; macOS
+process/endpoint/capture execution remains unverified until that workflow runs.
