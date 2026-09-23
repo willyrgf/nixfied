@@ -152,7 +152,7 @@ impl<'a> RunSession<'a> {
                 .as_ref()
                 .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
         let had_initial_failure = !failures.is_empty();
-        while let Some(mut service) = self.started.pop() {
+        while let Some(service) = self.started.pop() {
             let result = if canceled {
                 service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
             } else if had_initial_failure {
@@ -164,7 +164,7 @@ impl<'a> RunSession<'a> {
                     self.cancellation,
                 )
             } else {
-                service.stand(&mut self.registry)
+                service.stand(&mut self.registry, self.options.timeout_ms)
             };
             if let Err(error) = result {
                 failures.push(error);
@@ -850,7 +850,7 @@ fn run_m0_placed(
                 }) as PrepareRunner<'_>
             });
 
-        let mut current_service = match start_service_for_slot(
+        let current_service = match start_service_for_slot(
             admission,
             placement,
             &mut session.registry,
@@ -880,22 +880,27 @@ fn run_m0_placed(
             session.lease = Some(RunLeaseHeartbeat::start(
                 placement.registry_path().to_path_buf(),
                 session.registry.identity().clone(),
-                current_service.run_id.clone(),
-                current_service.owner_token.clone(),
+                current_service.info().run_id.clone(),
+                current_service.info().owner_token.clone(),
             ));
         }
-        let startup_result = current_service
-            .wait_for_probe_ready_cancellable(&mut session.registry, cancellation)
-            .and_then(|()| {
-                current_service.check_health_cancellable(&mut session.registry, cancellation)
-            });
+        let mut current_service = match current_service.ready(&mut session.registry, cancellation) {
+            Ok(service) => service,
+            Err(failure) => {
+                let (service, error) = failure.into_parts();
+                let failed_service_output = service_output(service.info());
+                let error =
+                    service.finalize_failed_start(&mut session.registry, options.timeout_ms, error);
+                finish_run!(
+                    error.with_detail("failedService", service_name),
+                    vec![failed_service_output]
+                );
+            }
+        };
+        let startup_result =
+            current_service.check_health_cancellable(&mut session.registry, cancellation);
         if let Err(error) = startup_result {
-            let failed_service_output = ServiceRunOutput {
-                service_id: current_service.service_name().to_string(),
-                service_instance_id: current_service.service_instance_id.clone(),
-                process_key: current_service.process_key.clone(),
-                selected_endpoint: current_service.selected_endpoint().cloned(),
-            };
+            let failed_service_output = service_output(current_service.info());
             let error = current_service.finalize_failed_start(
                 &mut session.registry,
                 options.timeout_ms,
@@ -1077,16 +1082,20 @@ fn run_m0_placed(
     session.finalize(None)
 }
 
-fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
-    started
+fn services_output(services: &[StartedService]) -> Vec<ServiceRunOutput> {
+    services
         .iter()
-        .map(|service| ServiceRunOutput {
-            service_id: service.service_name().to_string(),
-            service_instance_id: service.service_instance_id.clone(),
-            process_key: service.process_key.clone(),
-            selected_endpoint: service.selected_endpoint().cloned(),
-        })
+        .map(|service| service_output(service.info()))
         .collect()
+}
+
+fn service_output(info: &nixfied_runtime::service::ServiceInfo) -> ServiceRunOutput {
+    ServiceRunOutput {
+        service_id: info.service_name().to_string(),
+        service_instance_id: info.service_instance_id.clone(),
+        process_key: info.process_key.clone(),
+        selected_endpoint: info.selected_endpoint().cloned(),
+    }
 }
 
 fn write_diagnostic(output_mode: RunOutputMode, line: impl Display) -> Result<(), RuntimeError> {

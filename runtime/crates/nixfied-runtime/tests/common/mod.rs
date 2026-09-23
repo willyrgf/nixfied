@@ -135,7 +135,7 @@ pub use nixfied_manifest::fixtures::{host_arch, host_os, host_system};
 use nixfied_manifest::{Manifest, ServiceLifetime};
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
-    ServiceSelection, SlotEndpoints, StartedService, record_run_created, run_slot_clean,
+    AcquiredService, ServiceSelection, SlotEndpoints, record_run_created, run_slot_clean,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
@@ -244,7 +244,7 @@ pub fn start_synthetic_service(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_port: u16,
-) -> RuntimeResult<StartedService> {
+) -> RuntimeResult<AcquiredService> {
     let selected_slot = select_slot(manifest, None)?;
     start_synthetic_service_for_slot(
         admission,
@@ -264,7 +264,7 @@ pub fn start_synthetic_service_with_lifetime(
     run_id: impl Into<String>,
     selected_port: u16,
     service_lifetime: ServiceLifetime,
-) -> RuntimeResult<StartedService> {
+) -> RuntimeResult<AcquiredService> {
     let selected_slot = select_slot(manifest, None)?;
     start_synthetic_service_for_slot_with_lifetime(
         admission,
@@ -286,7 +286,7 @@ pub fn start_synthetic_service_for_slot(
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
-) -> RuntimeResult<StartedService> {
+) -> RuntimeResult<AcquiredService> {
     start_synthetic_service_for_slot_with_lifetime(
         admission,
         placement,
@@ -306,7 +306,7 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
     service_lifetime: ServiceLifetime,
-) -> RuntimeResult<StartedService> {
+) -> RuntimeResult<AcquiredService> {
     let run_id = run_id.into();
     record_run_created(registry, &run_id, admission, placement)?;
     // The synthetic fixture binds a single endpoint, `synthetic-tcp`.

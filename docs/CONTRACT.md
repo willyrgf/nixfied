@@ -214,6 +214,12 @@ when the manifest/runtime contract changes.
   before accepting readiness or settling probe timeout. A monitored service
   escape during a probe remains `PROC_ESCAPE`, including on the last attempt;
   endpoint evidence retains its existing failure precedence.
+- Startup guards remain owned through a failed readiness transition and its
+  cleanup. Initial health failure after committed readiness retains failed-service
+  output and uses failed-start settlement. A failed standing commit also attempts
+  owned failure cleanup; a settlement error takes precedence and retains the
+  lifecycle failure as its cause. Only a successful standing commit relinquishes
+  local child teardown ownership. Borrower finalization releases only its lease.
 - **REDACT-1:** runtime-owned persistent output is redacted before write,
   including captured child output, summaries, registry payloads, and runtime
   error JSON. Resolved secrets exist only in runtime memory and hermetic child

@@ -419,7 +419,7 @@ fn ensure_task_dependencies(
         ensure_service_instance_probe_ready(
             registry,
             service_name.as_str(),
-            &service.service_instance_id,
+            &service.info().service_instance_id,
         )?;
     }
     Ok(())

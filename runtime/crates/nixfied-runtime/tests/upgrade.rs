@@ -248,8 +248,8 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
         23980,
     )
     .expect("old-manifest service should start");
-    let pgid = service.pgid;
-    let process_key = service.process_key.clone();
+    let pgid = service.info().pgid;
+    let process_key = service.info().process_key.clone();
 
     let admission_b = admission(&manifest, &tmp.path, true);
     let identity_b = StateIdentity::from_admission(admission_b.common());

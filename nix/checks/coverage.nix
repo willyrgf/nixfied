@@ -29,6 +29,7 @@ let
     lease-authority = "runtime";
     escape-settlement = "runtime";
     probe-settlement = "runtime";
+    service-ownership = "runtime";
     finalization = "runtime";
     escaped-port-reconciliation = "runtime";
   };
