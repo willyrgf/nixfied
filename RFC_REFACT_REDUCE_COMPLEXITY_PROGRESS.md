@@ -409,9 +409,23 @@ removed state owners, coordinated change sites, and capture correctness addition
    `/tmp/nixfied-fixture-consolidation-tests.log`,
    `/tmp/nixfied-leaf-fixture-tests.log`). The augmented two-slot proof is recorded
    in `/tmp/nixfied-slot-fixture-proof.log`.
-   Remaining: coherent service fixture construction/start methods, broader CLI
-   fixture adoption where cohesive, registry identity/cleanup setup tables, and
-   approximate-audit replacement mapping/removal.
+   ServiceFixture now owns only the admitted scenario, placement, registry, and
+   workspace lifetime. Deleted the mutable raw Manifest copy, seven readmit sites,
+   and the duplicate typed argv mutator. Task timeout/argv and containment deltas
+   are configured in raw JSON before admission. The cwd race prepares its directory
+   before the sole admission, then replaces it with a symlink after admission.
+   The live-owner collision test separately admits its second scenario instead of
+   overwriting the owner's fixture. All fixture document reads borrow admission's
+   immutable validated manifest.
+   Service start, endpoint-less start, and prepare start are fixture methods;
+   67 repeated manifest/admission/placement/registry argument groups and three
+   forwarding helpers are removed. One shared run-recording/start setup remains
+   for independently selected slot and upgrade scenarios.
+   Clippy, 73 service tests, and ten upgrade tests pass after the method cutover
+   (`/tmp/nixfied-service-start-method-tests.log`); final endpoint-less/prepare
+   method checks are in `/tmp/nixfied-service-fixture-final-tests.log`.
+   Remaining: broader CLI fixture adoption where cohesive, registry identity/
+   cleanup setup tables, and approximate-audit replacement mapping/removal.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed
 test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release

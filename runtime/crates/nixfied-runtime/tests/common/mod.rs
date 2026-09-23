@@ -276,70 +276,9 @@ fn service_lifetime_wire(lifetime: ServiceLifetime) -> &'static str {
     }
 }
 
-/// Start the fixture's `synthetic` service on the default slot through the
+/// Record a fixture run and start its `synthetic` service on the selected slot through the
 /// generic runtime API.
-pub fn start_synthetic_service(
-    manifest: &Manifest,
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_port: u16,
-) -> RuntimeResult<AcquiredService> {
-    let selected_slot = select_slot(manifest, None)?;
-    start_synthetic_service_for_slot(
-        admission,
-        placement,
-        registry,
-        run_id,
-        &selected_slot,
-        selected_port,
-    )
-}
-
-pub fn start_synthetic_service_with_lifetime(
-    manifest: &Manifest,
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_port: u16,
-    service_lifetime: ServiceLifetime,
-) -> RuntimeResult<AcquiredService> {
-    let selected_slot = select_slot(manifest, None)?;
-    start_synthetic_service_for_slot_with_lifetime(
-        admission,
-        placement,
-        registry,
-        run_id,
-        &selected_slot,
-        selected_port,
-        service_lifetime,
-    )
-}
-
-/// Start the fixture's `synthetic` service on a chosen slot through the generic
-/// runtime API, with no wired endpoints.
-pub fn start_synthetic_service_for_slot(
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_slot: &SelectedSlot<'_>,
-    selected_port: u16,
-) -> RuntimeResult<AcquiredService> {
-    start_synthetic_service_for_slot_with_lifetime(
-        admission,
-        placement,
-        registry,
-        run_id,
-        selected_slot,
-        selected_port,
-        ServiceLifetime::RunScoped,
-    )
-}
-
-pub fn start_synthetic_service_for_slot_with_lifetime(
+pub fn start_fixture_service(
     admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,

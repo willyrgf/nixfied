@@ -239,13 +239,14 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let identity_a = StateIdentity::from_admission(admission_a.common());
     commit_slot_marker(&placement, &identity_a).expect("marker should be written");
     let mut registry = open_registry(&placement, &manifest);
-    let service = start_synthetic_service(
-        &manifest,
+    let service = start_fixture_service(
         &admission_a,
         &placement,
         &mut registry,
         "run-a",
+        &nixfied_runtime::slot::select_slot(&manifest, None).unwrap(),
         23980,
+        nixfied_manifest::ServiceLifetime::RunScoped,
     )
     .expect("old-manifest service should start");
     let pgid = service.info().pgid;
