@@ -408,7 +408,7 @@ removed state owners, coordinated change sites, and capture correctness addition
    floor passed (`/tmp/nixfied-redaction-sharing-tests.log`,
    `/tmp/nixfied-redaction-unit-tests.log`, `/tmp/nixfied-redaction-floor.log`).
    Architect review found no defects. Final cross-layer CI remains required.
-14. Fixture consolidation and audit proof mapping: in progress.
+14. Fixture consolidation and audit proof mapping: implemented; final verification below.
    RuntimeFixture now lives in tests/common and writes raw scenario bytes without
    validating or repairing them. Its command method returns ordinary Command;
    output tests and both real CLI signal/cancellation tests share it. Tests keep
@@ -489,6 +489,113 @@ removed state owners, coordinated change sites, and capture correctness addition
    running again as session `2926` (`/tmp/nixfied-refactor-final-floor.log`).
    This is additional evidence gathering, not a claimed root-cause fix.
 
-No completion claim: final acceptance audit, final measurements, full fixture-backed
-test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release
-package checks remain outstanding.
+The implementation audit, measurements, complete Linux fixture floor, and public
+package builds are recorded below. Full CI is still running; macOS execution
+remains unavailable. No full acceptance or completion claim is made.
+
+## Final implementation audit
+
+Audited implementation revision: `c324538` (baseline `d6b5632`). This is an
+implementation/proof map, not a claim that unavailable platform checks passed.
+The ordered delivery record above uses commit order; the table below uses the
+RFC's design section numbers.
+
+| RFC requirement | Current owner and inspected proof |
+| --- | --- |
+| 1. Closed admission | `ValidatedManifest` has a private field and fallible construction; loaded/run/control fields are private. `lower` requires the validated document. Admission tests cover origin-before-parse, host/graph ordering, provenance, secret/source/closure refusal, control independence, and `output.rs::unused_graph_and_template_faults_reject_before_state_or_child_effects` asserts MANIFEST_ADMISSION with absent state and child markers. |
+| 2. One Rust graph interpretation | `execution/plan.rs` owns flattening, combined service edges, cycle/union/capacity proof, logical planning and slot binding. Lowering calls those same proofs; runtime plans borrow admitted data. Independent Nix derivation vectors and literal Rust goldens remain. |
+| 3. Resolved invocations/templates | `ResolvedInvocation`, checked cwd and parsed templates are constructed during lowering; runtime consumes them with opaque inserted values. Shared template vectors, raw admission negatives and execution tests cover literal run[0], argument/env parsing, secret restrictions, operation/endpoint scope and temporal cwd confinement. |
+| 4. Ownership | Acquired/started owned and borrowed alternatives carry different resources. Ready/standing transitions consume ownership; failed transitions settle owned resources. Service tests cover borrowing, persistent survival, until-idle leases, readiness/health rollback, failed standing and exact error precedence. |
+| 5. Bounded children/capture | Task/probe completion shares the bounded-child owner; all bounded capture uses pipes, an absolute deadline and EOF-only completion. Both workers join; incomplete evidence cannot produce replay. Unit and CLI tests cover empty/secret redactors, escaped idle/continuous writers, partial failure and persistent transfer. Linux evidence exists; macOS execution remains missing. |
+| 6. Node/evidence owner | `execute_node` and `RunEvidence` own terminal records once. Monotonic attempted occurrences are separate from terminal indices; logs/summaries use exclusive creation. Repeated prepare/root and later-failure tests pin distinct literal child output; collision tests pin refusal before child start and preservation after terminal evidence. |
+| 7. Registry readers/context | Registry owns typed endpoint/lifetime/status decoding, the actionable escaped-process predicate and borrowed event/context access. Controls consume native observations and ps alone projects wire records. Corruption, multiplicity, alternate IPv6 spelling, rollback, contention, reuse, lease and pre-signal identity tests remain. No new persistent observation cache; effect boundaries retain fresh identity and transaction-local ownership checks. |
+| 8. Direct placement | State placement joins checked single components; the template language is deleted. Both-slot paths, narrowed component negatives, root/nested symlink confinement and registry-survival cleanup tests pin the boundary. |
+| 9. Possible outcomes | Endpoint refinement returns errors directly; cleanup terminal state excludes intent. Validated endpoint lock roots are explicitly supplied. Unsafe targets, nonblocking/CLOEXEC/partial-release and real-start-before-prepare tests remain. Listener representation is deliberately retained because IPv4 diagnostic mode evidence is accepted and must survive. |
+| 10. Failure/cancellation owner | RuntimeError owns causes; finalization records its cancellation observation once. Literal priority/flattening/cause-order tests and cancellation during blocked replay prove ordering and continued cleanup. |
+| 11. Atomic initialization | Registry creation classifies, creates schema, writes identity and version in one immediate transaction. Tests cover concurrent initialization, injected write/version failures, process exit before commit, reopen and rejection without migration. |
+| 12. Redaction/projection reuse | One scanner serves whole-buffer and streaming output. Output owns the narrow summary/footer constructor; replay retains distinct mappings and partial-progress handling. Literal binary/overlap/all-split tests, safe diagnostics and real broken-pipe output tests remain. |
+| 13. Fixtures/proof repair | CLI setup is shared where semantics coincide; admitted service fixtures own no mutable raw shadow. Start operations are fixture methods. Timing/scope/version repairs, merged environment/slot proofs, identity/cleanup tables and removed readback assertions are recorded above. Raw SQL/JSON corruption remains explicit. |
+| 14. Audit retirement | DEVELOPMENT maps retired approximate audits to exact inventory/record checks, freshness, independent ABI/wire and behavioral proofs. AGENTS routing changed atomically. Missing/renamed field vectors, native-owner/local-record routing and maintenance exercises remain. |
+| Smaller subtractions | Shared sigaction setup retains rollback/reverse restoration and caller diagnostics. Redundant slot validation/vector and health wrapper are removed. Identity hashing keeps direct serialization and literal component hashes, with no reachable new error boundary. Both real stop policies remain. |
+| ABI delivery | Descriptor additions and literal ABI snapshot are coupled to producers, consumers, docs and fixtures in coherent commits. Current ABI is `nixfied-runtime-abi:1-b0becb63c23d`; no numeric version change or old-byte compatibility path was introduced. |
+
+## Final measurement and change-site accounting
+
+Same physical-line classification as the baseline, measured from tracked Rust at
+`c324538`; comments/blanks included. These are not percentage targets.
+
+| Category | Baseline | Final | Delta |
+| --- | ---: | ---: | ---: |
+| Authored production | 18,756 | 18,821 | +65 |
+| Embedded test modules | 3,778 | 4,692 | +914 |
+| Integration/common tests and manifest fixtures | 12,099 | 12,410 | +311 |
+| Generated Rust | 817 | 817 | 0 |
+| Private test child | 643 | 686 | +43 |
+| Total | 36,093 | 37,426 | +1,333 |
+
+The bounded-child/capture correctness commit `210aedd` contributes +306 authored
+production, +357 embedded test, +134 integration/fixture and +26 test-child lines.
+This is a net commit delta that includes sharing/deletion as well as the new
+protocol, not a claim that every added line implements capture. Outside that
+commit, authored production is net -241 lines. Ownership transition fixes and
+occurrence-evidence correctness also add code; test growth is retained evidence,
+not classified as savings. No generated formatting reduction is claimed.
+
+Counted as 12 removed duplicate implementation groups (group definitions below,
+not individual helper functions): graph interpretation; invocation resolution;
+template matching/rendering and secret-reference scanning; admission store-root
+observation; source confinement; bounded task/probe completion; root/prepare node
+execution; stored endpoint decoding; actionable escaped-process SQL; process
+identity encoding; whole-buffer/streaming redaction scanning; sigaction setup.
+Each now has one named owner described above. Independent Nix derivation and
+literal test oracles are deliberately not counted as duplication to remove.
+
+Five removed redundant storage/representation groups: separate finalization cause storage;
+prepare/root terminal evidence shuttles; process-record IDs duplicated by transition
+context; owned versus borrowed event insertion records; and service fixture raw
+manifest shadows. Private admission APIs additionally remove external mutation
+of proof fields; owned/borrowed service alternatives remove incoherent correlated
+resource states. These representation changes are distinct from LOC movement.
+
+Moved code includes RuntimeFixture/command construction into tests/common,
+summary/footer projection construction into output, and lifecycle setup into
+fixture methods; movement itself is not credited as deletion. Removed logic and
+storage are listed separately above. Test setup sharing reduces coordinated test
+edits while retaining raw adversarial boundary paths.
+
+No new semantic seam, registry, daemon, compatibility path, mutable cache or
+external authority was added. Eight newly explicit ABI behavior coordinates
+(substitution-grammar, relational-admission, placement-components, probe-settlement,
+service-ownership, task-evidence, bounded-capture, finalization) require descriptor
+and existing native coverage routing entries. Their behavior changes also require
+the existing ABI snapshot/docs/proof cutover; those coordinated obligations are
+reported as added contract documentation, not hidden as refactor savings.
+
+## Verification receipts and remaining evidence
+
+- Linux fixture-backed floor: session `2926`, exit 0,
+  `/tmp/nixfied-refactor-final-floor.log`. The realized Postgres recovery test ran
+  and passed; it was not silently skipped.
+- Public CLI, installer, and optimized runtime builds: session `35327`, exit 0,
+  `/tmp/nixfied-refactor-final-packages.log`.
+- Initial final CI: session `84150`, exit 30. Source checks and the floor passed;
+  runtime gate slot 1 reported PORT_UNVERIFIABLE at 34980 (bind occupied without
+  observable listener). The exact collision source was not established. The
+  gate-only slot override moved from 34880 to 31880, below this host's ephemeral
+  range 32768–60999; both proposed windows were bindable before the rerun.
+  Production endpoint refusal semantics are unchanged.
+- Repaired final CI: session `96889`, still running when this draft was prepared.
+  All 22 runtime-gate cases, including both slots, passed; downstream Nix/install/
+  upgrade fixtures are still running. Log: `/tmp/nixfied-refactor-final-ci-repaired.log`.
+- Earlier full floor session `24863` failed once on the shutdown test's initial
+  service marker. Its failure path now reaps the child and reports diagnostics,
+  without changing time limits or success assertions. Subsequent service suites
+  and the complete floor passed. The original failure's cause remains unproven.
+- macOS execution is unverified. The current host is aarch64-linux, with no
+  extra execution platform or configured remote builder (`/etc/nix/machines`
+  absent). The user has been asked for an available macOS host/runner. The hosted
+  macOS workflow now runs service/output suites alongside unit/endpoint tests
+  (commit `5f586a4`); YAML and shell syntax have been checked, not macOS execution.
+
+Implementation evidence is not full RFC acceptance while the required macOS
+process/endpoint/capture proof is missing. No completion claim is made here.
