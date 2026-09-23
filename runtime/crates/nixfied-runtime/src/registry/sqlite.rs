@@ -15,6 +15,12 @@ pub struct Registry {
     redactor: Redactor,
 }
 
+pub(crate) struct RegistryContext<'a> {
+    pub(crate) connection: &'a mut Connection,
+    pub(crate) identity: &'a RegistryIdentity,
+    pub(crate) redactor: &'a Redactor,
+}
+
 impl Registry {
     pub fn open_or_create(
         path: impl AsRef<Path>,
@@ -51,6 +57,14 @@ impl Registry {
         })
     }
 
+    pub(crate) fn context(&mut self) -> RegistryContext<'_> {
+        RegistryContext {
+            connection: &mut self.conn,
+            identity: &self.identity,
+            redactor: &self.redactor,
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -75,7 +89,7 @@ impl Registry {
         &self.redactor
     }
 
-    pub fn append_event(&mut self, event: &EventInsert) -> RuntimeResult<i64> {
+    pub fn append_event(&mut self, event: EventInsert<'_>) -> RuntimeResult<i64> {
         append_event(&mut self.conn, &self.identity, &self.redactor, event)
     }
 }

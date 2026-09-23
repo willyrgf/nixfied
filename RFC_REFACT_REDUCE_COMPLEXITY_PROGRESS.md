@@ -295,7 +295,7 @@ removed state owners, coordinated change sites, and capture correctness addition
    behavior has a worker proof; existing persistent survival/borrow/release/down,
    until-idle, cancellation, identity/lease race, and escape service tests pass.
    macOS execution remains unverified; final acceptance must report that gap.
-11. Node runner and occurrence evidence ABI cutover: implemented; full proof running.
+11. Node runner and occurrence evidence ABI cutover: complete.
    One concrete runner resolves authored dependencies and executes borrowed prepare
    and root plan nodes. The session owns one terminal TaskRun vector; root and
    selected projections retain private indices, with output constructed once at
@@ -315,10 +315,26 @@ removed state owners, coordinated change sites, and capture correctness addition
    pass (`/tmp/nixfied-evidence-suites.log`). The complete fixture-backed floor
    passed (session `63610`, `/tmp/nixfied-evidence-floor.log`). Contract, architecture,
    descriptor routing, and ABI snapshot updated together to
-   `nixfied-runtime-abi:1-b0becb63c23d`. Full CI is live (session `30118`,
-   `/tmp/nixfied-evidence-ci.log`); source checks, fixture floor, and all 22 runtime
-   gate cases passed; downstream Nix/install/upgrade fixtures are running.
-12. Registry decoding/event context: pending.
+   `nixfied-runtime-abi:1-b0becb63c23d`. Full current-tree CI passed (session
+   `30118`, exit 0, `/tmp/nixfied-evidence-ci.log`): source checks, fixture floor,
+   all 22 runtime cases, and downstream Nix/install/upgrade fixtures. Committed
+   as `3281b38`; macOS remains unverified.
+12. Registry decoding/event context: first coherent increment implemented.
+   Registry lends disjoint connection, identity, and redactor references to
+   service/control/cleanup transitions. Explicit deferred/immediate transaction
+   modes, mutation order, temporal checks, redaction, and commit boundaries remain.
+   One borrowed EventInsert replaces owned/borrowed event representations; lifecycle
+   event-only writes reuse append_event. ProcessRecord no longer duplicates run
+   and service IDs supplied by transition context; stored comparisons remain.
+   StoredProcessIdentity owns shared encoding with task tracking omitted and
+   service tracking present, including empty arrays. Literal wire tests preserve
+   exact field order/presence. A trigger rejecting the second start event proves
+   rollback of both event writes, service/process rows, and port ownership.
+   Architect review found no correctness defects. Clippy, 40 service unit tests,
+   18 registry, 74 service, 26 state, and 10 upgrade tests pass
+   (`/tmp/nixfied-registry-context-complete.log`). Prepared in isolated worktree
+   while step 11 CI ran. Shared row decoding, active/escaped predicate, typed
+   reconciliation, complete fixture floor, and cross-layer gate remain pending.
 13. Shared redaction scanner/safe projections: pending.
 14. Fixture consolidation and audit proof mapping: pending.
 

@@ -258,7 +258,7 @@ fn concurrent_event_history_survives_reopen_and_rejects_another_slot() {
                             let event_type = format!("writer-{writer}");
                             let payload = serde_json::json!({"index": index}).to_string();
                             let seq = registry
-                                .append_event(&EventInsert::new(&event_type, &payload))
+                                .append_event(EventInsert::new(&event_type, &payload))
                                 .unwrap();
                             (seq, event_type, payload)
                         })

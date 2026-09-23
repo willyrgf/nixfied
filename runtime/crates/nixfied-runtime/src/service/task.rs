@@ -215,7 +215,12 @@ pub fn run_dependent_task_cancellable(
     // process_group(0) establishes the owned group before the child execs.
     let pgid = pid as i32;
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
-    let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
+    let start_identity = super::StoredProcessIdentity::encode(
+        pid,
+        pgid,
+        platform_start_identity(pid).as_deref(),
+        None,
+    );
     if let Err(error) = record_task_started(
         registry,
         &TaskProcessRecord {
@@ -438,20 +443,6 @@ fn record_task_cancellation_intent(
         context.computed_manifest_hash,
         &payload,
     )
-}
-
-fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> String {
-    let observed_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    serde_json::json!({
-        "pid": pid,
-        "pgid": pgid,
-        "platformStart": platform_start,
-        "observedAtNanos": observed_at,
-    })
-    .to_string()
 }
 
 fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
