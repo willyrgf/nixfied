@@ -21,9 +21,7 @@ const INP_V4MAPPEDV6: u8 = 0x4;
 const IN6P_IPV6_V6ONLY: u32 = 0x0000_8000;
 const IN6P_BINDV6ONLY: u32 = 0x0100_0000;
 const TCPS_LISTEN: u32 = 1;
-const PROC_PIDLISTFDS: libc::c_int = 1;
 const PROC_PIDFDSOCKETINFO: libc::c_int = 3;
-const PROX_FDTYPE_SOCKET: u32 = 2;
 const SOCKINFO_TCP: u32 = 2;
 const SOCKET_FDINFO_SO_OFFSET: usize = 160;
 const SOCKET_FDINFO_PROTOCOL_OFFSET: usize = 180;
@@ -362,7 +360,7 @@ fn list_socket_fds(pid: u32) -> Vec<i32> {
     let required = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
-            PROC_PIDLISTFDS,
+            libc::PROC_PIDLISTFDS,
             0,
             std::ptr::null_mut(),
             0,
@@ -379,7 +377,7 @@ fn list_socket_fds(pid: u32) -> Vec<i32> {
         let actual = unsafe {
             libc::proc_pidinfo(
                 pid as libc::c_int,
-                PROC_PIDLISTFDS,
+                libc::PROC_PIDLISTFDS,
                 0,
                 bytes.as_mut_ptr().cast(),
                 bytes.len() as libc::c_int,
@@ -401,7 +399,7 @@ fn list_socket_fds(pid: u32) -> Vec<i32> {
             .filter_map(|entry| {
                 let kind = read_u32_ne_raw(entry, 4).ok()?;
                 let descriptor = read_i32_ne_raw(entry, 0).ok()?;
-                (kind == PROX_FDTYPE_SOCKET).then_some(descriptor)
+                (kind == libc::PROX_FDTYPE_SOCKET as u32).then_some(descriptor)
             })
             .collect();
     }
@@ -433,23 +431,27 @@ fn socket_handle(pid: u32, descriptor: i32) -> Result<Option<u64>, String> {
             continue;
         }
         let bytes = &bytes[..actual as usize];
-        if bytes.len() < SOCKET_FDINFO_MIN_LEN {
-            return Err(format!(
-                "macOS socket fd info for pid {pid} fd {descriptor} used an unsupported layout"
-            ));
-        }
-        if read_u32_ne_raw(bytes, SOCKET_FDINFO_KIND_OFFSET)? != SOCKINFO_TCP
-            || read_u32_ne_raw(bytes, SOCKET_FDINFO_PROTOCOL_OFFSET)? != libc::IPPROTO_TCP as u32
-            || !matches!(
-                read_u32_ne_raw(bytes, SOCKET_FDINFO_FAMILY_OFFSET)? as libc::c_int,
-                libc::AF_INET | libc::AF_INET6
-            )
-        {
-            return Ok(None);
-        }
-        let handle = read_u64_ne_raw(bytes, SOCKET_FDINFO_SO_OFFSET)?;
-        return Ok((handle != 0).then_some(handle));
+        return decode_socket_handle(bytes, pid, descriptor);
     }
+}
+
+fn decode_socket_handle(bytes: &[u8], pid: u32, descriptor: i32) -> Result<Option<u64>, String> {
+    if bytes.len() < SOCKET_FDINFO_MIN_LEN {
+        return Err(format!(
+            "macOS socket fd info for pid {pid} fd {descriptor} used an unsupported layout"
+        ));
+    }
+    if read_u32_ne_raw(bytes, SOCKET_FDINFO_KIND_OFFSET)? != SOCKINFO_TCP
+        || read_u32_ne_raw(bytes, SOCKET_FDINFO_PROTOCOL_OFFSET)? != libc::IPPROTO_TCP as u32
+        || !matches!(
+            read_u32_ne_raw(bytes, SOCKET_FDINFO_FAMILY_OFFSET)? as libc::c_int,
+            libc::AF_INET | libc::AF_INET6
+        )
+    {
+        return Ok(None);
+    }
+    let handle = read_u64_ne_raw(bytes, SOCKET_FDINFO_SO_OFFSET)?;
+    Ok((handle != 0).then_some(handle))
 }
 
 fn read_u32_ne(bytes: &[u8], offset: usize) -> Result<u32, ParseFailure> {
@@ -604,15 +606,19 @@ mod tests {
             .copy_from_slice(&(libc::AF_INET as u32).to_ne_bytes());
         bytes[SOCKET_FDINFO_KIND_OFFSET..SOCKET_FDINFO_KIND_OFFSET + 4]
             .copy_from_slice(&SOCKINFO_TCP.to_ne_bytes());
-        assert_eq!(
-            read_u64_ne_raw(&bytes, SOCKET_FDINFO_SO_OFFSET).unwrap(),
-            47
-        );
-        bytes[SOCKET_FDINFO_KIND_OFFSET..SOCKET_FDINFO_KIND_OFFSET + 4]
-            .copy_from_slice(&0_u32.to_ne_bytes());
-        assert_ne!(
-            read_u32_ne_raw(&bytes, SOCKET_FDINFO_KIND_OFFSET).unwrap(),
-            SOCKINFO_TCP
-        );
+        assert_eq!(decode_socket_handle(&bytes, 1, 2).unwrap(), Some(47));
+        for offset in [
+            SOCKET_FDINFO_KIND_OFFSET,
+            SOCKET_FDINFO_PROTOCOL_OFFSET,
+            SOCKET_FDINFO_FAMILY_OFFSET,
+        ] {
+            let mut invalid = bytes.clone();
+            invalid[offset..offset + 4].copy_from_slice(&0_u32.to_ne_bytes());
+            assert_eq!(decode_socket_handle(&invalid, 1, 2).unwrap(), None);
+        }
+        assert!(decode_socket_handle(&bytes[..SOCKET_FDINFO_MIN_LEN - 1], 1, 2).is_err());
+        bytes[SOCKET_FDINFO_SO_OFFSET..SOCKET_FDINFO_SO_OFFSET + 8]
+            .copy_from_slice(&0_u64.to_ne_bytes());
+        assert_eq!(decode_socket_handle(&bytes, 1, 2).unwrap(), None);
     }
 }

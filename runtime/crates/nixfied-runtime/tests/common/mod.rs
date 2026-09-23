@@ -19,6 +19,17 @@ use serde_json::Value;
 use nixfied_manifest::fixtures::{self, SyntheticManifestOptions};
 pub use nixfied_manifest::fixtures::{SYNTHETIC_EXECUTABLE, SYNTHETIC_START_ARGS};
 
+pub fn add_slot_one(value: &mut Value, start: u16, end: u16) {
+    value["slotPolicy"]["max"] = serde_json::json!(1);
+    value["placement"]["slotPlacements"]["1"] = serde_json::json!({
+        "slot": 1,
+        "candidatePorts": {
+            "start": start,
+            "end": end
+        }
+    });
+}
+
 pub fn runtime_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_nixfied-runtime") {
         return PathBuf::from(path);
@@ -305,6 +316,7 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
             prepare_runner: None,
         },
     )
+    .map(|start| start.service)
     .map_err(|error| error.into_parts().0)
 }
 

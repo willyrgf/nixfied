@@ -3,7 +3,7 @@ use std::path::Path;
 
 use nixfied_manifest::LoopbackHost;
 
-use crate::cancellation::CancellationToken;
+use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::RuntimeResult;
 use crate::execution::{ExecProbe, TcpProbe};
 use crate::redaction::Redactor;
@@ -71,6 +71,7 @@ pub(crate) fn exec_probe_attempt(
         cancellation,
     )?;
     Ok(match outcome {
+        BoundedExecOutcome::Canceled => return Err(canceled_error()),
         BoundedExecOutcome::Exited(status) if status.success() => ProbeAttempt::Succeeded,
         BoundedExecOutcome::Exited(status) => ProbeAttempt::Failed(format!(
             "probe {} exited with code {} (probe logs: {}, {})",

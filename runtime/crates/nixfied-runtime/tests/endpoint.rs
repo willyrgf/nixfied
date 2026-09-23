@@ -522,6 +522,25 @@ fn write_endpoint_manifest(
     service_lifetime: &str,
     listener_behavior: &str,
 ) -> PathBuf {
+    write_manifest(
+        directory,
+        endpoint_manifest(
+            child,
+            port,
+            blocking_prepare,
+            service_lifetime,
+            listener_behavior,
+        ),
+    )
+}
+
+fn endpoint_manifest(
+    child: &Path,
+    port: u16,
+    blocking_prepare: bool,
+    service_lifetime: &str,
+    listener_behavior: &str,
+) -> Value {
     let closure_root = closure_root_for_store_executable(child)
         .expect("store executable should have a closure root");
     let executable_name = child
@@ -609,6 +628,10 @@ fn write_endpoint_manifest(
     };
     value["tasks"]["endpoint-prepare"] = prepare;
 
+    value
+}
+
+fn write_manifest(directory: &Path, value: Value) -> PathBuf {
     let manifest: Manifest = serde_json::from_value(value).expect("endpoint manifest should parse");
     manifest
         .validate()
@@ -619,21 +642,13 @@ fn write_endpoint_manifest(
 }
 
 fn write_multi_endpoint_manifest(directory: &Path, child: &Path, port: u16) -> PathBuf {
-    let path = write_endpoint_manifest(directory, child, port, false, "run-scoped", "hold");
-    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut value = endpoint_manifest(child, port, false, "run-scoped", "hold");
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     value["services"]["synthetic"]["endpoints"]["admin"] = json!({
         "endpointId": "admin",
         "host": "127.0.0.1"
     });
-    let manifest: Manifest =
-        serde_json::from_value(value).expect("multi-endpoint manifest should parse");
-    manifest
-        .validate()
-        .expect("two endpoints should fit the two-port window");
-    let path = directory.join("multi-endpoint-manifest.json");
-    fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
-    path
+    write_manifest(directory, value)
 }
 
 fn enable_address_reuse(listener: &TcpListener) {
@@ -686,28 +701,26 @@ fn assert_nonreusable_bind_is_occupied(port: u16) {
 }
 
 fn run_command(manifest: &Path, state_root: &Path) -> Command {
-    let mut command = Command::new(runtime_binary());
-    command
-        .arg("run")
-        .arg("--task")
-        .arg("smoke")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(manifest)
-        .arg("--timeout-ms")
-        .arg("20000")
-        .args(["--output", "json"])
-        .env("NIXFIED_STATE_DIR", state_root)
-        .current_dir(manifest.parent().unwrap())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut command = runtime_command("run", manifest, state_root);
+    command.args([
+        "--task",
+        "smoke",
+        "--timeout-ms",
+        "20000",
+        "--output",
+        "json",
+    ]);
     command
 }
 
 fn down_command(manifest: &Path, state_root: &Path) -> Command {
+    runtime_command("down", manifest, state_root)
+}
+
+fn runtime_command(action: &str, manifest: &Path, state_root: &Path) -> Command {
     let mut command = Command::new(runtime_binary());
     command
-        .arg("down")
+        .arg(action)
         .arg("--allow-non-store-manifest")
         .arg("--manifest")
         .arg(manifest)

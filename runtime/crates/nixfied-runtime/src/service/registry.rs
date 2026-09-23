@@ -156,30 +156,13 @@ pub(crate) fn reserve_service_start(
         .map_err(sql_error)?;
     require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
     ensure_service_start_allowed_transaction(&transaction, service_instance_id, run_id)?;
-    transaction
-        .execute(
-            "
-            INSERT INTO run_leases (
-              run_id, environment, slot, service_instance_id, owner_token,
-              heartbeat_at, expires_at, status
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5,
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
-              ?7
-            )
-            ",
-            params![
-                run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                service_instance_id,
-                owner_token,
-                lease_ttl_modifier(),
-                RunLeaseStatus::Active.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
+    insert_active_lease(
+        &transaction,
+        &identity,
+        run_id,
+        service_instance_id,
+        owner_token,
+    )?;
     // Reserve every endpoint port in the same transaction as the lease: a port
     // already held by another active service refuses the start here, before any
     // prepare or spawn runs. A Reserved row blocks competing reservations (it is in
@@ -221,6 +204,40 @@ pub(crate) fn reserve_service_start(
         },
     )?;
     transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+fn insert_active_lease(
+    transaction: &Transaction<'_>,
+    identity: &RegistryIdentity,
+    run_id: &str,
+    service_instance_id: &str,
+    owner_token: &str,
+) -> RuntimeResult<()> {
+    transaction
+        .execute(
+            "
+            INSERT INTO run_leases (
+              run_id, environment, slot, service_instance_id, owner_token,
+              heartbeat_at, expires_at, status
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5,
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
+              ?7
+            )
+            ",
+            params![
+                run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                service_instance_id,
+                owner_token,
+                lease_ttl_modifier(),
+                RunLeaseStatus::Active.as_str(),
+            ],
+        )
+        .map_err(sql_error)?;
     Ok(())
 }
 
@@ -555,30 +572,13 @@ pub(crate) fn record_service_borrow(
     if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
     }
-    transaction
-        .execute(
-            "
-            INSERT INTO run_leases (
-              run_id, environment, slot, service_instance_id, owner_token,
-              heartbeat_at, expires_at, status
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5,
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
-              ?7
-            )
-            ",
-            params![
-                run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                guard.service.service_instance_id,
-                owner_token,
-                lease_ttl_modifier(),
-                RunLeaseStatus::Active.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
+    insert_active_lease(
+        &transaction,
+        &identity,
+        run_id,
+        guard.service.service_instance_id,
+        owner_token,
+    )?;
     let payload_json = serde_json::json!({
         "borrowedProcessKey": guard.process.process_key,
     })
@@ -2145,27 +2145,28 @@ fn ensure_no_active_port_transaction(
     address: &str,
     port: u16,
 ) -> RuntimeResult<()> {
-    let existing = transaction
-        .query_row(
+    let mut statement = transaction
+        .prepare(
             "
             SELECT endpoint_key, status FROM ports
             WHERE address = ?1 AND port = ?2
             ORDER BY endpoint_key
-            LIMIT 1
             ",
-            params![address, port],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
-        .optional()
         .map_err(sql_error)?;
-    if let Some((endpoint_key, status)) = existing
-        && PortStatus::from_db(&status)
-            .is_some_and(|port_status| status::PORT_OPEN.contains(&port_status))
-    {
-        return Err(RuntimeError::new(
-            ErrorCode::LeaseConflict,
-            format!("endpoint {endpoint_key} already has active port {address}:{port}"),
-        ));
+    let rows = statement
+        .query_map(params![address, port], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql_error)?;
+    for row in rows {
+        let (endpoint_key, raw_status) = row.map_err(sql_error)?;
+        if status::PORT_OPEN.contains(&PortStatus::parse_db(&raw_status)?) {
+            return Err(RuntimeError::new(
+                ErrorCode::LeaseConflict,
+                format!("endpoint {endpoint_key} already has active port {address}:{port}"),
+            ));
+        }
     }
     Ok(())
 }
@@ -2468,6 +2469,62 @@ mod tests {
         ready_rx.recv().unwrap();
         reserve(&mut waiting.registry, RUN_ID, OWNER_TOKEN, true);
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn reservation_checks_every_matching_port_row_before_writing() {
+        for (later_status, expected_code) in [
+            ("reserved", ErrorCode::LeaseConflict),
+            ("active", ErrorCode::LeaseConflict),
+            ("invalid-status", ErrorCode::RegistryCorrupt),
+        ] {
+            let mut fixture = TestRegistry::new();
+            insert_run(&fixture.registry, RUN_ID);
+            let identity = fixture.registry.identity();
+            fixture
+                .registry
+                .connection()
+                .execute(
+                    "
+                    INSERT INTO ports (
+                      endpoint_key, environment, slot, service_instance_id, address, port, status
+                    ) VALUES
+                      ('a:old', ?1, ?2, 'old-service', ?3, ?4, 'released'),
+                      ('z:existing', ?1, ?2, 'existing-service', ?3, ?4, ?5)
+                    ",
+                    params![
+                        identity.environment,
+                        identity.slot,
+                        endpoint().address,
+                        endpoint().port,
+                        later_status,
+                    ],
+                )
+                .unwrap();
+
+            let error = reserve_service_start(
+                &mut fixture.registry,
+                RUN_ID,
+                OWNER_TOKEN,
+                MANIFEST_HASH,
+                SERVICE_ID,
+                &[endpoint()],
+            )
+            .expect_err("a released row must not hide a later open or malformed row");
+            assert_eq!(error.code, expected_code, "status {later_status}");
+            let counts: (i64, i64, i64) = fixture
+                .registry
+                .connection()
+                .query_row(
+                    "SELECT (SELECT count(*) FROM ports),
+                            (SELECT count(*) FROM run_leases),
+                            (SELECT count(*) FROM events)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(counts, (2, 0, 0), "status {later_status}");
+        }
     }
 
     #[test]

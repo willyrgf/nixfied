@@ -110,7 +110,7 @@ fn native_run_acquisition_repetition_and_integer_domains() {
     };
     let initial = parse(&[]).unwrap();
     assert_eq!(initial.timeout_ms, 5000);
-    assert_eq!(initial.selection.slot, None);
+    assert_eq!(initial.slot, None);
     assert_eq!(initial.output_mode, None);
     assert!(!initial.allow_non_store);
     for (args, code, message) in [
@@ -208,7 +208,7 @@ fn native_run_acquisition_repetition_and_integer_domains() {
         "7",
     ])
     .unwrap();
-    assert_eq!(options.selection.slot, Some(2));
+    assert_eq!(options.slot, Some(2));
     assert_eq!(options.timeout_ms, 7);
     // Observe the native fallback in the current process without mutating its environment.
     let fallback = state_base_from_env();
@@ -233,7 +233,7 @@ fn native_control_and_check_loops_keep_their_own_boundaries() {
             parse_control_options(command, &args)
         };
         let options = parse(&["--slot", "1", "--slot", "+2"]).unwrap();
-        assert_eq!(options.selection.slot, Some(2));
+        assert_eq!(options.slot, Some(2));
         assert_eq!(options.timeout_ms, 5000);
         assert_eq!(
             parse(&["--manifest"]).err().unwrap().message,

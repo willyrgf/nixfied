@@ -202,23 +202,15 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
     if !value.len().is_multiple_of(2) {
         return Err(format!("hex value has odd length: {value:?}"));
     }
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let high = hex_digit(pair[0])?;
-        let low = hex_digit(pair[1])?;
-        decoded.push((high << 4) | low);
+    if let Some(byte) = value.bytes().find(|byte| !byte.is_ascii_hexdigit()) {
+        return Err(format!("invalid hex digit: {byte:?}"));
     }
-    Ok(decoded)
-}
-
-fn hex_digit(value: u8) -> Result<u8, String> {
-    match value {
-        b'0'..=b'9' => Ok(value - b'0'),
-        b'a'..=b'f' => Ok(value - b'a' + 10),
-        b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err(format!("invalid hex digit: {value:?}")),
-    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&value[index..index + 2], 16).map_err(|error| error.to_string())
+        })
+        .collect()
 }
 
 fn exit_with(args: &[String]) -> Result<(), String> {
@@ -412,9 +404,7 @@ fn close_on_marker(listener: TcpListener, request: &Path, closed: &Path) -> Resu
         if request.exists() {
             drop(listener);
             touch(closed)?;
-            loop {
-                thread::park();
-            }
+            park_forever()
         }
         match listener.accept() {
             Ok((mut stream, _)) => {

@@ -8,7 +8,9 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{ContainmentRequirement, LoopbackHost, Manifest, ServiceLifetime};
+use nixfied_manifest::{
+    ContainmentRequirement, LoopbackHost, Manifest, ServiceLifetime, StopSignal,
+};
 use rusqlite::params;
 use serde::Serialize;
 
@@ -26,9 +28,7 @@ use crate::service::endpoint::{
     OwnershipObservation, acquire_startup_locks, observe_ownership,
     observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
-use crate::service::identity::{
-    compute_service_identity, service_address_hash, service_instance_id,
-};
+use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::readiness::{ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     PortReservation, ProcessRecord, ReservationOutcome, ServiceRecord, ServiceReuseGuard,
@@ -46,6 +46,15 @@ use super::task::{PrepareTaskError, TaskRun};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
+
+fn stop_signal_number(signal: StopSignal) -> i32 {
+    match signal {
+        StopSignal::Term => libc::SIGTERM,
+        StopSignal::Int => libc::SIGINT,
+        StopSignal::Quit => libc::SIGQUIT,
+        StopSignal::Hup => libc::SIGHUP,
+    }
+}
 
 /// The child's stdin, per the exec's declared policy: a closed `/dev/null` or the
 /// operator's inherited stdin.
@@ -413,7 +422,11 @@ impl StartedService {
             &self.process_key,
             &self.computed_manifest_hash,
             &activations,
-            (&record.operation_id, record.class, &record.terminal_success),
+            (
+                record.meta.operation_id.as_str(),
+                record.class,
+                &record.meta.terminal_success,
+            ),
         )
     }
 
@@ -639,13 +652,14 @@ impl StartedService {
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
         let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
-        let escalated = match self.stop_owned(self.service.stop.signal.libc(), stop_timeout) {
-            Ok(escalated) => escalated,
-            Err(error) => {
-                let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-                return Err(self.settle_escape(registry, &error, &error));
-            }
-        };
+        let escalated =
+            match self.stop_owned(stop_signal_number(self.service.stop.signal), stop_timeout) {
+                Ok(escalated) => escalated,
+                Err(error) => {
+                    let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
+                    return Err(self.settle_escape(registry, &error, &error));
+                }
+            };
         self.record_stop_signaled(registry, escalated, stop_timeout);
         let _ = wait_for_child_exit(self.child_mut()?, 1000)?;
         self.join_log_relays()?;
@@ -779,8 +793,8 @@ impl StartedService {
         let payload = serde_json::json!({
             "pid": self.pid,
             "pgid": self.pgid,
-            "signal": self.service.stop.signal.name(),
-            "signalNumber": self.service.stop.signal.libc(),
+            "signal": self.service.stop.signal,
+            "signalNumber": stop_signal_number(self.service.stop.signal),
             "escalatedToKill": escalated,
             "timeoutMs": timeout_ms,
         })
@@ -894,12 +908,12 @@ impl StartedService {
 fn probe_policy(probe: &Probe) -> (u32, Duration, &str) {
     match probe {
         Probe::Tcp(probe) => (
-            probe.max_attempts.max(1),
+            probe.max_attempts.get(),
             probe.retry_interval,
             probe.label.as_str(),
         ),
         Probe::Exec(probe) => (
-            probe.max_attempts.max(1),
+            probe.max_attempts.get(),
             probe.retry_interval,
             probe.label.as_str(),
         ),
@@ -1118,6 +1132,12 @@ pub struct ServiceSelection<'a> {
 pub type PrepareRunner<'a> =
     Box<dyn FnMut(&mut Registry) -> Result<Vec<TaskRun>, PrepareTaskError> + 'a>;
 
+/// Completed prepare evidence belongs to the start attempt, not the service lifetime.
+pub struct ServiceStart {
+    pub service: StartedService,
+    pub prepare_runs: Vec<TaskRun>,
+}
+
 /// Owned result of a service start attempt. Prepare tasks run before a service
 /// process exists, so their completed evidence belongs to the start attempt and
 /// must survive both success and failure without an optional side channel.
@@ -1155,9 +1175,9 @@ pub fn start_service_for_slot(
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
     selection: ServiceSelection<'_>,
-) -> Result<StartedService, ServiceStartError> {
+) -> Result<ServiceStart, ServiceStartError> {
     let mut prepare_runs = Vec::new();
-    start_service_for_slot_inner(
+    let result = start_service_for_slot_inner(
         admission,
         placement,
         registry,
@@ -1165,8 +1185,14 @@ pub fn start_service_for_slot(
         selected_slot,
         selection,
         &mut prepare_runs,
-    )
-    .map_err(|error| ServiceStartError::new(error, prepare_runs))
+    );
+    match result {
+        Ok(service) => Ok(ServiceStart {
+            service,
+            prepare_runs,
+        }),
+        Err(error) => Err(ServiceStartError::new(error, prepare_runs)),
+    }
 }
 
 fn start_service_for_slot_inner(
@@ -1187,7 +1213,7 @@ fn start_service_for_slot_inner(
     let slot_endpoints = selection.slot_endpoints;
     let service = admission
         .execution_manifest
-        .services
+        .services()
         .get(service_name)
         .ok_or_else(|| {
             RuntimeError::new(
@@ -1320,173 +1346,130 @@ fn start_service_for_slot_inner(
         &service_instance_id,
         &reservations,
     )?;
-    if let Err(error) = cancellation.check() {
-        return Err(settle_reserved_failure(
-            registry,
-            &run_id,
-            &service_instance_id,
-            error,
-        ));
-    }
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: None,
         computed_manifest_hash: admission.computed_manifest_hash.clone(),
     };
-    // prepare is a task reference: the caller supplies a runner that executes
-    // the referenced task's flattened nodes (ordinary task evidence — logs,
-    // summaries, registry rows keyed by step path). It runs INSIDE the
-    // service's reservation, so concurrent runtimes cannot double-prepare the
-    // same state, with the just-created lease kept alive for the duration.
-    if let Some(prepare_task) = &service.prepare {
-        let prepare_record = LifecycleRecord::from_meta(
-            &OpMeta {
-                operation_id: nixfied_manifest::OperationId::new(prepare_task.as_str()),
-                terminal_success: "initialized".to_string(),
-                terminal_failure: "failed".to_string(),
-            },
-            "prepare",
-        );
-        record_lifecycle_started(registry, &lifecycle_context, &prepare_record).map_err(
-            |error| settle_reserved_failure(registry, &run_id, &service_instance_id, error),
-        )?;
-        let prepare_heartbeat = RunLeaseHeartbeat::start(
-            placement.registry_path().to_path_buf(),
-            registry.identity().clone(),
-            run_id.clone(),
-            owner_token.clone(),
-        );
-        let prepare_result = match selection.prepare_runner {
-            Some(ref mut runner) => match runner(registry) {
-                Ok(task_runs) => {
-                    prepare_runs.extend(task_runs);
-                    Ok(())
-                }
-                Err(failure) => {
-                    let (error, task_runs) = failure.into_parts();
-                    prepare_runs.extend(task_runs);
-                    Err(error)
-                }
-            },
-            None => Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!(
-                    "service {service_name} declares prepare task {prepare_task} but the caller supplied no prepare runner"
-                ),
-            )),
-        };
-        let heartbeat_result = prepare_heartbeat.stop();
-        let prepare_error = match (prepare_result, heartbeat_result) {
-            (Ok(()), Ok(())) => None,
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Some(error),
-            (Err(error), Err(heartbeat_error)) => Some(heartbeat_error.with_cause(error)),
-        };
-        if let Some(error) = prepare_error {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
-            return Err(settle_reserved_failure(
-                registry,
-                &run_id,
-                &service_instance_id,
-                error,
-            ));
-        }
-        record_lifecycle_success(registry, &lifecycle_context, &prepare_record).map_err(
-            |error| settle_reserved_failure(registry, &run_id, &service_instance_id, error),
-        )?;
-        if let Err(error) = cancellation.check() {
-            return Err(settle_reserved_failure(
-                registry,
-                &run_id,
-                &service_instance_id,
-                error,
-            ));
-        }
-    }
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
-    record_lifecycle_started(registry, &lifecycle_context, &start_record)
-        .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let exec = &service.start.exec;
-    let command_cwd = resolve_exec_cwd(&source.observed_root, &exec.cwd)
-        .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let args = substitution
-        .args(&exec.args)
-        .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let declared_env = substitution
-        .env(&exec.env)
-        .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let env = exec.env_with_path(declared_env);
-    let stdout_path = placement
-        .logs_dir
-        .join(format!("service.{service_name}.stdout.log"));
-    let stderr_path = placement
-        .logs_dir
-        .join(format!("service.{service_name}.stderr.log"));
-    let command_json = serde_json::to_string(&CommandRecord {
-        executable: exec.executable.as_str(),
-        args: &args,
-        cwd: command_cwd.as_path(),
-        stdout_path: stdout_path.as_path(),
-        stderr_path: stderr_path.as_path(),
-    })
-    .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))
-    .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let redactor = Redactor::from_secrets(&admission.secrets);
-    let (stdout, stderr, mut log_relays) =
-        if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
-            let output = child_output(&stdout_path, &stderr_path, &redactor).map_err(|error| {
-                settle_reserved_failure(registry, &run_id, &service_instance_id, error)
-            })?;
-            (output.stdout, output.stderr, Some(output.relays))
-        } else {
-            (Stdio::null(), Stdio::null(), None)
-        };
-    let mut command = Command::new(&exec.executable);
-    // Hermetic child environment: declared env + runtime-owned variables only
-    // (PATH from the tool roots); nothing inherited from the runtime's own
-    // environment.
-    command
-        .env_clear()
-        .args(&args)
-        .current_dir(&command_cwd)
-        .envs(&env)
-        .stdin(stdin_for(exec.stdin))
-        .stdout(stdout)
-        .stderr(stderr);
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
-    if let Err(error) = cancellation.check() {
-        let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
-        return Err(settle_reserved_failure(
-            registry,
-            &run_id,
-            &service_instance_id,
-            error,
-        ));
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            let error = RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to spawn service {service_name}: {error}"),
+    // Until spawn succeeds, every failure can settle the reservation directly.
+    // Once a child exists, the separate paths below must first prove containment.
+    let (mut child, command_json, redactor, mut log_relays) = (|| {
+        cancellation.check()?;
+        // prepare is a task reference: the caller supplies a runner that executes
+        // the referenced task's flattened nodes (ordinary task evidence — logs,
+        // summaries, registry rows keyed by step path). It runs INSIDE the
+        // service's reservation, so concurrent runtimes cannot double-prepare the
+        // same state, with the just-created lease kept alive for the duration.
+        if let Some(prepare_task) = &service.prepare {
+            let prepare_record = LifecycleRecord::from_meta(
+                &OpMeta {
+                    operation_id: nixfied_manifest::OperationId::new(prepare_task.as_str()),
+                    terminal_success: "initialized".to_string(),
+                    terminal_failure: "failed".to_string(),
+                },
+                "prepare",
             );
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
-            return Err(settle_reserved_failure(
-                registry,
-                &run_id,
-                &service_instance_id,
-                error,
-            ));
+            record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
+            let prepare_heartbeat = RunLeaseHeartbeat::start(
+                placement.registry_path().to_path_buf(),
+                registry.identity().clone(),
+                run_id.clone(),
+                owner_token.clone(),
+            );
+            let prepare_result = match selection.prepare_runner {
+                Some(ref mut runner) => match runner(registry) {
+                    Ok(task_runs) => {
+                        prepare_runs.extend(task_runs);
+                        Ok(())
+                    }
+                    Err(failure) => {
+                        let (error, task_runs) = failure.into_parts();
+                        prepare_runs.extend(task_runs);
+                        Err(error)
+                    }
+                },
+                None => Err(RuntimeError::new(
+                    ErrorCode::LifecycleFailed,
+                    format!(
+                        "service {service_name} declares prepare task {prepare_task} but the caller supplied no prepare runner"
+                    ),
+                )),
+            };
+            let heartbeat_result = prepare_heartbeat.stop();
+            let prepare_error = match (prepare_result, heartbeat_result) {
+                (Ok(()), Ok(())) => None,
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Some(error),
+                (Err(error), Err(heartbeat_error)) => Some(heartbeat_error.with_cause(error)),
+            };
+            if let Some(error) = prepare_error {
+                let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
+                return Err(error);
+            }
+            record_lifecycle_success(registry, &lifecycle_context, &prepare_record)?;
+            cancellation.check()?;
         }
-    };
+        record_lifecycle_started(registry, &lifecycle_context, &start_record)?;
+        let exec = &service.start.exec;
+        let command_cwd = resolve_exec_cwd(&source.observed_root, &exec.cwd)?;
+        let args = substitution.args(&exec.args)?;
+        let declared_env = substitution.env(&exec.env)?;
+        let env = exec.env_with_path(declared_env);
+        let stdout_path = placement
+            .logs_dir
+            .join(format!("service.{service_name}.stdout.log"));
+        let stderr_path = placement
+            .logs_dir
+            .join(format!("service.{service_name}.stderr.log"));
+        let command_json = serde_json::to_string(&CommandRecord {
+            executable: exec.executable.as_str(),
+            args: &args,
+            cwd: command_cwd.as_path(),
+            stdout_path: stdout_path.as_path(),
+            stderr_path: stderr_path.as_path(),
+        })
+        .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
+        let redactor = Redactor::from_secrets(&admission.secrets);
+        let (stdout, stderr, log_relays) =
+            if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
+                let output = child_output(&stdout_path, &stderr_path, &redactor)?;
+                (output.stdout, output.stderr, Some(output.relays))
+            } else {
+                (Stdio::null(), Stdio::null(), None)
+            };
+        let mut command = Command::new(&exec.executable);
+        // Hermetic child environment: declared env + runtime-owned variables only
+        // (PATH from the tool roots); nothing inherited from the runtime's own
+        // environment.
+        command
+            .env_clear()
+            .args(&args)
+            .current_dir(&command_cwd)
+            .envs(&env)
+            .stdin(stdin_for(exec.stdin))
+            .stdout(stdout)
+            .stderr(stderr);
+        command.process_group(0);
+        if let Err(error) = cancellation.check() {
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
+            return Err(error);
+        }
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let error = RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("failed to spawn service {service_name}: {error}"),
+                );
+                let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
+                return Err(error);
+            }
+        };
+        drop(command); // Release configured pipe writers before any failure-path relay join.
+        Ok((child, command_json, redactor, log_relays))
+    })()
+    .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
     let pid = child.id();
     let pgid = match get_process_group(pid) {
         Ok(pgid) => pgid,
@@ -1887,11 +1870,6 @@ fn borrow_reusable_service(
         return Ok(None);
     }
     let process_row = process_row.clone();
-    let registry_endpoints = selected_endpoints_from_snapshot(
-        &snapshot,
-        request.service_record.service_instance_id,
-        &process_row.process_key,
-    )?;
     Ok(Some(StartedService {
         child: None,
         borrowed: true,
@@ -1907,7 +1885,7 @@ fn borrow_reusable_service(
         pid: process_row.pid,
         pgid: process_row.pgid,
         platform_start_identity: process_row.platform_start,
-        selected_endpoints: registry_endpoints,
+        selected_endpoints: request.selected_endpoints.clone(),
         computed_manifest_hash: request.admission.computed_manifest_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: request.placement.state_root.clone(),
@@ -1959,42 +1937,6 @@ fn stored_endpoints_match_selection(
     Ok(true)
 }
 
-fn selected_endpoints_from_snapshot(
-    snapshot: &crate::service::registry::ServiceSnapshot,
-    service_instance_id: &str,
-    process_key: &str,
-) -> RuntimeResult<BTreeMap<String, SelectedEndpoint>> {
-    let mut endpoints = BTreeMap::new();
-    for endpoint in &snapshot.endpoints {
-        if endpoint.status != PortStatus::Active
-            || endpoint.owner_process_key.as_deref() != Some(process_key)
-        {
-            return Ok(BTreeMap::new());
-        }
-        let prefix = format!("{service_instance_id}:");
-        let endpoint_id = endpoint.endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "endpoint key {} does not belong to service {service_instance_id}",
-                    endpoint.endpoint_key
-                ),
-            )
-        })?;
-        let host = LoopbackHost::parse(&endpoint.address)
-            .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
-        endpoints.insert(
-            endpoint_id.to_string(),
-            SelectedEndpoint {
-                endpoint_id: endpoint_id.to_string(),
-                host,
-                port: endpoint.port,
-            },
-        );
-    }
-    Ok(endpoints)
-}
-
 /// Clean every declared service of the slot, then clean the marker-owned slot
 /// state once. Membership does not exist; every declared service may have left
 /// slot evidence, so each one's clean lifecycle operation is recorded. Each is
@@ -2007,8 +1949,8 @@ pub fn run_slot_clean(
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    for service_name in manifest.services.keys() {
-        record_service_clean(manifest, admission, registry, selected_slot, service_name)?;
+    for service in admission.execution_manifest.services().values() {
+        record_service_clean(admission, registry, selected_slot, service)?;
     }
     clean_marked_slot_state(
         manifest,
@@ -2022,29 +1964,19 @@ pub fn run_slot_clean(
 
 /// Record the marker-gated clean lifecycle operation for one service.
 fn record_service_clean(
-    manifest: &Manifest,
     admission: &Admission,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
-    service_name: &str,
+    service: &ExecService,
 ) -> RuntimeResult<()> {
-    let service = manifest.services.get(service_name).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::LifecycleFailed,
-            format!("service {service_name} is missing"),
-        )
-    })?;
-    let record = LifecycleRecord::from_clean(&service.lifecycle.clean);
+    let record = LifecycleRecord::from_meta(&service.clean.meta, "clean");
     let address_hash = service_address_hash(
-        &manifest.project.project_id,
+        &admission.project_id,
         selected_slot.environment,
         selected_slot.slot,
-        service_name,
+        service.name.as_str(),
     );
-    // Recompute the same identity the lowering derived for this service so the
-    // clean path keys on the exact registry instance the start path created.
-    let identity = compute_service_identity(service, &manifest.state, &manifest.target);
-    let service_instance_id = service_instance_id(&address_hash, &identity);
+    let service_instance_id = service_instance_id(&address_hash, &service.identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
         service_instance_id,
@@ -2323,6 +2255,7 @@ pub(crate) struct BoundedExec<'a> {
 pub(crate) enum BoundedExecOutcome {
     Exited(std::process::ExitStatus),
     TimedOut,
+    Canceled,
 }
 
 /// Spawn the bounded exec in its own process group, wait for exit or deadline
@@ -2345,53 +2278,74 @@ pub(crate) fn run_bounded_exec(
         .stdin(stdin_for(spec.stdin))
         .stdout(output.stdout)
         .stderr(output.stderr);
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
+    command.process_group(0);
     let mut child = command.spawn().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("failed to spawn lifecycle operation {label}: {error}"),
         )
     })?;
-    let pgid = match get_process_group(child.id()) {
-        Ok(pgid) => pgid,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
+    // Command retains configured pipe writers; release them before relay EOF.
+    drop(command);
+    // Successful process_group(0) spawning establishes this group before exec.
+    let pgid = child.id() as i32;
     let deadline = Instant::now() + spec.timeout;
-    loop {
+    let outcome = loop {
         if cancellation.is_canceled() {
-            let _ = terminate_process_group(pgid, 1000);
-            let _ = wait_for_child_exit(&mut child, 1000);
-            output.relays.join()?;
-            return Err(canceled_error());
+            break Ok(BoundedExecOutcome::Canceled);
         }
-        if let Some(status) = child.try_wait().map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to inspect lifecycle operation {label}: {error}"),
-            )
-        })? {
-            output.relays.join()?;
-            return Ok(BoundedExecOutcome::Exited(status));
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(BoundedExecOutcome::Exited(status)),
+            Ok(None) => {}
+            Err(error) => {
+                break Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("failed to inspect lifecycle operation {label}: {error}"),
+                ));
+            }
         }
         if Instant::now() >= deadline {
-            let _ = terminate_process_group(pgid, 1000);
-            let _ = wait_for_child_exit(&mut child, 1000);
-            output.relays.join()?;
-            return Ok(BoundedExecOutcome::TimedOut);
+            break Ok(BoundedExecOutcome::TimedOut);
         }
         thread::sleep(Duration::from_millis(10));
+    };
+    if let Err(cleanup) = terminate_and_reap(&mut child, pgid) {
+        return Err(match outcome {
+            Err(error) => cleanup.with_cause(error),
+            Ok(_) => cleanup,
+        });
+    }
+    match (outcome, output.relays.join()) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Err(error), Err(relay)) => Err(error.with_cause(relay)),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+/// Finish an owned bounded child, including descendants left after direct exit.
+/// Reaping is attempted even if group containment fails; it cannot erase that failure.
+pub(crate) fn terminate_and_reap(child: &mut Child, pgid: i32) -> RuntimeResult<()> {
+    let containment = terminate_process_group(pgid, 1000);
+    let reaped = (|| {
+        if wait_for_child_exit(child, 1000)? {
+            return Ok(());
+        }
+        let killed = child.kill();
+        // A kill can race with exit. Reaping proves completion in either case.
+        if wait_for_child_exit(child, 1000)? {
+            return Ok(());
+        }
+        Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            match killed {
+                Ok(()) => "owned child did not exit after containment or direct kill".into(),
+                Err(error) => format!("failed to kill owned child after containment: {error}"),
+            },
+        ))
+    })();
+    match (containment, reaped) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(error), Err(reap)) => Err(error.with_cause(reap)),
     }
 }
 
@@ -2417,28 +2371,15 @@ struct LifecycleEventContext {
 /// recording, owned so it does not borrow the `StartedService` across the
 /// `&mut self` calls in the lifecycle methods.
 struct LifecycleRecord {
-    operation_id: String,
+    meta: OpMeta,
     class: &'static str,
-    terminal_success: String,
-    terminal_failure: String,
 }
 
 impl LifecycleRecord {
     fn from_meta(meta: &OpMeta, class: &'static str) -> Self {
         Self {
-            operation_id: meta.operation_id.as_str().to_string(),
+            meta: meta.clone(),
             class,
-            terminal_success: meta.terminal_success.clone(),
-            terminal_failure: meta.terminal_failure.clone(),
-        }
-    }
-
-    fn from_clean(clean: &nixfied_manifest::CleanSpec) -> Self {
-        Self {
-            operation_id: clean.operation_id.as_str().to_string(),
-            class: "clean",
-            terminal_success: clean.terminal.success.clone(),
-            terminal_failure: clean.terminal.failure.clone(),
         }
     }
 }
@@ -2449,7 +2390,7 @@ fn record_lifecycle_started(
     record: &LifecycleRecord,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
-        "operationId": record.operation_id,
+        "operationId": record.meta.operation_id,
         "class": record.class,
     }))
     .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
@@ -2469,7 +2410,13 @@ fn record_lifecycle_success(
     context: &LifecycleEventContext,
     record: &LifecycleRecord,
 ) -> RuntimeResult<()> {
-    record_lifecycle_terminal(registry, context, record, &record.terminal_success, None)
+    record_lifecycle_terminal(
+        registry,
+        context,
+        record,
+        &record.meta.terminal_success,
+        None,
+    )
 }
 
 fn record_lifecycle_failure(
@@ -2482,7 +2429,7 @@ fn record_lifecycle_failure(
         registry,
         context,
         record,
-        &record.terminal_failure,
+        &record.meta.terminal_failure,
         Some(error),
     )
 }
@@ -2495,7 +2442,7 @@ fn record_lifecycle_terminal(
     error: Option<&RuntimeError>,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
-        "operationId": record.operation_id,
+        "operationId": record.meta.operation_id,
         "class": record.class,
         "terminalResult": terminal_result,
         "errorCode": error.map(|error| error.code),
@@ -3003,12 +2950,11 @@ fn escaped_descendants(pid: u32, expected_pgid: i32) -> RuntimeResult<Vec<u32>> 
     Ok(escaped)
 }
 
-#[cfg(target_os = "linux")]
 fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
     let mut descendants = Vec::new();
     let mut queue = vec![pid];
     while let Some(parent) = queue.pop() {
-        for child in direct_child_pids_linux(parent)? {
+        for child in direct_child_pids(parent)? {
             queue.push(child);
             descendants.push(child);
         }
@@ -3017,7 +2963,7 @@ fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
 }
 
 #[cfg(target_os = "linux")]
-fn direct_child_pids_linux(parent: u32) -> RuntimeResult<Vec<u32>> {
+fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
     let mut children = Vec::new();
     let entries = std::fs::read_dir("/proc").map_err(|error| {
         RuntimeError::new(
@@ -3053,20 +2999,7 @@ fn direct_child_pids_linux(parent: u32) -> RuntimeResult<Vec<u32>> {
 }
 
 #[cfg(target_os = "macos")]
-fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
-    let mut descendants = Vec::new();
-    let mut queue = vec![pid];
-    while let Some(parent) = queue.pop() {
-        for child in direct_child_pids_macos(parent)? {
-            queue.push(child);
-            descendants.push(child);
-        }
-    }
-    Ok(descendants)
-}
-
-#[cfg(target_os = "macos")]
-fn direct_child_pids_macos(parent: u32) -> RuntimeResult<Vec<u32>> {
+fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
     let pids = macos_process_ids().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -3262,6 +3195,55 @@ mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
     use nixfied_manifest::ServiceId;
+
+    #[test]
+    fn bounded_exec_contains_pipe_holding_descendants_before_relay_join() {
+        let root = std::env::temp_dir().join(format!(
+            "nixfied-bounded-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let marker = root.join("survived");
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        let secrets =
+            ResolvedSecrets::from_values(BTreeMap::from([("token".into(), "secret".into())]));
+        let redactor = Redactor::from_secrets(&secrets);
+        let outcome = run_bounded_exec(
+            &BoundedExec {
+                executable: "/bin/sh",
+                args: &[
+                    "-c".into(),
+                    "(/bin/sleep 2; printf survived > \"$1\") & printf secret; exit 0".into(),
+                    "probe".into(),
+                    marker.to_string_lossy().into_owned(),
+                ],
+                env: &BTreeMap::new(),
+                cwd: &root,
+                stdin: StdinPolicy::Null,
+                timeout: Duration::from_secs(5),
+                stdout_path: &stdout,
+                stderr_path: &stderr,
+                redactor: &redactor,
+                label: "pipe-holder",
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let survived = marker.exists();
+        let captured = std::fs::read_to_string(&stdout).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(outcome, BoundedExecOutcome::Exited(status) if status.success()));
+        assert!(
+            !survived,
+            "relay completion must follow descendant containment, not natural expiry"
+        );
+        assert_eq!(captured, crate::redaction::REDACTION_TOKEN);
+    }
 
     #[test]
     fn conflict_view_preserves_wire_host_owner_omission_and_native_message() {

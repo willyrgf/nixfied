@@ -14,8 +14,8 @@ use crate::output::{EvidenceMode, ReplayTicket};
 use crate::redaction::{RedactedLogRelays, Redactor, child_output};
 use crate::registry::Registry;
 use crate::service::process::{
-    ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity, process_group,
-    resolve_exec_cwd, terminate_process_group, wait_for_child_exit,
+    BoundedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity,
+    resolve_exec_cwd, terminate_and_reap,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
@@ -178,29 +178,6 @@ pub fn run_dependent_task_cancellable(
     cancellation: &CancellationToken,
     evidence: EvidenceMode,
 ) -> Result<TaskExecution, TaskExecutionError> {
-    run_dependent_task_with_evidence(
-        placement,
-        registry,
-        run_context,
-        dependencies,
-        node_id,
-        task,
-        cancellation,
-        evidence,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_dependent_task_with_evidence(
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_context: RunContext<'_>,
-    dependencies: &[&StartedService],
-    node_id: &str,
-    task: &ExecTask,
-    cancellation: &CancellationToken,
-    evidence: EvidenceMode,
-) -> Result<TaskExecution, TaskExecutionError> {
     cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
     ensure_task_dependencies(registry, task, dependencies).map_err(TaskExecutionError::before)?;
@@ -278,20 +255,8 @@ fn run_dependent_task_with_evidence(
     )
     .map_err(TaskExecutionError::before)?;
     let pid = child.child.id();
-    let pgid = match process_group(pid) {
-        Ok(Some(pgid)) => pgid,
-        Ok(None) => {
-            return Err(TaskExecutionError::before(cleanup_unrecorded_task(
-                child,
-                RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"),
-            )));
-        }
-        Err(error) => {
-            return Err(TaskExecutionError::before(cleanup_unrecorded_task(
-                child, error,
-            )));
-        }
-    };
+    // process_group(0) establishes the owned group before the child execs.
+    let pgid = pid as i32;
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
@@ -306,27 +271,9 @@ fn run_dependent_task_with_evidence(
             computed_manifest_hash: run_context.computed_manifest_hash,
         },
     ) {
-        let termination_error = terminate_process_group(pgid, 1000).err();
-        let wait_error = match wait_for_child_exit(&mut child.child, 1000) {
-            Ok(true) => None,
-            Ok(false) => match child.child.kill() {
-                Ok(()) if matches!(wait_for_child_exit(&mut child.child, 1000), Ok(true)) => None,
-                Ok(()) => Some(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    "task child did not exit after containment or direct kill",
-                )),
-                Err(kill_error) => Some(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("task child did not exit after containment: {kill_error}"),
-                )),
-            },
-            Err(error) => Some(error),
-        };
-        let error = termination_error
-            .into_iter()
-            .chain(wait_error)
-            .fold(error, |error, cleanup| error.with_cause(cleanup));
-        return Err(TaskExecutionError::before(error));
+        return Err(TaskExecutionError::before(cleanup_unrecorded_task(
+            child, error,
+        )));
     }
     let outcome = wait_for_task(
         registry,
@@ -344,15 +291,22 @@ fn run_dependent_task_with_evidence(
     .map_err(TaskExecutionError::before)?;
     child.logs.join().map_err(TaskExecutionError::before)?;
     let duration_ms = elapsed_ms(started);
-    let canceled = outcome.canceled;
-    let timed_out = outcome.timed_out;
-    let success = !canceled
-        && !timed_out
-        && outcome
-            .exit_code
-            .map(|code| task.success_codes.contains(&code))
-            .unwrap_or(false);
-    let exit_code = outcome.exit_code;
+    let (exit_code, terminal_status) = match outcome {
+        BoundedExecOutcome::Exited(status) => {
+            let code = status.code();
+            let terminal = if code.is_some_and(|code| task.success_codes.contains(&code)) {
+                TaskTerminalStatus::Succeeded
+            } else {
+                TaskTerminalStatus::Failed
+            };
+            (code, terminal)
+        }
+        BoundedExecOutcome::TimedOut => (None, TaskTerminalStatus::TimedOut),
+        BoundedExecOutcome::Canceled => (None, TaskTerminalStatus::Canceled),
+    };
+    let success = terminal_status == TaskTerminalStatus::Succeeded;
+    let timed_out = terminal_status == TaskTerminalStatus::TimedOut;
+    let canceled = terminal_status == TaskTerminalStatus::Canceled;
     let failure_message = if timed_out {
         format!(
             "task {task_id} timed out after {}ms",
@@ -418,7 +372,7 @@ fn run_dependent_task_with_evidence(
         run_context.run_id,
         &process_key,
         run_context.computed_manifest_hash,
-        task_terminal_status(success, timed_out, canceled),
+        terminal_status,
         &payload_json,
     ) {
         return Err(TaskExecutionError::after(error, evidence));
@@ -444,18 +398,6 @@ fn run_dependent_task_with_evidence(
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
-}
-
-fn task_terminal_status(success: bool, timed_out: bool, canceled: bool) -> TaskTerminalStatus {
-    if success {
-        TaskTerminalStatus::Succeeded
-    } else if canceled {
-        TaskTerminalStatus::Canceled
-    } else if timed_out {
-        TaskTerminalStatus::TimedOut
-    } else {
-        TaskTerminalStatus::Failed
-    }
 }
 
 /// Verify every service the task declares as a dependency is among the started
@@ -504,15 +446,7 @@ fn spawn_task(
         .stdin(crate::service::process::stdin_for(exec.stdin))
         .stdout(output.stdout)
         .stderr(output.stderr);
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
+    command.process_group(0);
     let child = command.spawn().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -530,33 +464,15 @@ struct SpawnedTask {
     logs: RedactedLogRelays,
 }
 
-fn cleanup_unrecorded_task(mut task: SpawnedTask, mut error: RuntimeError) -> RuntimeError {
-    match task.child.try_wait() {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            if let Err(kill_error) = task.child.kill() {
-                error = error.with_cause(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to kill unrecorded task process: {kill_error}"),
-                ));
-            } else if !matches!(wait_for_child_exit(&mut task.child, 1000), Ok(true)) {
-                error = error.with_cause(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    "unrecorded task process did not exit after kill",
-                ));
-            }
-        }
-        Err(wait_error) => {
-            error = error.with_cause(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to inspect unrecorded task process: {wait_error}"),
-            ));
-        }
+fn cleanup_unrecorded_task(mut task: SpawnedTask, error: RuntimeError) -> RuntimeError {
+    let pgid = task.child.id() as i32;
+    if let Err(cleanup) = terminate_and_reap(&mut task.child, pgid) {
+        return cleanup.with_cause(error);
     }
-    if let Err(relay_error) = task.logs.join() {
-        error = error.with_cause(relay_error);
+    match task.logs.join() {
+        Ok(()) => error,
+        Err(relay) => error.with_cause(relay),
     }
-    error
 }
 
 fn wait_for_task(
@@ -566,58 +482,36 @@ fn wait_for_task(
     timeout_ms: u64,
     cancellation: &CancellationToken,
     context: TaskCancellationContext<'_>,
-) -> RuntimeResult<TaskOutcome> {
+) -> RuntimeResult<BoundedExecOutcome> {
     let timeout = Duration::from_millis(timeout_ms);
     let deadline = Instant::now() + timeout;
-    loop {
+    let outcome = loop {
         if cancellation.is_canceled() {
-            record_task_cancellation_intent(registry, &context, pgid, "run canceled")?;
-            terminate_process_group(pgid, 1000)?;
-            require_child_exit(child)?;
-            return Ok(TaskOutcome {
-                exit_code: None,
-                timed_out: false,
-                canceled: true,
-            });
+            break record_task_cancellation_intent(registry, &context, pgid, "run canceled")
+                .map(|()| BoundedExecOutcome::Canceled);
         }
-        if let Some(status) = child.try_wait().map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to inspect task process: {error}"),
-            )
-        })? {
-            // The direct child has exited, but a bounded task may have spawned
-            // children into its own process group. Reconcile the owned group so a
-            // task that daemonizes and exits 0 cannot leave processes behind,
-            // matching the containment services enforce.
-            terminate_process_group(pgid, 1000)?;
-            return Ok(TaskOutcome {
-                exit_code: status.code(),
-                timed_out: false,
-                canceled: false,
-            });
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break Ok(BoundedExecOutcome::Exited(status));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                break Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("failed to inspect task process: {error}"),
+                ));
+            }
         }
         if Instant::now() >= deadline {
-            record_task_cancellation_intent(registry, &context, pgid, "task timeout")?;
-            terminate_process_group(pgid, 1000)?;
-            require_child_exit(child)?;
-            return Ok(TaskOutcome {
-                exit_code: None,
-                timed_out: true,
-                canceled: false,
-            });
+            break record_task_cancellation_intent(registry, &context, pgid, "task timeout")
+                .map(|()| BoundedExecOutcome::TimedOut);
         }
         thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn require_child_exit(child: &mut Child) -> RuntimeResult<()> {
-    match wait_for_child_exit(child, 1000)? {
-        true => Ok(()),
-        false => Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            "task child did not exit after cancellation or timeout containment",
-        )),
+    };
+    match (terminate_and_reap(child, pgid), outcome) {
+        (Ok(()), outcome) => outcome,
+        (Err(cleanup), Ok(_)) => Err(cleanup),
+        (Err(cleanup), Err(error)) => Err(cleanup.with_cause(error)),
     }
 }
 
@@ -648,12 +542,6 @@ fn record_task_cancellation_intent(
         context.computed_manifest_hash,
         &payload,
     )
-}
-
-struct TaskOutcome {
-    exit_code: Option<i32>,
-    timed_out: bool,
-    canceled: bool,
 }
 
 fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> String {
@@ -696,4 +584,71 @@ struct TaskCommandRecord<'a> {
     cwd: &'a Path,
     stdout_path: &'a Path,
     stderr_path: &'a Path,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::RegistryIdentity;
+    use std::process::Stdio;
+
+    #[test]
+    fn cancellation_recording_failure_still_contains_and_reaps_child() {
+        let root = std::env::temp_dir().join(format!(
+            "nixfied-task-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut registry = Registry::open_or_create(
+            root.join("registry.sqlite3"),
+            &RegistryIdentity::default_slot("test", "abi", "toolchain"),
+        )
+        .unwrap();
+        registry
+            .connection()
+            .execute("DROP TABLE events", [])
+            .unwrap();
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pgid = child.id() as i32;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let error = wait_for_task(
+            &mut registry,
+            &mut child,
+            pgid,
+            5000,
+            &cancellation,
+            TaskCancellationContext {
+                run_id: "test",
+                task_id: "task",
+                process_key: "process",
+                computed_manifest_hash: "hash",
+            },
+        )
+        .err()
+        .unwrap();
+        let exited = child.try_wait().unwrap().is_some();
+        if !exited {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        drop(registry);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert!(
+            exited,
+            "failed intent recording must not bypass owned child containment"
+        );
+    }
 }

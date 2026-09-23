@@ -31,6 +31,11 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "linux")]
+use linux::{correlate as platform_correlate, snapshot as platform_snapshot};
+#[cfg(target_os = "macos")]
+use macos::{correlate as platform_correlate, snapshot as platform_snapshot};
+
 const LOCK_SUFFIX: &str = ".lock";
 const STABLE_SNAPSHOT_ATTEMPTS: usize = 3;
 
@@ -817,11 +822,11 @@ fn stable_matching_snapshot(
         let after = matching_snapshot(endpoints)?;
         let before_ids = before
             .iter()
-            .map(|record| record.identity.clone())
+            .map(|record| &record.identity)
             .collect::<Vec<_>>();
         let after_ids = after
             .iter()
-            .map(|record| record.identity.clone())
+            .map(|record| &record.identity)
             .collect::<Vec<_>>();
         if before_ids == after_ids {
             return Ok(before);
@@ -842,28 +847,6 @@ fn matching_snapshot(endpoints: &[&SelectedEndpoint]) -> Result<Vec<ListenerReco
                 .any(|endpoint| conflicts(endpoint, listener))
         })
         .collect())
-}
-
-fn platform_snapshot() -> Result<Vec<ListenerRecord>, String> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::snapshot()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::snapshot()
-    }
-}
-
-fn platform_correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::correlate(records)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::correlate(records)
-    }
 }
 
 enum BindResult {
@@ -1569,7 +1552,7 @@ mod tests {
                 },
             ) {
                 Ok(service) => {
-                    let _ = service.stop(&mut registry, 1000);
+                    let _ = service.service.stop(&mut registry, 1000);
                     panic!("unsafe lock target must fail before prepare");
                 }
                 Err(error) => error,
