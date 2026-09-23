@@ -20,6 +20,57 @@ fn unique_env_name(prefix: &str) -> String {
 }
 
 #[test]
+fn explicit_invocation_root_is_resolved_only_for_live_run_admission() {
+    use nixfied_runtime::admission::InvocationRoot;
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+    let workspace = tmp.path.join("explicit-workspace");
+    fs::create_dir(&workspace).unwrap();
+    let loaded = load_manifest(&manifest_path).unwrap();
+    let mut context = admission_context(&closure_root);
+    context.invocation_root = InvocationRoot::Path(workspace.clone());
+    let admission = Admission::check(&loaded, &context).unwrap();
+    assert_eq!(
+        admission.require_source().unwrap().observed_root,
+        workspace.canonicalize().unwrap()
+    );
+    fs::remove_dir(&workspace).unwrap();
+    let error = Admission::check(&loaded, &context).unwrap_err();
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
+    assert!(
+        error
+            .message
+            .starts_with("failed to canonicalize invocation root")
+    );
+    assert_eq!(
+        error.computed_manifest_hash.as_deref(),
+        Some(loaded.computed_manifest_hash())
+    );
+    Admission::check_for_control(&loaded, &context)
+        .expect("controls must ignore an unavailable invocation root");
+}
+
+#[test]
+fn immutable_source_ignores_unavailable_invocation_root() {
+    use nixfied_runtime::admission::InvocationRoot;
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+    let source = closure_root.join("immutable-source");
+    fs::create_dir(&source).unwrap();
+    let mut value: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    value["codebases"][0]["sourceMode"] = json!("snapshot");
+    value["codebases"][0]["sourceIdentity"] = json!(source);
+    value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).unwrap();
+    let mut context = admission_context(&closure_root);
+    context.invocation_root = InvocationRoot::Path(tmp.path.join("absent"));
+    let admission = Admission::check(&loaded, &context).unwrap();
+    assert_eq!(
+        admission.require_source().unwrap().observed_root,
+        source.canonicalize().unwrap()
+    );
+}
+
+#[test]
 fn load_manifest_hashes_raw_bytes() {
     let (_tmp, manifest_path, _closure) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
@@ -91,6 +142,7 @@ fn normal_origin_refuses_non_store_before_parse() {
     fs::write(&manifest_path, b"{not json").unwrap();
     let raw = read_raw_manifest(&manifest_path).expect("raw bytes should be readable");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::RequireStore,
         store_root: tmp.path.join("store"),
         host_system: host_system(),
@@ -118,6 +170,7 @@ fn origin_rejects_canonical_path_escape() {
     let escaped_manifest = store.join("../outside/manifest.json");
     let raw = read_raw_manifest(&escaped_manifest).expect("escaped path should read");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::RequireStore,
         store_root: store,
         host_system: host_system(),
@@ -133,6 +186,7 @@ fn unstable_escape_hatch_admits_non_store_manifest() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root
             .parent()
@@ -367,6 +421,7 @@ fn snapshot_source_admits_immutable_store_root_with_reject() {
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
         host_system: host_system(),
@@ -395,6 +450,7 @@ fn flake_input_source_admits_immutable_store_root() {
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
         host_system: host_system(),
@@ -440,6 +496,7 @@ fn immutable_source_logical_root_escape_is_rejected() {
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
         host_system: host_system(),
@@ -500,6 +557,7 @@ fn missing_closure_is_rejected() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), false);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root
             .parent()
@@ -542,6 +600,7 @@ fn closure_store_path_escape_is_rejected() {
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: store,
         host_system: host_system(),
@@ -649,6 +708,7 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
 
 fn admission_context(closure_root: &Path) -> AdmissionContext {
     AdmissionContext {
+        invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
         host_system: host_system(),
