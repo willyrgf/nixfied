@@ -441,8 +441,17 @@ removed state owners, coordinated change sites, and capture correctness addition
    check passed, including generation/reference freshness and maintenance exercises
    (`/tmp/nixfied-audit-source-check.log`). Current structure/coverage Nix evaluation
    also passed after the new field-rejection vectors. Final full CI remains due.
-   Remaining: broader CLI fixture adoption where cohesive and registry identity/
-   cleanup setup tables.
+   Registry identity setup is now a table retaining project/environment/ABI/
+   toolchain inputs, exact field/path diagnostics and error classes; each refusal
+   also reopens the unchanged original identity. The stored slot-one/slot-zero
+   mismatch proof remains separate. Cleanup tables retain both standard and purge
+   unmarked/mismatched-marker cases and nondeletion assertions, plus protected and
+   persistent standard refusals. Both successful purge variants now assert the
+   original intent/terminal row, purge event flags, and deleted state.
+   Clippy, 15 registry tests, and 23 state tests pass
+   (`/tmp/nixfied-registry-fixture-tables.log`); fewer test functions contain all
+   original scenario inputs and modes. Remaining fixture work: broader CLI
+   adoption where cohesive.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed
 test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release
