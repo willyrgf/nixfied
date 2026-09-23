@@ -187,9 +187,9 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                 serde_json::from_slice(&fs::read(run.join("artifacts/run-summary.json")).unwrap())
                     .unwrap();
             assert_eq!(summary["nodes"], json!([]));
-            assert!(!run.join("summary.smoke.json").exists());
+            assert!(!run.join("summary.0.json").exists());
             for stream in ["stdout", "stderr"] {
-                let path = run.join(format!("logs/task.smoke.{stream}.log"));
+                let path = run.join(format!("logs/task.0.{stream}.log"));
                 let before = fs::read(&path).unwrap();
                 assert!(!before.is_empty());
                 if secret && activity == "idle" {

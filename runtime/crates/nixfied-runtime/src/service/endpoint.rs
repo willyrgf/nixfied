@@ -1529,19 +1529,19 @@ mod tests {
                     cancellation: &CancellationToken::new(),
                     prepare_runner: Some(Box::new(|_| {
                         prepare_ran = true;
-                        Ok(Vec::new())
+                        Ok(())
                     })),
                 },
             ) {
                 Ok(service) => {
-                    let _ = service.service.stop(&mut registry, 1000);
+                    let _ = service.stop(&mut registry, 1000);
                     panic!("unsafe lock target must fail before prepare");
                 }
                 Err(error) => error,
             }
         });
 
-        assert_eq!(error.error().code, ErrorCode::PortUnverifiable);
+        assert_eq!(error.code, ErrorCode::PortUnverifiable);
         assert!(!prepare_ran);
         let mutations: i64 = registry
             .connection()

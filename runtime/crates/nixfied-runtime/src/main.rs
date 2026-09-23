@@ -6,7 +6,7 @@ use std::time::Instant;
 use nixfied_manifest::{ServiceLifetime, TaskDefaultOutput};
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::RuntimeCause;
-use nixfied_runtime::execution::plan;
+use nixfied_runtime::execution::{PlanNode, plan};
 use nixfied_runtime::output::{
     EvidenceMode, OutputStream, ProjectionDiagnostic, ProjectionOperation, ReplaySinks,
     ReplayTicket,
@@ -14,10 +14,9 @@ use nixfied_runtime::output::{
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::{
-    PrepareRunner, PrepareTaskError, RunContext, SelectedEndpoint, ServiceSelection,
-    StartedService, TaskExecution, TaskExecutionError, TaskRun, mark_run_completed,
-    mark_run_failed, record_run_created, run_dependent_task_cancellable, run_slot_clean,
-    start_service_for_slot,
+    PrepareRunner, RunContext, SelectedEndpoint, ServiceSelection, StartedService, TaskExecution,
+    TaskExecutionError, TaskRun, mark_run_completed, mark_run_failed, record_run_created,
+    run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -51,10 +50,7 @@ struct RunSession<'a> {
     service_lifetime: ServiceLifetime,
     direct_selected: bool,
     lease: Option<RunLeaseHeartbeat>,
-    task_runs: Vec<TaskRun>,
-    selected_task_run: Option<TaskRun>,
-    node_results: Vec<NodeResult>,
-    replay: Option<ReplayTicket>,
+    evidence: RunEvidence,
     diagnostic_failures: Vec<RuntimeError>,
 }
 
@@ -134,7 +130,7 @@ impl<'a> RunSession<'a> {
             failures.push(error);
         }
 
-        if let Some(ticket) = self.replay.take()
+        if let Some(ticket) = self.evidence.replay.take()
             && let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error()
         {
             failures.push(error);
@@ -193,14 +189,15 @@ impl<'a> RunSession<'a> {
 
         let duration_ms = elapsed_ms(self.run_started);
         let run_succeeded = failures.is_empty();
+        let node_results = self.evidence.nodes();
         let run_summary_path = match write_run_summary(RunSummary {
             placement: self.placement,
             run_id: self.run_id,
             run_succeeded,
             duration_ms,
-            nodes: &self.node_results,
+            nodes: &node_results,
             services: &services,
-            tasks: &self.task_runs,
+            tasks: &self.evidence.tasks,
             redactor: self.redactor,
         }) {
             Ok(path) => Some(path),
@@ -213,7 +210,7 @@ impl<'a> RunSession<'a> {
         if let Err(error) = print_run_footer(
             self.options.output_mode,
             footer_succeeded,
-            &self.node_results,
+            &node_results,
             duration_ms,
             run_summary_path.as_deref(),
             &self.placement.logs_dir,
@@ -222,9 +219,11 @@ impl<'a> RunSession<'a> {
         }
 
         let primary_task = if self.direct_selected {
-            self.selected_task_run.clone()
+            self.evidence
+                .selected_task
+                .map(|index| self.evidence.tasks[index.0].clone())
         } else {
-            self.task_runs.last().cloned()
+            self.evidence.tasks.last().cloned()
         };
         let output = RunOutput {
             run_id: self.run_id.to_string(),
@@ -234,8 +233,8 @@ impl<'a> RunSession<'a> {
             services,
             summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
             task: primary_task,
-            tasks: self.task_runs,
-            nodes: self.node_results,
+            tasks: self.evidence.tasks,
+            nodes: node_results,
             run_summary_path: run_summary_path.clone(),
         };
         match failures.finish(output) {
@@ -739,10 +738,7 @@ fn run_m0_placed(
         service_lifetime: plan.service_lifetime,
         direct_selected,
         lease: None,
-        task_runs: Vec::new(),
-        selected_task_run: None,
-        node_results: Vec::new(),
-        replay: None,
+        evidence: RunEvidence::default(),
         diagnostic_failures,
     };
     macro_rules! finish_run {
@@ -763,90 +759,30 @@ fn run_m0_placed(
             session.diagnostic_failures.push(error);
         }
 
-        // prepare-as-task: the runner executes the prepare task's flattened
-        // nodes inside the service reservation, resolving each leaf's
-        // requirements against the services already started (the combined
-        // connectsTo + prepare-requires ordering guarantees they are ready).
-        let service_def = binding.service;
-        let output_mode = options.output_mode;
         let prepare_runner: Option<PrepareRunner<'_>> =
-            service_def.prepare.as_ref().map(|_| {
-                let nodes = &binding.prepare_nodes;
-                let started_services = &session.started;
-                let diagnostic_failures = &mut session.diagnostic_failures;
-                Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
-                    let mut task_runs = Vec::new();
-                    for node in nodes {
-                        let task = node.task;
-                        let mut dependencies: Vec<&StartedService> = Vec::new();
-                        for name in &task.requires {
-                            let Some(dependency) = started_services
-                                .iter()
-                                .find(|service| service.service_name() == name.as_str())
-                            else {
-                                return Err(PrepareTaskError::new(
-                                    RuntimeError::new(
-                                        nixfied_runtime::ErrorCode::DependencyUnavailable,
-                                        format!(
-                                            "prepare node {} requires service {name} which is not started yet",
-                                            node.node_id
-                                        ),
-                                    ),
-                                    task_runs,
-                                ));
-                            };
-                            dependencies.push(dependency);
-                        }
-                        if output_mode.emit_summary()
-                            && let Err(error) = write_diagnostic(
-                                output_mode,
-                                format_args!(
-                                    "  prepare node {} ({})",
-                                    node.node_id, node.task.task_id
-                                ),
-                            )
-                        {
-                            diagnostic_failures.push(error);
-                        }
-                        let task_result = run_dependent_task_cancellable(
-                            placement,
+            binding.service.prepare.as_ref().map(|_| {
+                let context = NodeContext {
+                    placement,
+                    run: RunContext::new(admission, run_id, &placement.state_root, redactor),
+                    cancellation,
+                    output_mode: options.output_mode,
+                };
+                let evidence = &mut session.evidence;
+                let started = &session.started;
+                let diagnostics = &mut session.diagnostic_failures;
+                Box::new(move |registry: &mut Registry| {
+                    for node in &binding.prepare_nodes {
+                        execute_node(
+                            &context,
                             registry,
-                            RunContext::new(admission, run_id, &placement.state_root, redactor),
-                            &dependencies,
-                            node.node_id.as_str(),
-                            task,
-                            cancellation,
-                            EvidenceMode::CaptureOnly,
-                        );
-                        match task_result {
-                            Ok(TaskExecution::Succeeded(evidence)) => {
-                                let (task_run, _) = evidence.into_task_and_replay();
-                                task_runs.push(task_run);
-                            }
-                            Ok(TaskExecution::Failed { error, evidence }) => {
-                                let (task_run, _) = evidence.into_task_and_replay();
-                                task_runs.push(task_run.clone());
-                                return Err(PrepareTaskError::new(
-                                    attach_task_evidence(error, &task_run),
-                                    task_runs,
-                                ));
-                            }
-                            Err(TaskExecutionError::BeforeTerminal(error)) => {
-                                return Err(PrepareTaskError::new(*error, task_runs));
-                            }
-                            Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
-                                let error = *error;
-                                let evidence = *evidence;
-                                let (task_run, _) = evidence.into_task_and_replay();
-                                task_runs.push(task_run.clone());
-                                return Err(PrepareTaskError::new(
-                                    attach_task_evidence(error, &task_run),
-                                    task_runs,
-                                ));
-                            }
-                        }
+                            evidence,
+                            started,
+                            diagnostics,
+                            node,
+                            NodeRole::Prepare,
+                        )?;
                     }
-                    Ok(task_runs)
+                    Ok(())
                 }) as PrepareRunner<'_>
             });
 
@@ -866,13 +802,8 @@ fn run_m0_placed(
                 prepare_runner,
             },
         ) {
-            Ok(start) => {
-                session.task_runs.extend(start.prepare_runs);
-                start.service
-            }
-            Err(start_error) => {
-                let (error, evidence) = start_error.into_parts();
-                session.task_runs.extend(evidence);
+            Ok(service) => service,
+            Err(error) => {
                 finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
@@ -946,133 +877,23 @@ fn run_m0_placed(
         finish_run!(error, Vec::new());
     }
 
-    // Run each flattened node in dependency order, gating each leaf on the
-    // readiness of its declared service requirements (the first provides
-    // ${port}/${host} substitution). The plan's order already honors the
-    // composite's step dependencies.
+    let context = NodeContext {
+        placement,
+        run: RunContext::new(admission, run_id, &placement.state_root, redactor),
+        cancellation,
+        output_mode: options.output_mode,
+    };
     for node in &plan.nodes {
-        let task_id = &node.task.task_id;
-        let task = node.task;
-        // Resolve every service this task depends on to its started instance (the
-        // first is the primary, providing ${port}/${host}). A task may declare
-        // zero services — it runs in the run context alone.
-        let mut dep_indices = Vec::new();
-        let mut missing_dependency = None;
-        for name in &task.requires {
-            match session
-                .started
-                .iter()
-                .position(|service| service.service_name() == name.as_str())
-            {
-                Some(index) => dep_indices.push(index),
-                None => {
-                    missing_dependency = Some(name.clone());
-                    break;
-                }
-            }
-        }
-        if let Some(name) = missing_dependency {
-            let error = RuntimeError::new(
-                nixfied_runtime::ErrorCode::DependencyUnavailable,
-                format!("task {task_id} depends on service {name} which was not started"),
-            )
-            .with_detail("failedNodeId", node.node_id.as_str());
-            finish_run!(error, Vec::new());
-        }
-        let dependencies: Vec<&StartedService> = dep_indices
-            .iter()
-            .map(|&index| &session.started[index])
-            .collect();
-        let run_context = RunContext::new(admission, run_id, &placement.state_root, redactor);
-        let task_result = run_dependent_task_cancellable(
-            placement,
+        if let Err(error) = execute_node(
+            &context,
             &mut session.registry,
-            run_context,
-            &dependencies,
-            node.node_id.as_str(),
-            task,
-            cancellation,
-            if options.output_mode.is_task_output() {
-                EvidenceMode::ReplaySelected
-            } else {
-                EvidenceMode::CaptureOnly
-            },
-        );
-        match task_result {
-            Ok(TaskExecution::Succeeded(evidence)) => {
-                let (task_run, ticket) = evidence.into_task_and_replay();
-                session.replay = ticket.or(session.replay);
-                if direct_selected {
-                    session.selected_task_run = Some(task_run.clone());
-                }
-                if options.output_mode.emit_summary()
-                    && let Err(error) = write_diagnostic(
-                        options.output_mode,
-                        format_args!(
-                            "  ok {} ({task_id}) {}",
-                            node.node_id,
-                            human_duration(task_run.duration_ms)
-                        ),
-                    )
-                {
-                    session.diagnostic_failures.push(error);
-                }
-                session.node_results.push(NodeResult {
-                    node_id: node.node_id.as_str().to_string(),
-                    task_id: task_id.as_str().to_string(),
-                    success: task_run.success,
-                    exit_code: task_run.exit_code,
-                    duration_ms: task_run.duration_ms,
-                    stdout_path: task_run.stdout_path.clone(),
-                    stderr_path: task_run.stderr_path.clone(),
-                    summary_path: task_run.summary_path.clone(),
-                });
-                session.task_runs.push(task_run);
-            }
-            Ok(TaskExecution::Failed { error, evidence }) => {
-                let (task_run, ticket) = evidence.into_task_and_replay();
-                session.replay = ticket.or(session.replay);
-                if direct_selected {
-                    session.selected_task_run = Some(task_run.clone());
-                }
-                let error = task_failure_with_evidence(
-                    error,
-                    node.node_id.as_str(),
-                    task_id.as_str(),
-                    &task_run,
-                    options.output_mode,
-                    &mut session.node_results,
-                    &mut session.task_runs,
-                    &mut session.diagnostic_failures,
-                );
-                let error = error.with_detail("failedNodeId", node.node_id.as_str());
-                finish_run!(error, Vec::new());
-            }
-            Err(TaskExecutionError::BeforeTerminal(error)) => {
-                let error = (*error).with_detail("failedNodeId", node.node_id.as_str());
-                finish_run!(error, Vec::new());
-            }
-            Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
-                let error = *error;
-                let evidence = *evidence;
-                let (task_run, ticket) = evidence.into_task_and_replay();
-                session.replay = ticket.or(session.replay);
-                if direct_selected {
-                    session.selected_task_run = Some(task_run.clone());
-                }
-                let error = task_failure_with_evidence(
-                    error,
-                    node.node_id.as_str(),
-                    task_id.as_str(),
-                    &task_run,
-                    options.output_mode,
-                    &mut session.node_results,
-                    &mut session.task_runs,
-                    &mut session.diagnostic_failures,
-                )
-                .with_detail("failedNodeId", node.node_id.as_str());
-                finish_run!(error, Vec::new());
-            }
+            &mut session.evidence,
+            &session.started,
+            &mut session.diagnostic_failures,
+            node,
+            NodeRole::Root { direct_selected },
+        ) {
+            finish_run!(error, Vec::new());
         }
     }
 
@@ -1144,47 +965,185 @@ fn output_projection_io_error(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn task_failure_with_evidence(
-    error: RuntimeError,
-    node_id: &str,
-    task_id: &str,
-    task_run: &TaskRun,
+#[derive(Clone, Copy)]
+struct EvidenceIndex(usize);
+
+#[derive(Default)]
+struct RunEvidence {
+    next_occurrence: u64,
+    tasks: Vec<TaskRun>,
+    root_nodes: Vec<EvidenceIndex>,
+    selected_task: Option<EvidenceIndex>,
+    replay: Option<ReplayTicket>,
+}
+
+impl RunEvidence {
+    fn allocate_occurrence(&mut self) -> Result<u64, RuntimeError> {
+        let occurrence = self.next_occurrence;
+        self.next_occurrence = occurrence.checked_add(1).ok_or_else(|| {
+            RuntimeError::new(
+                nixfied_runtime::ErrorCode::StateUnwritable,
+                "task occurrence sequence exhausted",
+            )
+        })?;
+        Ok(occurrence)
+    }
+
+    fn nodes(&self) -> Vec<NodeResult> {
+        self.root_nodes
+            .iter()
+            .map(|index| {
+                let task = &self.tasks[index.0];
+                NodeResult {
+                    node_id: task.step_path.clone(),
+                    task_id: task.task_id.clone(),
+                    success: task.success,
+                    exit_code: task.exit_code,
+                    duration_ms: task.duration_ms,
+                    stdout_path: task.stdout_path.clone(),
+                    stderr_path: task.stderr_path.clone(),
+                    summary_path: task.summary_path.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NodeRole {
+    Prepare,
+    Root { direct_selected: bool },
+}
+
+struct NodeContext<'a> {
+    placement: &'a nixfied_runtime::state::HostPlacement,
+    run: RunContext<'a>,
+    cancellation: &'a CancellationToken,
     output_mode: RunOutputMode,
-    node_results: &mut Vec<NodeResult>,
-    task_runs: &mut Vec<TaskRun>,
+}
+
+fn execute_node(
+    context: &NodeContext<'_>,
+    registry: &mut Registry,
+    evidence: &mut RunEvidence,
+    started: &[StartedService],
     diagnostic_failures: &mut Vec<RuntimeError>,
-) -> RuntimeError {
-    if output_mode.emit_summary() {
-        if let Err(error) = write_diagnostic(
-            output_mode,
-            format_args!(
-                "  fail {node_id} ({task_id}) {} exit={}",
-                human_duration(task_run.duration_ms),
-                human_exit_code(task_run.exit_code)
-            ),
-        ) {
-            diagnostic_failures.push(error);
+    node: &PlanNode<'_>,
+    role: NodeRole,
+) -> Result<(), RuntimeError> {
+    let decorate = |error: RuntimeError| match role {
+        NodeRole::Prepare => error,
+        NodeRole::Root { .. } => error.with_detail("failedNodeId", node.node_id.as_str()),
+    };
+    let occurrence = evidence.allocate_occurrence().map_err(decorate)?;
+    let task = node.task;
+    let mut dependencies = Vec::new();
+    for name in &task.requires {
+        let service = started
+            .iter()
+            .find(|service| service.service_name() == name.as_str())
+            .ok_or_else(|| {
+                decorate(RuntimeError::new(
+                    nixfied_runtime::ErrorCode::DependencyUnavailable,
+                    match role {
+                        NodeRole::Prepare => format!(
+                            "prepare node {} requires service {name} which is not started yet",
+                            node.node_id
+                        ),
+                        NodeRole::Root { .. } => format!(
+                            "task {} depends on service {name} which was not started",
+                            task.task_id
+                        ),
+                    },
+                ))
+            })?;
+        dependencies.push(service);
+    }
+    if matches!(role, NodeRole::Prepare)
+        && context.output_mode.emit_summary()
+        && let Err(error) = write_diagnostic(
+            context.output_mode,
+            format_args!("  prepare node {} ({})", node.node_id, task.task_id),
+        )
+    {
+        diagnostic_failures.push(error);
+    }
+    let mode = match role {
+        NodeRole::Root {
+            direct_selected: true,
+        } if context.output_mode.is_task_output() => EvidenceMode::ReplaySelected,
+        NodeRole::Prepare | NodeRole::Root { .. } => EvidenceMode::CaptureOnly,
+    };
+    let result = run_dependent_task_cancellable(
+        context.placement,
+        registry,
+        context.run,
+        &dependencies,
+        node.node_id.as_str(),
+        occurrence,
+        task,
+        context.cancellation,
+        mode,
+    );
+    let (completed, error) = match result {
+        Ok(TaskExecution::Succeeded(completed)) => (completed, None),
+        Ok(TaskExecution::Failed { error, evidence }) => (evidence, Some(error)),
+        Err(TaskExecutionError::BeforeTerminal(error)) => return Err(decorate(*error)),
+        Err(TaskExecutionError::AfterTerminal { error, evidence }) => (*evidence, Some(*error)),
+    };
+    let (task_run, ticket) = completed.into_task_and_replay();
+    let index = EvidenceIndex(evidence.tasks.len());
+    evidence.tasks.push(task_run);
+    evidence.replay = ticket.or(evidence.replay.take());
+    if let NodeRole::Root { direct_selected } = role {
+        evidence.root_nodes.push(index);
+        if direct_selected {
+            evidence.selected_task = Some(index);
         }
-        if let Err(error) = write_diagnostic(
-            output_mode,
-            format_args!("    stderr: {}", human_path(&task_run.stderr_path)),
-        ) {
-            diagnostic_failures.push(error);
+        let task_run = &evidence.tasks[index.0];
+        if context.output_mode.emit_summary() {
+            let diagnostic = if error.is_some() {
+                write_diagnostic(
+                    context.output_mode,
+                    format_args!(
+                        "  fail {} ({}) {} exit={}",
+                        node.node_id,
+                        task.task_id,
+                        human_duration(task_run.duration_ms),
+                        human_exit_code(task_run.exit_code)
+                    ),
+                )
+            } else {
+                write_diagnostic(
+                    context.output_mode,
+                    format_args!(
+                        "  ok {} ({}) {}",
+                        node.node_id,
+                        task.task_id,
+                        human_duration(task_run.duration_ms)
+                    ),
+                )
+            };
+            if let Err(error) = diagnostic {
+                diagnostic_failures.push(error);
+            }
+            if error.is_some()
+                && let Err(error) = write_diagnostic(
+                    context.output_mode,
+                    format_args!("    stderr: {}", human_path(&task_run.stderr_path)),
+                )
+            {
+                diagnostic_failures.push(error);
+            }
         }
     }
-    node_results.push(NodeResult {
-        node_id: node_id.to_string(),
-        task_id: task_id.to_string(),
-        success: task_run.success,
-        exit_code: task_run.exit_code,
-        duration_ms: task_run.duration_ms,
-        stdout_path: task_run.stdout_path.clone(),
-        stderr_path: task_run.stderr_path.clone(),
-        summary_path: task_run.summary_path.clone(),
-    });
-    task_runs.push(task_run.clone());
-    attach_task_evidence(error, task_run)
+    match error {
+        Some(error) => Err(decorate(attach_task_evidence(
+            error,
+            &evidence.tasks[index.0],
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn attach_task_evidence(mut error: RuntimeError, task_run: &TaskRun) -> RuntimeError {
