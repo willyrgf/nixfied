@@ -92,9 +92,17 @@ removed state owners, coordinated change sites, and capture correctness addition
    while capacity rejection still exercises lowering. All 32 manifest tests,
    110 runtime unit tests, 31 admission tests, 71 service tests, and workspace
    Clippy pass on Linux. No public diagnostic or rejection-order change.
+   Source/closure/target helpers now return phase errors without carrying a loaded
+   document solely for diagnostics; the admission operation attaches provenance
+   once. Live/immutable sources share the canonical confined-directory resolver,
+   preserving lexical/root-check ordering and diagnostic text. Store containment
+   returns the proved canonical path instead of forcing immutable sources to
+   canonicalize twice. Secret and closure admission share one raw invocation
+   traversal, and invoked-tool membership is collected once per closure pass.
+   The follow-up passes all 31 admission tests, both secret unit tests, and Clippy.
    Remaining in this step: private run/control admissions owning the loaded
-   document; removal of fabricated admission fixtures; unified origin/provenance
-   handling and confined source resolution; correlated secret-source alternatives.
+   document; removal of fabricated admission fixtures; one origin entry point and
+   one store-root observation per admission; correlated secret-source alternatives.
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.

@@ -2,13 +2,8 @@ use nixfied_manifest::Manifest;
 
 use crate::admission::AdmissionContext;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::manifest_loader::LoadedManifest;
 
-pub fn check_target(
-    manifest: &Manifest,
-    loaded: &LoadedManifest,
-    context: &AdmissionContext,
-) -> RuntimeResult<()> {
+pub fn check_target(manifest: &Manifest, context: &AdmissionContext) -> RuntimeResult<()> {
     if manifest.target.system != context.host_system
         || manifest.target.closure_system != context.host_system
         || manifest.target.os != host_os()
@@ -26,8 +21,7 @@ pub fn check_target(
                 host_os(),
                 host_arch()
             ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
+        ));
     }
     Ok(())
 }

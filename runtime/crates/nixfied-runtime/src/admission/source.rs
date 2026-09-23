@@ -6,7 +6,6 @@ use serde::Serialize;
 use crate::admission::AdmissionContext;
 use crate::admission::origin;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::manifest_loader::LoadedManifest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,20 +21,19 @@ pub struct AdmittedSource {
 
 pub fn check_source(
     manifest: &Manifest,
-    loaded: &LoadedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<AdmittedSource> {
     let [codebase] = manifest.codebases.as_slice() else {
-        return Err(
-            RuntimeError::new(ErrorCode::SourceMismatch, "requires exactly one codebase")
-                .with_manifest(loaded.path(), loaded.computed_manifest_hash()),
-        );
+        return Err(RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            "requires exactly one codebase",
+        ));
     };
     if codebase.codebase_id.as_str() != "main" {
-        return Err(
-            RuntimeError::new(ErrorCode::SourceMismatch, "requires codebase main")
-                .with_manifest(loaded.path(), loaded.computed_manifest_hash()),
-        );
+        return Err(RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            "requires codebase main",
+        ));
     }
     let observed_root = match codebase.source_mode {
         SourceMode::LiveWorkspace => {
@@ -44,15 +42,13 @@ pub fn check_source(
                 DirtyPolicy::Reject => Err(RuntimeError::new(
                     ErrorCode::SourceMismatch,
                     "runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
-                )
-                .with_manifest(loaded.path(), loaded.computed_manifest_hash()))?,
+                ))?,
             }
-            resolve_live_observed_root(&codebase.logical_root, loaded)?
+            resolve_live_observed_root(&codebase.logical_root)?
         }
         SourceMode::Snapshot | SourceMode::FlakeInput => resolve_immutable_observed_root(
             &codebase.source_identity,
             &codebase.logical_root,
-            loaded,
             context,
         )?,
     };
@@ -67,18 +63,14 @@ pub fn check_source(
     })
 }
 
-fn resolve_live_observed_root(
-    logical_root: &str,
-    loaded: &LoadedManifest,
-) -> RuntimeResult<PathBuf> {
+fn resolve_live_observed_root(logical_root: &str) -> RuntimeResult<PathBuf> {
     let logical_path = Path::new(logical_root);
-    validate_logical_root(logical_root, logical_path, loaded)?;
+    validate_logical_root(logical_root, logical_path)?;
     let invocation_root = std::env::current_dir().map_err(|error| {
         RuntimeError::new(
             ErrorCode::SourceMismatch,
             format!("failed to inspect invocation root: {error}"),
         )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
     })?;
     let invocation_root = invocation_root.canonicalize().map_err(|error| {
         RuntimeError::new(
@@ -88,35 +80,18 @@ fn resolve_live_observed_root(
                 invocation_root.display()
             ),
         )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
     })?;
-    let observed_root = invocation_root
-        .join(logical_path)
-        .canonicalize()
-        .map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::SourceMismatch,
-                format!("failed to resolve logicalRoot {logical_root}: {error}"),
-            )
-            .with_manifest(loaded.path(), loaded.computed_manifest_hash())
-        })?;
-    if !observed_root.is_dir() || !observed_root.starts_with(&invocation_root) {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            format!(
-                "logicalRoot {} resolved outside the invocation root",
-                observed_root.display()
-            ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
-    }
-    Ok(observed_root)
+    resolve_confined_directory(
+        &invocation_root,
+        logical_path,
+        &format!("logicalRoot {logical_root}"),
+        "the invocation root",
+    )
 }
 
 fn resolve_immutable_observed_root(
     source_identity: &str,
     logical_root: &str,
-    loaded: &LoadedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<PathBuf> {
     let source_root = Path::new(source_identity);
@@ -124,30 +99,19 @@ fn resolve_immutable_observed_root(
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
             format!("immutable sourceIdentity must be an absolute store path: {source_identity}"),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
+        ));
     }
-    if !origin::canonical_is_under_store(source_root, &context.store_root) {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            format!(
-                "immutable sourceIdentity {} is not under {}",
-                source_root.display(),
-                context.store_root.display()
-            ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
-    }
-    let canonical_source_root = source_root.canonicalize().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            format!(
-                "failed to canonicalize immutable sourceIdentity {}: {error}",
-                source_root.display()
-            ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash())
-    })?;
+    let canonical_source_root = origin::canonical_under_store(source_root, &context.store_root)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::SourceMismatch,
+                format!(
+                    "immutable sourceIdentity {} is not under {}",
+                    source_root.display(),
+                    context.store_root.display()
+                ),
+            )
+        })?;
     if !canonical_source_root.is_dir() {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
@@ -155,43 +119,46 @@ fn resolve_immutable_observed_root(
                 "immutable sourceIdentity {} is not a directory",
                 canonical_source_root.display()
             ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
+        ));
     }
     let logical_path = Path::new(logical_root);
-    validate_logical_root(logical_root, logical_path, loaded)?;
-    let observed_root = canonical_source_root
-        .join(logical_path)
-        .canonicalize()
-        .map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::SourceMismatch,
-                format!(
-                    "failed to resolve immutable logicalRoot {logical_root} under {}: {error}",
-                    canonical_source_root.display()
-                ),
-            )
-            .with_manifest(loaded.path(), loaded.computed_manifest_hash())
-        })?;
-    if !observed_root.is_dir() || !observed_root.starts_with(&canonical_source_root) {
+    validate_logical_root(logical_root, logical_path)?;
+    resolve_confined_directory(
+        &canonical_source_root,
+        logical_path,
+        &format!(
+            "immutable logicalRoot {logical_root} under {}",
+            canonical_source_root.display()
+        ),
+        &format!("immutable source root {}", canonical_source_root.display()),
+    )
+}
+
+fn resolve_confined_directory(
+    root: &Path,
+    logical_path: &Path,
+    resolve_context: &str,
+    escape_context: &str,
+) -> RuntimeResult<PathBuf> {
+    let observed_root = root.join(logical_path).canonicalize().map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!("failed to resolve {resolve_context}: {error}"),
+        )
+    })?;
+    if !observed_root.is_dir() || !observed_root.starts_with(root) {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
             format!(
-                "logicalRoot {} resolved outside immutable source root {}",
-                observed_root.display(),
-                canonical_source_root.display()
+                "logicalRoot {} resolved outside {escape_context}",
+                observed_root.display()
             ),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
+        ));
     }
     Ok(observed_root)
 }
 
-fn validate_logical_root(
-    logical_root: &str,
-    logical_path: &Path,
-    loaded: &LoadedManifest,
-) -> RuntimeResult<()> {
+fn validate_logical_root(logical_root: &str, logical_path: &Path) -> RuntimeResult<()> {
     if logical_root.is_empty()
         || logical_path.is_absolute()
         || logical_path.components().any(disallowed_component)
@@ -199,8 +166,7 @@ fn validate_logical_root(
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
             format!("logicalRoot must be a confined relative path: {logical_root}"),
-        )
-        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
+        ));
     }
     Ok(())
 }
