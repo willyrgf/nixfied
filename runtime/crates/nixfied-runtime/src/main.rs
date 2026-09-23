@@ -466,23 +466,11 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, CHECK_HELP) {
         return Ok(());
     }
-    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
-    let mut slot = RUNTIME_SLOT_INITIAL;
+    let mut common = ManifestOptions::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            RUNTIME_MANIFEST => {
-                index += 1;
-                manifest_path = args.get(index).map(PathBuf::from);
-            }
-            RUNTIME_ALLOW_NON_STORE_MANIFEST => {
-                allow_non_store = true;
-            }
-            RUNTIME_SLOT => {
-                index += 1;
-                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
-            }
+            _ if common.consume(args, &mut index)? => {}
             other => {
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::ManifestAdmission,
@@ -492,12 +480,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         }
         index += 1;
     }
-    let manifest_path = manifest_path.ok_or_else(|| {
-        RuntimeError::new(
-            nixfied_runtime::ErrorCode::ManifestAdmission,
-            format!("missing {RUNTIME_MANIFEST} path"),
-        )
-    })?;
+    let (manifest_path, allow_non_store, slot) = common.finish()?;
     let admission = load_admitted_manifest(manifest_path, allow_non_store)?;
     let selected_slot =
         select_slot(admission.common().manifest(), slot).map_err(post_admission_error)?;
@@ -842,31 +825,16 @@ fn run_m0_placed(
             );
         }
         if options.output_mode.emit_summary() {
-            match current_service.selected_endpoint() {
-                Some(endpoint) => {
-                    if let Err(error) = write_diagnostic(
-                        options.output_mode,
-                        format_args!(
-                            "  service {} ready at {}:{}",
-                            current_service.service_name(),
-                            endpoint.host,
-                            endpoint.port
-                        ),
-                    ) {
-                        session.diagnostic_failures.push(error);
-                    }
-                }
-                None => {
-                    if let Err(error) = write_diagnostic(
-                        options.output_mode,
-                        format_args!(
-                            "  service {} ready (endpoint-less)",
-                            current_service.service_name()
-                        ),
-                    ) {
-                        session.diagnostic_failures.push(error);
-                    }
-                }
+            let name = current_service.service_name();
+            let message = match current_service.selected_endpoint() {
+                Some(endpoint) => format!(
+                    "  service {name} ready at {}:{}",
+                    endpoint.host, endpoint.port
+                ),
+                None => format!("  service {name} ready (endpoint-less)"),
+            };
+            if let Err(error) = write_diagnostic(options.output_mode, message) {
+                session.diagnostic_failures.push(error);
             }
         }
         session.started.push(current_service);
@@ -1408,31 +1376,61 @@ fn run_control_admitted(
     result.map_err(|error| enrich_placed_error(error, &placement, &selected_slot))
 }
 
+struct ManifestOptions {
+    manifest_path: Option<PathBuf>,
+    allow_non_store: bool,
+    slot: Option<RuntimeSlotValue>,
+}
+
+impl ManifestOptions {
+    fn new() -> Self {
+        Self {
+            manifest_path: RUNTIME_MANIFEST_INITIAL.map(PathBuf::from),
+            allow_non_store: RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL,
+            slot: RUNTIME_SLOT_INITIAL,
+        }
+    }
+
+    fn consume(&mut self, args: &[String], index: &mut usize) -> Result<bool, RuntimeError> {
+        match args[*index].as_str() {
+            RUNTIME_MANIFEST => {
+                *index += 1;
+                self.manifest_path = args.get(*index).map(PathBuf::from);
+            }
+            RUNTIME_ALLOW_NON_STORE_MANIFEST => self.allow_non_store = true,
+            RUNTIME_SLOT => {
+                *index += 1;
+                self.slot = Some(parse_integer_arg(args.get(*index), RUNTIME_SLOT)?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn finish(self) -> Result<(PathBuf, bool, Option<RuntimeSlotValue>), RuntimeError> {
+        let manifest_path = self.manifest_path.ok_or_else(|| {
+            RuntimeError::new(
+                nixfied_runtime::ErrorCode::ManifestAdmission,
+                format!("missing {RUNTIME_MANIFEST} path"),
+            )
+        })?;
+        Ok((manifest_path, self.allow_non_store, self.slot))
+    }
+}
+
 fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> {
-    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
+    let mut common = ManifestOptions::new();
     let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = RUN_TIMEOUT_MS_INITIAL;
     let mut output_mode = RUN_OUTPUT_INITIAL;
-    let mut slot = RUNTIME_SLOT_INITIAL;
     let mut task = RUN_TASK_INITIAL.map(str::to_string);
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            RUNTIME_MANIFEST => {
-                index += 1;
-                manifest_path = args.get(index).map(PathBuf::from);
-            }
-            RUNTIME_ALLOW_NON_STORE_MANIFEST => {
-                allow_non_store = true;
-            }
+            _ if common.consume(args, &mut index)? => {}
             RUNTIME_STATE_BASE => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
-            }
-            RUNTIME_SLOT => {
-                index += 1;
-                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
             }
             RUN_TASK => {
                 index += 1;
@@ -1454,18 +1452,8 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
             }
             RUN_TIMEOUT_MS => {
                 index += 1;
-                let value = args.get(index).ok_or_else(|| {
-                    RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ManifestAdmission,
-                        format!("missing {RUN_TIMEOUT_MS} value"),
-                    )
-                })?;
-                timeout_ms = value.parse::<RunTimeoutMsValue>().map_err(|error| {
-                    RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ManifestAdmission,
-                        format!("invalid {RUN_TIMEOUT_MS} value {value}: {error}"),
-                    )
-                })?;
+                timeout_ms =
+                    parse_integer_arg::<RunTimeoutMsValue>(args.get(index), RUN_TIMEOUT_MS)?;
             }
             RUN_OUTPUT => {
                 index += 1;
@@ -1501,12 +1489,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
         }
         index += 1;
     }
-    let manifest_path = manifest_path.ok_or_else(|| {
-        RuntimeError::new(
-            nixfied_runtime::ErrorCode::ManifestAdmission,
-            format!("missing {RUNTIME_MANIFEST} path"),
-        )
-    })?;
+    let (manifest_path, allow_non_store, slot) = common.finish()?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
     Ok(ParsedRunOptions {
         manifest_path,
@@ -1553,11 +1536,9 @@ fn parse_control_options(
     command: ControlCommand,
     args: &[String],
 ) -> Result<ControlOptions, RuntimeError> {
-    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
+    let mut common = ManifestOptions::new();
     let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = DOWN_TIMEOUT_MS_INITIAL;
-    let mut slot = RUNTIME_SLOT_INITIAL;
     let mut cleanup_mode = if CLEAN_PURGE_INITIAL {
         nixfied_runtime::state::CleanupMode::Purge
     } else {
@@ -1566,38 +1547,18 @@ fn parse_control_options(
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            value if value == RUNTIME_MANIFEST => {
-                index += 1;
-                manifest_path = args.get(index).map(PathBuf::from);
-            }
-            value if value == RUNTIME_ALLOW_NON_STORE_MANIFEST => {
-                allow_non_store = true;
-            }
+            _ if common.consume(args, &mut index)? => {}
             value if value == RUNTIME_STATE_BASE => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
-            }
-            value if value == RUNTIME_SLOT => {
-                index += 1;
-                slot = Some(parse_slot_arg(args.get(index), RUNTIME_SLOT)?);
             }
             CLEAN_PURGE if matches!(command, ControlCommand::Clean) => {
                 cleanup_mode = nixfied_runtime::state::CleanupMode::Purge;
             }
             DOWN_TIMEOUT_MS if matches!(command, ControlCommand::Down) => {
                 index += 1;
-                let value = args.get(index).ok_or_else(|| {
-                    RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ManifestAdmission,
-                        format!("missing {DOWN_TIMEOUT_MS} value"),
-                    )
-                })?;
-                timeout_ms = value.parse::<DownTimeoutMsValue>().map_err(|error| {
-                    RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ManifestAdmission,
-                        format!("invalid {DOWN_TIMEOUT_MS} value {value}: {error}"),
-                    )
-                })?;
+                timeout_ms =
+                    parse_integer_arg::<DownTimeoutMsValue>(args.get(index), DOWN_TIMEOUT_MS)?;
             }
             other => {
                 return Err(RuntimeError::new(
@@ -1608,12 +1569,7 @@ fn parse_control_options(
         }
         index += 1;
     }
-    let manifest_path = manifest_path.ok_or_else(|| {
-        RuntimeError::new(
-            nixfied_runtime::ErrorCode::ManifestAdmission,
-            format!("missing {RUNTIME_MANIFEST} path"),
-        )
-    })?;
+    let (manifest_path, allow_non_store, slot) = common.finish()?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
     Ok(ControlOptions {
         manifest_path,
@@ -1625,14 +1581,20 @@ fn parse_control_options(
     })
 }
 
-fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<RuntimeSlotValue, RuntimeError> {
+fn parse_integer_arg<T: std::str::FromStr>(
+    value: Option<&String>,
+    flag: &str,
+) -> Result<T, RuntimeError>
+where
+    T::Err: Display,
+{
     let value = value.ok_or_else(|| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ManifestAdmission,
             format!("missing {flag} value"),
         )
     })?;
-    value.parse::<RuntimeSlotValue>().map_err(|error| {
+    value.parse::<T>().map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ManifestAdmission,
             format!("invalid {flag} value {value}: {error}"),
