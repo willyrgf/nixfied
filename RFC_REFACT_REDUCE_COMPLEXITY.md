@@ -1,6 +1,12 @@
 # RFC: reduce runtime complexity through explicit ownership
 
-Status: proposed; architect revision incorporates the 14-opportunity review. This RFC defines the target design and implementation plan; it does not change the current contract by itself.
+Status: implemented design, with a qualified reduction outcome. This document
+preserves the accepted design and plan; current behavior is owned by the contract.
+At completion (`9ba9a07`), authored Rust production was only 126 lines smaller
+than the implementation baseline, while the repository was 2,361 lines larger
+than the branch base. Ownership and correctness improved, but substantial
+maintained-code reduction was not achieved. See the corrected
+[outcome and evidence](RFC_REFACT_REDUCE_COMPLEXITY_PROGRESS.md).
 
 Baseline: `0570aa3`, reviewed on 2026-09-23. The audit covered all 26 Rust files with at least 400 lines, plus their adjacent owners and tests. Those files contain 30,165 of the 36,093 physical Rust lines under `runtime/`. The total includes 22,754 authored source lines with embedded tests, 11,879 integration-test/helper lines, 817 generated lines, and 643 test-child lines. These counts include comments and whitespace and are a baseline, not a reduction quota.
 
@@ -331,7 +337,7 @@ Specific proof repairs/removals:
 
 ## 14. Retire approximate audits only after proof mapping
 
-Sources: [capability_coverage.rs](runtime/crates/nixfied-runtime/tests/capability_coverage.rs), [coverage.nix](nix/checks/coverage.nix), [structure.nix](nix/checks/structure.nix), [wire_presence.rs](runtime/crates/nixfied-manifest/tests/wire_presence.rs), [generated.nix](nix/checks/generated.nix).
+Sources: `runtime/crates/nixfied-runtime/tests/capability_coverage.rs` (retired; available at baseline `d6b5632`), [coverage.nix](nix/checks/coverage.nix), [structure.nix](nix/checks/structure.nix), [wire_presence.rs](runtime/crates/nixfied-manifest/tests/wire_presence.rs), [generated.nix](nix/checks/generated.nix).
 
 **Root cause.** Manual inventories survived after declaration ownership moved elsewhere. Token occurrence in one fixture is weaker than per-record coverage and cannot establish omitted/new-field coverage.
 
@@ -434,4 +440,9 @@ Acceptance requires:
 - Every intentional ABI change lands atomically with documentation, descriptor, fixtures, and both sides; no fallback or migration.
 - Net reduction in maintained duplication and change sites, with honest LOC accounting and explicit reporting of any added correctness code.
 
-This document is a design proposal based on source inspection. It does not claim that the proposed implementation, crash injection, race tests, platform matrix, release builds, or full gates have already run.
+These are the original design acceptance criteria, not verification receipts.
+The [outcome report](RFC_REFACT_REDUCE_COMPLEXITY_PROGRESS.md) records measured
+results, the proof repair, and unverified platform coverage. Future reduction
+work should separate behavior-preserving simplification from correctness changes,
+budget production/test/documentation growth, and review the tradeoff when the
+expected aggregate savings disappear.
