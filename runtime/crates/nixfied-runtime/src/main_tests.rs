@@ -16,8 +16,6 @@ fn local_check_and_run_records_preserve_required_and_omitted_members() {
         environment: "dev".into(),
         slot: 2,
     };
-    let raw_len: usize = checked.raw_len;
-    assert_eq!(raw_len, 7);
     assert_eq!(
         serde_json::to_string(&checked).unwrap(),
         r#"{"manifestPath":"/manifest","computedManifestHash":"hash","rawLen":7,"projectId":"project","runtimeAbi":"abi","toolchainId":"tool","targetSystem":"system","environment":"dev","slot":2}"#
