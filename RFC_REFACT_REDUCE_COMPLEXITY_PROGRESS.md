@@ -49,7 +49,16 @@ removed state owners, coordinated change sites, and capture correctness addition
    tests, and workspace/all-target Clippy pass on Linux. Remaining: explicit
    lock-directory injection, applicable wrapper/ceremony subtractions, and the
    conditional listener representation review.
-3. Placement characterization: pending.
+3. Placement characterization: exact slot-one registry/run/log/artifact/summary
+   paths are pinned alongside existing slot-zero paths. Materialization rejects
+   symlinks at each owned root and nested run path without writing through them.
+   Literal cases record currently accepted nested project/run identifiers,
+   embedded environment substitution, and slash-prefixed run identifiers;
+   traversal, absolute project identifiers, and unresolved templates reject.
+   Convert the accepted compound cases to negatives in step 7's ABI cutover.
+   Deleted the test-only `first_candidate_port` production helper; actual
+   service slot-window and planner allocation proofs remain. All 26 state tests
+   pass on Linux, including cleanup registry survival and interrupted deletion.
 4. Atomic registry initialization: pending.
 5. Finalization error/cancellation ownership: pending.
 6. Closed loaded/admitted construction: pending.
