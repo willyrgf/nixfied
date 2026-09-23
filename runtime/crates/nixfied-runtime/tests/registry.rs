@@ -345,47 +345,55 @@ fn all_clean_terminal_siblings_allow_heartbeat_shutdown() {
 }
 
 #[test]
-fn rejects_registry_project_mismatch_as_state_unowned() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    Registry::open_or_create(&path, &identity).expect("registry should open");
-    let bad = RegistryIdentity::default_slot(
-        "other-project",
-        "nixfied-runtime-abi:1",
-        "nixfied-toolchain:1",
-    );
-    let error = match Registry::open_or_create(&path, &bad) {
-        Ok(_) => panic!("identity mismatch should fail"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-    assert_mismatched_fields(&error, &["projectId"]);
-    assert_registry_path_details(&error, &path);
-}
-
-#[test]
-fn rejects_registry_environment_mismatch_as_state_unowned() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    Registry::open_or_create(&path, &identity).expect("registry should open");
-    let bad = RegistryIdentity::for_slot(
-        "minimal",
-        "prod",
-        0,
-        "nixfied-runtime-abi:1",
-        "nixfied-toolchain:1",
-    );
-    let error = match Registry::open_or_create(&path, &bad) {
-        Ok(_) => panic!("environment mismatch should fail"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-    assert_mismatched_fields(&error, &["environment"]);
-    assert_registry_path_details(&error, &path);
+fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
+    for (field, bad, code) in [
+        (
+            "projectId",
+            RegistryIdentity {
+                project_id: "other-project".into(),
+                ..identity()
+            },
+            ErrorCode::StateUnowned,
+        ),
+        (
+            "environment",
+            RegistryIdentity {
+                environment: "prod".into(),
+                ..identity()
+            },
+            ErrorCode::StateUnowned,
+        ),
+        (
+            "runtimeAbi",
+            RegistryIdentity {
+                runtime_abi: "nixfied-runtime-abi:2".into(),
+                ..identity()
+            },
+            ErrorCode::RuntimeAbiMismatch,
+        ),
+        (
+            "toolchainId",
+            RegistryIdentity {
+                toolchain_id: "nixfied-toolchain:2".into(),
+                ..identity()
+            },
+            ErrorCode::RuntimeAbiMismatch,
+        ),
+    ] {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("registry.sqlite3");
+        let expected = identity();
+        Registry::open_or_create(&path, &expected).expect("registry should open");
+        let error = match Registry::open_or_create(&path, &bad) {
+            Ok(_) => panic!("{field} mismatch should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, code, "{field}");
+        assert_mismatched_fields(&error, &[field]);
+        assert_registry_path_details(&error, &path);
+        Registry::open_or_create(&path, &expected)
+            .expect("rejection must preserve the original stored identity");
+    }
 }
 
 #[test]
@@ -418,42 +426,6 @@ fn records_and_checks_selected_slot_identity() {
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_mismatched_fields(&error, &["slot"]);
-    assert_registry_path_details(&error, &path);
-}
-
-#[test]
-fn rejects_registry_runtime_abi_mismatch_as_runtime_abi_mismatch() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    Registry::open_or_create(&path, &identity).expect("registry should open");
-    let bad =
-        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:2", "nixfied-toolchain:1");
-    let error = match Registry::open_or_create(&path, &bad) {
-        Ok(_) => panic!("runtime ABI mismatch should fail"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
-    assert_mismatched_fields(&error, &["runtimeAbi"]);
-    assert_registry_path_details(&error, &path);
-}
-
-#[test]
-fn rejects_registry_toolchain_mismatch_as_runtime_abi_mismatch() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    Registry::open_or_create(&path, &identity).expect("registry should open");
-    let bad =
-        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:2");
-    let error = match Registry::open_or_create(&path, &bad) {
-        Ok(_) => panic!("toolchain mismatch should fail"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
-    assert_mismatched_fields(&error, &["toolchainId"]);
     assert_registry_path_details(&error, &path);
 }
 
