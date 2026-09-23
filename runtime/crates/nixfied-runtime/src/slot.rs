@@ -1,4 +1,4 @@
-use nixfied_manifest::{CandidatePortWindow, Manifest, SlotPlacement};
+use nixfied_manifest::{Manifest, SlotPlacement};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
@@ -51,17 +51,4 @@ pub fn select_slot(
         slot,
         placement,
     })
-}
-
-pub fn first_candidate_port(window: &CandidatePortWindow) -> RuntimeResult<u16> {
-    if window.start == 0 || window.start > window.end {
-        return Err(RuntimeError::new(
-            ErrorCode::ManifestAdmission,
-            format!(
-                "invalid candidate port window {}-{}",
-                window.start, window.end
-            ),
-        ));
-    }
-    Ok(window.start)
 }

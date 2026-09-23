@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy};
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::slot::{first_candidate_port, select_slot};
+use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
     CleanupMode, CleanupOutcome, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
     clean_marked_state, commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
@@ -79,8 +79,25 @@ fn selects_explicit_slot_placement() {
     assert_eq!(selected.slot, 1);
     assert_eq!(layout.state_root, tmp.path.join("runtime-test/dev/1"));
     assert_eq!(
-        first_candidate_port(&selected.placement.candidate_ports).expect("port should select"),
-        23180
+        layout.run_dir,
+        tmp.path.join("runtime-test/dev/1/runs/run-2")
+    );
+    assert_eq!(
+        layout.logs_dir,
+        tmp.path.join("runtime-test/dev/1/runs/run-2/logs")
+    );
+    assert_eq!(
+        layout.artifacts_dir,
+        tmp.path.join("runtime-test/dev/1/runs/run-2/artifacts")
+    );
+    assert_eq!(
+        layout.summary_path,
+        tmp.path.join("runtime-test/dev/1/runs/run-2/summary.json")
+    );
+    assert_eq!(
+        layout.registry_path(),
+        tmp.path
+            .join("registry/runtime-test/dev/1/registry.sqlite3")
     );
 }
 
@@ -112,24 +129,86 @@ fn slot_out_of_range_is_refused() {
     assert_eq!(error.code, ErrorCode::ManifestAdmission);
 }
 
+#[test]
+fn placement_characterizes_compound_identifiers_before_component_cutover() {
+    // These are currently accepted whole-path substitutions. The reviewed ABI
+    // cutover will reject these identifiers rather than silently preserve them.
+    for (project, run, state_path, run_path) in [
+        (
+            "nested/project",
+            "run/child",
+            "nested/project/dev/0",
+            "nested/project/dev/0/runs/run/child",
+        ),
+        (
+            "project-${environment}",
+            "run",
+            "project-dev/dev/0",
+            "project-dev/dev/0/runs/run",
+        ),
+        (
+            "project",
+            "/absolute",
+            "project/dev/0",
+            "project/dev/0/runs/absolute",
+        ),
+    ] {
+        let tmp = TempDir::new();
+        let mut manifest = manifest();
+        manifest.project.project_id = project.into();
+        let layout = derive_host_placement(&manifest, run, &tmp.path).unwrap();
+        assert_eq!(layout.state_root, tmp.path.join(state_path));
+        assert_eq!(layout.run_dir, tmp.path.join(run_path));
+        assert!(
+            !layout.state_root.exists(),
+            "pure derivation has no effects"
+        );
+    }
+}
+
+#[test]
+fn placement_rejects_traversal_absolute_project_and_unresolved_templates() {
+    for (project, run) in [
+        ("../outside", "run"),
+        ("/absolute", "run"),
+        ("project", "../outside"),
+        ("project-${unknown}", "run"),
+        ("project", "${unknown}"),
+    ] {
+        let tmp = TempDir::new();
+        let mut manifest = manifest();
+        manifest.project.project_id = project.into();
+        let error = derive_host_placement(&manifest, run, &tmp.path).unwrap_err();
+        assert_eq!(error.code, ErrorCode::StateUnwritable);
+        assert_eq!(fs::read_dir(&tmp.path).unwrap().count(), 0);
+    }
+}
+
 #[cfg(unix)]
 #[test]
-fn materialization_refuses_symlinked_roots() {
-    let tmp = TempDir::new();
-    let manifest = manifest();
-    let layout =
-        derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
-    fs::create_dir_all(&layout.state_root).expect("state root should be created");
-    fs::create_dir_all(layout.registry_dir.parent().expect("registry has a parent"))
-        .expect("registry parent should be created");
-    let outside = tmp.path.join("outside-registry");
-    fs::create_dir_all(&outside).expect("outside dir should be created");
-    std::os::unix::fs::symlink(&outside, &layout.registry_dir)
-        .expect("registry symlink should be created");
+fn materialization_refuses_symlinked_roots_and_nested_run_paths() {
+    for target in ["registry", "state", "run", "logs", "artifacts"] {
+        let tmp = TempDir::new();
+        let layout = derive_host_placement(&manifest(), "run-1", &tmp.path).unwrap();
+        let path = match target {
+            "registry" => &layout.registry_dir,
+            "state" => &layout.state_root,
+            "run" => &layout.run_dir,
+            "logs" => &layout.logs_dir,
+            "artifacts" => &layout.artifacts_dir,
+            _ => unreachable!(),
+        };
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let outside = tmp.path.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel"), b"untouched").unwrap();
+        std::os::unix::fs::symlink(&outside, path).unwrap();
 
-    let error = materialize_run_roots(&layout).expect_err("symlinked roots must be refused");
-
-    assert_eq!(error.code, ErrorCode::StateUnwritable);
+        let error = materialize_run_roots(&layout).unwrap_err();
+        assert_eq!(error.code, ErrorCode::StateUnwritable, "{target}");
+        assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+    }
 }
 
 #[test]
