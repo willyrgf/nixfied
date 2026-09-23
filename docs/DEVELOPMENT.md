@@ -309,7 +309,8 @@ Dirty mode uses a path pin and therefore re-derives the downstream closure.
 
 `nix run .#ci` is the canonical full local gate, not a byte-for-byte copy of the
 hosted workflow. `.github/workflows/checks.yml` separately runs the raw Cargo
-floor, flake checks, and gate; it also runs macOS-specific endpoint observer tests
+floor, flake checks, and gate; it also runs macOS runtime unit, endpoint, service,
+and output tests (including bounded capture and persistent-service ownership)
 and builds the public CLI, installer, and optimized release runtime as a final
 safety net:
 
