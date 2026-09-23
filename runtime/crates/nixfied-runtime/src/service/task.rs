@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::admission::secrets::ResolvedSecrets;
+use crate::admission::RunAdmission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecTask, ResolvedInvocation};
@@ -120,25 +120,24 @@ impl PrepareTaskError {
 /// context.
 #[derive(Debug, Clone, Copy)]
 pub struct RunContext<'a> {
-    pub run_id: &'a str,
-    pub computed_manifest_hash: &'a str,
-    pub source_root: &'a Path,
-    pub state_root: &'a Path,
-    pub secrets: &'a ResolvedSecrets,
-    pub redactor: &'a Redactor,
+    admission: &'a RunAdmission,
+    run_id: &'a str,
+    state_root: &'a Path,
+    redactor: &'a Redactor,
 }
 
 impl<'a> RunContext<'a> {
-    /// The run context as carried by an already-started service (every service in
-    /// a run shares it).
-    pub fn from_service(service: &'a StartedService) -> Self {
+    pub fn new(
+        admission: &'a RunAdmission,
+        run_id: &'a str,
+        state_root: &'a Path,
+        redactor: &'a Redactor,
+    ) -> Self {
         Self {
-            run_id: &service.run_id,
-            computed_manifest_hash: &service.computed_manifest_hash,
-            source_root: &service.source_root,
-            state_root: &service.state_root,
-            secrets: &service.secrets,
-            redactor: &service.redactor,
+            admission,
+            run_id,
+            state_root,
+            redactor,
         }
     }
 }
@@ -207,7 +206,7 @@ pub fn run_dependent_task_cancellable(
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: run_context.state_root,
-        secrets: run_context.secrets,
+        secrets: run_context.admission.secrets(),
     };
     let exec = &task.exec;
     // Key logs by step path, not task id: a composite may run the same leaf in
@@ -226,8 +225,8 @@ pub fn run_dependent_task_cancellable(
         .env(&exec.env)
         .map_err(TaskExecutionError::before)?;
     let env = exec.env_with_path(env);
-    let command_cwd =
-        resolve_exec_cwd(run_context.source_root, &exec.cwd).map_err(TaskExecutionError::before)?;
+    let command_cwd = resolve_exec_cwd(&run_context.admission.source().observed_root, &exec.cwd)
+        .map_err(TaskExecutionError::before)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
@@ -268,7 +267,7 @@ pub fn run_dependent_task_cancellable(
             pgid,
             start_identity: &start_identity,
             command_json: &command_json,
-            computed_manifest_hash: run_context.computed_manifest_hash,
+            computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
         },
     ) {
         return Err(TaskExecutionError::before(cleanup_unrecorded_task(
@@ -285,7 +284,7 @@ pub fn run_dependent_task_cancellable(
             run_id: run_context.run_id,
             task_id,
             process_key: &process_key,
-            computed_manifest_hash: run_context.computed_manifest_hash,
+            computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
         },
     )
     .map_err(TaskExecutionError::before)?;
@@ -371,7 +370,7 @@ pub fn run_dependent_task_cancellable(
         registry,
         run_context.run_id,
         &process_key,
-        run_context.computed_manifest_hash,
+        run_context.admission.common().computed_manifest_hash(),
         terminal_status,
         &payload_json,
     ) {

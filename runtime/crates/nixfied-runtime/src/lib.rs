@@ -14,7 +14,10 @@ pub mod service;
 pub mod slot;
 pub mod state;
 
-pub use admission::{Admission, AdmissionContext, StoreOriginPolicy, source::AdmittedSource};
+pub use admission::{
+    AdmissionContext, ControlAdmission, RunAdmission, StoreOriginPolicy, admit_control, admit_run,
+    source::AdmittedSource,
+};
 pub use error::{ErrorCode, RuntimeError, RuntimeResult};
 pub use manifest_loader::{
     LoadedManifest, RawManifest, load_manifest, parse_loaded_manifest, read_raw_manifest,

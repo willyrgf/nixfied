@@ -131,9 +131,24 @@ removed state owners, coordinated change sites, and capture correctness addition
    re-admit all bytes rather than replacing only the execution graph. All 71
    service, 26 state, 10 upgrade, and 11 endpoint unit tests pass; the owner
    attribution case passes after synchronizing its raw scenario; Clippy passes.
-   Remaining in this step: private run/control admissions owning the loaded
-   document; removal of fabricated admission fixtures; one origin entry point and
-   one store-root observation per admission.
+   Private `ControlAdmission` now owns the loaded document, immutable execution
+   graph, and serialized provenance. `RunAdmission` adds required source/secrets;
+   no boolean mode, optional source, public proof fields, or `require_source`
+   remains. Path-based `admit_run`/`admit_control` own origin-before-parse ordering;
+   the duplicate loaded-origin check and independently passed runtime manifests
+   are deleted. State identity/cleanup derive facts from common admission. Source
+   admission requires the structural wrapper and drops duplicate codebase checks.
+   Architect review found the public task `RunContext` as a remaining bypass;
+   it now privately borrows `RunAdmission` and derives source/secrets/hash from it.
+   The public service-derived constructor is removed. Review confirmed closure.
+   The obsolete control-source accessor misuse test is replaced by compiler
+   visibility and the existing deleted-workspace control behavior test. Both raw
+   constructors now prove malformed non-store origin precedence and provenance.
+   All 110 runtime unit, 32 admission, 71 service, 26 state, 10 upgrade, three
+   context tests and Clippy passed; `.#test` passed before the task-context
+   follow-up, then 32 admission/71 service tests and Clippy passed after it.
+   Logs: `/tmp/nixfied-private-admission-floor.log`, `/tmp/nixfied-run-context.log`.
+   Remaining in this step: one store-root observation per admission.
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.

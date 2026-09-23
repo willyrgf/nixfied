@@ -8,14 +8,12 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{
-    ContainmentRequirement, LoopbackHost, Manifest, ServiceLifetime, StopSignal,
-};
+use nixfied_manifest::{ContainmentRequirement, LoopbackHost, ServiceLifetime, StopSignal};
 use rusqlite::params;
 use serde::Serialize;
 
-use crate::admission::Admission;
 use crate::admission::secrets::{ResolvedSecrets, has_unclosed_secret_ref, secret_refs};
+use crate::admission::{ControlAdmission, RunAdmission};
 use crate::cancellation::{CancellationToken, canceled_error, sleep_cancellable};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -1179,7 +1177,7 @@ impl ServiceStartError {
 /// the admission's `ExecutionManifest`, never the raw `Manifest`. The caller must have
 /// recorded this exact `run_id` with [`super::record_run_created`] first.
 pub fn start_service_for_slot(
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -1206,7 +1204,7 @@ pub fn start_service_for_slot(
 }
 
 fn start_service_for_slot_inner(
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
@@ -1217,12 +1215,13 @@ fn start_service_for_slot_inner(
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
     let cancellation = selection.cancellation;
-    let source = admission.require_source()?;
+    let source = admission.source();
     let service_name = selection.service_name;
     let endpoint_ports = selection.endpoint_ports;
     let slot_endpoints = selection.slot_endpoints;
     let service = admission
-        .execution_manifest
+        .common()
+        .execution_manifest()
         .services()
         .get(service_name)
         .ok_or_else(|| {
@@ -1273,14 +1272,14 @@ fn start_service_for_slot_inner(
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: &placement.state_root,
-        secrets: &admission.secrets,
+        secrets: admission.secrets(),
     };
     // Exec probe args/env are substituted once here, with the same scope as the
     // start exec, so probe attempts later need no endpoint context.
     let ready_probe = substituted_probe(&service.ready.probe, &substitution)?;
     let health_probe = substituted_probe(&service.health.probe, &substitution)?;
     let address_hash = service_address_hash(
-        &admission.project_id,
+        admission.common().project_id(),
         selected_slot.environment,
         selected_slot.slot,
         service_name,
@@ -1352,7 +1351,7 @@ fn start_service_for_slot_inner(
         registry,
         &run_id,
         &owner_token,
-        &admission.computed_manifest_hash,
+        admission.common().computed_manifest_hash(),
         &service_instance_id,
         &reservations,
     )?;
@@ -1360,7 +1359,7 @@ fn start_service_for_slot_inner(
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: None,
-        computed_manifest_hash: admission.computed_manifest_hash.clone(),
+        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
     // Until spawn succeeds, every failure can settle the reservation directly.
@@ -1440,7 +1439,7 @@ fn start_service_for_slot_inner(
             stderr_path: stderr_path.as_path(),
         })
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
-        let redactor = Redactor::from_secrets(&admission.secrets);
+        let redactor = Redactor::from_secrets(admission.secrets());
         let (stdout, stderr, log_relays) =
             if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
                 let output = child_output(&stdout_path, &stderr_path, &redactor)?;
@@ -1514,13 +1513,13 @@ fn start_service_for_slot_inner(
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: Some(process_key.clone()),
-        computed_manifest_hash: admission.computed_manifest_hash.clone(),
+        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     if let Err(error) = record_service_start(
         registry,
         &run_id,
         &owner_token,
-        &admission.computed_manifest_hash,
+        admission.common().computed_manifest_hash(),
         &service_record,
         &ProcessRecord {
             process_key: &process_key,
@@ -1573,10 +1572,10 @@ fn start_service_for_slot_inner(
         pgid,
         platform_start_identity: platform_start,
         selected_endpoints: own_endpoints,
-        computed_manifest_hash: admission.computed_manifest_hash.clone(),
+        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
-        secrets: admission.secrets.clone(),
+        secrets: admission.secrets().clone(),
         redactor,
         owner_token,
         service_lifetime: selection.service_lifetime,
@@ -1598,7 +1597,7 @@ fn start_service_for_slot_inner(
 }
 
 struct BorrowServiceRequest<'a> {
-    admission: &'a Admission,
+    admission: &'a RunAdmission,
     placement: &'a HostPlacement,
     run_id: &'a str,
     owner_token: &'a str,
@@ -1857,12 +1856,12 @@ fn borrow_reusable_service(
             return Ok(None);
         }
     }
-    let source = request.admission.require_source()?;
+    let source = request.admission.source();
     let borrowed = record_service_borrow(
         registry,
         request.run_id,
         request.owner_token,
-        &request.admission.computed_manifest_hash,
+        request.admission.common().computed_manifest_hash(),
         &ServiceReuseGuard {
             service: request.service_record,
             process: process_row,
@@ -1889,11 +1888,15 @@ fn borrow_reusable_service(
         pgid: process_row.pgid,
         platform_start_identity: process_row.platform_start,
         selected_endpoints: request.selected_endpoints.clone(),
-        computed_manifest_hash: request.admission.computed_manifest_hash.clone(),
+        computed_manifest_hash: request
+            .admission
+            .common()
+            .computed_manifest_hash()
+            .to_owned(),
         source_root: source.observed_root.clone(),
         state_root: request.placement.state_root.clone(),
-        secrets: request.admission.secrets.clone(),
-        redactor: Redactor::from_secrets(&request.admission.secrets),
+        secrets: request.admission.secrets().clone(),
+        redactor: Redactor::from_secrets(request.admission.secrets()),
         owner_token: request.owner_token.to_string(),
         service_lifetime: request.service_record.service_lifetime,
         log_relays: None,
@@ -1945,36 +1948,28 @@ fn stored_endpoints_match_selection(
 /// slot evidence, so each one's clean lifecycle operation is recorded. Each is
 /// a marker-gated runtime cleanup primitive (no exec).
 pub fn run_slot_clean(
-    manifest: &Manifest,
-    admission: &Admission,
+    admission: &ControlAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    for service in admission.execution_manifest.services().values() {
+    for service in admission.execution_manifest().services().values() {
         record_service_clean(admission, registry, selected_slot, service)?;
     }
-    clean_marked_slot_state(
-        manifest,
-        admission,
-        placement,
-        registry,
-        selected_slot,
-        mode,
-    )
+    clean_marked_slot_state(admission, placement, registry, selected_slot, mode)
 }
 
 /// Record the marker-gated clean lifecycle operation for one service.
 fn record_service_clean(
-    admission: &Admission,
+    admission: &ControlAdmission,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     service: &ExecService,
 ) -> RuntimeResult<()> {
     let record = LifecycleRecord::from_meta(&service.clean.meta, "clean");
     let address_hash = service_address_hash(
-        &admission.project_id,
+        admission.project_id(),
         selected_slot.environment,
         selected_slot.slot,
         service.name.as_str(),
@@ -1984,7 +1979,7 @@ fn record_service_clean(
         run_id: None,
         service_instance_id,
         process_key: None,
-        computed_manifest_hash: admission.computed_manifest_hash.clone(),
+        computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
     };
     record_lifecycle_started(registry, &lifecycle_context, &record)?;
     record_lifecycle_success(registry, &lifecycle_context, &record)
@@ -1992,14 +1987,13 @@ fn record_service_clean(
 
 /// Clean the marker-owned state root for the selected slot.
 fn clean_marked_slot_state(
-    manifest: &Manifest,
-    admission: &Admission,
+    admission: &ControlAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    let identity = StateIdentity::from_selected_slot(manifest, admission, selected_slot);
+    let identity = StateIdentity::from_selected_slot(admission, selected_slot);
     // Reconcile first so rows left active by a crashed runtime (no live OS
     // process) are marked stale instead of tripping the active-refs refusal,
     // sparing the operator a manual ps/down before clean can proceed.

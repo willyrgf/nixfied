@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
 use nixfied_runtime::{
-    Admission, AdmissionContext, ErrorCode, StoreOriginPolicy, load_manifest, read_raw_manifest,
+    AdmissionContext, ErrorCode, StoreOriginPolicy, load_manifest, read_raw_manifest,
 };
 use serde_json::{Value, json};
 
@@ -28,13 +28,13 @@ fn explicit_invocation_root_is_resolved_only_for_live_run_admission() {
     let loaded = load_manifest(&manifest_path).unwrap();
     let mut context = admission_context(&closure_root);
     context.invocation_root = InvocationRoot::Path(workspace.clone());
-    let admission = Admission::check(&loaded, &context).unwrap();
+    let admission = nixfied_runtime::admit_run(loaded.path(), &context).unwrap();
     assert_eq!(
-        admission.require_source().unwrap().observed_root,
+        admission.source().observed_root,
         workspace.canonicalize().unwrap()
     );
     fs::remove_dir(&workspace).unwrap();
-    let error = Admission::check(&loaded, &context).unwrap_err();
+    let error = nixfied_runtime::admit_run(loaded.path(), &context).unwrap_err();
     assert_eq!(error.code, ErrorCode::SourceMismatch);
     assert!(
         error
@@ -45,7 +45,7 @@ fn explicit_invocation_root_is_resolved_only_for_live_run_admission() {
         error.computed_manifest_hash.as_deref(),
         Some(loaded.computed_manifest_hash())
     );
-    Admission::check_for_control(&loaded, &context)
+    nixfied_runtime::admit_control(loaded.path(), &context)
         .expect("controls must ignore an unavailable invocation root");
 }
 
@@ -63,9 +63,9 @@ fn immutable_source_ignores_unavailable_invocation_root() {
     let loaded = load_manifest(&manifest_path).unwrap();
     let mut context = admission_context(&closure_root);
     context.invocation_root = InvocationRoot::Path(tmp.path.join("absent"));
-    let admission = Admission::check(&loaded, &context).unwrap();
+    let admission = nixfied_runtime::admit_run(loaded.path(), &context).unwrap();
     assert_eq!(
-        admission.require_source().unwrap().observed_root,
+        admission.source().observed_root,
         source.canonicalize().unwrap()
     );
 }
@@ -120,8 +120,8 @@ fn removed_cache_env_is_manifest_invalid_before_admission_or_lowering() {
 fn normal_admission_refuses_non_store_manifest() {
     let (_tmp, manifest_path, _closure) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let error = Admission::check(
-        &loaded,
+    let error = nixfied_runtime::admit_run(
+        loaded.path(),
         &AdmissionContext::current(StoreOriginPolicy::RequireStore),
     )
     .expect_err("non-store manifest must be refused");
@@ -148,10 +148,18 @@ fn normal_origin_refuses_non_store_before_parse() {
         host_system: host_system(),
     };
     fs::create_dir_all(&context.store_root).unwrap();
-    let error = nixfied_runtime::admission::origin::check_raw_store_origin(&raw, &context)
-        .expect_err("origin should gate before JSON parse");
-
-    assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
+    for result in [
+        nixfied_runtime::admit_run(&raw.path, &context).map(|_| ()),
+        nixfied_runtime::admit_control(&raw.path, &context).map(|_| ()),
+    ] {
+        let error = result.expect_err("origin should gate before JSON parse");
+        assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
+        assert_eq!(error.manifest_path.as_deref(), Some(raw.path.as_path()));
+        assert_eq!(
+            error.computed_manifest_hash.as_deref(),
+            Some(sha256_hex(b"{not json").as_str())
+        );
+    }
 }
 
 #[test]
@@ -175,7 +183,7 @@ fn origin_rejects_canonical_path_escape() {
         store_root: store,
         host_system: host_system(),
     };
-    let error = nixfied_runtime::admission::origin::check_raw_store_origin(&raw, &context)
+    let error = nixfied_runtime::admit_run(&raw.path, &context)
         .expect_err("canonical path outside store must fail");
 
     assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
@@ -194,13 +202,14 @@ fn unstable_escape_hatch_admits_non_store_manifest() {
             .to_path_buf(),
         host_system: host_system(),
     };
-    let admission = Admission::check(&loaded, &context).expect("escape hatch should admit fixture");
+    let admission = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect("escape hatch should admit fixture");
 
     assert_eq!(
-        admission.computed_manifest_hash,
+        admission.common().computed_manifest_hash(),
         loaded.computed_manifest_hash()
     );
-    assert_eq!(admission.project_id, "runtime-test");
+    assert_eq!(admission.common().project_id(), "runtime-test");
 }
 
 #[test]
@@ -208,15 +217,14 @@ fn source_admission_records_invocation_root() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let admission = Admission::check(&loaded, &context).expect("source should admit");
+    let admission =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect("source should admit");
     let invocation_root = std::env::current_dir()
         .expect("current dir should exist")
         .canonicalize()
         .expect("current dir should canonicalize");
 
-    let source = admission
-        .require_source()
-        .expect("run admission resolves a source");
+    let source = admission.source();
     assert_eq!(source.codebase_id, "main");
     assert_eq!(source.logical_root, ".");
     assert_eq!(source.observed_root, invocation_root);
@@ -237,8 +245,8 @@ fn lowering_failure_carries_manifest_provenance() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let error =
-        Admission::check(&loaded, &context).expect_err("undeclared step task must be refused");
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect_err("undeclared step task must be refused");
 
     assert_eq!(error.code, ErrorCode::ManifestAdmission);
     assert!(
@@ -252,31 +260,13 @@ fn lowering_failure_carries_manifest_provenance() {
 }
 
 #[test]
-fn control_admission_does_not_resolve_a_live_source() {
-    // Recovery (ps/down/clean) must admit from the store manifest alone, so control
-    // admission leaves the live workspace unresolved instead of failing when the
-    // caller is outside the project root or the workspace has gone.
-    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
-    let loaded = load_manifest(&manifest_path).expect("fixture should load");
-    let context = admission_context(&closure_root);
-    let admission =
-        Admission::check_for_control(&loaded, &context).expect("control admission should succeed");
-
-    assert!(admission.source.is_none());
-    assert_eq!(
-        admission.require_source().unwrap_err().code,
-        ErrorCode::SourceMismatch
-    );
-}
-
-#[test]
 fn dirty_policy_reject_fails_closed() {
     let mut manifest = fixture_manifest();
     manifest["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("dirtyPolicy=reject cannot be proven for live-workspace");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
@@ -300,10 +290,14 @@ fn env_var_secret_resolves_during_admission() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let admission = Admission::check(&loaded, &context).expect("secret should resolve");
+    let admission =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect("secret should resolve");
     unsafe { std::env::remove_var(&env_var) };
 
-    assert_eq!(admission.secrets.get("api-token"), Some("resolved-secret"));
+    assert_eq!(
+        admission.secrets().get("api-token"),
+        Some("resolved-secret")
+    );
 }
 
 #[test]
@@ -320,7 +314,8 @@ fn missing_secret_fails_admission_before_execution() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context).expect_err("missing secret must fail");
+    let error =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect_err("missing secret must fail");
 
     assert_eq!(error.code, ErrorCode::SecretUnavailable);
     assert_eq!(
@@ -343,7 +338,8 @@ fn empty_secret_material_is_unavailable() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context).expect_err("empty secret must fail");
+    let error =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect_err("empty secret must fail");
     unsafe { std::env::remove_var(&env_var) };
 
     assert_eq!(error.code, ErrorCode::SecretUnavailable);
@@ -367,10 +363,11 @@ fn file_secret_is_confined_and_normalized() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let admission = Admission::check(&loaded, &context).expect("file secret should resolve");
+    let admission =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect("file secret should resolve");
     unsafe { std::env::remove_var("NIXFIED_SECRETS_DIR") };
 
-    assert_eq!(admission.secrets.get("api-token"), Some("file-secret"));
+    assert_eq!(admission.secrets().get("api-token"), Some("file-secret"));
 }
 
 #[test]
@@ -381,7 +378,8 @@ fn undeclared_secret_reference_is_manifest_admission_error() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context).expect_err("undeclared secret must fail");
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect_err("undeclared secret must fail");
 
     assert_eq!(error.code, ErrorCode::ManifestAdmission);
 }
@@ -400,7 +398,8 @@ fn secret_reference_in_args_is_manifest_admission_error() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context).expect_err("arg secret must fail");
+    let error =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect_err("arg secret must fail");
     unsafe { std::env::remove_var(&env_var) };
 
     assert_eq!(error.code, ErrorCode::ManifestAdmission);
@@ -427,8 +426,9 @@ fn snapshot_source_admits_immutable_store_root_with_reject() {
         host_system: host_system(),
     };
 
-    let admission = Admission::check(&loaded, &context).expect("snapshot source should admit");
-    let source = admission.require_source().expect("source should resolve");
+    let admission =
+        nixfied_runtime::admit_run(loaded.path(), &context).expect("snapshot source should admit");
+    let source = admission.source();
 
     assert_eq!(source.source_mode, nixfied_manifest::SourceMode::Snapshot);
     assert_eq!(
@@ -456,8 +456,9 @@ fn flake_input_source_admits_immutable_store_root() {
         host_system: host_system(),
     };
 
-    let admission = Admission::check(&loaded, &context).expect("flake input source should admit");
-    let source = admission.require_source().expect("source should resolve");
+    let admission = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect("flake input source should admit");
+    let source = admission.source();
 
     assert_eq!(source.source_mode, nixfied_manifest::SourceMode::FlakeInput);
     assert_eq!(source.observed_root, source_root.canonicalize().unwrap());
@@ -476,7 +477,7 @@ fn immutable_source_must_be_under_store_root() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("immutable source outside store root must fail");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
@@ -502,8 +503,8 @@ fn immutable_source_logical_root_escape_is_rejected() {
         host_system: host_system(),
     };
 
-    let error =
-        Admission::check(&loaded, &context).expect_err("immutable logicalRoot escape must fail");
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect_err("immutable logicalRoot escape must fail");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
 }
@@ -515,7 +516,7 @@ fn logical_root_escape_is_rejected() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("logicalRoot must not escape invocation root");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
@@ -529,7 +530,8 @@ fn protected_persistent_state_is_valid_manifest_data() {
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
     let loaded = load_manifest(&manifest_path).expect("protected persistent state should load");
     let context = admission_context(&closure_root);
-    Admission::check(&loaded, &context).expect("protected persistent state should admit");
+    nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect("protected persistent state should admit");
 
     assert_eq!(
         loaded.manifest().state.cleanup_policy,
@@ -565,7 +567,8 @@ fn missing_closure_is_rejected() {
             .to_path_buf(),
         host_system: host_system(),
     };
-    let error = Admission::check(&loaded, &context).expect_err("missing closure should fail");
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect_err("missing closure should fail");
 
     assert_eq!(error.code, ErrorCode::ClosureMissing);
 }
@@ -605,7 +608,8 @@ fn closure_store_path_escape_is_rejected() {
         store_root: store,
         host_system: host_system(),
     };
-    let error = Admission::check(&loaded, &context).expect_err("escaped closure path should fail");
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
+        .expect_err("escaped closure path should fail");
 
     assert_eq!(error.code, ErrorCode::ClosureMissing);
 }
@@ -622,7 +626,7 @@ fn invocation_executable_must_match_run_resolution() {
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("invocation executable mismatch should fail");
 
     assert_eq!(error.code, ErrorCode::ManifestAdmission);
@@ -645,7 +649,7 @@ fn exec_bound_closure_without_executable_bit_is_rejected() {
     fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("non-executable exec-bound closure should fail");
 
     assert_eq!(error.code, ErrorCode::ClosureMissing);
@@ -658,7 +662,7 @@ fn target_os_and_arch_must_match_host() {
         manifest["target"][field] = json!("definitely-not-this-host");
         let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
         let loaded = load_manifest(&manifest_path).expect("fixture should load");
-        let error = Admission::check(&loaded, &admission_context(&closure_root))
+        let error = nixfied_runtime::admit_run(loaded.path(), &admission_context(&closure_root))
             .expect_err("target mismatch should fail");
         assert_eq!(error.code, ErrorCode::PlatformUnsupported, "field {field}");
     }
@@ -680,7 +684,7 @@ fn symlinked_closure_executable_is_admitted() {
     std::os::unix::fs::symlink(&real, &declared).unwrap();
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
-    Admission::check(&loaded, &context).expect("symlinked executable should admit");
+    nixfied_runtime::admit_run(loaded.path(), &context).expect("symlinked executable should admit");
 }
 
 #[test]
@@ -695,7 +699,7 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
     let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = admission_context(&closure_root);
 
-    let error = Admission::check(&loaded, &context)
+    let error = nixfied_runtime::admit_run(loaded.path(), &context)
         .expect_err("symlink target outside the store root should fail");
 
     assert_eq!(error.code, ErrorCode::ClosureMissing);

@@ -112,7 +112,7 @@ fn slot_one_marker_records_selected_identity() {
     let layout = derive_host_placement_for_slot(&manifest, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
     materialize_run_roots(&layout).expect("roots should materialize");
-    let identity = StateIdentity::from_selected_slot(&manifest, &admission, &selected);
+    let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
 
     let marker = commit_slot_marker(&layout, &identity).expect("marker should be written");
 
@@ -981,7 +981,7 @@ impl StateFixture {
         let layout =
             derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
-        let identity = StateIdentity::from_manifest(&manifest, &admission);
+        let identity = StateIdentity::from_admission(admission.common());
         commit_slot_marker(&layout, &identity).expect("marker should be written");
         Self {
             tmp,

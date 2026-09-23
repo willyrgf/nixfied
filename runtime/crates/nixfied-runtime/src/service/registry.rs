@@ -5,7 +5,7 @@ use crate::execution::ServiceIdentity;
 use nixfied_manifest::ServiceLifetime;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-use crate::admission::Admission;
+use crate::admission::RunAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{BorrowedEvent, insert_event};
 use crate::registry::leases::lease_ttl_modifier;
@@ -254,10 +254,10 @@ fn insert_active_lease(
 pub fn record_run_created(
     registry: &mut Registry,
     run_id: &str,
-    admission: &Admission,
+    admission: &RunAdmission,
     placement: &HostPlacement,
 ) -> RuntimeResult<()> {
-    let source_json = serde_json::to_string(&admission.source).map_err(json_error)?;
+    let source_json = serde_json::to_string(&admission.source()).map_err(json_error)?;
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
@@ -275,12 +275,12 @@ pub fn record_run_created(
                 identity.environment.as_str(),
                 identity.slot,
                 RunStatus::ServiceStarting.as_str(),
-                admission.manifest_path.display().to_string(),
-                admission.computed_manifest_hash.as_str(),
-                admission.runtime_abi.as_str(),
-                admission.toolchain_id.as_str(),
-                admission.generator_json.as_str(),
-                admission.target_json.as_str(),
+                admission.common().manifest_path().display().to_string(),
+                admission.common().computed_manifest_hash(),
+                admission.common().runtime_abi(),
+                admission.common().toolchain_id(),
+                admission.common().generator_json(),
+                admission.common().target_json(),
                 source_json,
                 placement.summary_path.display().to_string(),
             ],
@@ -295,7 +295,7 @@ pub fn record_run_created(
             run_id: Some(run_id),
             service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(&admission.computed_manifest_hash),
+            computed_manifest_hash: Some(admission.common().computed_manifest_hash()),
             payload_json: "{}",
         },
     )?;

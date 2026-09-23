@@ -14,7 +14,7 @@ use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
     derive_host_placement, materialize_registry_root, materialize_run_roots, prepare_slot_state,
 };
-use nixfied_runtime::{Admission, ErrorCode};
+use nixfied_runtime::{ErrorCode, RunAdmission};
 use serde_json::Value;
 
 mod common;
@@ -97,7 +97,7 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
     let epoch2_manifest: Manifest =
         serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
     let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
-    let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
+    let epoch2_identity = StateIdentity::from_admission(epoch2_admission.common());
 
     let report = fixture
         .prepare("run-2", &epoch2_identity)
@@ -210,7 +210,7 @@ fn epoch_change_on_protected_state_refuses_upgrade_clean() {
     let epoch2_manifest: Manifest =
         serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
     let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
-    let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
+    let epoch2_identity = StateIdentity::from_admission(epoch2_admission.common());
 
     let error = fixture
         .prepare("run-2", &epoch2_identity)
@@ -236,7 +236,7 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let admission_a = admission(&manifest, &tmp.path, false);
     let placement = derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
     materialize_run_roots(&placement).expect("roots should materialize");
-    let identity_a = StateIdentity::from_manifest(&manifest, &admission_a);
+    let identity_a = StateIdentity::from_admission(admission_a.common());
     commit_slot_marker(&placement, &identity_a).expect("marker should be written");
     let mut registry = open_registry(&placement, &manifest);
     let service = start_synthetic_service(
@@ -252,7 +252,7 @@ fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let process_key = service.process_key.clone();
 
     let admission_b = admission(&manifest, &tmp.path, true);
-    let identity_b = StateIdentity::from_manifest(&manifest, &admission_b);
+    let identity_b = StateIdentity::from_admission(admission_b.common());
     let placement_b = derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
     let report = prepare_slot_state(&placement_b, &identity_b, &mut registry, 5000)
         .expect("upgrade should tear down the old manifest's live service");
@@ -391,7 +391,7 @@ impl UpgradeFixture {
 
     fn identity(&self, pretty: bool) -> StateIdentity {
         let admission = admission(&self.manifest, &self.tmp.path, pretty);
-        StateIdentity::from_manifest(&self.manifest, &admission)
+        StateIdentity::from_admission(admission.common())
     }
 
     fn placement(&self, run_id: &str) -> HostPlacement {
@@ -492,7 +492,7 @@ fn expected_hash(manifest: &Manifest, pretty: bool) -> String {
     hex::encode(Sha256::digest(manifest_bytes(manifest, pretty)))
 }
 
-fn admission(manifest: &Manifest, source_root: &Path, pretty: bool) -> Admission {
+fn admission(manifest: &Manifest, source_root: &Path, pretty: bool) -> RunAdmission {
     common::admit_fixture_bytes(
         &manifest_bytes(manifest, pretty),
         source_root,

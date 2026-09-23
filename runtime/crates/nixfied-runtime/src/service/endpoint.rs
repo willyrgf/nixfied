@@ -1444,6 +1444,7 @@ mod tests {
 
     #[test]
     fn unsafe_lock_root_fails_the_real_start_path_before_prepare() {
+        use crate::ErrorCode;
         use crate::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
         use crate::cancellation::CancellationToken;
         use crate::registry::{Registry, RegistryIdentity};
@@ -1451,7 +1452,6 @@ mod tests {
         use crate::service::record_run_created;
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
-        use crate::{Admission, ErrorCode};
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
         use nixfied_manifest::{Manifest, ServiceLifetime};
         use serde_json::json;
@@ -1479,10 +1479,9 @@ mod tests {
         let manifest: Manifest = serde_json::from_value(value).unwrap();
         let manifest_path = workspace.0.join("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let loaded = crate::manifest_loader::load_manifest(&manifest_path).unwrap();
         let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
         context.invocation_root = InvocationRoot::Path(workspace.0.clone());
-        let admission = Admission::check(&loaded, &context).unwrap();
+        let admission = crate::admit_run(&manifest_path, &context).unwrap();
         let selected = select_slot(&manifest, None).unwrap();
         let placement = derive_host_placement_for_slot(
             &manifest,

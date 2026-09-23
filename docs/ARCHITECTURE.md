@@ -89,6 +89,16 @@ mode:
   every manifest/runtime contract change, while numeric versions change only for
   their separately defined semantics.
 
+The Rust admission APIs own their input document. `admit_run` and `admit_control`
+read and hash the manifest, reject its origin before parsing, and construct private
+admission values only after the applicable checks and lowering succeed.
+`ControlAdmission` owns immutable document, provenance, and execution facts;
+`RunAdmission` additionally owns required source and resolved secrets. Child
+execution requires the run type; recovery consumes the common control type and
+does not resolve source or secret values. Neither exposes mutable proof fields.
+The manifest crate's `ValidatedManifest` is the structural prerequisite for
+lowering; it does not claim host admission.
+
 ## Shared contracts and the static reference
 
 Adopters use ordinary Nix modules and the public library. The private declaration
