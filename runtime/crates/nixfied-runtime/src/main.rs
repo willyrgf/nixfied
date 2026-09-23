@@ -61,15 +61,11 @@ struct RunSession<'a> {
 
 struct FailureAccumulator {
     primary: Option<RuntimeError>,
-    causes: Vec<RuntimeCause>,
 }
 
 impl FailureAccumulator {
     fn new() -> Self {
-        Self {
-            primary: None,
-            causes: Vec::new(),
-        }
+        Self { primary: None }
     }
 
     fn is_empty(&self) -> bool {
@@ -81,29 +77,34 @@ impl FailureAccumulator {
             self.primary = Some(error);
             return;
         };
+        let mut error = error;
         if failure_priority(error.code) > failure_priority(primary.code) {
-            let mut error = error;
-            let incoming = std::mem::take(&mut error.causes);
-            error.causes.extend(*incoming);
             error.causes.extend(primary.causes.drain(..));
-            error.causes.extend(self.causes.drain(..));
             error.causes.push(RuntimeCause::from_error(primary));
             self.primary = Some(error);
         } else {
-            let mut error = error;
-            let incoming = std::mem::take(&mut error.causes);
-            self.causes.extend(*incoming);
-            self.causes.push(RuntimeCause::from_error(error));
+            primary.causes.extend(error.causes.drain(..));
+            primary.causes.push(RuntimeCause::from_error(error));
             self.primary = Some(primary);
         }
     }
 
     fn finish(self, output: RunOutput) -> Result<RunOutput, RuntimeError> {
-        let Some(mut primary) = self.primary else {
+        let Some(primary) = self.primary else {
             return Ok(output);
         };
-        primary.causes.extend(self.causes);
         Err(primary)
+    }
+}
+
+fn record_cancellation_once(
+    cancellation: &CancellationToken,
+    recorded: &mut bool,
+    failures: &mut FailureAccumulator,
+) {
+    if !*recorded && cancellation.is_canceled() {
+        failures.push(nixfied_runtime::cancellation::canceled_error());
+        *recorded = true;
     }
 }
 
@@ -120,7 +121,6 @@ fn failure_priority(code: nixfied_runtime::ErrorCode) -> u8 {
 impl<'a> RunSession<'a> {
     fn finalize(mut self, initial_error: Option<RuntimeError>) -> Result<RunOutput, RuntimeError> {
         let had_initial_outcome = initial_error.is_some();
-        let cancellation_seen = self.cancellation.is_canceled();
         let mut cancellation_recorded = initial_error
             .as_ref()
             .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
@@ -128,9 +128,8 @@ impl<'a> RunSession<'a> {
         if let Some(error) = initial_error {
             failures.push(error);
         }
-        if !had_initial_outcome && cancellation_seen {
-            failures.push(nixfied_runtime::cancellation::canceled_error());
-            cancellation_recorded = true;
+        if !had_initial_outcome {
+            record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
         }
         for error in self.diagnostic_failures.drain(..) {
             failures.push(error);
@@ -141,9 +140,7 @@ impl<'a> RunSession<'a> {
         {
             failures.push(error);
         }
-        if self.cancellation.is_canceled() && !cancellation_recorded {
-            failures.push(nixfied_runtime::cancellation::canceled_error());
-        }
+        record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
 
         let services = {
             let mut services = self.extra_services;
@@ -179,9 +176,7 @@ impl<'a> RunSession<'a> {
         {
             failures.push(error);
         }
-        if self.cancellation.is_canceled() && !cancellation_recorded {
-            failures.push(nixfied_runtime::cancellation::canceled_error());
-        }
+        record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
         canceled |= self.cancellation.is_canceled()
             || failures
                 .primary

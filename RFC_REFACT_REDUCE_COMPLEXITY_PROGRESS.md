@@ -71,7 +71,19 @@ removed state owners, coordinated change sites, and capture correctness addition
    concurrent creators, metadata-insert rollback, denied version-write rollback,
    and process loss at SQLite's commit hook followed by reopen. All 18 registry
    tests, all 26 state tests, and workspace/all-target Clippy pass on Linux.
-5. Finalization error/cancellation ownership: pending.
+5. Finalization error/cancellation ownership: the primary error now owns every
+   cause; the secondary accumulator is deleted. A nine-pair literal priority
+   matrix covers equal-priority retention and existing/nested cause order.
+   Finalizer cancellation observation updates its flag at every checkpoint.
+   A real blocked-replay signal test proves exactly one cancellation diagnostic,
+   complete replay, and no active service/lease/port rows after teardown. Removing
+   the flag update made that test fail with two cancellation diagnostics, then
+   restoring it passed. Contract, descriptor, native coverage, and independent
+   ABI snapshot updated atomically. All 19 output tests, seven binary tests,
+   32 manifest tests, Clippy, and formatting pass on Linux. Cross-layer `.#check`
+   is running as session `77914`, log `/tmp/nixfied-complexity-finalization-check.log`;
+   poll that handle before deciding its outcome. The full current-tree
+   fixture floor and downstream gate remain required for final acceptance.
 6. Closed loaded/admitted construction: pending.
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.

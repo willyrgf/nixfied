@@ -308,3 +308,59 @@ fn native_early_projection_scans_the_last_operand_bearing_output() {
         assert_eq!(error_output_projection(&command_args(&args)), expected);
     }
 }
+
+#[test]
+fn failure_merge_preserves_priority_and_flattened_cause_order() {
+    use nixfied_runtime::ErrorCode::{OutputProjectionFailed, RegistryCorrupt, TaskFailed};
+    // Literal priority ranks are the independent oracle, not failure_priority().
+    for (old_code, old_rank) in [
+        (TaskFailed, 1),
+        (OutputProjectionFailed, 2),
+        (RegistryCorrupt, 3),
+    ] {
+        for (new_code, new_rank) in [
+            (TaskFailed, 1),
+            (OutputProjectionFailed, 2),
+            (RegistryCorrupt, 3),
+        ] {
+            let mut old = RuntimeError::new(old_code, "old").with_detail("task", "old");
+            old.causes.push(RuntimeCause::from_error(
+                RuntimeError::new(TaskFailed, "nested").with_detail("task", "old-nested"),
+            ));
+            let mut new = RuntimeError::new(new_code, "new").with_detail("task", "new");
+            new.causes.push(RuntimeCause::from_error(
+                RuntimeError::new(TaskFailed, "nested").with_detail("task", "new-nested"),
+            ));
+            let mut failures = FailureAccumulator::new();
+            failures.push(old);
+            failures.push(RuntimeError::new(TaskFailed, "earlier").with_detail("task", "earlier"));
+            failures.push(new);
+            let primary = failures.primary.unwrap();
+            let (code, message, expected) = if new_rank > old_rank {
+                (
+                    new_code,
+                    "new",
+                    vec!["new-nested", "old-nested", "earlier", "old"],
+                )
+            } else {
+                (
+                    old_code,
+                    "old",
+                    vec!["old-nested", "earlier", "new-nested", "new"],
+                )
+            };
+            assert_eq!(primary.code, code);
+            assert_eq!(primary.message, message);
+            let json = serde_json::to_value(&primary).unwrap();
+            let causes = json["causes"].as_array().unwrap();
+            assert_eq!(
+                causes
+                    .iter()
+                    .map(|cause| cause["details"]["task"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(causes.iter().all(|cause| cause.get("causes").is_none()));
+        }
+    }
+}
