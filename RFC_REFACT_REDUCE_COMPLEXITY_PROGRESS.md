@@ -469,8 +469,25 @@ removed state owners, coordinated change sites, and capture correctness addition
    original intent/terminal row, purge event flags, and deleted state.
    Clippy, 15 registry tests, and 23 state tests pass
    (`/tmp/nixfied-registry-fixture-tables.log`); fewer test functions contain all
-   original scenario inputs and modes. Remaining fixture work: broader CLI
-   adoption where cohesive.
+   original scenario inputs and modes. Five additional composite/control CLI
+   scenarios now use RuntimeFixture; lifecycle reuses common runtime_binary.
+   The control identity-mismatch proof no longer acquires an unused TCP port.
+   Environment-selected state-root tests and commands exercising distinct explicit
+   state bases retain their purposeful command setup; endpoint's environment-root
+   builder remains separate from the shared fixture's explicit --state-base policy.
+   Clippy and all 73 service tests pass (`/tmp/nixfied-cli-fixture-adoption.log`).
+   Architect's implementation-scope audit found no further production omissions;
+   conditional/deferred investigations remain as specified by the RFC.
+
+   Full fixture floor session `24863` failed once because the shutdown-signal test
+   did not observe its initial service marker. Its assertion discarded diagnostics,
+   so the cause is unproven. The test now signals/reaps its child on a missing
+   marker and reports status/stdout/stderr without changing its deadlines or success
+   assertions. Two subsequent complete service suites passed, including that case
+   (`/tmp/nixfied-shutdown-diagnostic-suite.log`,
+   `/tmp/nixfied-cli-fixture-adoption.log`). The complete fixture-backed floor is
+   running again as session `2926` (`/tmp/nixfied-refactor-final-floor.log`).
+   This is additional evidence gathering, not a claimed root-cause fix.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed
 test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release

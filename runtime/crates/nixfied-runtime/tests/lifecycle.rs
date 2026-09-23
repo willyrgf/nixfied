@@ -1,5 +1,4 @@
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -197,16 +196,4 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         !state_root.exists(),
         "clean should have removed the state root"
     );
-}
-
-fn runtime_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_nixfied-runtime") {
-        return PathBuf::from(path);
-    }
-    let current = std::env::current_exe().expect("current test executable should be known");
-    current
-        .parent()
-        .and_then(Path::parent)
-        .expect("test binary should be inside target profile directory")
-        .join("nixfied-runtime")
 }

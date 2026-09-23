@@ -1673,14 +1673,23 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
         .args(["--output", "json"])
         .spawn()
         .expect("runtime run should spawn");
-    assert!(
-        wait_for_path(&started, Duration::from_secs(3)),
-        "service should start before shutdown proof"
-    );
-    assert!(
-        wait_for_path(&stopping, Duration::from_secs(5)),
-        "service should enter stop handling before signal"
-    );
+    for (path, timeout, phase) in [
+        (&started, Duration::from_secs(3), "service start"),
+        (&stopping, Duration::from_secs(5), "service shutdown"),
+    ] {
+        if !wait_for_path(path, timeout) {
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+            }
+            let output = wait_for_child_output(child, Duration::from_secs(6));
+            panic!(
+                "{phase} marker missing before signal proof\nstatus: {}\nstdout: {}\nstderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
     let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
     let output = wait_for_child_output(child, Duration::from_secs(6));
@@ -4832,32 +4841,18 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     let manifest: Manifest =
         serde_json::from_value(value).expect("nested fixture manifest should parse");
 
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(&manifest);
 
-    let child = Command::new(runtime_binary())
-        .arg("run")
+    let child = fixture
+        .command("run", &[])
         .arg("--task")
         .arg("outer")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
         .args(["--output", "json"])
-        .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("runtime should spawn");
-    let registry_path = wait_for_task_process_row(&state_base, Duration::from_secs(5));
+    let registry_path = wait_for_task_process_row(&fixture.state_base, Duration::from_secs(5));
     assert!(
         wait_for_path(&started, Duration::from_secs(3)),
         "nested task descendant should start before cancellation"
@@ -5146,27 +5141,13 @@ fn composite_starts_full_service_union_before_first_node() {
     let manifest: Manifest =
         serde_json::from_value(value).expect("eager fixture manifest should parse");
 
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(&manifest);
 
-    let output = Command::new(runtime_binary())
-        .arg("run")
+    let output = fixture
+        .command("run", &[])
         .arg("--task")
         .arg("pipeline")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
         .args(["--output", "json"])
-        .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -5365,26 +5346,12 @@ fn failed_composite_run_writes_failure_summary() {
     });
     let manifest: Manifest =
         serde_json::from_value(value).expect("failure fixture manifest should parse");
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(&manifest);
 
-    let output = Command::new(runtime_binary())
-        .arg("run")
+    let output = fixture
+        .command("run", &[])
         .arg("--task")
         .arg("wf")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
-        .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
 
@@ -5405,7 +5372,7 @@ fn failed_composite_run_writes_failure_summary() {
         "summary failure output should not append JSON error payload: {stderr_text}"
     );
     let summary_path =
-        find_named(&state_base, "run-summary.json").expect("run summary should exist");
+        find_named(&fixture.state_base, "run-summary.json").expect("run summary should exist");
     let summary: Value =
         serde_json::from_slice(&fs::read(&summary_path).expect("run summary should exist"))
             .expect("run summary should parse");
@@ -5422,7 +5389,7 @@ fn failed_composite_run_writes_failure_summary() {
         .expect("summary must link the failed task stdout");
     assert!(PathBuf::from(stdout_path).exists());
 
-    let json_state_base = tmp.path.join("state-json");
+    let json_state_base = fixture.tmp.path.join("state-json");
     fs::create_dir_all(&json_state_base).expect("json state base should be created");
     let json_output = Command::new(runtime_binary())
         .arg("run")
@@ -5430,11 +5397,11 @@ fn failed_composite_run_writes_failure_summary() {
         .arg("wf")
         .arg("--allow-non-store-manifest")
         .arg("--manifest")
-        .arg(&manifest_path)
+        .arg(&fixture.manifest_path)
         .arg("--state-base")
         .arg(&json_state_base)
         .args(["--output", "json"])
-        .current_dir(&tmp.path)
+        .current_dir(&fixture.tmp.path)
         .output()
         .expect("runtime run should execute");
 
@@ -5464,7 +5431,7 @@ fn failed_composite_run_writes_failure_summary() {
         .expect("error must link the run summary");
     assert!(PathBuf::from(json_summary_path).exists());
 
-    let both_state_base = tmp.path.join("state-both");
+    let both_state_base = fixture.tmp.path.join("state-both");
     fs::create_dir_all(&both_state_base).expect("both state base should be created");
     let both_output = Command::new(runtime_binary())
         .arg("run")
@@ -5472,11 +5439,11 @@ fn failed_composite_run_writes_failure_summary() {
         .arg("wf")
         .arg("--allow-non-store-manifest")
         .arg("--manifest")
-        .arg(&manifest_path)
+        .arg(&fixture.manifest_path)
         .arg("--state-base")
         .arg(&both_state_base)
         .args(["--output", "both"])
-        .current_dir(&tmp.path)
+        .current_dir(&fixture.tmp.path)
         .output()
         .expect("runtime run should execute");
 
@@ -5534,27 +5501,13 @@ fn service_failure_before_any_node_writes_failed_summary() {
         });
         let manifest: Manifest =
             serde_json::from_value(value).expect("failure fixture manifest should parse");
-        let tmp = TempDir::new();
-        let manifest_path = tmp.path.join("manifest.json");
-        let state_base = tmp.path.join("state");
-        fs::create_dir_all(&state_base).expect("state base should be created");
-        fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-        )
-        .expect("manifest should be written");
+        let fixture = RuntimeFixture::new(&manifest);
 
-        let output = Command::new(runtime_binary())
-            .arg("run")
+        let output = fixture
+            .command("run", &[])
             .arg("--task")
             .arg("wf")
-            .arg("--allow-non-store-manifest")
-            .arg("--manifest")
-            .arg(&manifest_path)
-            .arg("--state-base")
-            .arg(&state_base)
             .args(["--output", "json"])
-            .current_dir(&tmp.path)
             .output()
             .expect("runtime run should execute");
 
@@ -5603,23 +5556,14 @@ fn service_failure_before_any_node_writes_failed_summary() {
 
 #[test]
 fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    let value = test_child_fixture_value(&["block"], port);
+    let value = test_child_fixture_value(&["block"], 23180);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(&manifest);
 
     let selected_slot = select_slot(&manifest, None).expect("slot should select");
-    let placement = derive_host_placement_for_slot(&manifest, &selected_slot, "setup", &state_base)
-        .expect("placement should derive");
+    let placement =
+        derive_host_placement_for_slot(&manifest, &selected_slot, "setup", &fixture.state_base)
+            .expect("placement should derive");
     Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
@@ -5632,14 +5576,8 @@ fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
     )
     .expect("mismatched registry should be created");
 
-    let output = Command::new(runtime_binary())
-        .arg("ps")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
-        .current_dir(&tmp.path)
+    let output = fixture
+        .command("ps", &[])
         .output()
         .expect("runtime ps should execute");
 
