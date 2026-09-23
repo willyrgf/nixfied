@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+pub use crate::template::Template;
 use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
-pub use nixfied_manifest::{LoopbackHost, StdinPolicy, StopSignal};
+pub use nixfied_manifest::{Endpoint, LoopbackHost, StdinPolicy, StopSignal};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
 /// contract — never supplied by the manifest. The four components hash the endpoint,
@@ -29,28 +30,39 @@ pub struct ServiceIdentity {
 /// shared references so graph validity cannot be invalidated after admission.
 #[derive(Debug, Clone)]
 pub struct ExecutionManifest {
-    pub(super) services: BTreeMap<ServiceId, ExecService>,
-    pub(super) tasks: BTreeMap<TaskId, ExecutableTask>,
-    pub(super) slot_windows: BTreeMap<u32, PortWindow>,
+    pub(super) program: Program,
+}
+
+/// Candidate storage is moved, not copied, into the admitted program after proof.
+#[derive(Debug, Clone)]
+pub(super) struct Program {
+    pub services: BTreeMap<ServiceId, ExecService>,
+    pub tasks: BTreeMap<TaskId, ExecutableTask>,
+    pub slot_windows: BTreeMap<u32, PortWindow>,
 }
 
 impl ExecutionManifest {
     pub fn services(&self) -> &BTreeMap<ServiceId, ExecService> {
-        &self.services
+        &self.program.services
     }
-
     pub fn tasks(&self) -> &BTreeMap<TaskId, ExecutableTask> {
-        &self.tasks
+        &self.program.tasks
     }
+    pub fn leaf(&self, task: &str) -> Option<&ExecTask> {
+        self.program.leaf(task)
+    }
+    pub fn task_ids(&self) -> impl Iterator<Item = &TaskId> {
+        self.program.task_ids()
+    }
+}
 
+impl Program {
     pub fn leaf(&self, task: &str) -> Option<&ExecTask> {
         match self.tasks.get(task)? {
             ExecutableTask::Leaf(leaf) => Some(leaf),
             ExecutableTask::Composite(_) => None,
         }
     }
-
-    /// Retain the established leaf-then-composite diagnostic/proof order.
     pub fn task_ids(&self) -> impl Iterator<Item = &TaskId> {
         self.tasks
             .iter()
@@ -129,7 +141,7 @@ pub struct ExecService {
     /// The loopback endpoints the service binds, keyed by endpointId. Each is
     /// assigned a port from the service's contiguous slot block, reserved, and
     /// ownership-verified.
-    pub endpoints: BTreeMap<String, ResolvedEndpoint>,
+    pub endpoints: BTreeMap<String, Endpoint>,
     /// The endpoint bare `${port}`/`${host}` and the tcp readiness/health probe
     /// resolve to, and the one a `connectsTo` dependent reaches by service id. A
     /// key in `endpoints`; `None` for an endpoint-less service.
@@ -173,7 +185,7 @@ pub struct HealthOp {
 /// unrepresentable past admission.
 #[derive(Debug, Clone)]
 pub enum Probe {
-    Tcp(TcpProbe),
+    Tcp(ProbePolicy),
     Exec(ExecProbe),
 }
 
@@ -182,11 +194,8 @@ pub enum Probe {
 /// timeout does not apply to probe attempts.
 #[derive(Debug, Clone)]
 pub struct ExecProbe {
-    pub label: String,
     pub exec: ResolvedInvocation,
-    pub timeout: Duration,
-    pub retry_interval: Duration,
-    pub max_attempts: NonZeroU32,
+    pub policy: ProbePolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -202,19 +211,41 @@ pub struct CleanOp {
 }
 
 /// A resolved invocation: the eval-resolved executable, the argv tail
-/// (`run[1..]`), environment, confined relative working directory, timeout,
+/// (`run[1..]`), environment, confined relative working directory,
 /// and the tool PATH roots (each tool executable's parent directory, in
 /// declared order) the runtime assembles the child PATH from.
 /// `${port}`/`${stateDir}`/`${host}` are substituted at run time.
 #[derive(Debug, Clone)]
 pub struct ResolvedInvocation {
     pub executable: String,
-    pub args: Vec<String>,
-    pub env: BTreeMap<String, String>,
-    pub cwd: String,
+    pub args: Vec<Template>,
+    pub env: BTreeMap<String, Template>,
+    pub cwd: RelativeCwd,
     pub stdin: StdinPolicy,
-    pub timeout: Duration,
     pub tool_roots: Vec<String>,
+}
+
+/// Lexically confined at lowering; filesystem confinement is rechecked at every spawn.
+#[derive(Debug, Clone)]
+pub struct RelativeCwd(String);
+
+impl RelativeCwd {
+    pub(super) fn new(value: &str) -> Option<Self> {
+        use std::path::{Component, Path};
+        (!value.is_empty()
+            && !value.contains('\0')
+            && !Path::new(value).components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            }))
+        .then(|| Self(value.to_string()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl ResolvedInvocation {
@@ -233,28 +264,20 @@ impl ResolvedInvocation {
     }
 }
 
-/// A tcp-connect probe of the service's single bound endpoint; `label` only names
-/// the op (ready/health) in diagnostics. No http target, no cross-endpoint ref.
+/// One probe attempt deadline and retry schedule; the mechanism owns this policy.
 #[derive(Debug, Clone)]
-pub struct TcpProbe {
+pub struct ProbePolicy {
     pub label: String,
     pub timeout: Duration,
     pub retry_interval: Duration,
     pub max_attempts: NonZeroU32,
 }
 
-/// The endpoint the runtime binds and verifies ownership of. The port is assigned
-/// by the planner from the slot window, so it is not part of the endpoint.
-#[derive(Debug, Clone)]
-pub struct ResolvedEndpoint {
-    pub endpoint_id: String,
-    pub host: LoopbackHost,
-}
-
 /// A resolved leaf task: its invocation, the services it requires ready while
 /// it runs, and its success codes.
 #[derive(Debug, Clone)]
 pub struct ExecTask {
+    pub timeout: Duration,
     pub task_id: TaskId,
     pub service_lifetime: ServiceLifetime,
     pub exec: ResolvedInvocation,

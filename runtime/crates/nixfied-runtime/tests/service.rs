@@ -146,7 +146,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
 }
 
 #[test]
-fn service_start_rejects_exec_cwd_escape() {
+fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23180);
     fixture
         .manifest
@@ -156,8 +156,13 @@ fn service_start_rejects_exec_cwd_escape() {
         .lifecycle
         .start
         .invocation
-        .cwd = "..".to_string();
+        .cwd = "work".to_string();
+    let work = fixture.admission.source().observed_root.join("work");
+    fs::create_dir(&work).unwrap();
     fixture.readmit();
+    fs::remove_dir(&work).unwrap();
+    let outside = TempDir::new();
+    std::os::unix::fs::symlink(&outside.path, &work).unwrap();
 
     let error = match start_synthetic_service(
         &fixture.manifest,
@@ -1124,6 +1129,63 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         )
         .expect("process status should query");
     assert_eq!(process_status, "failed");
+}
+
+#[test]
+fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout() {
+    for acknowledge in [true, false] {
+        let port = available_port_window(1);
+        let child = test_child();
+        let mut value = exec_probe_fixture_value(
+            child.to_str().unwrap(),
+            &["listen", "127.0.0.1", "${port}", "hold"],
+            port,
+            json!([
+                "-c",
+                ": > \"$1\"; while ! test -e \"$2\"; do :; done",
+                "probe",
+                "${stateDir}/attempt",
+                "${stateDir}/ack"
+            ]),
+            1,
+        );
+        value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["timeoutMs"] =
+            json!(if acknowledge { 2000 } else { 50 });
+        value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["timeoutMs"] =
+            json!(if acknowledge { 1 } else { 30000 });
+        let mut fixture = ServiceFixture::from_value(value);
+        let mut service = start_synthetic_service(
+            &fixture.manifest,
+            &fixture.admission,
+            &fixture.placement,
+            &mut fixture.registry,
+            "probe-deadline",
+            port,
+        )
+        .unwrap();
+        let root = fixture.placement.state_root.clone();
+        let acknowledger = acknowledge.then(|| {
+            thread::spawn(move || {
+                assert!(wait_for_path(&root.join("attempt"), Duration::from_secs(5)));
+                thread::sleep(Duration::from_millis(100));
+                fs::write(root.join("ack"), b"ready").unwrap();
+            })
+        });
+        let result = service.wait_for_probe_ready(&mut fixture.registry);
+        if let Some(acknowledger) = acknowledger {
+            acknowledger.join().unwrap();
+            result.expect("the invocation's 1ms timeout must not truncate the probe attempt");
+            service.stop(&mut fixture.registry, 1000).unwrap();
+        } else {
+            let error = result.expect_err("the probe deadline must terminate a blocked attempt");
+            assert!(
+                error.message.contains("timed out after 50ms"),
+                "{}",
+                error.message
+            );
+            service.finalize_failed_start(&mut fixture.registry, 1000, error);
+        }
+    }
 }
 
 #[test]

@@ -72,27 +72,19 @@ let
       [ service.endpoint.endpointId ]
     else
       builtins.attrNames service.endpoints;
-  invocationValues = invocation: invocation.run ++ builtins.attrValues invocation.env;
-  refsAfterPrefix =
-    prefix: value:
-    lib.concatMap (
-      part:
-      let
-        split = lib.splitString "}" part;
-      in
-      if builtins.length split > 1 then [ (builtins.head split) ] else [ ]
-    ) (builtins.tail (lib.splitString prefix value));
-  secretRefs = refsAfterPrefix "\${secret:";
-  hasSecretRefSyntax = value: lib.hasInfix "\${secret:" value;
-  secretRefMalformed =
-    value:
-    lib.any (part: builtins.length (lib.splitString "}" part) == 1) (
-      builtins.tail (lib.splitString "\${secret:" value)
-    );
-  namedEndpointRefs = value: refsAfterPrefix "\${port:" value ++ refsAfterPrefix "\${host:" value;
-  invocationNamedRefs =
-    invocation: lib.unique (lib.concatMap namedEndpointRefs (invocationValues invocation));
-  hasBareEndpointRef = value: lib.hasInfix "\${port}" value || lib.hasInfix "\${host}" value;
+  invocationValues = invocation: (lib.drop 1 invocation.run) ++ builtins.attrValues invocation.env;
+  tokenize = import ../lib/invocation-template.nix { inherit lib; };
+  secretRefs = value: lib.concatMap (token: lib.optional (token ? secret) (token.secret or null)) (tokenize value);
+  hasSecretRefSyntax = value: lib.any (token: token ? secret || (token.malformed or null) == "secret") (tokenize value);
+  secretRefMalformed = value: lib.any (token: (token.malformed or null) == "secret") (tokenize value);
+  namedEndpointRefs = value: lib.concatMap (token:
+    lib.optional (token ? port && token.port != null) (token.port or null)
+    ++ lib.optional (token ? host && token.host != null) (token.host or null)
+  ) (tokenize value);
+  invocationNamedRefs = invocation: lib.unique (lib.concatMap namedEndpointRefs (invocationValues invocation));
+  hasBareEndpointRef = value: lib.any (token:
+    (token ? port && token.port == null) || (token ? host && token.host == null)
+  ) (tokenize value);
   invocationHasBareRef = invocation: lib.any hasBareEndpointRef (invocationValues invocation);
   taskIdsStepSafe = lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
   secrets = config.nixfied.secrets;
@@ -212,6 +204,9 @@ let
   allInvocations =
     (map (task: task.invocation) (builtins.attrValues leafTasks))
     ++ lib.concatMap serviceLifecycleInvocations (builtins.attrValues services);
+  invocationTemplatesWellFormed = lib.all (invocation:
+    lib.all (value: lib.all (token: !(token ? malformed)) (tokenize value)) (invocationValues invocation)
+  ) allInvocations;
   secretRefsOnlyInEnv = lib.all (
     invocation: lib.all (value: !(hasSecretRefSyntax value)) invocation.run
   ) allInvocations;
@@ -324,6 +319,7 @@ let
     (expect secretRefsOnlyInEnv "secret placeholders are only valid in invocation.env values")
     (expect secretRefsWellFormed "secret placeholders must use the \${secret:<id>} grammar")
     (expect secretRefsDeclared "secret placeholders must reference declared nixfied.secrets ids")
+    (expect invocationTemplatesWellFormed "invocation placeholders must use the supported grammar")
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
     (expect compositesCoherent "a composite task carries only steps and summary defaultOutput (no invocation, operationId, or requires) with step-safe names")
     (expect stepTasksDeclared "composite steps must reference declared tasks")

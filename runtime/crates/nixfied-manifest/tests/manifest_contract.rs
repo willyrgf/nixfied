@@ -419,26 +419,6 @@ fn clean_operation_stays_marker_gated_runtime_cleanup() {
 }
 
 #[test]
-fn connects_to_undeclared_service_is_rejected() {
-    let mut value = valid_manifest_json();
-    value["services"]["synthetic"]["connectsTo"] = json!(["missing"]);
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    let error = ValidatedManifest::try_from(manifest).expect_err("undeclared target must fail");
-    assert!(error.to_string().contains("connectsTo"));
-}
-
-#[test]
-fn connects_to_cycle_is_rejected() {
-    let mut value = valid_manifest_json();
-    add_worker_service(&mut value);
-    value["services"]["synthetic"]["connectsTo"] = json!(["worker"]);
-    value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    let error = ValidatedManifest::try_from(manifest).expect_err("cycle must fail");
-    assert!(error.to_string().contains("acyclic"));
-}
-
-#[test]
 fn connects_to_chain_is_accepted() {
     let mut value = valid_manifest_json();
     add_worker_service(&mut value);

@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use nixfied_manifest::{Manifest, SecretSourceKind};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::template::{Kind, Reference, Token, tokenize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResolvedSecrets {
@@ -35,9 +36,18 @@ pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
 }
 
 fn check_references(manifest: &Manifest) -> RuntimeResult<()> {
-    for invocation in super::invocations(manifest) {
+    for invocation in crate::execution::invocations(manifest) {
         for value in &invocation.run {
-            if value.contains("${secret:") {
+            if tokenize(value).iter().any(|token| {
+                matches!(
+                    token,
+                    Token::Reference(Reference::Secret(_))
+                        | Token::Malformed {
+                            kind: Kind::Secret,
+                            ..
+                        }
+                )
+            }) {
                 return Err(RuntimeError::new(
                     ErrorCode::ManifestAdmission,
                     "secret placeholders are only allowed in invocation.env values",
@@ -45,20 +55,27 @@ fn check_references(manifest: &Manifest) -> RuntimeResult<()> {
             }
         }
         for value in invocation.env.values() {
-            if has_unclosed_secret_ref(value) {
+            let tokens = tokenize(value);
+            if let Some(empty) = tokens.iter().find_map(|token| match token {
+                Token::Malformed {
+                    kind: Kind::Secret,
+                    empty,
+                } => Some(*empty),
+                _ => None,
+            }) {
                 return Err(RuntimeError::new(
                     ErrorCode::ManifestAdmission,
-                    format!("malformed secret placeholder in invocation env value: {value}"),
+                    if empty {
+                        "secret placeholder must name a declared secret".to_string()
+                    } else {
+                        format!("malformed secret placeholder in invocation env value: {value}")
+                    },
                 ));
             }
-            for reference in secret_refs(value) {
-                if reference.is_empty() {
-                    return Err(RuntimeError::new(
-                        ErrorCode::ManifestAdmission,
-                        "secret placeholder must name a declared secret",
-                    ));
-                }
-                if !manifest.secrets.contains_key(reference) {
+            for token in tokens {
+                if let Token::Reference(Reference::Secret(reference)) = token
+                    && !manifest.secrets.contains_key(reference)
+                {
                     return Err(RuntimeError::new(
                         ErrorCode::ManifestAdmission,
                         format!("secret placeholder references undeclared secret {reference}"),
@@ -149,34 +166,6 @@ fn checked_secret_sources(manifest: &Manifest) -> RuntimeResult<Vec<(&str, Secre
         sources.push((id.as_str(), source));
     }
     Ok(sources)
-}
-
-pub(crate) fn secret_refs(value: &str) -> Vec<&str> {
-    refs_after_prefix("${secret:", value)
-}
-
-fn refs_after_prefix<'a>(prefix: &str, value: &'a str) -> Vec<&'a str> {
-    let mut refs = Vec::new();
-    let mut rest = value;
-    while let Some(start) = rest.find(prefix) {
-        rest = &rest[start + prefix.len()..];
-        let Some(end) = rest.find('}') else { break };
-        refs.push(&rest[..end]);
-        rest = &rest[end..];
-    }
-    refs
-}
-
-pub(crate) fn has_unclosed_secret_ref(value: &str) -> bool {
-    let mut rest = value;
-    while let Some(start) = rest.find("${secret:") {
-        rest = &rest[start + "${secret:".len()..];
-        let Some(end) = rest.find('}') else {
-            return true;
-        };
-        rest = &rest[end + 1..];
-    }
-    false
 }
 
 fn read_env_secret(id: &str, env_var: &str) -> RuntimeResult<String> {
@@ -340,15 +329,6 @@ mod tests {
                 assert_eq!(error.message, diagnostic);
             }
         }
-    }
-
-    #[test]
-    fn secret_refs_extracts_placeholders() {
-        assert_eq!(
-            secret_refs("${secret:one}:${secret:two}"),
-            vec!["one", "two"]
-        );
-        assert!(secret_refs("${secret:unterminated").is_empty());
     }
 
     #[test]

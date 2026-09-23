@@ -8,7 +8,7 @@ use super::origin::StoreRoot;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 pub fn check_closures(manifest: &Manifest, store: &StoreRoot<'_>) -> RuntimeResult<()> {
-    let invoked_tools = super::invocations(manifest)
+    let invoked_tools = crate::execution::invocations(manifest)
         .flat_map(|invocation| invocation.tools.iter())
         .map(|tool| tool.as_str())
         .collect::<BTreeSet<_>>();

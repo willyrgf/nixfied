@@ -130,58 +130,43 @@ fn slot_out_of_range_is_refused() {
 }
 
 #[test]
-fn placement_characterizes_compound_identifiers_before_component_cutover() {
-    // These are currently accepted whole-path substitutions. The reviewed ABI
-    // cutover will reject these identifiers rather than silently preserve them.
-    for (project, run, state_path, run_path) in [
-        (
-            "nested/project",
-            "run/child",
-            "nested/project/dev/0",
-            "nested/project/dev/0/runs/run/child",
-        ),
-        (
-            "project-${environment}",
-            "run",
-            "project-dev/dev/0",
-            "project-dev/dev/0/runs/run",
-        ),
-        (
-            "project",
-            "/absolute",
-            "project/dev/0",
-            "project/dev/0/runs/absolute",
-        ),
+fn placement_rejects_compound_or_template_identifiers_before_effects() {
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "../outside",
+        "/absolute",
+        "nested/project",
+        "trailing/",
+        "x//y",
+        "x/.",
+        "project-${environment}",
+        "${unknown}",
+        "nul\0byte",
     ] {
-        let tmp = TempDir::new();
-        let mut manifest = manifest();
-        manifest.project.project_id = project.into();
-        let layout = derive_host_placement(&manifest, run, &tmp.path).unwrap();
-        assert_eq!(layout.state_root, tmp.path.join(state_path));
-        assert_eq!(layout.run_dir, tmp.path.join(run_path));
-        assert!(
-            !layout.state_root.exists(),
-            "pure derivation has no effects"
-        );
+        for (project, run) in [(invalid, "run"), ("project", invalid)] {
+            let tmp = TempDir::new();
+            let mut manifest = manifest();
+            manifest.project.project_id = project.into();
+            let error = derive_host_placement(&manifest, run, &tmp.path).unwrap_err();
+            assert_eq!(error.code, ErrorCode::StateUnwritable);
+            assert_eq!(fs::read_dir(&tmp.path).unwrap().count(), 0);
+        }
     }
 }
 
 #[test]
-fn placement_rejects_traversal_absolute_project_and_unresolved_templates() {
-    for (project, run) in [
-        ("../outside", "run"),
-        ("/absolute", "run"),
-        ("project", "../outside"),
-        ("project-${unknown}", "run"),
-        ("project", "${unknown}"),
-    ] {
-        let tmp = TempDir::new();
-        let mut manifest = manifest();
-        manifest.project.project_id = project.into();
-        let error = derive_host_placement(&manifest, run, &tmp.path).unwrap_err();
-        assert_eq!(error.code, ErrorCode::StateUnwritable);
-        assert_eq!(fs::read_dir(&tmp.path).unwrap().count(), 0);
-    }
+fn placement_preserves_unix_backslashes_as_component_bytes() {
+    let tmp = TempDir::new();
+    let mut manifest = manifest();
+    manifest.project.project_id = r"project\name".into();
+    let layout = derive_host_placement(&manifest, r"run\name", &tmp.path).unwrap();
+    assert_eq!(layout.state_root, tmp.path.join(r"project\name/dev/0"));
+    assert_eq!(
+        layout.run_dir,
+        tmp.path.join(r"project\name/dev/0/runs/run\name")
+    );
 }
 
 #[cfg(unix)]

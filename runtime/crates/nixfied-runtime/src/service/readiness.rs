@@ -5,10 +5,10 @@ use nixfied_manifest::LoopbackHost;
 
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::RuntimeResult;
-use crate::execution::{ExecProbe, TcpProbe};
+use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
-    BoundedExec, BoundedExecOutcome, resolve_exec_cwd, run_bounded_exec,
+    BoundedExec, BoundedExecOutcome, RenderedInvocation, resolve_exec_cwd, run_bounded_exec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub(crate) enum ProbeAttempt {
 /// Execute one tcp-connect probe attempt. Retry budgeting and endpoint
 /// ownership observation live together in `process.rs`.
 pub(crate) fn tcp_probe_attempt(
-    probe: &TcpProbe,
+    probe: &ProbePolicy,
     host: LoopbackHost,
     port: u16,
     cancellation: &CancellationToken,
@@ -44,24 +44,24 @@ pub(crate) fn tcp_probe_attempt(
 /// output overwrites `lifecycle.<label>.probe.{stdout,stderr}.log`, so the last
 /// attempt's evidence — the one an operator debugs — survives.
 pub(crate) fn exec_probe_attempt(
-    probe: &ExecProbe,
+    probe: &ProbePolicy,
+    command: &RenderedInvocation,
     source_root: &Path,
     logs_dir: &Path,
     redactor: &Redactor,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<ProbeAttempt> {
-    let command_cwd = resolve_exec_cwd(source_root, &probe.exec.cwd)?;
-    let env = probe.exec.env_with_path(probe.exec.env.clone());
+    let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
     let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
     let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
     cancellation.check()?;
     let outcome = run_bounded_exec(
         &BoundedExec {
-            executable: &probe.exec.executable,
-            args: &probe.exec.args,
-            env: &env,
+            executable: &command.executable,
+            args: &command.args,
+            env: &command.env,
             cwd: &command_cwd,
-            stdin: probe.exec.stdin,
+            stdin: command.stdin,
             timeout: probe.timeout,
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,

@@ -1,0 +1,21 @@
+[
+  {"text":"", "tokens":[]},
+  {"text":"λ plain", "tokens":[{"literal":"λ plain"}]},
+  {"text":"${port}:${host}/${stateDir}", "tokens":[{"port":null},{"literal":":"},{"host":null},{"literal":"/"},{"stateDir":null}]},
+  {"text":"${port:db}-${host:rpc}-${secret:key}", "tokens":[{"port":"db"},{"literal":"-"},{"host":"rpc"},{"literal":"-"},{"secret":"key"}]},
+  {"text":"${HOME:-${port}}", "tokens":[{"literal":"${HOME:-"},{"port":null},{"literal":"}"}]},
+  {"text":"${portfoo}", "tokens":[{"literal":"${portfoo}"}]},
+  {"text":"${HOME", "tokens":[{"literal":"${HOME"}]},
+  {"text":"${secret}", "tokens":[{"literal":"${secret}"}]},
+  {"text":"${port", "tokens":[{"malformed":"port","empty":false},{"literal":"port"}]},
+  {"text":"${host:", "tokens":[{"malformed":"host","empty":false},{"literal":"host:"}]},
+  {"text":"${stateDir", "tokens":[{"malformed":"stateDir","empty":false},{"literal":"stateDir"}]},
+  {"text":"${secret:", "tokens":[{"malformed":"secret","empty":false},{"literal":"secret:"}]},
+  {"text":"${port:}", "tokens":[{"malformed":"port","empty":true},{"literal":"port:}"}]},
+  {"text":"${secret:}", "tokens":[{"malformed":"secret","empty":true},{"literal":"secret:}"}]},
+  {"text":"${port:${HOME}}", "tokens":[{"malformed":"port","empty":false},{"literal":"port:${HOME}}"}]},
+  {"text":"${port:${secret:token}}", "tokens":[{"malformed":"port","empty":false},{"literal":"port:"},{"secret":"token"},{"literal":"}"}]},
+  {"text":"${HOME:-${secret:key}}", "tokens":[{"literal":"${HOME:-"},{"secret":"key"},{"literal":"}"}]},
+  {"text":"${secret:key{bad}}", "tokens":[{"malformed":"secret","empty":false},{"literal":"secret:key{bad}}"}]},
+  {"text":"${HOME:-${port", "tokens":[{"literal":"${HOME:-"},{"malformed":"port","empty":false},{"literal":"port"}]}
+]

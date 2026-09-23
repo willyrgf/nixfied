@@ -102,6 +102,17 @@ Use escaped interpolation in Nix strings, for example `"\${port:postgres}"`, or
 syntax is not a registry of Nixfied placeholders; consult these exact supported
 forms rather than inferring additional names from examples.
 
+Authored text is scanned from left to right. `${HOME:-${port}}` retains the
+unknown outer child syntax and substitutes the inner `${port}`. `${portfoo}`
+remains literal. Empty named payloads, braces inside a named payload (such as
+`${port:${HOME}}`), and unclosed recognized references reject. Secrets remain
+forbidden anywhere in authored argv, including inside unknown child syntax.
+Inserted values are opaque: a secret containing `${secret:other}` or a state
+path containing `${port}` is inserted literally and is never substituted again.
+`run[0]` is the literal executable basename used for tool selection; templates
+apply to the argument tail and environment values. Secret references are forbidden
+throughout `run`, including the executable position.
+
 ## Multiple listeners: declare every endpoint
 
 A service that binds more than one listener (reth: http/ws/authrpc) declares each

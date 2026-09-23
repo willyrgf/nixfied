@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,12 +12,14 @@ use nixfied_manifest::{ContainmentRequirement, LoopbackHost, ServiceLifetime, St
 use rusqlite::params;
 use serde::Serialize;
 
-use crate::admission::secrets::{ResolvedSecrets, has_unclosed_secret_ref, secret_refs};
+use crate::admission::secrets::ResolvedSecrets;
 use crate::admission::{ControlAdmission, RunAdmission};
 use crate::cancellation::{CancellationToken, canceled_error, sleep_cancellable};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, StdinPolicy};
+use crate::execution::{
+    ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
+};
 use crate::redaction::{RedactedLogRelays, Redactor, child_output};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
@@ -38,6 +40,7 @@ use crate::service::registry::{
 };
 use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
+use crate::template::{EndpointSelector, Piece, Template};
 
 use super::TrackedProcessIdentity;
 use super::task::{PrepareTaskError, TaskRun};
@@ -75,8 +78,8 @@ pub struct StartedService {
     service: ExecService,
     /// The ready/health probes with exec args/env already substituted against
     /// the slot plan at start time.
-    ready_probe: Probe,
-    health_probe: Probe,
+    ready_probe: PreparedProbe,
+    health_probe: PreparedProbe,
     /// Where probe attempt output is captured, alongside the service logs.
     logs_dir: PathBuf,
     pub run_id: String,
@@ -173,7 +176,7 @@ impl StartedService {
     fn wait_probe_with_ownership(
         &mut self,
         registry: &mut Registry,
-        probe: &Probe,
+        probe: &PreparedProbe,
         cancellation: &CancellationToken,
         ready_record: Option<&LifecycleRecord>,
     ) -> RuntimeResult<()> {
@@ -258,11 +261,11 @@ impl StartedService {
 
     fn probe_attempt(
         &self,
-        probe: &Probe,
+        probe: &PreparedProbe,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<ProbeAttempt> {
         match probe {
-            Probe::Tcp(probe) => {
+            PreparedProbe::Tcp(probe) => {
                 let endpoint = self.selected_endpoint().ok_or_else(|| {
                     RuntimeError::new(
                         ErrorCode::LifecycleFailed,
@@ -271,8 +274,9 @@ impl StartedService {
                 })?;
                 tcp_probe_attempt(probe, endpoint.host, endpoint.port, cancellation)
             }
-            Probe::Exec(probe) => exec_probe_attempt(
-                probe,
+            PreparedProbe::Exec { policy, command } => exec_probe_attempt(
+                policy,
+                command,
                 &self.source_root,
                 &self.logs_dir,
                 &self.redactor,
@@ -913,19 +917,15 @@ impl StartedService {
     }
 }
 
-fn probe_policy(probe: &Probe) -> (u32, Duration, &str) {
-    match probe {
-        Probe::Tcp(probe) => (
-            probe.max_attempts.get(),
-            probe.retry_interval,
-            probe.label.as_str(),
-        ),
-        Probe::Exec(probe) => (
-            probe.max_attempts.get(),
-            probe.retry_interval,
-            probe.label.as_str(),
-        ),
-    }
+fn probe_policy(probe: &PreparedProbe) -> (u32, Duration, &str) {
+    let policy = match probe {
+        PreparedProbe::Tcp(policy) | PreparedProbe::Exec { policy, .. } => policy,
+    };
+    (
+        policy.max_attempts.get(),
+        policy.retry_interval,
+        policy.label.as_str(),
+    )
 }
 
 fn port_conflict_error(
@@ -1276,8 +1276,8 @@ fn start_service_for_slot_inner(
     };
     // Exec probe args/env are substituted once here, with the same scope as the
     // start exec, so probe attempts later need no endpoint context.
-    let ready_probe = substituted_probe(&service.ready.probe, &substitution)?;
-    let health_probe = substituted_probe(&service.health.probe, &substitution)?;
+    let ready_probe = prepare_probe(&service.ready.probe, &substitution)?;
+    let health_probe = prepare_probe(&service.health.probe, &substitution)?;
     let address_hash = service_address_hash(
         admission.common().project_id(),
         selected_slot.environment,
@@ -1604,8 +1604,8 @@ struct BorrowServiceRequest<'a> {
     service: &'a ExecService,
     service_record: &'a ServiceRecord<'a>,
     selected_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
-    ready_probe: &'a Probe,
-    health_probe: &'a Probe,
+    ready_probe: &'a PreparedProbe,
+    health_probe: &'a PreparedProbe,
     reservations: &'a [PortReservation<'a>],
 }
 
@@ -2078,15 +2078,8 @@ fn sql_error(error: rusqlite::Error) -> RuntimeError {
 /// substitution addresses this map by service id.
 pub type SlotEndpoints = std::collections::BTreeMap<nixfied_manifest::ServiceId, SelectedEndpoint>;
 
-/// Placeholder substitution shared by lifecycle and task exec args/env values.
-/// Bare `${port}`/`${host}` resolve to `own_primary` (the exec's own primary
-/// endpoint for a service, the primary dependency for a task). `${port:<name>}` /
-/// `${host:<name>}` resolve `<name>` first against `own_endpoints` (the service's
-/// own endpoints by id), then against `named` (the connectsTo/dependency slot-plan
-/// endpoints by service id). `${stateDir}` resolves to the host-materialised slot
-/// state root. Lowering already proved every named reference is declared, so a
-/// leftover named placeholder here is a leak — fail closed rather than hand the
-/// literal string to the child.
+/// Render checked references against selected runtime facts. Inserted values
+/// remain opaque; endpoint selectors were resolved to their namespace at lowering.
 pub(crate) struct ExecSubstitution<'a> {
     pub own_primary: Option<&'a SelectedEndpoint>,
     pub own_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
@@ -2096,101 +2089,71 @@ pub(crate) struct ExecSubstitution<'a> {
 }
 
 impl ExecSubstitution<'_> {
-    fn endpoint_value(&self, value: &str) -> RuntimeResult<String> {
-        let mut out = value.to_string();
-        // Own endpoints win the `${port:<name>}` namespace; validation proved no
-        // own endpointId collides with a connectsTo serviceId, so order is moot
-        // for correctness, but resolving own first keeps the intent explicit.
-        for (endpoint_id, endpoint) in self.own_endpoints {
-            let host = endpoint.host.to_string();
-            out = out
-                .replace(
-                    &format!("${{port:{endpoint_id}}}"),
-                    &endpoint.port.to_string(),
-                )
-                .replace(&format!("${{host:{endpoint_id}}}"), &host);
-        }
-        for (service, endpoint) in self.named {
-            let host = endpoint.host.to_string();
-            out = out
-                .replace(
-                    &format!("${{port:{}}}", service.as_str()),
-                    &endpoint.port.to_string(),
-                )
-                .replace(&format!("${{host:{}}}", service.as_str()), &host);
-        }
-        if let Some(own) = self.own_primary {
-            let host = own.host.to_string();
-            out = out
-                .replace("${port}", &own.port.to_string())
-                .replace("${host}", &host);
-        }
-        out = out.replace("${stateDir}", &self.state_root.to_string_lossy());
-        if out.contains("${port:") || out.contains("${host:") {
-            return Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!("unresolved endpoint placeholder in exec value: {value}"),
-            ));
+    fn command(&self, exec: &ResolvedInvocation) -> RuntimeResult<RenderedInvocation> {
+        Ok(RenderedInvocation {
+            executable: exec.executable.clone(),
+            args: self.args(&exec.args)?,
+            env: exec.env_with_path(self.env(&exec.env)?),
+            cwd: exec.cwd.clone(),
+            stdin: exec.stdin,
+        })
+    }
+
+    pub(crate) fn value(&self, template: &Template) -> RuntimeResult<String> {
+        let mut out = String::new();
+        for piece in template.pieces() {
+            match piece {
+                Piece::Literal(text) => out.push_str(text),
+                Piece::StateDir => out.push_str(&self.state_root.to_string_lossy()),
+                Piece::Secret(id) => out.push_str(self.secrets.get(id).ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::LifecycleFailed,
+                        format!("admitted secret {id} is missing from render context"),
+                    )
+                })?),
+                Piece::Port(selector) | Piece::Host(selector) => {
+                    let endpoint = match selector {
+                        EndpointSelector::Primary => self.own_primary,
+                        EndpointSelector::Own(id) => self.own_endpoints.get(id),
+                        EndpointSelector::Service(id) => self.named.get(id),
+                    }
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            ErrorCode::LifecycleFailed,
+                            "admitted endpoint is missing from render context",
+                        )
+                    })?;
+                    match piece {
+                        Piece::Port(_) => out.push_str(&endpoint.port.to_string()),
+                        Piece::Host(_) => out.push_str(&endpoint.host.to_string()),
+                        _ => unreachable!(),
+                    }
+                }
+            }
         }
         Ok(out)
     }
 
-    pub(crate) fn value(&self, value: &str) -> RuntimeResult<String> {
-        let out = self.endpoint_value(value)?;
-        if out.contains("${secret:") {
-            return Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                "secret placeholders are only allowed in invocation.env values",
-            ));
-        }
-        Ok(out)
-    }
-
-    fn env_value(&self, value: &str) -> RuntimeResult<String> {
-        if has_unclosed_secret_ref(value) {
-            return Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!("malformed secret placeholder in invocation env value: {value}"),
-            ));
-        }
-        let mut out = self.endpoint_value(value)?;
-        for reference in secret_refs(value) {
-            let secret = self.secrets.get(reference).ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::LifecycleFailed,
-                    format!("secret placeholder references unresolved secret {reference}"),
-                )
-            })?;
-            out = out.replace(&format!("${{secret:{reference}}}"), secret);
-        }
-        Ok(out)
-    }
-
-    pub(crate) fn args(&self, args: &[String]) -> RuntimeResult<Vec<String>> {
+    pub(crate) fn args(&self, args: &[Template]) -> RuntimeResult<Vec<String>> {
         args.iter().map(|arg| self.value(arg)).collect()
     }
 
     pub(crate) fn env(
         &self,
-        env: &BTreeMap<String, String>,
+        env: &BTreeMap<String, Template>,
     ) -> RuntimeResult<BTreeMap<String, String>> {
         env.iter()
-            .map(|(key, value)| Ok((key.clone(), self.env_value(value)?)))
+            .map(|(key, value)| Ok((key.clone(), self.value(value)?)))
             .collect()
     }
 }
 
-pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeResult<PathBuf> {
+pub(crate) fn resolve_exec_cwd(
+    source_root: &Path,
+    exec_cwd: &crate::execution::RelativeCwd,
+) -> RuntimeResult<PathBuf> {
+    let exec_cwd = exec_cwd.as_str();
     let relative = Path::new(exec_cwd);
-    if exec_cwd.is_empty()
-        || relative.is_absolute()
-        || relative.components().any(disallowed_component)
-    {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            format!("exec cwd must be a confined relative path: {exec_cwd}"),
-        ));
-    }
     let source_root = source_root.canonicalize().map_err(|error| {
         RuntimeError::new(
             ErrorCode::SourceMismatch,
@@ -2215,20 +2178,36 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
     Ok(cwd)
 }
 
-/// Clone a probe with its exec args/env substituted against the slot plan. A
-/// tcp probe carries no substitutable values and passes through unchanged.
-fn substituted_probe(probe: &Probe, substitution: &ExecSubstitution<'_>) -> RuntimeResult<Probe> {
+/// Concrete values are distinct from authored invocation templates. They are
+/// rendered once and never parsed again by a probe attempt.
+#[derive(Clone)]
+pub(crate) struct RenderedInvocation {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub cwd: RelativeCwd,
+    pub stdin: StdinPolicy,
+}
+
+#[derive(Clone)]
+enum PreparedProbe {
+    Tcp(ProbePolicy),
+    Exec {
+        policy: ProbePolicy,
+        command: RenderedInvocation,
+    },
+}
+
+fn prepare_probe(
+    probe: &Probe,
+    substitution: &ExecSubstitution<'_>,
+) -> RuntimeResult<PreparedProbe> {
     match probe {
-        Probe::Tcp(tcp) => Ok(Probe::Tcp(tcp.clone())),
-        Probe::Exec(exec_probe) => {
-            let mut exec = exec_probe.exec.clone();
-            exec.args = substitution.args(&exec.args)?;
-            exec.env = substitution.env(&exec.env)?;
-            Ok(Probe::Exec(ExecProbe {
-                exec,
-                ..exec_probe.clone()
-            }))
-        }
+        Probe::Tcp(policy) => Ok(PreparedProbe::Tcp(policy.clone())),
+        Probe::Exec(probe) => Ok(PreparedProbe::Exec {
+            policy: probe.policy.clone(),
+            command: substitution.command(&probe.exec)?,
+        }),
     }
 }
 
@@ -2344,13 +2323,6 @@ pub(crate) fn terminate_and_reap(child: &mut Child, pgid: i32) -> RuntimeResult<
         (Ok(()), result) | (result, Ok(())) => result,
         (Err(error), Err(reap)) => Err(error.with_cause(reap)),
     }
-}
-
-fn disallowed_component(component: Component<'_>) -> bool {
-    matches!(
-        component,
-        Component::ParentDir | Component::RootDir | Component::Prefix(_)
-    )
 }
 
 fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
@@ -3302,6 +3274,30 @@ mod tests {
         }
     }
 
+    fn checked(
+        text: &str,
+        substitution: &ExecSubstitution<'_>,
+        secrets: &[&str],
+        env: bool,
+    ) -> RuntimeResult<Template> {
+        let declared = secrets.iter().map(|id| (id.to_string(), serde_json::from_value(serde_json::json!({"secretId":id,"source":{"kind":"env-var","envVar":"TEST_ONLY"}})).unwrap())).collect();
+        Template::parse(
+            text,
+            &crate::template::Scope {
+                owner: crate::template::Owner::Service("fixture"),
+                has_primary: substitution.own_primary.is_some(),
+                own_endpoints: substitution
+                    .own_endpoints
+                    .keys()
+                    .map(String::as_str)
+                    .collect(),
+                services: substitution.named.keys().map(|id| id.as_str()).collect(),
+            },
+            &declared,
+            env,
+        )
+    }
+
     #[test]
     fn substitutes_bare_named_and_state_placeholders() {
         let own = endpoint("127.0.0.1", 23080);
@@ -3316,7 +3312,7 @@ mod tests {
             secrets: &ResolvedSecrets::empty(),
         };
         let value = substitution
-            .value("--listen ${host}:${port} --db ${host:postgres}:${port:postgres} --data ${stateDir}")
+            .value(&checked("--listen ${host}:${port} --db ${host:postgres}:${port:postgres} --data ${stateDir}", &substitution, &[], false).unwrap())
             .expect("declared placeholders substitute");
         assert_eq!(
             value,
@@ -3342,7 +3338,15 @@ mod tests {
             secrets: &ResolvedSecrets::empty(),
         };
         let value = substitution
-            .value("--http ${port} --ws ${port:ws} --auth ${port:authrpc}")
+            .value(
+                &checked(
+                    "--http ${port} --ws ${port:ws} --auth ${port:authrpc}",
+                    &substitution,
+                    &[],
+                    false,
+                )
+                .unwrap(),
+            )
             .expect("own endpoint placeholders substitute");
         assert_eq!(value, "--http 25080 --ws 25081 --auth 25082");
     }
@@ -3365,6 +3369,10 @@ mod tests {
         )]
         .into_iter()
         .collect();
+        let env = env
+            .into_iter()
+            .map(|(key, value)| (key, checked(&value, &substitution, &[], true).unwrap()))
+            .collect();
         let env = substitution.env(&env).expect("env substitutes");
         assert_eq!(env["DB_URL"], "tcp://127.0.0.1:23081");
     }
@@ -3389,19 +3397,32 @@ mod tests {
         .into_iter()
         .collect();
 
+        let env = env
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key,
+                    checked(&value, &substitution, &["api-token"], true).unwrap(),
+                )
+            })
+            .collect();
         let env = substitution.env(&env).expect("secret env substitutes");
         assert_eq!(env["TOKEN"], "bearer:secret-value");
         assert_eq!(
-            substitution
-                .value("--token=${secret:api-token}")
-                .unwrap_err()
-                .code,
-            ErrorCode::LifecycleFailed
+            checked(
+                "--token=${secret:api-token}",
+                &substitution,
+                &["api-token"],
+                false
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::ManifestAdmission
         );
     }
 
     #[test]
-    fn unresolved_named_placeholder_fails_closed() {
+    fn undeclared_named_reference_cannot_construct_a_template() {
         let substitution = ExecSubstitution {
             own_primary: None,
             own_endpoints: &BTreeMap::new(),
@@ -3409,9 +3430,36 @@ mod tests {
             state_root: Path::new("/state"),
             secrets: &ResolvedSecrets::empty(),
         };
-        let error = substitution
-            .value("--db ${port:ghost}")
+        let error = checked("--db ${port:ghost}", &substitution, &[], false)
             .expect_err("an undeclared named placeholder must not leak to the child");
-        assert_eq!(error.code, ErrorCode::LifecycleFailed);
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
+    }
+
+    #[test]
+    fn inserted_values_are_opaque_and_unknown_child_syntax_keeps_nested_references() {
+        let own = endpoint("127.0.0.1", 23080);
+        let secrets = ResolvedSecrets::from_values(BTreeMap::from([
+            ("a".into(), "${secret:b}/${port}".into()),
+            ("b".into(), "actual-b".into()),
+        ]));
+        let substitution = ExecSubstitution {
+            own_primary: Some(&own),
+            own_endpoints: &BTreeMap::new(),
+            named: &SlotEndpoints::new(),
+            state_root: Path::new("/state/${port}/${secret:b}"),
+            secrets: &secrets,
+        };
+        for (authored, expected) in [
+            ("${secret:a}|${secret:b}", "${secret:b}/${port}|actual-b"),
+            ("${secret:b}|${secret:a}", "actual-b|${secret:b}/${port}"),
+            ("${stateDir}|${port}", "/state/${port}/${secret:b}|23080"),
+            (
+                "${HOME:-${port}}:${portfoo}:${HOME",
+                "${HOME:-23080}:${portfoo}:${HOME",
+            ),
+        ] {
+            let template = checked(authored, &substitution, &["a", "b"], true).unwrap();
+            assert_eq!(substitution.value(&template).unwrap(), expected);
+        }
     }
 }

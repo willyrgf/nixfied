@@ -15,6 +15,62 @@ fn fixture_manifest() -> Value {
     common::synthetic_manifest_default(23080, 23090)
 }
 
+#[test]
+fn graph_relationships_reject_after_host_checks_with_manifest_admission() {
+    for (target, message) in [
+        (
+            "missing",
+            "service.connectsTo references undeclared missing",
+        ),
+        (
+            "synthetic",
+            "the combined connectsTo + prepare-requires service graph has a cycle: synthetic -[connectsTo]-> synthetic",
+        ),
+    ] {
+        let mut value = fixture_manifest();
+        value["services"]["synthetic"]["connectsTo"] = json!([target]);
+        let (_tmp, path, closure_root) = write_fixture_manifest(value, true);
+        load_manifest(&path).expect("graph relationships are not structural validation");
+        let context = admission_context(&closure_root);
+        let error = nixfied_runtime::admit_run(&path, &context).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
+        assert_eq!(error.message, message);
+        fs::remove_file(closure_root.join("bin/synthetic-helper")).unwrap();
+        let error = nixfied_runtime::admit_run(&path, &context).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ClosureMissing);
+    }
+}
+
+#[test]
+fn executable_selection_is_literal_while_tail_arguments_are_templates() {
+    for program in ["${port:absent}", "${port:"] {
+        let (_tmp, path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+        let executable = closure_root.join("bin").join(program);
+        fs::rename(closure_root.join("bin/synthetic-helper"), &executable).unwrap();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["closures"]["synthetic-helper"]["executable"] = json!(executable);
+        set_invocation_executables(&mut value, json!(executable));
+        value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0] =
+            json!(program);
+        value["tasks"]["smoke"]["invocation"]["run"][0] = json!(program);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let context = admission_context(&closure_root);
+        nixfied_runtime::admit_run(&path, &context)
+            .expect("literal executable basename selects the declared closure");
+        value["tasks"]["smoke"]["invocation"]["run"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(program));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            nixfied_runtime::admit_run(&path, &context)
+                .unwrap_err()
+                .code,
+            ErrorCode::ManifestAdmission
+        );
+    }
+}
+
 fn unique_env_name(prefix: &str) -> String {
     format!("{prefix}_{}_{}", std::process::id(), unique_suffix())
 }

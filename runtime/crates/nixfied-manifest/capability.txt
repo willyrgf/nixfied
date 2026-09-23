@@ -43,6 +43,9 @@ primitive ExitPolicy: successCodes
 # the owning service's endpoint ids, then against a service declared via
 # connectsTo (services) or requires (tasks) — its primary slot-plan endpoint.
 substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>} ${secret:<id>}
+substitution-grammar: literal-run0 template-run-tail-and-env secrets-forbidden-all-run left-to-right nested-known-in-unknown nonempty-braceless-names reject-unclosed-known opaque-inserted-values
+relational-admission: references-operations local-invocation-endpoint-effects task-sibling-cycles combined-service-cycles operation-bindings services-required slot-capacity graph-errors-manifest-admission-after-host-checks per-position-start-ready-health lexical-cwd-before-execution temporal-cwd-per-attempt
+placement-components: original-bytes single-normal no-slash no-nul no-dot no-dotdot no-template unix-backslash-literal direct-joins
 
 # The hidden runtime command surfaces every manifest exposes. `manifest-check` is the
 # generated project-app name for `check`; installation is outside the manifest ABI.

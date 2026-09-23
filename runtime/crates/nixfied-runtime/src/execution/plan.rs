@@ -1,267 +1,335 @@
-//! The run planner: a pure function of `(ExecutionManifest, selected task, slot)`
-//! that derives the service union, assigns service ports, and orders the
-//! flattened nodes — or rejects when no concrete executable plan exists.
-//! Admission runs it over every slot and every declared task so that
-//! "admitted" means "a concrete plan exists"; `run` recomputes the same
-//! function.
-
+//! One graph interpretation for candidate admission and selected execution.
+use super::lower::Rejection;
+use super::types::{ExecutableTask, ExecutionManifest, PortWindow, Program};
+use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use nixfied_manifest::{Manifest, NodeId, ServiceId, ServiceLifetime, TaskId};
 use std::collections::{BTreeMap, BTreeSet};
 
-use nixfied_manifest::{NodeId, ServiceId, ServiceLifetime, TaskId};
-
-use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecService, ExecutableTask, ExecutionManifest, PortWindow};
-
-/// A concrete, executable plan for one slot: services bound to ports in start
-/// order, and tasks in execution order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunPlan {
+#[derive(Debug)]
+pub struct RunPlan<'a> {
     pub service_lifetime: ServiceLifetime,
-    pub services: Vec<ServiceBinding>,
-    pub nodes: Vec<PlanNode>,
+    pub services: Vec<ServiceBinding<'a>>,
+    pub nodes: Vec<PlanNode<'a>>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceBinding {
-    pub service_name: ServiceId,
-    /// The port assigned to each of the service's endpoints, keyed by endpointId.
-    /// Ports come from the service's contiguous block in the slot window, so every
-    /// modelled listener has a reserved, conflict-checked port.
+#[derive(Debug)]
+pub struct ServiceBinding<'a> {
+    pub service: &'a super::types::ExecService,
+    pub prepare_nodes: Vec<PlanNode<'a>>,
     pub endpoint_ports: BTreeMap<String, u16>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanNode {
+#[derive(Debug)]
+pub struct PlanNode<'a> {
     pub node_id: NodeId,
-    pub task_id: TaskId,
+    pub task: &'a super::types::ExecTask,
 }
 
-pub fn plan(manifest: &ExecutionManifest, task: &TaskId, slot: u32) -> RuntimeResult<RunPlan> {
-    let window = manifest.slot_windows.get(&slot).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ManifestAdmission,
-            format!("slot {slot} has no candidate port window"),
-        )
-    })?;
+struct LogicalPlan<'a> {
+    service_lifetime: ServiceLifetime,
+    services: Vec<(&'a super::types::ExecService, Vec<PlanNode<'a>>)>,
+    nodes: Vec<PlanNode<'a>>,
+    slot_windows: &'a BTreeMap<u32, PortWindow>,
+}
 
-    let service_lifetime = selected_service_lifetime(manifest, task)?;
-    let nodes = flatten_task(manifest, task)?;
-    // The derived service union (docs/DERIVATION_SPEC.md §3): the flattened
-    // leaves' requires, closed over connectsTo, in canonical (byte) order —
-    // ports are assigned from the sorted set, so a service's port depends only
-    // on membership, never on authoring order.
-    let mut union = BTreeSet::new();
-    for node in &nodes {
-        union.extend(leaf_requires(manifest, &node.task_id)?.iter().cloned());
-    }
-    loop {
-        let mut additions: Vec<ServiceId> = Vec::new();
-        for name in union.iter() {
-            let service = service(manifest, name)?;
-            additions.extend(
-                service
-                    .connects_to
-                    .iter()
-                    .filter(|target| !union.contains(*target))
-                    .cloned(),
-            );
-            // Starting a service runs its prepare task first; its leaves'
-            // requirements belong to the union (docs/DERIVATION_SPEC.md §3).
-            if let Some(prepare_task) = &service.prepare {
-                additions.extend(
-                    prepare_requires(manifest, prepare_task)?
-                        .into_iter()
-                        .filter(|target| !union.contains(target)),
+type Edges = BTreeMap<ServiceId, Vec<(ServiceId, &'static str)>>;
+/// Temporary admission facts. Flattened nodes are discarded per task, never retained here.
+pub(super) struct GraphFacts {
+    required: BTreeMap<TaskId, BTreeSet<ServiceId>>,
+}
+
+fn direct_requirements(nodes: &[PlanNode<'_>]) -> BTreeSet<ServiceId> {
+    nodes
+        .iter()
+        .flat_map(|node| node.task.requires.iter().cloned())
+        .collect()
+}
+
+fn service_edges(program: &Program, bases: &BTreeMap<TaskId, BTreeSet<ServiceId>>) -> Edges {
+    program
+        .services
+        .iter()
+        .map(|(id, service)| {
+            let mut edges: Vec<_> = service
+                .connects_to
+                .iter()
+                .cloned()
+                .map(|id| (id, "connectsTo"))
+                .collect();
+            if let Some(prepare) = &service.prepare {
+                edges.extend(
+                    bases[prepare]
+                        .iter()
+                        .cloned()
+                        .map(|id| (id, "prepare requires")),
                 );
             }
-        }
-        if additions.is_empty() {
-            break;
-        }
-        union.extend(additions);
-    }
-    let service_names: Vec<ServiceId> = union.into_iter().collect();
-
-    // Ports are assigned in the union's canonical order (stable, predictable
-    // addressing — authoring order never moves a service's port), then the
-    // bindings are reordered for start so every connectsTo dependency is ready
-    // before its dependent spawns. Validation proved the wiring graph acyclic,
-    // and the union is connectsTo-closed by construction, so the sort always
-    // completes.
-    let services = order_for_start(
-        assign_ports(&service_names, manifest, *window, slot)?,
-        manifest,
-    )?;
-    Ok(RunPlan {
-        service_lifetime,
-        services,
-        nodes,
-    })
-}
-
-fn selected_service_lifetime(
-    manifest: &ExecutionManifest,
-    task: &TaskId,
-) -> RuntimeResult<ServiceLifetime> {
-    match manifest.tasks.get(task) {
-        Some(ExecutableTask::Leaf(task)) => Ok(task.service_lifetime),
-        Some(ExecutableTask::Composite(task)) => Ok(task.service_lifetime),
-        None => Err(RuntimeError::new(
-            ErrorCode::ManifestAdmission,
-            format!("task {task} is missing"),
-        )),
-    }
-}
-
-fn service<'a>(
-    manifest: &'a ExecutionManifest,
-    name: &ServiceId,
-) -> RuntimeResult<&'a ExecService> {
-    manifest.services.get(name).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ManifestAdmission,
-            format!("service {name} is missing"),
-        )
-    })
-}
-
-fn leaf_requires<'a>(
-    manifest: &'a ExecutionManifest,
-    task: &TaskId,
-) -> RuntimeResult<&'a [ServiceId]> {
-    manifest
-        .leaf(task.as_str())
-        .map(|leaf| leaf.requires.as_slice())
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ManifestAdmission,
-                format!("leaf task {task} is missing"),
-            )
+            (id.clone(), edges)
         })
+        .collect()
 }
 
-/// The services a prepare task's leaves require — the prepare-requires edges
-/// of the combined service graph.
-fn prepare_requires(
-    manifest: &ExecutionManifest,
-    prepare_task: &TaskId,
-) -> RuntimeResult<Vec<ServiceId>> {
-    let mut required = Vec::new();
-    for node in flatten_task(manifest, prepare_task)? {
-        required.extend(leaf_requires(manifest, &node.task_id)?.iter().cloned());
-    }
-    Ok(required)
-}
-
-/// Stable topological order over the combined connectsTo + prepare-requires
-/// graph: among services whose dependencies are all started, canonical order
-/// wins, so a wiring-free union keeps its canonical order.
-fn order_for_start(
-    bindings: Vec<ServiceBinding>,
-    manifest: &ExecutionManifest,
-) -> RuntimeResult<Vec<ServiceBinding>> {
-    // Calculate each edge set once; failed prepare traversal is never ignored.
-    let mut remaining = bindings
-        .into_iter()
-        .map(|binding| {
-            let service = service(manifest, &binding.service_name)?;
-            let mut edges = service.connects_to.clone();
-            if let Some(prepare) = &service.prepare {
-                edges.extend(prepare_requires(manifest, prepare)?);
+fn close_union(mut union: BTreeSet<ServiceId>, edges: &Edges) -> BTreeSet<ServiceId> {
+    let mut pending: Vec<_> = union.iter().cloned().collect();
+    while let Some(id) = pending.pop() {
+        for (target, _) in &edges[&id] {
+            if union.insert(target.clone()) {
+                pending.push(target.clone());
             }
-            Ok((binding, edges))
+        }
+    }
+    union
+}
+
+fn prove_service_cycles(edges: &Edges) -> RuntimeResult<()> {
+    fn visit<'a>(
+        edges: &'a Edges,
+        start: &ServiceId,
+        current: &ServiceId,
+        trail: &mut Vec<(&'a ServiceId, &'static str)>,
+        seen: &mut BTreeSet<&'a ServiceId>,
+    ) -> Option<Vec<(&'a ServiceId, &'static str)>> {
+        for (target, kind) in &edges[current] {
+            if target == start {
+                let mut cycle = trail.clone();
+                cycle.push((target, kind));
+                return Some(cycle);
+            }
+            if seen.insert(target) {
+                trail.push((target, kind));
+                if let Some(cycle) = visit(edges, start, target, trail, seen) {
+                    return Some(cycle);
+                }
+                trail.pop();
+            }
+        }
+        None
+    }
+    for start in edges.keys() {
+        if let Some(cycle) = visit(edges, start, start, &mut Vec::new(), &mut BTreeSet::new()) {
+            let mut rendered = start.to_string();
+            for (target, kind) in cycle {
+                rendered.push_str(&format!(" -[{kind}]-> {target}"));
+            }
+            return Err(Rejection::ServiceGraphCycle { cycle: rendered }.into());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn prove_graph(program: &Program) -> RuntimeResult<GraphFacts> {
+    let mut bases = BTreeMap::new();
+    for task in program.tasks.keys() {
+        let nodes = flatten(program, task)?;
+        bases.insert(task.clone(), direct_requirements(&nodes));
+    }
+    let edges = service_edges(program, &bases);
+    prove_service_cycles(&edges)?;
+    let required = bases
+        .into_iter()
+        .map(|(task, base)| (task, close_union(base, &edges)))
+        .collect();
+    Ok(GraphFacts { required })
+}
+
+pub(super) fn prove_carried_services(facts: &GraphFacts, manifest: &Manifest) -> RuntimeResult<()> {
+    for (task_id, task) in &manifest.tasks {
+        let derived: Vec<_> = facts.required[task_id.as_str()]
+            .iter()
+            .map(ServiceId::as_str)
+            .collect();
+        let carried: Vec<_> = task
+            .services_required
+            .iter()
+            .map(ServiceId::as_str)
+            .collect();
+        if carried != derived {
+            return Err(Rejection::DerivedFactMismatch {
+                owner: format!("task {task_id}"),
+                fact: "servicesRequired",
+                carried: carried.join(", "),
+                derived: derived.join(", "),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn capacity(window: PortWindow, slot: u32, endpoints: usize, services: usize) -> RuntimeResult<()> {
+    if endpoints > window.capacity() as usize {
+        return Err(RuntimeError::new(
+            ErrorCode::ManifestAdmission,
+            format!(
+                "slot {slot} candidate window {}-{} cannot host {endpoints} endpoints across {services} services",
+                window.start(),
+                window.end()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn prove_capacity(program: &Program, facts: GraphFacts) -> RuntimeResult<()> {
+    let demands: BTreeMap<_, _> = facts
+        .required
+        .into_iter()
+        .map(|(task, services)| {
+            let endpoints: usize = services
+                .iter()
+                .map(|id| program.services[id].endpoints.len())
+                .sum();
+            (task, (endpoints, services.len()))
         })
-        .collect::<RuntimeResult<Vec<_>>>()?;
-    let mut ordered = Vec::with_capacity(remaining.len());
+        .collect();
+    for (&slot, &window) in &program.slot_windows {
+        for task in program.task_ids() {
+            let (endpoints, services) = demands[task];
+            capacity(window, slot, endpoints, services)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn plan<'a>(
+    manifest: &'a ExecutionManifest,
+    task: &TaskId,
+    slot: u32,
+) -> RuntimeResult<RunPlan<'a>> {
+    plan_program(&manifest.program, task, slot)
+}
+
+fn plan_program<'a>(program: &'a Program, task: &TaskId, slot: u32) -> RuntimeResult<RunPlan<'a>> {
+    bind_slot(logical_plan(program, task)?, slot)
+}
+
+fn logical_plan<'a>(program: &'a Program, task: &TaskId) -> RuntimeResult<LogicalPlan<'a>> {
+    let service_lifetime = match program.tasks.get(task) {
+        Some(ExecutableTask::Leaf(task)) => task.service_lifetime,
+        Some(ExecutableTask::Composite(task)) => task.service_lifetime,
+        None => {
+            return Err(RuntimeError::new(
+                ErrorCode::ManifestAdmission,
+                format!("task {task} is missing"),
+            ));
+        }
+    };
+    let nodes = flatten(program, task)?;
+    let mut bases = BTreeMap::new();
+    for prepare in program
+        .services
+        .values()
+        .filter_map(|service| service.prepare.as_ref())
+    {
+        if !bases.contains_key(prepare) {
+            bases.insert(
+                prepare.clone(),
+                direct_requirements(&flatten(program, prepare)?),
+            );
+        }
+    }
+    let edges = service_edges(program, &bases);
+    let required = close_union(direct_requirements(&nodes), &edges);
+    let mut remaining: Vec<_> = required.iter().collect();
+    let mut services = Vec::with_capacity(remaining.len());
     let mut started = BTreeSet::new();
     while !remaining.is_empty() {
         let ready = remaining
             .iter()
-            .position(|(_, edges)| edges.iter().all(|target| started.contains(target)))
+            .position(|id| edges[*id].iter().all(|(id, _)| started.contains(id)))
             .ok_or_else(|| {
                 RuntimeError::new(
                     ErrorCode::ManifestAdmission,
                     "service startup dependencies contain a cycle or leave the selected union",
                 )
             })?;
-        let (next, _) = remaining.remove(ready);
-        started.insert(next.service_name.clone());
-        ordered.push(next);
+        let id = remaining.remove(ready);
+        let service = &program.services[id];
+        let prepare_nodes = service
+            .prepare
+            .as_ref()
+            .map(|task| flatten(program, task))
+            .transpose()?
+            .unwrap_or_default();
+        services.push((service, prepare_nodes));
+        started.insert(id.clone());
     }
-    Ok(ordered)
+    Ok(LogicalPlan {
+        service_lifetime,
+        services,
+        nodes,
+        slot_windows: &program.slot_windows,
+    })
 }
 
-/// Assign each service a contiguous block of ports from the window — one per
-/// endpoint, in endpointId order — advancing a single cursor across services in
-/// declared order. Proves the window has capacity for every modelled listener, so
-/// a service can never run an unreserved port.
-fn assign_ports(
-    service_names: &[ServiceId],
-    manifest: &ExecutionManifest,
-    window: PortWindow,
-    slot: u32,
-) -> RuntimeResult<Vec<ServiceBinding>> {
-    let demand: usize = service_names
-        .iter()
-        .map(|name| service(manifest, name).map(|service| service.endpoints.len()))
-        .sum::<RuntimeResult<_>>()?;
-    if demand > window.capacity() as usize {
-        return Err(RuntimeError::new(
+fn bind_slot(logical: LogicalPlan<'_>, slot: u32) -> RuntimeResult<RunPlan<'_>> {
+    let window = logical.slot_windows.get(&slot).ok_or_else(|| {
+        RuntimeError::new(
             ErrorCode::ManifestAdmission,
-            format!(
-                "slot {slot} candidate window {}-{} cannot host {demand} endpoints across {} services",
-                window.start(),
-                window.end(),
-                service_names.len()
-            ),
-        ));
-    }
-
-    let mut bindings = Vec::with_capacity(service_names.len());
+            format!("slot {slot} has no candidate port window"),
+        )
+    })?;
+    let demand = logical
+        .services
+        .iter()
+        .map(|(service, _)| service.endpoints.len())
+        .sum();
+    capacity(*window, slot, demand, logical.services.len())?;
+    // Canonical address allocation is independent of dependency-first startup.
+    let mut addresses = BTreeMap::new();
+    let canonical: BTreeMap<_, _> = logical
+        .services
+        .iter()
+        .map(|(service, _)| (&service.name, *service))
+        .collect();
     let mut cursor = window.start();
-    for service_name in service_names {
-        let endpoint_ids = service(manifest, service_name)?.endpoints.keys();
-        let mut endpoint_ports = BTreeMap::new();
-        for endpoint_id in endpoint_ids {
-            endpoint_ports.insert(endpoint_id.clone(), cursor);
-            cursor = cursor.saturating_add(1);
-        }
-        bindings.push(ServiceBinding {
-            service_name: service_name.clone(),
-            endpoint_ports,
-        });
+    for (id, service) in canonical {
+        let endpoints = service
+            .endpoints
+            .keys()
+            .map(|endpoint| {
+                let port = cursor;
+                cursor = cursor.saturating_add(1);
+                (endpoint.clone(), port)
+            })
+            .collect();
+        addresses.insert(id, endpoints);
     }
-    Ok(bindings)
+    let services = logical
+        .services
+        .into_iter()
+        .map(|(service, prepare_nodes)| ServiceBinding {
+            service,
+            prepare_nodes,
+            endpoint_ports: addresses
+                .remove(&service.name)
+                .expect("every selected service was allocated"),
+        })
+        .collect();
+    Ok(RunPlan {
+        service_lifetime: logical.service_lifetime,
+        services,
+        nodes: logical.nodes,
+    })
 }
 
-/// Flatten one selected task into ordered plan nodes with stable step paths
-/// (docs/DERIVATION_SPEC.md §2): a leaf is a single node whose path is the task
-/// id; a composite emits its steps depth-first in canonical step-name order,
-/// each node's path `<root>.<step>...<step>`. A step's `dependsOn` constrains
-/// every node of its subtree on **every** node of the dependency's subtree
-/// (composite success is conjunction). The returned order is the deterministic
-/// topological order: emission order, earliest node whose dependencies are
-/// already placed first. Cycles through nesting are rejected here — admission
-/// proves every selection plans, so a cyclic reference never survives it.
-pub fn flatten_task(manifest: &ExecutionManifest, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
-    struct FlatNode {
+fn flatten<'a>(manifest: &'a Program, root: &TaskId) -> RuntimeResult<Vec<PlanNode<'a>>> {
+    struct FlatNode<'a> {
         step_path: String,
-        leaf: TaskId,
+        leaf: &'a super::types::ExecTask,
         depends_on: BTreeSet<String>,
     }
 
-    fn emit(
-        manifest: &ExecutionManifest,
+    fn emit<'a>(
+        manifest: &'a Program,
         task: &TaskId,
         path: String,
         visiting: &mut Vec<TaskId>,
-        out: &mut Vec<FlatNode>,
+        out: &mut Vec<FlatNode<'a>>,
     ) -> RuntimeResult<()> {
         let composite = match manifest.tasks.get(task) {
-            Some(ExecutableTask::Leaf(_)) => {
+            Some(ExecutableTask::Leaf(leaf)) => {
                 out.push(FlatNode {
                     step_path: path,
-                    leaf: task.clone(),
+                    leaf,
                     depends_on: BTreeSet::new(),
                 });
                 return Ok(());
@@ -354,23 +422,10 @@ pub fn flatten_task(manifest: &ExecutionManifest, root: &TaskId) -> RuntimeResul
         placed.insert(node.step_path.clone());
         ordered.push(PlanNode {
             node_id: NodeId::new(&node.step_path),
-            task_id: node.leaf,
+            task: node.leaf,
         });
     }
     Ok(ordered)
-}
-
-/// Prove a concrete plan exists for every slot in the policy range and every
-/// declared task. Admission calls this so "admitted" implies "runnable for any
-/// slot/task the user can select" — including composite acyclicity and the
-/// derived union's port feasibility.
-pub(super) fn prove_all_plans_feasible(manifest: &ExecutionManifest) -> RuntimeResult<()> {
-    for &slot in manifest.slot_windows.keys() {
-        for task in manifest.task_ids() {
-            plan(manifest, task, slot)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -399,15 +454,14 @@ mod tests {
             executable: "/bin/svc".to_string(),
             args: Vec::new(),
             env: BTreeMap::new(),
-            cwd: ".".to_string(),
+            cwd: RelativeCwd::new(".").unwrap(),
             stdin: StdinPolicy::Null,
-            timeout: Duration::from_millis(1000),
             tool_roots: Vec::new(),
         }
     }
 
-    fn tcp_probe() -> TcpProbe {
-        TcpProbe {
+    fn tcp_probe() -> ProbePolicy {
+        ProbePolicy {
             label: "ready".to_string(),
             timeout: Duration::from_millis(1000),
             retry_interval: Duration::from_millis(100),
@@ -441,7 +495,7 @@ mod tests {
             },
             endpoints: BTreeMap::from([(
                 "e".to_string(),
-                ResolvedEndpoint {
+                Endpoint {
                     endpoint_id: "e".to_string(),
                     host: LoopbackHost::parse("127.0.0.1").unwrap(),
                 },
@@ -464,10 +518,10 @@ mod tests {
         services: Vec<&str>,
         required: Vec<&str>,
         windows: Vec<(u32, u16, u16)>,
-    ) -> ExecutionManifest {
+    ) -> Program {
         let mut leaf = leaf_task("all");
         leaf.requires = required.into_iter().map(ServiceId::new).collect();
-        ExecutionManifest {
+        Program {
             services: services
                 .into_iter()
                 .map(|name| (ServiceId::new(name), service(name)))
@@ -483,26 +537,56 @@ mod tests {
     #[test]
     fn assigns_ports_from_window_start_in_order() {
         let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
-        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
+        let plan = plan_program(&em, &TaskId::new("all"), 0).expect("plan exists");
         assert_eq!(
-            plan.services,
+            plan.services
+                .iter()
+                .map(|binding| (
+                    binding.service.name.as_str(),
+                    binding.endpoint_ports.clone()
+                ))
+                .collect::<Vec<_>>(),
             vec![
-                ServiceBinding {
-                    service_name: ServiceId::new("a"),
-                    endpoint_ports: BTreeMap::from([("e".to_string(), 23080)]),
-                },
-                ServiceBinding {
-                    service_name: ServiceId::new("b"),
-                    endpoint_ports: BTreeMap::from([("e".to_string(), 23081)]),
-                },
+                ("a", BTreeMap::from([("e".to_string(), 23080)])),
+                ("b", BTreeMap::from([("e".to_string(), 23081)])),
             ]
+        );
+    }
+
+    #[test]
+    fn each_selected_service_gets_its_shared_prepare_task_occurrences() {
+        let mut program = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
+        program.tasks.insert(
+            TaskId::new("prepare"),
+            ExecutableTask::Leaf(leaf_task("prepare")),
+        );
+        for service in program.services.values_mut() {
+            service.prepare = Some(TaskId::new("prepare"));
+        }
+        let plan = plan_program(&program, &TaskId::new("all"), 0).unwrap();
+        let occurrences: Vec<_> = plan
+            .services
+            .iter()
+            .flat_map(|binding| {
+                binding.prepare_nodes.iter().map(|node| {
+                    (
+                        binding.service.name.as_str(),
+                        node.node_id.as_str(),
+                        node.task.task_id.as_str(),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            occurrences,
+            vec![("a", "prepare", "prepare"), ("b", "prepare", "prepare")]
         );
     }
 
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
         let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
-        let error = plan(&em, &TaskId::new("all"), 0).expect_err("window too small");
+        let error = plan_program(&em, &TaskId::new("all"), 0).expect_err("window too small");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
     }
 
@@ -514,15 +598,16 @@ mod tests {
             vec!["a", "b"],
             vec![(0, 23080, 23090), (1, 24000, 24000)],
         );
-        assert!(plan(&em, &TaskId::new("all"), 0).is_ok());
+        assert!(plan_program(&em, &TaskId::new("all"), 0).is_ok());
         assert_eq!(
-            plan(&em, &TaskId::new("all"), 1)
+            plan_program(&em, &TaskId::new("all"), 1)
                 .expect_err("slot 1 too small")
                 .code,
             ErrorCode::ManifestAdmission
         );
         assert_eq!(
-            prove_all_plans_feasible(&em)
+            prove_graph(&em)
+                .and_then(|facts| prove_capacity(&em, facts))
                 .expect_err("not all slots feasible")
                 .code,
             ErrorCode::ManifestAdmission
@@ -531,6 +616,7 @@ mod tests {
 
     fn leaf_task(name: &str) -> ExecTask {
         ExecTask {
+            timeout: Duration::from_millis(1000),
             task_id: TaskId::new(name),
             service_lifetime: ServiceLifetime::RunScoped,
             exec: resolved_exec(),
@@ -554,7 +640,7 @@ mod tests {
         }
     }
 
-    fn vector_manifest(leaves: Vec<&str>, composites: Vec<ExecComposite>) -> ExecutionManifest {
+    fn vector_manifest(leaves: Vec<&str>, composites: Vec<ExecComposite>) -> Program {
         let mut em = manifest(vec![], vec![], vec![(0, 23080, 23090)]);
         em.tasks.clear();
         for leaf in leaves {
@@ -568,8 +654,8 @@ mod tests {
         em
     }
 
-    fn plan_paths(em: &ExecutionManifest, root: &str) -> Vec<String> {
-        plan(em, &TaskId::new(root), 0)
+    fn plan_paths(em: &Program, root: &str) -> Vec<String> {
+        plan_program(em, &TaskId::new(root), 0)
             .expect("plan exists")
             .nodes
             .iter()
@@ -641,7 +727,7 @@ mod tests {
             (TaskId::new("stack"), ExecutableTask::Composite(composite)),
         ]);
 
-        let direct = plan(&em, &TaskId::new("smoke"), 0).expect("leaf plan exists");
+        let direct = plan_program(&em, &TaskId::new("smoke"), 0).expect("leaf plan exists");
         assert_eq!(
             direct.service_lifetime,
             ServiceLifetime::PersistentUntilDown
@@ -650,18 +736,18 @@ mod tests {
             direct
                 .services
                 .iter()
-                .map(|binding| binding.service_name.as_str())
+                .map(|binding| binding.service.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["db"]
         );
 
-        let nested = plan(&em, &TaskId::new("stack"), 0).expect("composite plan exists");
+        let nested = plan_program(&em, &TaskId::new("stack"), 0).expect("composite plan exists");
         assert_eq!(nested.service_lifetime, ServiceLifetime::UntilIdle);
         assert_eq!(
             nested
                 .services
                 .iter()
-                .map(|binding| binding.service_name.as_str())
+                .map(|binding| binding.service.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["db"]
         );
@@ -676,7 +762,7 @@ mod tests {
                 composite("b", vec![("to-a", "a", vec![])]),
             ],
         );
-        let error = plan(&em, &TaskId::new("a"), 0).expect_err("cycle must reject");
+        let error = plan_program(&em, &TaskId::new("a"), 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
@@ -690,7 +776,7 @@ mod tests {
                 vec![("x", "unit", vec!["y"]), ("y", "unit", vec!["x"])],
             )],
         );
-        let error = plan(&em, &TaskId::new("spin"), 0).expect_err("cycle must reject");
+        let error = plan_program(&em, &TaskId::new("spin"), 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
@@ -708,18 +794,18 @@ mod tests {
             .get_mut(&ServiceId::new("app"))
             .expect("app exists")
             .connects_to = vec![ServiceId::new("db")];
-        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
+        let plan = plan_program(&em, &TaskId::new("all"), 0).expect("plan exists");
         assert_eq!(
-            plan.services,
+            plan.services
+                .iter()
+                .map(|binding| (
+                    binding.service.name.as_str(),
+                    binding.endpoint_ports.clone()
+                ))
+                .collect::<Vec<_>>(),
             vec![
-                ServiceBinding {
-                    service_name: ServiceId::new("db"),
-                    endpoint_ports: BTreeMap::from([("e".to_string(), 23081)]),
-                },
-                ServiceBinding {
-                    service_name: ServiceId::new("app"),
-                    endpoint_ports: BTreeMap::from([("e".to_string(), 23080)]),
-                },
+                ("db", BTreeMap::from([("e".to_string(), 23081)])),
+                ("app", BTreeMap::from([("e".to_string(), 23080)])),
             ]
         );
     }
@@ -740,7 +826,7 @@ mod tests {
         for id in ["a", "b", "c"] {
             multi.endpoints.insert(
                 id.to_string(),
-                ResolvedEndpoint {
+                Endpoint {
                     endpoint_id: id.to_string(),
                     host: LoopbackHost::parse("127.0.0.1").unwrap(),
                 },
@@ -748,11 +834,11 @@ mod tests {
         }
         multi.endpoints.remove("e");
         multi.primary_endpoint = Some("a".to_string());
-        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
+        let plan = plan_program(&em, &TaskId::new("all"), 0).expect("plan exists");
         let multi_ports = &plan
             .services
             .iter()
-            .find(|b| b.service_name.as_str() == "multi")
+            .find(|b| b.service.name.as_str() == "multi")
             .expect("multi binding")
             .endpoint_ports;
         assert_eq!(
@@ -766,7 +852,7 @@ mod tests {
         let solo_ports = &plan
             .services
             .iter()
-            .find(|b| b.service_name.as_str() == "solo")
+            .find(|b| b.service.name.as_str() == "solo")
             .expect("solo binding")
             .endpoint_ports;
         assert_eq!(solo_ports, &BTreeMap::from([("e".to_string(), 23083)]));
@@ -778,13 +864,13 @@ mod tests {
         let mut em = manifest(vec!["a"], vec!["a"], vec![(0, 23080, 23080)]);
         em.services.get_mut("a").unwrap().endpoints.insert(
             "second".into(),
-            ResolvedEndpoint {
+            Endpoint {
                 endpoint_id: "second".into(),
                 host: LoopbackHost::parse("127.0.0.1").unwrap(),
             },
         );
         assert_eq!(
-            plan(&em, &TaskId::new("all"), 0)
+            plan_program(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")
                 .code,
             ErrorCode::ManifestAdmission
