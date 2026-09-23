@@ -30,6 +30,47 @@ pub fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     });
 }
 
+/// Raw CLI scenario: deliberately does not validate or repair adversarial bytes.
+pub struct RuntimeFixture {
+    pub tmp: TempDir,
+    pub manifest_path: PathBuf,
+    pub state_base: PathBuf,
+}
+
+impl RuntimeFixture {
+    pub fn new(manifest: impl serde::Serialize) -> Self {
+        let tmp = TempDir::new();
+        let manifest_path = tmp.path.join("manifest.json");
+        let state_base = tmp.path.join("state");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("fixture manifest should serialize"),
+        )
+        .expect("fixture manifest should be written");
+        Self {
+            tmp,
+            manifest_path,
+            state_base,
+        }
+    }
+
+    pub fn command(&self, operation: &str, extra: &[&str]) -> Command {
+        let mut command = Command::new(runtime_binary());
+        command
+            .arg(operation)
+            .arg("--allow-non-store-manifest")
+            .arg("--manifest")
+            .arg(&self.manifest_path)
+            .arg("--state-base")
+            .arg(&self.state_base)
+            .args(extra)
+            .current_dir(&self.tmp.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    }
+}
+
 pub fn runtime_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_nixfied-runtime") {
         return PathBuf::from(path);

@@ -389,7 +389,29 @@ removed state owners, coordinated change sites, and capture correctness addition
    floor passed (`/tmp/nixfied-redaction-sharing-tests.log`,
    `/tmp/nixfied-redaction-unit-tests.log`, `/tmp/nixfied-redaction-floor.log`).
    Architect review found no defects. Final cross-layer CI remains required.
-14. Fixture consolidation and audit proof mapping: pending.
+14. Fixture consolidation and audit proof mapping: in progress.
+   RuntimeFixture now lives in tests/common and writes raw scenario bytes without
+   validating or repairing them. Its command method returns ordinary Command;
+   output tests and both real CLI signal/cancellation tests share it. Tests keep
+   their explicit command environment and raw corruption paths.
+   One CLI child now proves exact tool-root PATH, declared variables, and absence
+   of a per-command parent canary. Deleted the separate PATH run and unsafe global
+   environment mutation. Leaf output fixtures and the environment/secret proofs
+   no longer bind ports for unused service metadata; service-dependent output
+   fixtures retain real available-port selection and lifecycle coverage.
+   Deleted raw_len readback beside the exact literal wire assertion and the
+   positive redaction-token tree search beside exact redacted stdout; whole-tree
+   secret absence remains. Merged slot-identity-only checks into the executed
+   two-slot isolation proof, which compares actual instance IDs and stored address
+   hashes while retaining control/cleanup isolation checks.
+   Clippy, all 22 output tests, 73 service tests, and the literal local-record wire
+   test pass (`/tmp/nixfied-cli-fixture-tests.log`,
+   `/tmp/nixfied-fixture-consolidation-tests.log`,
+   `/tmp/nixfied-leaf-fixture-tests.log`). The augmented two-slot proof is recorded
+   in `/tmp/nixfied-slot-fixture-proof.log`.
+   Remaining: coherent service fixture construction/start methods, broader CLI
+   fixture adoption where cohesive, registry identity/cleanup setup tables, and
+   approximate-audit replacement mapping/removal.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed
 test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release

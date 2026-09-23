@@ -4,45 +4,34 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use common::{
-    TempDir, available_port_window, runtime_binary, synthetic_manifest, test_child,
+    RuntimeFixture, TempDir, available_port_window, runtime_binary, synthetic_manifest, test_child,
     wait_for_child_output, wait_for_path,
 };
 use nixfied_runtime::redaction::REDACTION_TOKEN;
 use serde_json::{Value, json};
 
-struct RuntimeFixture {
-    _tmp: TempDir,
-    manifest_path: PathBuf,
-    state_base: PathBuf,
-}
-
-fn fixture(manifest: Value) -> RuntimeFixture {
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("fixture manifest should serialize"),
-    )
-    .expect("fixture manifest should be written");
-    RuntimeFixture {
-        _tmp: tmp,
-        manifest_path,
-        state_base,
-    }
-}
-
 fn task_manifest(args: &[String]) -> Value {
+    task_manifest_at(args, available_port_window(1))
+}
+
+fn leaf_task_manifest(args: &[String]) -> Value {
+    // Unused service metadata needs no host port observation.
+    let mut manifest = task_manifest_at(args, 23180);
+    manifest["tasks"]["smoke"]["requires"] = json!([]);
+    manifest["tasks"]["smoke"]["servicesRequired"] = json!([]);
+    manifest
+}
+
+fn task_manifest_at(args: &[String], port: u16) -> Value {
     let executable = test_child();
     let executable = executable
         .to_str()
         .expect("test child path should be UTF-8")
         .to_string();
-    let port = available_port_window(1);
     let mut manifest = synthetic_manifest(
         &executable,
         &["listen", "127.0.0.1", "${port}", "hold"],
@@ -69,24 +58,9 @@ fn set_task_default_output(manifest: &mut Value, output: &str) {
     manifest["tasks"]["smoke"]["defaultOutput"] = json!(output);
 }
 
-fn command(fixture: &RuntimeFixture, extra: &[&str]) -> Command {
-    let mut command = Command::new(runtime_binary());
-    command
-        .arg("run")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&fixture.manifest_path)
-        .arg("--state-base")
-        .arg(&fixture.state_base)
-        .args(extra)
-        .current_dir(&fixture._tmp.path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
-}
-
 fn run(fixture: &RuntimeFixture, extra: &[&str]) -> Output {
-    command(fixture, extra)
+    fixture
+        .command("run", extra)
         .output()
         .expect("runtime command should execute")
 }
@@ -98,11 +72,6 @@ fn assert_stream_contains(haystack: &[u8], needle: &[u8], stream: &str) {
             .any(|window| window == needle),
         "{stream} did not contain expected bytes\nexpected: {needle:?}\nactual: {haystack:?}"
     );
-}
-
-fn no_service(manifest: &mut Value) {
-    manifest["tasks"]["smoke"]["requires"] = json!([]);
-    manifest["tasks"]["smoke"]["servicesRequired"] = json!([]);
 }
 
 #[test]
@@ -134,16 +103,16 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                 hex(prefix),
                 hex(prefix),
             ];
-            let mut manifest = task_manifest(&args);
-            no_service(&mut manifest);
+            let mut manifest = leaf_task_manifest(&args);
             if secret {
                 manifest["secrets"]["token"] = json!({"secretId":"token","source":{
                     "kind":"env-var","envVar":"NIXFIED_CAPTURE_SECRET"
                 }});
                 manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
             }
-            let fixture = fixture(manifest);
-            let child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+            let fixture = RuntimeFixture::new(manifest);
+            let child = fixture
+                .command("run", &["--task", "smoke", "--output", "task-output"])
                 .env("NIXFIED_CAPTURE_SECRET", "abcdef")
                 .spawn()
                 .unwrap();
@@ -207,8 +176,7 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
 #[test]
 fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
     for fault in ["cycle", "template", "nested-secret"] {
-        let mut manifest = task_manifest(&["prepare".into(), "child-started".into()]);
-        no_service(&mut manifest);
+        let mut manifest = leaf_task_manifest(&["prepare".into(), "child-started".into()]);
         match fault {
             "cycle" => manifest["services"]["synthetic"]["connectsTo"] = json!(["synthetic"]),
             "template" => {
@@ -224,7 +192,7 @@ fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
             }
             _ => unreachable!(),
         }
-        let fixture = fixture(manifest);
+        let fixture = RuntimeFixture::new(manifest);
         let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
         assert!(!output.status.success(), "{fault}");
         assert!(
@@ -234,7 +202,7 @@ fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
         );
         assert!(!fixture.state_base.exists(), "{fault} materialized state");
         assert!(
-            !fixture._tmp.path.join("child-started").exists(),
+            !fixture.tmp.path.join("child-started").exists(),
             "{fault} started a child"
         );
     }
@@ -242,11 +210,10 @@ fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
 
 #[test]
 fn child_receives_inserted_state_path_without_recursive_substitution() {
-    let mut manifest = task_manifest(&["output".into(), "env".into(), "VALUE".into()]);
-    no_service(&mut manifest);
+    let mut manifest = leaf_task_manifest(&["output".into(), "env".into(), "VALUE".into()]);
     manifest["tasks"]["smoke"]["invocation"]["env"]["VALUE"] = json!("${HOME:-${stateDir}}");
-    let mut fixture = fixture(manifest);
-    fixture.state_base = fixture._tmp.path.join("state-${port:unresolved}");
+    let mut fixture = RuntimeFixture::new(manifest);
+    fixture.state_base = fixture.tmp.path.join("state-${port:unresolved}");
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
     assert!(
         output.status.success(),
@@ -264,13 +231,13 @@ fn child_receives_inserted_state_path_without_recursive_substitution() {
 
 #[test]
 fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() {
-    let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
-    no_service(&mut manifest);
+    let mut manifest = leaf_task_manifest(&["exit".to_string(), "0".to_string()]);
     manifest["secrets"]["token"] = json!({"secretId":"token","source":{
         "kind":"env-var","envVar":"NIXFIED_OUTPUT_VIEW_SECRET"
     }});
-    let fixture = fixture(manifest);
-    let output = command(&fixture, &["--task", "smoke", "--output", "json"])
+    let fixture = RuntimeFixture::new(manifest);
+    let output = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
         .env("NIXFIED_OUTPUT_VIEW_SECRET", "smoke")
         .output()
         .unwrap();
@@ -326,7 +293,7 @@ fn direct_leaf_replays_exact_binary_without_metadata() {
         hex(&stdout),
         hex(stderr),
     ];
-    let fixture = fixture(task_manifest(&args));
+    let fixture = RuntimeFixture::new(task_manifest(&args));
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert!(
@@ -346,15 +313,14 @@ fn direct_leaf_replays_exact_binary_without_metadata() {
 fn leaf_default_replays_when_output_is_omitted() {
     let stdout = b"default stdout";
     let stderr = b"default stderr";
-    let mut manifest = task_manifest(&[
+    let mut manifest = leaf_task_manifest(&[
         "output".to_string(),
         "hex".to_string(),
         hex(stdout),
         hex(stderr),
     ]);
-    no_service(&mut manifest);
     set_task_default_output(&mut manifest, "task-output");
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke"]);
 
     assert!(
@@ -368,10 +334,9 @@ fn leaf_default_replays_when_output_is_omitted() {
 
 #[test]
 fn explicit_output_overrides_leaf_default() {
-    let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
-    no_service(&mut manifest);
+    let mut manifest = leaf_task_manifest(&["exit".to_string(), "0".to_string()]);
     set_task_default_output(&mut manifest, "task-output");
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke", "--output", "summary"]);
 
     assert!(
@@ -397,7 +362,7 @@ fn composite_selection_uses_its_metadata_default_not_a_child_default() {
         "servicesRequired": ["synthetic"],
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "pipeline"]);
 
     assert!(
@@ -424,7 +389,7 @@ fn accepted_nonzero_code_replays_and_succeeds() {
     ];
     let mut manifest = task_manifest(&args);
     manifest["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([0, 7]);
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert!(
@@ -444,9 +409,8 @@ fn empty_output_is_a_valid_zero_byte_replay() {
         String::new(),
         String::new(),
     ];
-    let mut manifest = task_manifest(&args);
-    no_service(&mut manifest);
-    let fixture = fixture(manifest);
+    let manifest = leaf_task_manifest(&args);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert!(
@@ -469,9 +433,8 @@ fn large_simultaneous_streams_replay_exactly() {
         "7a".to_string(),
         stderr.len().to_string(),
     ];
-    let mut manifest = task_manifest(&args);
-    no_service(&mut manifest);
-    let fixture = fixture(manifest);
+    let manifest = leaf_task_manifest(&args);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert!(
@@ -495,10 +458,10 @@ fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_replay() {
         "7a".to_string(),
         stderr.len().to_string(),
     ];
-    let mut manifest = task_manifest(&args);
-    no_service(&mut manifest);
-    let fixture = fixture(manifest);
-    let mut child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+    let manifest = leaf_task_manifest(&args);
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .expect("runtime command should spawn");
     drop(child.stdout.take());
@@ -525,7 +488,7 @@ fn task_failure_replays_captured_bytes_and_preserves_status() {
         hex(stderr),
         "7".to_string(),
     ];
-    let fixture = fixture(task_manifest(&args));
+    let fixture = RuntimeFixture::new(task_manifest(&args));
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(30));
@@ -541,8 +504,7 @@ fn task_failure_replays_captured_bytes_and_preserves_status() {
 #[test]
 fn redaction_happens_before_task_output_replay() {
     let mut manifest =
-        task_manifest(&["output".to_string(), "env".to_string(), "TOKEN".to_string()]);
-    no_service(&mut manifest);
+        leaf_task_manifest(&["output".to_string(), "env".to_string(), "TOKEN".to_string()]);
     manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": {
@@ -551,8 +513,9 @@ fn redaction_happens_before_task_output_replay() {
         }
     });
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    let fixture = fixture(manifest);
-    let output = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+    let fixture = RuntimeFixture::new(manifest);
+    let output = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
         .env("NIXFIED_TEST_TASK_SECRET", "child-visible-secret")
         .output()
         .expect("runtime command should execute");
@@ -590,10 +553,9 @@ fn timeout_replays_output_before_reporting_task_failure() {
         hex(stderr),
         marker.to_string_lossy().into_owned(),
     ];
-    let mut manifest = task_manifest(&args);
-    no_service(&mut manifest);
+    let mut manifest = leaf_task_manifest(&args);
     manifest["tasks"]["smoke"]["invocation"]["timeoutMs"] = json!(150);
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(30));
@@ -618,11 +580,11 @@ fn cancellation_replays_output_before_reporting_canceled() {
         hex(stderr),
         marker.to_string_lossy().into_owned(),
     ];
-    let mut manifest = task_manifest(&args);
-    no_service(&mut manifest);
+    let mut manifest = leaf_task_manifest(&args);
     manifest["tasks"]["smoke"]["invocation"]["timeoutMs"] = json!(30_000);
-    let fixture = fixture(manifest);
-    let child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+    let fixture = RuntimeFixture::new(manifest);
+    let child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .expect("runtime command should spawn");
     assert!(wait_for_path(&marker, Duration::from_secs(3)));
@@ -650,8 +612,9 @@ fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
         "79".into(),
         "0".into(),
     ]);
-    let fixture = fixture(manifest);
-    let mut child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .unwrap();
     // A byte on the runtime's stdout proves task capture finished and replay
@@ -704,7 +667,7 @@ fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
         "servicesRequired": ["synthetic"],
         "steps": { "only": { "task": "smoke" } }
     });
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = run(&fixture, &["--task", "pipeline", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(37));
@@ -720,18 +683,18 @@ fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
 fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
     let manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
 
-    let missing = fixture(manifest.clone());
+    let missing = RuntimeFixture::new(manifest.clone());
     let output = run(&missing, &["--output", "task-output"]);
     assert_eq!(output.status.code(), Some(37));
     assert!(output.stdout.is_empty());
     assert!(!missing.state_base.exists());
 
-    let unknown = fixture(manifest.clone());
+    let unknown = RuntimeFixture::new(manifest.clone());
     let output = run(&unknown, &["--task", "missing", "--output", "task-output"]);
     assert_eq!(output.status.code(), Some(37));
     assert!(!unknown.state_base.exists());
 
-    let repeated = fixture(manifest.clone());
+    let repeated = RuntimeFixture::new(manifest.clone());
     let output = run(
         &repeated,
         &[
@@ -747,7 +710,7 @@ fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
     assert!(!repeated.state_base.exists());
 
     for spelling in ["--task-output", "--json", "--both", "--summary", "--output"] {
-        let alias = fixture(manifest.clone());
+        let alias = RuntimeFixture::new(manifest.clone());
         let args = if spelling == "--output" {
             vec!["--task", "smoke", "--output", "task_output"]
         } else {
@@ -766,7 +729,7 @@ fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
         ["--output", "json", "--output", "task-output"],
         ["--output", "summary", "--output", "both"],
     ] {
-        let fixture = fixture(task_manifest(&["exit".to_string(), "0".to_string()]));
+        let fixture = RuntimeFixture::new(task_manifest(&["exit".to_string(), "0".to_string()]));
         let output = run(&fixture, &args);
         assert_eq!(output.status.code(), Some(36), "args {args:?}");
         assert!(output.stdout.is_empty());
@@ -794,12 +757,13 @@ fn non_utf8_environment_secret_never_reaches_diagnostics() {
         "kind":"env-var","envVar":"NIXFIED_TEST_INVALID_SECRET"
     }});
     manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let mut bytes = b"synthetic-prefix-".to_vec();
     bytes.push(0xff);
     bytes.extend_from_slice(b"-synthetic-suffix");
     for mode in ["summary", "json", "both", "task-output"] {
-        let output = command(&fixture, &["--task", "smoke", "--output", mode])
+        let output = fixture
+            .command("run", &["--task", "smoke", "--output", mode])
             .env(
                 "NIXFIED_TEST_INVALID_SECRET",
                 OsString::from_vec(bytes.clone()),
@@ -852,11 +816,11 @@ fn optional_host_ephemeral_observation_warns_without_executing_children() {
         bounds[0],
         bounds[0],
     );
-    let fixture = fixture(manifest);
+    let fixture = RuntimeFixture::new(manifest);
     let output = Command::new(runtime_binary())
         .args(["check", "--allow-non-store-manifest", "--manifest"])
         .arg(&fixture.manifest_path)
-        .current_dir(&fixture._tmp.path)
+        .current_dir(&fixture.tmp.path)
         .output()
         .unwrap();
     assert!(

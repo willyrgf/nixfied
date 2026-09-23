@@ -724,6 +724,15 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         slot0.service.info().service_instance_id,
         slot1.service.info().service_instance_id
     );
+    let [address0, address1] = [&slot0.registry, &slot1.registry].map(|registry| {
+        registry
+            .connection()
+            .query_row("SELECT service_address_hash FROM services", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .expect("started service address should be stored")
+    });
+    assert_ne!(address0, address1);
 
     let slot0_ps = ps(&mut slot0.registry).expect("slot 0 ps should reconcile");
     let slot1_ps = ps(&mut slot1.registry).expect("slot 1 ps should reconcile");
@@ -782,26 +791,6 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         CleanupMode::Standard,
     )
     .expect("slot 1 cleanup should succeed after stop");
-}
-
-#[test]
-fn service_instance_identity_includes_selected_slot() {
-    let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
-    add_slot_one(&mut value, 23280, 23280);
-    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
-    let service = manifest
-        .services
-        .get("synthetic")
-        .expect("fixture has synthetic service");
-
-    let identity = compute_service_identity(service, &manifest.state, &manifest.target);
-    let slot_0_address = service_address_hash(&manifest.project.project_id, "dev", 0, "synthetic");
-    let slot_1_address = service_address_hash(&manifest.project.project_id, "dev", 1, "synthetic");
-    let slot_0_instance = service_instance_id(&slot_0_address, &identity);
-    let slot_1_instance = service_instance_id(&slot_1_address, &identity);
-
-    assert_ne!(slot_0_address, slot_1_address);
-    assert_ne!(slot_0_instance, slot_1_instance);
 }
 
 #[test]
@@ -1717,31 +1706,13 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     let value = test_child_fixture_value(&["term-tree", &started_arg, &marker_arg], port);
     let manifest: Manifest =
         serde_json::from_value(value).expect("CLI fixture manifest should parse");
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(manifest);
 
-    let mut child = Command::new(runtime_binary())
-        .arg("run")
-        .arg("--task")
-        .arg("smoke")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
+    let mut child = fixture
+        .command("run", &["--task", "smoke"])
         .arg("--timeout-ms")
         .arg("200")
         .args(["--output", "json"])
-        .current_dir(&tmp.path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
         .expect("runtime run should spawn");
     if !wait_for_path(&started, Duration::from_secs(3)) {
@@ -1760,14 +1731,8 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("CANCELED"));
 
-    let ps_output = Command::new(runtime_binary())
-        .arg("ps")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
-        .current_dir(&tmp.path)
+    let ps_output = fixture
+        .command("ps", &[])
         .output()
         .expect("runtime ps should run");
     assert!(
@@ -1824,31 +1789,13 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     set_task_run_args(&mut value, &["exit", "0"]);
     let manifest: Manifest =
         serde_json::from_value(value).expect("CLI fixture manifest should parse");
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+    let fixture = RuntimeFixture::new(manifest);
 
-    let child = Command::new(runtime_binary())
-        .arg("run")
-        .arg("--task")
-        .arg("smoke")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
+    let child = fixture
+        .command("run", &["--task", "smoke"])
         .arg("--timeout-ms")
         .arg("1000")
         .args(["--output", "json"])
-        .current_dir(&tmp.path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
         .expect("runtime run should spawn");
     assert!(
@@ -1866,14 +1813,8 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("CANCELED"));
 
-    let ps_output = Command::new(runtime_binary())
-        .arg("ps")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
-        .current_dir(&tmp.path)
+    let ps_output = fixture
+        .command("ps", &[])
         .output()
         .expect("runtime ps should run");
     assert!(
@@ -4115,67 +4056,9 @@ fn down_escalates_until_owned_process_group_is_empty() {
 }
 
 #[test]
-fn task_child_path_is_assembled_from_tool_roots() {
-    // The child PATH is runtime-owned: exactly the tool roots, in declared
-    // order — not the runtime's own inherited PATH.
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    let mut value = test_child_listener_value(port);
-    value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &["output", "env", "PATH"]);
-    let mut fixture = ServiceFixture::from_value(value);
-    let task = fixture
-        .admission
-        .common()
-        .execution_manifest()
-        .leaf("smoke")
-        .expect("task lowered")
-        .clone();
-    let redactor = Redactor::empty();
-    let run = run_dependent_task_cancellable(
-        &fixture.placement,
-        &mut fixture.registry,
-        RunContext::new(
-            &fixture.admission,
-            "run-path-proof",
-            &fixture.placement.state_root,
-            &redactor,
-        ),
-        &[],
-        "smoke",
-        0,
-        &task,
-        &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
-    )
-    .expect("path-printing task should succeed");
-    let TaskExecution::Succeeded(evidence) = run else {
-        panic!("path-printing task should succeed");
-    };
-    let (run, replay) = evidence.into_task_and_replay();
-    assert!(replay.is_none());
-    let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
-    let expected = test_child()
-        .as_path()
-        .parent()
-        .expect("test child parent dir")
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(stdout, expected);
-}
-
-#[test]
 fn task_child_environment_is_hermetic() {
-    // The child sees the declared env plus the runtime-owned PATH — nothing
-    // inherited from the runtime's own environment.
-    // A canary in the runtime's environment that must NOT leak to the child.
-    unsafe { std::env::set_var("NIXFIED_HERMETIC_CANARY", "leaked") };
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    let mut value = test_child_listener_value(port);
+    // This leaf declares no acquired service and needs no listening port.
+    let mut value = test_child_listener_value(23180);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["tasks"]["smoke"]["invocation"]["env"] = json!({
@@ -4183,38 +4066,20 @@ fn task_child_environment_is_hermetic() {
         "CARGO_TARGET_DIR": "target/verification"
     });
     set_task_run_args(&mut value, &["output", "environment"]);
-    let mut fixture = ServiceFixture::from_value(value);
-    let task = fixture
-        .admission
-        .common()
-        .execution_manifest()
-        .leaf("smoke")
-        .expect("task lowered")
-        .clone();
-    let redactor = Redactor::empty();
-    let run = run_dependent_task_cancellable(
-        &fixture.placement,
-        &mut fixture.registry,
-        RunContext::new(
-            &fixture.admission,
-            "run-hermetic-proof",
-            &fixture.placement.state_root,
-            &redactor,
-        ),
-        &[],
-        "smoke",
-        0,
-        &task,
-        &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
-    )
-    .expect("env-printing task should succeed");
-    let TaskExecution::Succeeded(evidence) = run else {
-        panic!("env-printing task should succeed");
-    };
-    let (run, replay) = evidence.into_task_and_replay();
-    assert!(replay.is_none());
-    let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
+    let fixture = RuntimeFixture::new(value);
+    let output = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .env("NIXFIED_HERMETIC_CANARY", "leaked")
+        .output()
+        .expect("runtime should execute");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run: Value = serde_json::from_slice(&output.stdout).expect("runtime summary");
+    let stdout =
+        fs::read_to_string(run["task"]["stdoutPath"].as_str().unwrap()).expect("task stdout log");
     let vars: Vec<&str> = stdout.split(';').filter(|v| !v.is_empty()).collect();
     assert!(
         vars.contains(&"DECLARED=yes"),
@@ -4228,6 +4093,11 @@ fn task_child_environment_is_hermetic() {
         !stdout.contains("NIXFIED_HERMETIC_CANARY"),
         "runtime env must not leak: {stdout}"
     );
+    let expected_path = format!("PATH={}", test_child().parent().unwrap().display());
+    assert!(
+        vars.contains(&expected_path.as_str()),
+        "exact tool-root PATH: {stdout}"
+    );
     // Exactly the declared env + the runtime-owned variables (PATH, and
     // anything the platform libc injects for every process, e.g. LC_CTYPE on
     // some systems). Assert the strong property directly: no inherited vars.
@@ -4238,18 +4108,16 @@ fn task_child_environment_is_hermetic() {
             "unexpected child env var {name}: {stdout}"
         );
     }
-    let summary: Value =
-        serde_json::from_slice(&fs::read(&run.summary_path).expect("task summary should read"))
-            .expect("task summary should parse");
+    let summary: Value = serde_json::from_slice(
+        &fs::read(run["task"]["summaryPath"].as_str().unwrap()).expect("task summary should read"),
+    )
+    .expect("task summary should parse");
     assert!(summary.get("cacheEnv").is_none());
 }
 
 #[test]
 fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    let mut value = test_child_listener_value(port);
+    let mut value = test_child_listener_value(23180);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["secrets"]["api-token"] = json!({
@@ -4311,7 +4179,6 @@ fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
         REDACTION_TOKEN
     );
     assert_tree_excludes(&state_base, b"child-visible-secret");
-    assert_tree_contains(&state_base, REDACTION_TOKEN.as_bytes());
 }
 
 fn assert_tree_excludes(root: &Path, needle: &[u8]) {
@@ -4325,18 +4192,6 @@ fn assert_tree_excludes(root: &Path, needle: &[u8]) {
             file.display()
         );
     }
-}
-
-fn assert_tree_contains(root: &Path, needle: &[u8]) {
-    assert!(
-        files_under(root).into_iter().any(|file| {
-            fs::read(&file)
-                .map(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
-                .unwrap_or(false)
-        }),
-        "{} did not contain expected redaction token",
-        root.display()
-    );
 }
 
 fn files_under(root: &Path) -> Vec<PathBuf> {
