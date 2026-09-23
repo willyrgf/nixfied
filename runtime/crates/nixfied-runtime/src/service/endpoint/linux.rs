@@ -541,6 +541,36 @@ mod tests {
     }
 
     #[test]
+    fn ipv4_listener_preserves_optional_kernel_mode_in_diagnostics() {
+        for (mode, expected) in [
+            (None, serde_json::Value::Null),
+            (Some(false), serde_json::json!(false)),
+            (Some(true), serde_json::json!(true)),
+        ] {
+            let payload = diag_payload(
+                libc::AF_INET as u8,
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                23080,
+                mode,
+            );
+            let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 23, &payload);
+            let record = parse_datagram(&bytes, 23, libc::AF_INET as u8)
+                .unwrap()
+                .0
+                .pop()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(record.identity).unwrap(),
+                serde_json::json!({
+                    "family": "ipv4", "address": "127.0.0.1", "port": 23080,
+                    "kernel": { "platform": "linux", "inode": 42, "cookie": [7, 8] },
+                    "uid": 1000, "ipv6Only": expected
+                })
+            );
+        }
+    }
+
+    #[test]
     fn parser_retains_listener_identity_and_ipv6_mode() {
         let payload = diag_payload(
             libc::AF_INET6 as u8,

@@ -51,7 +51,7 @@ removed state owners, coordinated change sites, and capture correctness addition
    accept only `Deleted` or `Failed { safe_reason }`, and prior cleanup evidence
    stores a parsed status. All 24 state tests, 11 endpoint tests, six readiness
    tests, and workspace/all-target Clippy pass on Linux. Remaining: explicit
-   applicable wrapper/ceremony subtractions and conditional listener review.
+   applicable wrapper/ceremony subtractions.
    Explicit lock-root injection now replaces ambient thread-local state and fd
    duplication/restoration. The endpoint owner supplies a validated descriptor;
    a private acquisition loop receives the validated lock directory. Fixed-root
@@ -65,6 +65,13 @@ removed state owners, coordinated change sites, and capture correctness addition
    found no defect and identified a redundant root validation, now removed;
    the final narrow review check is recorded in
    `/tmp/nixfied-explicit-lock-review-tests.log`.
+   Conditional listener representation review is complete: retain IpAddr plus
+   optional IPv6-only evidence. Linux accepts that attribute on IPv4 records and
+   preserves it in diagnostic JSON; V4(address) would discard accepted evidence,
+   while a lossless V4-with-optional-mode enum adds complexity. A literal parser-to-
+   JSON test pins IPv4 missing/false/true mode evidence; the existing IPv6 missing-
+   evidence rejection and dual-stack classification tests remain. Architect review
+   agrees with retention (`/tmp/nixfied-listener-representation-tests.log`).
 3. Placement characterization: exact slot-one registry/run/log/artifact/summary
    paths are pinned alongside existing slot-zero paths. Materialization rejects
    symlinks at each owned root and nested run path without writing through them.
