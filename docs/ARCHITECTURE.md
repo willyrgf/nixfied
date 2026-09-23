@@ -266,6 +266,17 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   record, not a liveness oracle*. (v1: the registry was treated as liveness truth.)
 - **Liveness is reconciled against the OS** before being reported — `ps` confirms
   process identity (surviving PID reuse) before saying `running`/`stale`/etc.
+- **Registry readers own stored representation.** Service and control paths share
+  endpoint decoding for status, service prefix, nonempty endpoint identity,
+  loopback address, and port representation. Raw address spelling remains available
+  for exact row comparisons and event bytes. Reservation, activation, and reuse
+  retain their own complete-set and ownership checks within the relevant transaction.
+  Shared actionable-process SQL preserves each caller's multiplicity and conflict
+  rules. Reconciliation returns typed observations; `ps` alone projects public
+  strings, and `down` re-reads rows and refreshes identity before signaling.
+- **Transitions borrow registry context.** Connection, immutable identity, and
+  redactor are borrowed together. Each transition visibly selects its transaction
+  mode and commits mutations with redacted events through one borrowed event record.
 - **Registry-only evidence fails closed.** A live reservation lease without a
   process is `LEASE_CONFLICT`; a post-reconcile row with neither a valid lease
   nor a valid process is `REGISTRY_CORRUPT`.

@@ -36,6 +36,28 @@ pub fn sql_in_list<S: DbStatus>(statuses: &[S]) -> String {
         .join(", ")
 }
 
+/// Registry queries use `p` for the process row whose current ownership is checked.
+pub(crate) fn unresolved_escape_sql() -> String {
+    format!(
+        "p.status = '{}' AND EXISTS (
+            SELECT 1 FROM ports ep
+            WHERE ep.service_instance_id = p.service_instance_id
+              AND ep.owner_process_key = p.process_key
+              AND ep.status IN ({})
+        )",
+        ProcessStatus::Escaped.as_str(),
+        sql_in_list(PORT_OPEN),
+    )
+}
+
+pub(crate) fn actionable_process_sql() -> String {
+    format!(
+        "p.status IN ({}) OR ({})",
+        sql_in_list(PROCESS_ACTIVE),
+        unresolved_escape_sql()
+    )
+}
+
 macro_rules! db_status {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $lit:literal),+ $(,)? }) => {
         $(#[$meta])*

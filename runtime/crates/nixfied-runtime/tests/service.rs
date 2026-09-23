@@ -2664,25 +2664,29 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
     let service_instance_id = owner.info().service_instance_id.clone();
     let owner_process_key = owner.info().process_key.clone();
     let owner_pgid = owner.info().pgid;
+    let owner_pid = owner.info().pid;
     owner
         .stand(&mut fixture.registry, 1000)
         .expect("persistent service should stand");
 
     let standing = ps(&mut fixture.registry).expect("ps should report standing service");
-    let observed = standing
-        .processes
-        .iter()
-        .find(|process| process.service_instance_id.as_deref() == Some(&service_instance_id))
-        .expect("standing service process should be reported");
-    assert!(observed.live);
-    assert_eq!(observed.process_key, owner_process_key);
-    assert_eq!(observed.registry_status, "ready");
-    assert_eq!(observed.reconciled_status, "running");
     assert_eq!(
-        observed.service_lifetime.as_deref(),
-        Some("persistent-until-down")
+        serde_json::to_value(&standing).unwrap(),
+        json!({
+            "processes": [{
+                "processKey": owner_process_key,
+                "runId": "run-persistent-owner",
+                "serviceInstanceId": service_instance_id,
+                "pid": owner_pid,
+                "pgid": owner_pgid,
+                "registryStatus": "ready",
+                "reconciledStatus": "running",
+                "serviceLifetime": "persistent-until-down",
+                "borrowerCount": 0,
+                "live": true
+            }]
+        })
     );
-    assert_eq!(observed.borrower_count, 0);
 
     let borrower = start_synthetic_service(
         &fixture.manifest,
@@ -2726,7 +2730,10 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
         .expect("down should stop persistent service after borrowers release");
-    assert_eq!(down.stopped.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&down).unwrap(),
+        json!({"stopped": [owner_process_key], "stale": []})
+    );
     assert!(
         !process_group_has_non_zombie_member(owner_pgid),
         "down should terminate the persistent owner process group"
@@ -3742,10 +3749,70 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
 }
 
 #[test]
+fn control_rejects_malformed_open_endpoints_before_signaling() {
+    for mutation in [
+        "UPDATE ports SET endpoint_key = 'other:endpoint'",
+        "UPDATE ports SET endpoint_key = service_instance_id || ':'",
+        "UPDATE ports SET address = 'not-an-address'",
+        "UPDATE ports SET address = '0.0.0.0'",
+        "UPDATE ports SET port = -1",
+        "UPDATE ports SET port = 65536",
+    ] {
+        let port = available_port_window(1);
+        let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
+        let service = start_synthetic_service(
+            &fixture.manifest,
+            &fixture.admission,
+            &fixture.placement,
+            &mut fixture.registry,
+            "run-corrupt-endpoint",
+            port,
+        )
+        .unwrap();
+        let original: (String, String, i64) = fixture
+            .registry
+            .connection()
+            .query_row("SELECT endpoint_key, address, port FROM ports", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        fixture
+            .registry
+            .connection()
+            .execute_batch(mutation)
+            .unwrap();
+        let before: i64 = fixture
+            .registry
+            .connection()
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        let error = down_owned_process_groups(&mut fixture.registry, 1000).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt, "{mutation}");
+        assert!(process_is_non_zombie(service.info().pid), "{mutation}");
+        let after: i64 = fixture
+            .registry
+            .connection()
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, before, "{mutation}");
+        fixture
+            .registry
+            .connection()
+            .execute(
+                "UPDATE ports SET endpoint_key = ?1, address = ?2, port = ?3",
+                rusqlite::params![original.0, original.1, original.2],
+            )
+            .unwrap();
+        service.stop(&mut fixture.registry, 1000).unwrap();
+    }
+}
+
+#[test]
 fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
-    for (status, run_id) in [
-        ("unknown", "run-corrupt-control"),
-        ("running", "missing-run"),
+    for (status, run_id, lifetime) in [
+        ("unknown", "run-corrupt-control", "run-scoped"),
+        ("running", "missing-run", "run-scoped"),
+        ("running", "run-corrupt-control", "unknown"),
     ] {
         let port = available_port_window(1);
         let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
@@ -3776,6 +3843,11 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                 )
                 .unwrap();
         }
+        fixture
+            .registry
+            .connection()
+            .execute("UPDATE services SET service_lifetime = ?1", [lifetime])
+            .unwrap();
         let events_before: i64 = fixture
             .registry
             .connection()
@@ -3784,6 +3856,9 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
         let error = down_owned_process_groups(&mut fixture.registry, 1000)
             .expect_err("all process rows must decode before reconciliation or teardown");
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        if lifetime == "unknown" {
+            assert_eq!(error.message, "unknown service lifetime unknown");
+        }
         assert!(
             process_is_non_zombie(service.info().pid),
             "valid service must not be signaled"
@@ -3810,6 +3885,11 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                 "DELETE FROM processes WHERE process_key IN ('a-dead', 'z-corrupt')",
                 [],
             )
+            .unwrap();
+        fixture
+            .registry
+            .connection()
+            .execute("UPDATE services SET service_lifetime = 'run-scoped'", [])
             .unwrap();
         service.stop(&mut fixture.registry, 1000).unwrap();
     }

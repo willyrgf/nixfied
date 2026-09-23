@@ -319,7 +319,7 @@ removed state owners, coordinated change sites, and capture correctness addition
    `30118`, exit 0, `/tmp/nixfied-evidence-ci.log`): source checks, fixture floor,
    all 22 runtime cases, and downstream Nix/install/upgrade fixtures. Committed
    as `3281b38`; macOS remains unverified.
-12. Registry decoding/event context: first coherent increment implemented.
+12. Registry decoding/event context: implemented; full proof running.
    Registry lends disjoint connection, identity, and redactor references to
    service/control/cleanup transitions. Explicit deferred/immediate transaction
    modes, mutation order, temporal checks, redaction, and commit boundaries remain.
@@ -333,8 +333,27 @@ removed state owners, coordinated change sites, and capture correctness addition
    Architect review found no correctness defects. Clippy, 40 service unit tests,
    18 registry, 74 service, 26 state, and 10 upgrade tests pass
    (`/tmp/nixfied-registry-context-complete.log`). Prepared in isolated worktree
-   while step 11 CI ran. Shared row decoding, active/escaped predicate, typed
-   reconciliation, complete fixture floor, and cross-layer gate remain pending.
+   while step 11 CI ran; committed as `8f23846` and merged back. The temporary
+   worktree was removed cleanly.
+   Registry now owns shared open-endpoint decoding for start, activation, snapshots,
+   and controls. Status/prefix/endpoint/loopback/port checks occur at that boundary;
+   raw address spelling remains separate from parsed host so exact equality and
+   event bytes stay unchanged. Duplicate process-layer endpoint parsing is deleted.
+   One registry-owned active/escaped-with-owned-open-port SQL predicate serves
+   query-specific readers without replacing multiplicity or first-conflict policy.
+   Typed reconciliation observations replace public status-string interpretation;
+   ps alone projects public records and down retains fresh rereads/pre-signal checks.
+   Existing lifetime parsing now also closes control-row decoding.
+   Independent tests cover malformed endpoint rows through all four consumers,
+   no signaling/control event writes on refusal, corrupt lifetime refusal,
+   snapshot multiplicity versus reservation precedence, exact alternate IPv6
+   spelling, and complete ps/down output. The stale-port cleanup fixture had an
+   accidental unprefixed key; repaired that positive fixture and retained separate
+   malformed-key negatives. Clippy, eight registry unit proofs, 75 service,
+   26 state, and 10 upgrade tests pass (`/tmp/nixfied-registry-boundary-tests.log`,
+   `/tmp/nixfied-registry-relational-tests.log`). Full fixture-backed floor passed
+   (session `71543`, `/tmp/nixfied-registry-owner-floor.log`). Final architect
+   review found no correctness gaps; cross-layer CI remains required.
 13. Shared redaction scanner/safe projections: pending.
 14. Fixture consolidation and audit proof mapping: pending.
 

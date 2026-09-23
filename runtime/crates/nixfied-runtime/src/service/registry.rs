@@ -1,3 +1,5 @@
+pub(crate) use crate::registry::records::StoredEndpoint as StoredServiceEndpoint;
+use crate::registry::records::read_open_endpoints;
 use crate::registry::sqlite::RegistryContext;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -73,15 +75,6 @@ pub(crate) struct StoredServiceProcess {
     pub(crate) start_identity_json: String,
     pub(crate) run_id: String,
     pub(crate) status: ProcessStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StoredServiceEndpoint {
-    pub(crate) endpoint_key: String,
-    pub(crate) address: String,
-    pub(crate) port: u16,
-    pub(crate) status: PortStatus,
-    pub(crate) owner_process_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -781,38 +774,10 @@ pub(crate) fn activate_service_ready(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let mut statement = transaction
-        .prepare(&format!(
-            "
-            SELECT endpoint_key, address, port, status, owner_process_key
-            FROM ports
-            WHERE service_instance_id = ?1 AND status IN ({})
-            ORDER BY endpoint_key
-            ",
-            status::sql_in_list(status::PORT_OPEN)
-        ))
-        .map_err(sql_error)?;
-    let rows = statement
-        .query_map(params![service_instance_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, u16>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-            ))
-        })
-        .map_err(sql_error)?;
-    let mut stored = BTreeMap::new();
-    for row in rows {
-        let (endpoint_key, address, port, port_status, owner_process_key) =
-            row.map_err(sql_error)?;
-        stored.insert(
-            endpoint_key,
-            (address, port, port_status, owner_process_key),
-        );
-    }
-    drop(statement);
+    let stored = stored_endpoint_map(&read_open_endpoints(
+        &transaction,
+        Some(service_instance_id),
+    )?);
     let expected = endpoints
         .iter()
         .map(|endpoint| {
@@ -1714,23 +1679,10 @@ fn read_service_snapshot_conn(
                 SELECT p.process_key, p.pid, p.pgid, p.start_identity, p.run_id, p.status
                 FROM processes p
                 WHERE p.service_instance_id = ?1
-                  AND (
-                    p.status IN ({active_processes})
-                    OR (
-                      p.status = '{escaped}'
-                      AND EXISTS (
-                        SELECT 1 FROM ports ep
-                        WHERE ep.service_instance_id = p.service_instance_id
-                          AND ep.owner_process_key = p.process_key
-                          AND ep.status IN ({open_ports})
-                      )
-                    )
-                  )
+                  AND ({actionable})
                 ORDER BY p.process_key
                 ",
-                active_processes = status::sql_in_list(status::PROCESS_ACTIVE),
-                escaped = ProcessStatus::Escaped.as_str(),
-                open_ports = status::sql_in_list(status::PORT_OPEN),
+                actionable = status::actionable_process_sql(),
             ))
             .map_err(sql_error)?;
         statement
@@ -1785,45 +1737,7 @@ fn read_service_snapshot_conn(
         )
         .transpose()?;
 
-    let endpoints = {
-        let mut statement = connection
-            .prepare(&format!(
-                "
-                SELECT endpoint_key, address, port, status, owner_process_key
-                FROM ports
-                WHERE service_instance_id = ?1 AND status IN ({})
-                ORDER BY endpoint_key
-                ",
-                status::sql_in_list(status::PORT_OPEN),
-            ))
-            .map_err(sql_error)?;
-        let rows = statement
-            .query_map(params![service_instance_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, u16>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?;
-        rows.into_iter()
-            .map(
-                |(endpoint_key, address, port, endpoint_status, owner_process_key)| {
-                    Ok(StoredServiceEndpoint {
-                        endpoint_key,
-                        address,
-                        port,
-                        status: PortStatus::parse_db(&endpoint_status)?,
-                        owner_process_key,
-                    })
-                },
-            )
-            .collect::<RuntimeResult<Vec<_>>>()?
-    };
+    let endpoints = read_open_endpoints(connection, Some(service_instance_id))?;
 
     let leases = {
         let mut statement = connection
@@ -1898,7 +1812,7 @@ pub(crate) fn stored_service_matches(
 fn expected_endpoint_map(
     endpoints: &[PortReservation<'_>],
     process_key: &str,
-) -> BTreeMap<String, (String, u16, PortStatus, Option<String>)> {
+) -> BTreeMap<String, (String, u16, String, Option<String>)> {
     endpoints
         .iter()
         .map(|endpoint| {
@@ -1907,7 +1821,7 @@ fn expected_endpoint_map(
                 (
                     endpoint.address.to_string(),
                     endpoint.port,
-                    PortStatus::Active,
+                    PortStatus::Active.as_str().to_owned(),
                     Some(process_key.to_string()),
                 ),
             )
@@ -1917,7 +1831,7 @@ fn expected_endpoint_map(
 
 fn stored_endpoint_map(
     endpoints: &[StoredServiceEndpoint],
-) -> BTreeMap<String, (String, u16, PortStatus, Option<String>)> {
+) -> BTreeMap<String, (String, u16, String, Option<String>)> {
     endpoints
         .iter()
         .map(|endpoint| {
@@ -1926,7 +1840,7 @@ fn stored_endpoint_map(
                 (
                     endpoint.address.clone(),
                     endpoint.port,
-                    endpoint.status,
+                    endpoint.status.as_str().to_owned(),
                     endpoint.owner_process_key.clone(),
                 ),
             )
@@ -1934,7 +1848,7 @@ fn stored_endpoint_map(
         .collect()
 }
 
-fn parse_service_lifetime(value: &str) -> RuntimeResult<ServiceLifetime> {
+pub(crate) fn parse_service_lifetime(value: &str) -> RuntimeResult<ServiceLifetime> {
     match value {
         "run-scoped" => Ok(ServiceLifetime::RunScoped),
         "until-idle" => Ok(ServiceLifetime::UntilIdle),
@@ -2021,34 +1935,10 @@ fn require_active_reservation(
         ));
     }
 
-    let stored = {
-        let query = format!(
-            "
-            SELECT endpoint_key, address, port, status, owner_process_key
-            FROM ports
-            WHERE service_instance_id = ?1
-              AND status IN ({})
-            ORDER BY endpoint_key
-            ",
-            status::sql_in_list(status::PORT_OPEN)
-        );
-        let mut statement = transaction.prepare(&query).map_err(sql_error)?;
-        statement
-            .query_map(params![service_instance_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    (
-                        row.get::<_, String>(1)?,
-                        row.get::<_, u16>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ),
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(sql_error)?
-    };
+    let stored = stored_endpoint_map(&read_open_endpoints(
+        transaction,
+        Some(service_instance_id),
+    )?);
     let expected = endpoints
         .iter()
         .map(|endpoint| {
@@ -2095,24 +1985,11 @@ fn actionable_process_status(
                 SELECT p.status
                 FROM processes p
                 WHERE p.service_instance_id = ?1
-                  AND (
-                    p.status IN ({active})
-                    OR (
-                      p.status = '{escaped}'
-                      AND EXISTS (
-                        SELECT 1 FROM ports ep
-                        WHERE ep.service_instance_id = p.service_instance_id
-                          AND ep.owner_process_key = p.process_key
-                          AND ep.status IN ({ports})
-                      )
-                    )
-                  )
+                  AND ({actionable})
                 ORDER BY p.process_key
                 LIMIT 1
                 ",
-                active = status::sql_in_list(status::PROCESS_ACTIVE),
-                escaped = ProcessStatus::Escaped.as_str(),
-                ports = status::sql_in_list(status::PORT_OPEN),
+                actionable = status::actionable_process_sql(),
             ),
             params![service_instance_id],
             |row| row.get(0),
@@ -2443,6 +2320,174 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(mutations, 0);
+        }
+    }
+
+    #[test]
+    fn snapshot_multiplicity_and_reservation_conflict_keep_distinct_precedence() {
+        let mut fixture = TestRegistry::new();
+        record_started(&mut fixture.registry);
+        fixture
+            .registry
+            .connection()
+            .execute_batch(
+                "INSERT INTO processes (
+                process_key, environment, slot, pid, pgid, start_identity,
+                command_json, run_id, service_instance_id, status
+             ) SELECT 'z-second', environment, slot, pid, pgid, 'invalid-json',
+                      command_json, run_id, service_instance_id, status FROM processes;",
+            )
+            .unwrap();
+        let error = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert_eq!(
+            error.message,
+            "service instance service-instance has 2 actionable process rows"
+        );
+        let error = reserve_service_start(
+            &mut fixture.registry,
+            RUN_ID,
+            OWNER_TOKEN,
+            MANIFEST_HASH,
+            SERVICE_ID,
+            &[endpoint()],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::LeaseConflict);
+        assert_eq!(
+            error.message,
+            "service instance service-instance has actionable process running"
+        );
+    }
+
+    #[test]
+    fn reservation_equality_retains_stored_ipv6_spelling() {
+        let mut fixture = TestRegistry::new();
+        insert_run(&fixture.registry, RUN_ID);
+        reserve(&mut fixture.registry, RUN_ID, OWNER_TOKEN, true);
+        fixture
+            .registry
+            .connection()
+            .execute("UPDATE ports SET address = '0:0:0:0:0:0:0:1'", [])
+            .unwrap();
+        let identity = identity();
+        let canonical = PortReservation {
+            address: "::1",
+            ..endpoint()
+        };
+        let error = record_service_start(
+            &mut fixture.registry,
+            RUN_ID,
+            OWNER_TOKEN,
+            MANIFEST_HASH,
+            &service_record(&identity),
+            &process_record(123),
+            &[canonical],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert!(
+            error
+                .message
+                .starts_with("process recording reservation mismatch")
+        );
+        let exact = PortReservation {
+            address: "0:0:0:0:0:0:0:1",
+            ..endpoint()
+        };
+        record_service_start(
+            &mut fixture.registry,
+            RUN_ID,
+            OWNER_TOKEN,
+            MANIFEST_HASH,
+            &service_record(&identity),
+            &process_record(123),
+            &[exact],
+        )
+        .unwrap();
+        let snapshot = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap();
+        assert_eq!(snapshot.endpoints[0].address, "0:0:0:0:0:0:0:1");
+        assert_eq!(snapshot.endpoints[0].host.to_string(), "::1");
+    }
+
+    #[test]
+    fn stored_endpoint_decoding_is_shared_by_start_ready_and_reuse_reads() {
+        for mutation in [
+            "UPDATE ports SET endpoint_key = 'other:endpoint'",
+            "UPDATE ports SET endpoint_key = service_instance_id || ':'",
+            "UPDATE ports SET address = 'not-an-address'",
+            "UPDATE ports SET address = '0.0.0.0'",
+            "UPDATE ports SET port = -1",
+            "UPDATE ports SET port = 65536",
+        ] {
+            for consumer in ["start", "ready", "snapshot"] {
+                let mut fixture = TestRegistry::new();
+                if consumer == "ready" {
+                    record_started(&mut fixture.registry);
+                } else {
+                    insert_run(&fixture.registry, RUN_ID);
+                    reserve(&mut fixture.registry, RUN_ID, OWNER_TOKEN, true);
+                }
+                fixture
+                    .registry
+                    .connection()
+                    .execute_batch(mutation)
+                    .unwrap();
+                let before: (i64, i64, i64) = fixture
+                    .registry
+                    .connection()
+                    .query_row(
+                        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM processes),
+                            (SELECT count(*) FROM services)",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+                let identity = identity();
+                let result = match consumer {
+                    "start" => record_service_start(
+                        &mut fixture.registry,
+                        RUN_ID,
+                        OWNER_TOKEN,
+                        MANIFEST_HASH,
+                        &service_record(&identity),
+                        &process_record(123),
+                        &[endpoint()],
+                    ),
+                    "ready" => activate_service_ready(
+                        &mut fixture.registry,
+                        RUN_ID,
+                        SERVICE_ID,
+                        PROCESS_KEY,
+                        MANIFEST_HASH,
+                        &[VerifiedEndpointActivation {
+                            endpoint_key: endpoint().endpoint_key,
+                            address: "127.0.0.1",
+                            port: 24222,
+                            ownership_json: "{}",
+                        }],
+                        ("service.ready", "ready", "ready"),
+                    ),
+                    "snapshot" => read_service_snapshot(&fixture.registry, SERVICE_ID).map(|_| ()),
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    result.unwrap_err().code,
+                    ErrorCode::RegistryCorrupt,
+                    "{consumer}: {mutation}"
+                );
+                let after: (i64, i64, i64) = fixture
+                    .registry
+                    .connection()
+                    .query_row(
+                        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM processes),
+                            (SELECT count(*) FROM services)",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+                assert_eq!(after, before, "{consumer}: {mutation}");
+            }
         }
     }
 
