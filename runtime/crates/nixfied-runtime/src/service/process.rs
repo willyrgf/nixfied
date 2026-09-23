@@ -283,19 +283,14 @@ impl StartedService {
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
-    pub fn check_health(&mut self, registry: &mut Registry) -> RuntimeResult<()> {
-        self.check_health_cancellable(registry, &CancellationToken::new())
-    }
-    pub fn check_health_cancellable(
+    pub fn check_health(
         &mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
         match self {
             Self::Borrowed(_) => Ok(()),
-            Self::Owned(service) => service
-                .owned
-                .check_health_cancellable(registry, cancellation),
+            Self::Owned(service) => service.owned.check_health(registry, cancellation),
         }
     }
     pub fn finalize_failed_start(
@@ -433,7 +428,7 @@ impl OwnedService {
         }
     }
 
-    pub fn check_health_cancellable(
+    pub fn check_health(
         &mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
