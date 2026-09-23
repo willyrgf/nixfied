@@ -6,7 +6,6 @@ mod target;
 
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::Manifest;
 use origin::StoreRoot;
 
 use crate::error::RuntimeResult;
@@ -187,19 +186,4 @@ fn host_system() -> String {
         other => other,
     };
     format!("{arch}-{os}")
-}
-
-/// Borrow raw invocation positions before relational lowering, in secret-check order.
-fn invocations(manifest: &Manifest) -> impl Iterator<Item = &nixfied_manifest::InvocationSpec> {
-    let service_values = manifest.services.values().flat_map(|service| {
-        let lifecycle = &service.lifecycle;
-        std::iter::once(&lifecycle.start.invocation)
-            .chain(lifecycle.ready.probe.invocation.as_ref())
-            .chain(lifecycle.health.probe.invocation.as_ref())
-    });
-    let task_values = manifest
-        .tasks
-        .values()
-        .filter_map(|task| task.invocation.as_ref());
-    service_values.chain(task_values)
 }

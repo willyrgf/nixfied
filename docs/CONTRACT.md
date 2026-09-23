@@ -143,10 +143,34 @@ when the manifest/runtime contract changes.
   Named endpoint references must resolve in their directly declared scope;
   bare task references use the first authored dependency, without skipping an
   endpoint-less service. `${secret:<id>}` requires a declared secret and is
-  restricted to environment values. `stdin` is a null/inherit policy, not a
+  restricted to environment values, including a prohibition in `run[0]`.
+  `run[0]` selects a declared executable by its literal basename; only `run[1..]`
+  and environment values are templates. `stdin` is a null/inherit policy, not a
   template. Nix validation and independent runtime lowering reject invalid
   references before child execution. This does not introduce blanket rejection
-  of arbitrary `${...}` child-program syntax.
+  of arbitrary `${...}` child-program syntax. Authored text is scanned once from
+  left to right; recognized references nested inside unknown child syntax still
+  resolve. Named payloads must be nonempty and contain no braces or nested `${`.
+  Unclosed recognized references reject. Inserted secret values and host paths
+  are opaque: they are never parsed or substituted again.
+- **Relational admission order:** after target, source/secret, and closure host
+  checks, lowering checks references and operation IDs; local invocation,
+  endpoint, and effect coherence; task/sibling cycles; combined service cycles;
+  carried operation bindings; carried service requirements; then slot capacity.
+  All graph relationship errors, including `connectsTo`, are
+  `MANIFEST_ADMISSION`, not structural `MANIFEST_INVALID` errors. Every declared
+  task/service is checked, including unused graph components.
+  Invocation checks visit services in canonical order, completing start, ready,
+  and health in that order before proceeding to canonical task order. Lowering
+  rejects non-relative cwd paths, parent traversal, and NUL bytes. Directory
+  existence and canonical source confinement are rechecked at execution, including
+  every probe attempt, because filesystem paths can change after admission.
+- **Placement components:** project, environment, and run identifiers are
+  nonempty single normal path components. Slash, NUL, `.`, `..`, and `${` syntax
+  reject as `STATE_UNWRITABLE` before filesystem effects. Original bytes are
+  checked before path normalization; Unix backslashes remain ordinary bytes.
+  Layout is direct joining of project/environment/slot and runs/runId beneath
+  the state base, with registry/project/environment/slot as a parallel tree.
 - **SOURCE-1:** runtime operations observe source only through declared
   `codebaseId`s. `live-workspace` roots resolve from the invocation root;
   immutable `snapshot` and `flake-input` roots resolve from the Nix store path in

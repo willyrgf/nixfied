@@ -106,6 +106,64 @@ fn no_service(manifest: &mut Value) {
 }
 
 #[test]
+fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
+    for fault in ["cycle", "template", "nested-secret"] {
+        let mut manifest = task_manifest(&["prepare".into(), "child-started".into()]);
+        no_service(&mut manifest);
+        match fault {
+            "cycle" => manifest["services"]["synthetic"]["connectsTo"] = json!(["synthetic"]),
+            "template" => {
+                manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["env"]["BAD"] =
+                    json!("${port:${HOME}}")
+            }
+            "nested-secret" => {
+                manifest["tasks"]["smoke"]["invocation"]["run"] = json!([
+                    test_child().file_name().unwrap().to_str().unwrap(),
+                    "prepare",
+                    "${HOME:-${secret:undeclared}}"
+                ])
+            }
+            _ => unreachable!(),
+        }
+        let fixture = fixture(manifest);
+        let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+        assert!(!output.status.success(), "{fault}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("MANIFEST_ADMISSION"),
+            "{fault}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.state_base.exists(), "{fault} materialized state");
+        assert!(
+            !fixture._tmp.path.join("child-started").exists(),
+            "{fault} started a child"
+        );
+    }
+}
+
+#[test]
+fn child_receives_inserted_state_path_without_recursive_substitution() {
+    let mut manifest = task_manifest(&["output".into(), "env".into(), "VALUE".into()]);
+    no_service(&mut manifest);
+    manifest["tasks"]["smoke"]["invocation"]["env"]["VALUE"] = json!("${HOME:-${stateDir}}");
+    let mut fixture = fixture(manifest);
+    fixture.state_base = fixture._tmp.path.join("state-${port:unresolved}");
+    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "${{HOME:-{}}}",
+            fixture.state_base.join("runtime-test/dev/0").display()
+        )
+    );
+}
+
+#[test]
 fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() {
     let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
     no_service(&mut manifest);

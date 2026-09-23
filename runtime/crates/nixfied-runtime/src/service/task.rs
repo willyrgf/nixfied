@@ -278,7 +278,7 @@ pub fn run_dependent_task_cancellable(
         registry,
         &mut child.child,
         pgid,
-        exec.timeout.as_millis() as u64,
+        task.timeout.as_millis() as u64,
         cancellation,
         TaskCancellationContext {
             run_id: run_context.run_id,
@@ -309,7 +309,7 @@ pub fn run_dependent_task_cancellable(
     let failure_message = if timed_out {
         format!(
             "task {task_id} timed out after {}ms",
-            exec.timeout.as_millis()
+            task.timeout.as_millis()
         )
     } else {
         format!(

@@ -16,6 +16,9 @@ let
   native = {
     manifest-version = "manifest";
     substitution = "placeholders";
+    substitution-grammar = "placeholders";
+    relational-admission = "runtime";
+    placement-components = "runtime";
     surface = "commands";
     surface-help = "commands";
     "output-schema run-task-output" = "outputs";

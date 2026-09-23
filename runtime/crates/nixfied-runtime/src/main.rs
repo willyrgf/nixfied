@@ -569,6 +569,12 @@ fn run_m0_admitted(
     let manifest = admission.common().manifest();
     cancellation.check()?;
     let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
+    let plan = plan(
+        admission.common().execution_manifest(),
+        &options.task,
+        selected_slot.slot,
+    )
+    .map_err(post_admission_error)?;
     let placement =
         derive_host_placement_for_slot(manifest, &selected_slot, &run_id, &options.state_base)
             .map_err(post_admission_error)?;
@@ -577,6 +583,7 @@ fn run_m0_admitted(
     // placement by hand.
     run_m0_placed(
         admission,
+        &plan,
         redactor,
         options,
         &run_id,
@@ -635,6 +642,7 @@ fn enrich_placed_error(
 #[allow(clippy::too_many_arguments)]
 fn run_m0_placed(
     admission: &RunAdmission,
+    plan: &nixfied_runtime::execution::RunPlan<'_>,
     redactor: &Redactor,
     options: &RunOptions,
     run_id: &str,
@@ -681,17 +689,6 @@ fn run_m0_placed(
         diagnostic_failures.push(error);
     }
 
-    // A run drives one selected task: its flattened nodes plus the derived
-    // service union, started eagerly. The plan (service ports + node order) is
-    // a pure function of the lowered manifest, the task, and the slot, already
-    // proven feasible at admission. `run` with no selection refuses and lists
-    // the declared tasks — there is no implicit default.
-    let plan = plan(
-        admission.common().execution_manifest(),
-        &options.task,
-        selected_slot.slot,
-    )
-    .map_err(post_admission_error)?;
     let direct_selected = admission
         .common()
         .execution_manifest()
@@ -711,16 +708,12 @@ fn run_m0_placed(
         .services
         .iter()
         .filter_map(|binding| {
-            let service = admission
-                .common()
-                .execution_manifest()
-                .services()
-                .get(binding.service_name.as_str())?;
+            let service = binding.service;
             let primary_id = service.primary_endpoint.as_ref()?;
             let primary = service.endpoints.get(primary_id)?;
             let port = *binding.endpoint_ports.get(primary_id)?;
             Some((
-                binding.service_name.clone(),
+                binding.service.name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
                     endpoint_id: primary.endpoint_id.clone(),
                     host: primary.host,
@@ -760,7 +753,7 @@ fn run_m0_placed(
         }};
     }
     for binding in &plan.services {
-        let service_name = binding.service_name.as_str();
+        let service_name = binding.service.name.as_str();
         if options.output_mode.emit_summary()
             && let Err(error) = write_diagnostic(
                 options.output_mode,
@@ -774,50 +767,17 @@ fn run_m0_placed(
         // nodes inside the service reservation, resolving each leaf's
         // requirements against the services already started (the combined
         // connectsTo + prepare-requires ordering guarantees they are ready).
-        let Some(service_def) = admission
-            .common()
-            .execution_manifest()
-            .services()
-            .get(service_name)
-        else {
-            finish_run!(
-                RuntimeError::new(
-                    nixfied_runtime::ErrorCode::LifecycleFailed,
-                    format!("admitted service {service_name} is missing"),
-                ),
-                Vec::new()
-            );
-        };
+        let service_def = binding.service;
         let output_mode = options.output_mode;
         let prepare_runner: Option<PrepareRunner<'_>> =
-            service_def.prepare.clone().map(|prepare_task| {
+            service_def.prepare.as_ref().map(|_| {
+                let nodes = &binding.prepare_nodes;
                 let started_services = &session.started;
                 let diagnostic_failures = &mut session.diagnostic_failures;
                 Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
                     let mut task_runs = Vec::new();
-                    let nodes = match nixfied_runtime::execution::flatten_task(
-                        admission.common().execution_manifest(),
-                        &prepare_task,
-                    ) {
-                        Ok(nodes) => nodes,
-                        Err(error) => {
-                            return Err(PrepareTaskError::new(
-                                post_admission_error(error),
-                                task_runs,
-                            ));
-                        }
-                    };
                     for node in nodes {
-                        let Some(task) = admission.common().execution_manifest().leaf(node.task_id.as_str())
-                        else {
-                            return Err(PrepareTaskError::new(
-                                RuntimeError::new(
-                                    nixfied_runtime::ErrorCode::LifecycleFailed,
-                                    format!("admitted task {} is missing", node.task_id),
-                                ),
-                                task_runs,
-                            ));
-                        };
+                        let task = node.task;
                         let mut dependencies: Vec<&StartedService> = Vec::new();
                         for name in &task.requires {
                             let Some(dependency) = started_services
@@ -842,7 +802,7 @@ fn run_m0_placed(
                                 output_mode,
                                 format_args!(
                                     "  prepare node {} ({})",
-                                    node.node_id, node.task_id
+                                    node.node_id, node.task.task_id
                                 ),
                             )
                         {
@@ -986,20 +946,8 @@ fn run_m0_placed(
     // ${port}/${host} substitution). The plan's order already honors the
     // composite's step dependencies.
     for node in &plan.nodes {
-        let task_id = &node.task_id;
-        let Some(task) = admission
-            .common()
-            .execution_manifest()
-            .leaf(task_id.as_str())
-        else {
-            finish_run!(
-                RuntimeError::new(
-                    nixfied_runtime::ErrorCode::LifecycleFailed,
-                    format!("admitted task {task_id} is missing"),
-                ),
-                Vec::new()
-            );
-        };
+        let task_id = &node.task.task_id;
+        let task = node.task;
         // Resolve every service this task depends on to its started instance (the
         // first is the primary, providing ${port}/${host}). A task may declare
         // zero services — it runs in the run context alone.
@@ -1421,7 +1369,6 @@ fn validate_run_selection(
     };
     let task_id = nixfied_manifest::TaskId::new(task);
     if manifest.leaf(task).is_some() {
-        validate_selection_nodes(manifest, &task_id, task)?;
         return Ok(task_id);
     }
     if let Some(nixfied_runtime::execution::ExecutableTask::Composite(composite)) =
@@ -1435,7 +1382,6 @@ fn validate_run_selection(
             .with_detail("task", task)
             .with_detail("compositeSteps", composite.steps.len()));
         }
-        validate_selection_nodes(manifest, &task_id, task)?;
         return Ok(task_id);
     }
     Err(selection_required_error(manifest).with_detail("unknownTask", task))
@@ -1454,23 +1400,6 @@ fn resolve_run_output_mode(
             })
             .unwrap_or(RunOutputMode::Summary)
     })
-}
-
-fn validate_selection_nodes(
-    manifest: &nixfied_runtime::execution::ExecutionManifest,
-    task_id: &nixfied_manifest::TaskId,
-    task: &str,
-) -> Result<(), RuntimeError> {
-    let nodes = nixfied_runtime::execution::flatten_task(manifest, task_id)
-        .map_err(post_admission_error)?;
-    if nodes.is_empty() {
-        return Err(RuntimeError::new(
-            nixfied_runtime::ErrorCode::TaskSelectionInvalid,
-            format!("task {task} has no executable nodes"),
-        )
-        .with_detail("task", task));
-    }
-    Ok(())
 }
 
 fn parse_run_output_mode(value: &str) -> Result<RunOutputMode, RuntimeError> {

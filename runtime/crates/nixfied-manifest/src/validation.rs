@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::constants::{MANIFEST_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
-use crate::ids::{OperationId, ServiceId};
+use crate::ids::OperationId;
 use crate::types::*;
 
 /// An owned manifest whose structural and exact-identity checks have passed.
@@ -339,7 +339,6 @@ fn validate_services(manifest: &Manifest) -> Result<(), ValidationError> {
         validate_service_endpoints(name, service)?;
         validate_service_lifecycle(service)?;
     }
-    validate_connects_to(manifest)?;
     Ok(())
 }
 
@@ -388,52 +387,6 @@ fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), V
             actual: format!("{name}: {other:?}"),
         }),
     }
-}
-
-/// `connectsTo` targets must be declared services and the wiring graph must be
-/// acyclic; the same checks the Nix compiler enforces, repeated fail-closed at
-/// the admission boundary.
-fn validate_connects_to(manifest: &Manifest) -> Result<(), ValidationError> {
-    for (name, service) in &manifest.services {
-        for target in service.connects_to.iter() {
-            if !manifest.services.contains_key(target.as_str()) {
-                return Err(ValidationError::UnsupportedValue {
-                    field: "services.connectsTo",
-                    expected: "a declared service",
-                    actual: format!("{name} -> {target}"),
-                });
-            }
-        }
-    }
-    for start in manifest.services.keys() {
-        let mut seen = Vec::new();
-        if connects_to_reaches(manifest, start, start, &mut seen) {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.connectsTo",
-                expected: "an acyclic wiring graph",
-                actual: format!("cycle through {start}"),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn connects_to_reaches<'a>(
-    manifest: &'a Manifest,
-    start: &str,
-    current: &str,
-    seen: &mut Vec<&'a ServiceId>,
-) -> bool {
-    let Some(service) = manifest.services.get(current) else {
-        return false;
-    };
-    service.connects_to.iter().any(|target| {
-        target.as_str() == start
-            || (!seen.contains(&target) && {
-                seen.push(target);
-                connects_to_reaches(manifest, start, target.as_str(), seen)
-            })
-    })
 }
 
 /// The lifecycle's per-class shape and the endpoint/probe wiring are now

@@ -17,6 +17,7 @@ use nixfied_manifest::{
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::types::*;
+use crate::template::{Owner, Scope};
 
 /// Lower a validated manifest into the executor's input. The result contains only
 /// what the runtime can execute; anything it cannot is rejected here.
@@ -46,6 +47,11 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
         tasks,
     } = manifest;
 
+    let mut resolver = InvocationResolver {
+        closures,
+        secrets: &manifest.secrets,
+        bindings: BTreeMap::new(),
+    };
     let lowered_services = services
         .iter()
         .map(|(name, service)| {
@@ -55,8 +61,7 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
                     name,
                     service,
                     services,
-                    tasks,
-                    closures,
+                    &mut resolver,
                     state,
                     &manifest.target,
                 )?,
@@ -65,11 +70,10 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
     let mut lowered_tasks = BTreeMap::new();
-    let task_ids = tasks.keys().map(String::as_str).collect::<BTreeSet<_>>();
     for (id, task) in tasks {
         lowered_tasks.insert(
             TaskId::new(id),
-            lower_task(id, task, closures, &lowered_services, &task_ids)?,
+            lower_task(id, task, &mut resolver, &lowered_services)?,
         );
     }
 
@@ -99,35 +103,23 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
             "no candidate port windows declared",
         ));
     }
-    let execution = ExecutionManifest {
+    let program = Program {
         services: lowered_services,
         tasks: lowered_tasks,
         slot_windows,
     };
-    super::plan::prove_all_plans_feasible(&execution)?;
-    Ok(execution)
-}
-
-/// Resolve a service reference against the lowered program. The check proves
-/// membership here; the identifier type itself only distinguishes namespaces.
-fn require_service(
-    kind: &'static str,
-    services: &BTreeMap<ServiceId, ExecService>,
-    id: &ServiceId,
-) -> Result<ServiceId, Rejection> {
-    if services.contains_key(id) {
-        Ok(id.clone())
-    } else {
-        Err(undeclared(kind, id.as_str()))
-    }
+    let facts = super::plan::prove_graph(&program)?;
+    prove_derived_operation_bindings(manifest, &resolver.bindings)?;
+    super::plan::prove_carried_services(&facts, manifest)?;
+    super::plan::prove_capacity(&program, facts)?;
+    Ok(ExecutionManifest { program })
 }
 
 fn lower_service(
     name: &str,
     service: &ServiceSpec,
     all_services: &BTreeMap<String, ServiceSpec>,
-    tasks: &BTreeMap<String, TaskSpec>,
-    closures: &BTreeMap<String, ClosureSpec>,
+    resolver: &mut InvocationResolver<'_>,
     state: &StatePolicy,
     target: &Target,
 ) -> RuntimeResult<ExecService> {
@@ -149,89 +141,11 @@ fn lower_service(
         clean,
     } = lifecycle;
 
-    let endpoints: BTreeMap<String, ResolvedEndpoint> = endpoints
-        .iter()
-        .map(|(id, endpoint)| {
-            (
-                id.clone(),
-                ResolvedEndpoint {
-                    endpoint_id: endpoint.endpoint_id.clone(),
-                    host: endpoint.host,
-                },
-            )
-        })
-        .collect();
+    let endpoints = endpoints.clone();
 
     let owner = || format!("service {name}");
     let endpoint_less = endpoints.is_empty();
-    // prepare is a task reference with full task semantics. It must name a
-    // declared task, and its derived service union must not (transitively)
-    // include the owning service — a service cannot wait on itself to prepare.
-    let prepare = match prepare {
-        Some(spec) => {
-            if !tasks.contains_key(spec.task.as_str()) {
-                return Err(undeclared("service.prepare.task", spec.task.as_str()).into());
-            }
-            Some(spec.task.clone())
-        }
-        None => None,
-    };
-    // Effects coherence, both directions: a listening service's start closure
-    // must attest `network-listener`; an endpoint-less service's must not — it
-    // would announce a listener the planner cannot reserve.
-    if let Some((closure_id, closure)) = executable_closure(&start.invocation, closures) {
-        let listens = closure
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, nixfied_manifest::ClosureEffect::NetworkListener));
-        if !endpoint_less && !listens {
-            return Err(Rejection::EffectsIncoherent {
-                service: name.to_string(),
-                closure_id: closure_id.clone(),
-                expected: "declared endpoints require `network-listener` on the start closure",
-            }
-            .into());
-        }
-        if endpoint_less && listens {
-            return Err(Rejection::EffectsIncoherent {
-                service: name.to_string(),
-                closure_id: closure_id.clone(),
-                expected: "an endpoint-less service's start closure must not declare `network-listener` (an unreservable listener)",
-            }
-            .into());
-        }
-    }
-    let start = StartOp {
-        meta: op_meta(&start.operation_id, &start.terminal),
-        exec: resolve_invocation(&owner, &start.invocation, closures)?,
-    };
-    // An endpoint-less service has no tcp probe target: readiness means "the
-    // probe answers", so its probes must be invocations (rejected at eval and
-    // re-proven here).
-    if endpoint_less {
-        for (class, probe) in [("ready", &ready.probe), ("health", &health.probe)] {
-            if probe.kind == ProbeKind::Tcp {
-                return Err(Rejection::TcpProbeWithoutEndpoint {
-                    service: name.to_string(),
-                    class,
-                }
-                .into());
-            }
-        }
-    }
-    let ready = ReadyOp {
-        meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: lower_probe(name, "ready", &ready.probe, closures)?,
-    };
-    let health = HealthOp {
-        meta: op_meta(&health.operation_id, &health.terminal),
-        probe: lower_probe(name, "health", &health.probe, closures)?,
-    };
-    let stop = lower_stop(stop);
-    let clean = CleanOp {
-        meta: op_meta(&clean.operation_id, &clean.terminal),
-    };
-
+    let prepare = prepare.as_ref().map(|spec| spec.task.clone());
     // Named endpoint placeholders `${port:<name>}` in lifecycle invocation
     // args/env (including probe invocations) resolve against the service's own
     // endpoint ids or its declared connectsTo dependencies; reject any other
@@ -240,44 +154,74 @@ fn lower_service(
     // ids are disjoint.
     // An endpoint-less connectsTo target keeps its ordering/derivation meaning
     // but is NOT addressable: it leaves the named-placeholder scope entirely.
-    let allowed: BTreeSet<&str> = endpoints
-        .keys()
-        .map(String::as_str)
-        .chain(connects_to.iter().filter_map(|id| {
-            let target = all_services.get(id.as_str())?;
-            (!target.endpoints.is_empty()).then_some(id.as_str())
-        }))
-        .collect();
-    for exec in std::iter::once(&start.exec)
-        .chain(probe_exec(&ready.probe))
-        .chain(probe_exec(&health.probe))
+    let scope = Scope {
+        owner: Owner::Service(name),
+        has_primary: primary_endpoint.is_some(),
+        own_endpoints: endpoints.keys().map(String::as_str).collect(),
+        services: connects_to
+            .iter()
+            .filter_map(|id| {
+                (!all_services[id.as_str()].endpoints.is_empty()).then_some(id.as_str())
+            })
+            .collect(),
+    };
+    // Effects coherence, both directions: a listening service's start closure
+    // must attest `network-listener`; an endpoint-less service's must not — it
+    // would announce a listener the planner cannot reserve.
+    let (start_exec, closure_id, closure) =
+        resolver.resolve(&owner, &start.invocation, &start.operation_id, &scope)?;
     {
-        require_named_refs_in_scope(
-            &owner,
-            "own endpoints or addressable connectsTo",
-            exec,
-            &allowed,
-        )?;
-        // The bare-placeholder rule tasks already have, applied symmetrically:
-        // an endpoint-less service has no primary endpoint for `${port}` /
-        // `${host}` to resolve to.
-        if endpoint_less {
-            for placeholder in ["${port}", "${host}"] {
-                if exec
-                    .args
-                    .iter()
-                    .chain(exec.env.values())
-                    .any(|value| value.contains(placeholder))
-                {
-                    return Err(Rejection::ServicePlaceholderWithoutEndpoint {
-                        service: name.to_string(),
-                        placeholder,
-                    }
-                    .into());
-                }
+        let listens = closure
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, nixfied_manifest::ClosureEffect::NetworkListener));
+        if !endpoint_less && !listens {
+            return Err(Rejection::EffectsIncoherent {
+                service: name.to_string(),
+                closure_id: closure_id.to_string(),
+                expected: "declared endpoints require `network-listener` on the start closure",
             }
+            .into());
+        }
+        if endpoint_less && listens {
+            return Err(Rejection::EffectsIncoherent {
+                service: name.to_string(),
+                closure_id: closure_id.to_string(),
+                expected: "an endpoint-less service's start closure must not declare `network-listener` (an unreservable listener)",
+            }
+            .into());
         }
     }
+    let start = StartOp {
+        meta: op_meta(&start.operation_id, &start.terminal),
+        exec: start_exec,
+    };
+    let ready = ReadyOp {
+        meta: op_meta(&ready.operation_id, &ready.terminal),
+        probe: lower_probe(
+            name,
+            "ready",
+            &ready.probe,
+            &ready.operation_id,
+            &scope,
+            resolver,
+        )?,
+    };
+    let health = HealthOp {
+        meta: op_meta(&health.operation_id, &health.terminal),
+        probe: lower_probe(
+            name,
+            "health",
+            &health.probe,
+            &health.operation_id,
+            &scope,
+            resolver,
+        )?,
+    };
+    let stop = lower_stop(stop);
+    let clean = CleanOp {
+        meta: op_meta(&clean.operation_id, &clean.terminal),
+    };
 
     Ok(ExecService {
         name: ServiceId::new(name),
@@ -314,15 +258,14 @@ fn op_meta(operation_id: &OperationId, terminal: &TerminalSemantics) -> OpMeta {
 fn lower_task(
     task_id: &str,
     task: &TaskSpec,
-    closures: &BTreeMap<String, ClosureSpec>,
+    resolver: &mut InvocationResolver<'_>,
     services: &BTreeMap<ServiceId, ExecService>,
-    task_ids: &BTreeSet<&str>,
 ) -> RuntimeResult<ExecutableTask> {
     let TaskSpec {
         kind,
         default_output: _,
         service_lifetime,
-        operation_id: _,
+        operation_id,
         invocation,
         requires,
         // Re-derived and compared against the carried value at admission
@@ -340,14 +283,12 @@ fn lower_task(
                 task_id,
                 *service_lifetime,
                 steps,
-                task_ids,
-            )?));
+            )));
         }
         TaskKind::Leaf => {}
     }
     let owner = || format!("task {task_id}");
-    // Kind/field coherence is validated structurally; re-prove it here so the
-    // lowering is total on any deserialized manifest (fail closed).
+    // Convert the structurally checked wire alternatives into the native leaf.
     let Some(invocation) = invocation else {
         return Err(Rejection::TaskKindIncoherent {
             task_id: task_id.to_string(),
@@ -369,11 +310,10 @@ fn lower_task(
         }
         .into());
     }
-    let exec = resolve_invocation(&owner, invocation, closures)?;
-    let requires = requires
-        .iter()
-        .map(|id| require_service("task.requires", services, id))
-        .collect::<Result<Vec<_>, Rejection>>()?;
+    let operation_id = operation_id
+        .as_ref()
+        .expect("validated leaf has an operation id");
+    let requires: Vec<_> = requires.iter().cloned().collect();
     // `${port}`/`${host}` resolve from the task's primary (first) requirement.
     // A task that requires no services — or whose primary requirement is
     // endpoint-less — has no endpoint, so referencing them is unrunnable:
@@ -383,26 +323,10 @@ fn lower_task(
         .and_then(|id| services.get(id))
         .map(|service| !service.endpoints.is_empty())
         .unwrap_or(false);
-    if !primary_has_endpoint {
-        for placeholder in ["${port}", "${host}"] {
-            if exec
-                .args
-                .iter()
-                .chain(exec.env.values())
-                .any(|value| value.contains(placeholder))
-            {
-                return Err(Rejection::TaskPlaceholderWithoutService {
-                    task_id: task_id.to_string(),
-                    placeholder,
-                }
-                .into());
-            }
-        }
-    }
     // Named endpoint placeholders may only reference declared service
     // requirements (any of them, not just the primary) that actually declare
     // endpoints — an endpoint-less requirement is not addressable.
-    let allowed: BTreeSet<&str> = requires
+    let named: BTreeSet<&str> = requires
         .iter()
         .filter(|id| {
             services
@@ -412,73 +336,54 @@ fn lower_task(
         })
         .map(|id| id.as_str())
         .collect();
-    require_named_refs_in_scope(&owner, "addressable requires", &exec, &allowed)?;
+    let scope = Scope {
+        owner: Owner::Task(task_id),
+        has_primary: primary_has_endpoint,
+        own_endpoints: BTreeSet::new(),
+        services: named,
+    };
+    let (exec, _, _) = resolver.resolve(&owner, invocation, operation_id, &scope)?;
     Ok(ExecutableTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
         service_lifetime: *service_lifetime,
+        timeout: Duration::from_millis(invocation.timeout_ms.get()),
         exec,
         requires,
         success_codes: exit_policy.success_codes.iter().copied().collect(),
     }))
 }
 
-/// Lower a composite body: every step references a declared task (leaf or
-/// composite) and `dependsOn` names sibling steps. Acyclicity through nesting
-/// is proven by the planner's flattening, which admission runs for every
-/// slot/selection.
+/// References were checked before resolution; the planner owns cycle proof.
 fn lower_composite(
     task_id: &str,
     service_lifetime: nixfied_manifest::ServiceLifetime,
     steps: &BTreeMap<String, StepSpec>,
-    task_ids: &BTreeSet<&str>,
-) -> Result<ExecComposite, Rejection> {
-    if steps.is_empty() {
-        return Err(Rejection::TaskKindIncoherent {
-            task_id: task_id.to_string(),
-            expected: "a composite task carries at least one step",
-        });
-    }
-    let step_names = steps.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let lowered = steps
-        .iter()
-        .map(|(name, step)| {
-            if !task_ids.contains(step.task.as_str()) {
-                return Err(undeclared("task.steps.task", step.task.as_str()));
-            }
-            let depends_on = step
-                .depends_on
-                .iter()
-                .map(|dependency| {
-                    if step_names.contains(dependency.as_str()) {
-                        Ok(dependency.clone())
-                    } else {
-                        Err(undeclared("task.steps.dependsOn", dependency.as_str()))
-                    }
-                })
-                .collect::<Result<Vec<_>, Rejection>>()?;
-            Ok(ExecStep {
-                name: name.clone(),
-                task: step.task.clone(),
-                depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, Rejection>>()?;
-    Ok(ExecComposite {
+) -> ExecComposite {
+    ExecComposite {
         task_id: TaskId::new(task_id),
         service_lifetime,
-        steps: lowered,
-    })
+        steps: steps
+            .iter()
+            .map(|(name, step)| ExecStep {
+                name: name.clone(),
+                task: step.task.clone(),
+                depends_on: step.depends_on.iter().cloned().collect(),
+            })
+            .collect(),
+    }
 }
 
 /// Lower the kind-discriminated wire probe into the executor's closed enum,
 /// proving kind/field coherence: a tcp probe must not carry an invocation, an
 /// exec probe must carry one. The probe's own timing governs every attempt —
-/// the invocation's own timeout is overridden.
+/// the invocation's authored timeout is not an execution deadline here.
 fn lower_probe(
     service: &str,
     class: &'static str,
     probe: &ProbeSpec,
-    closures: &BTreeMap<String, ClosureSpec>,
+    operation_id: &OperationId,
+    scope: &Scope<'_>,
+    resolver: &mut InvocationResolver<'_>,
 ) -> RuntimeResult<Probe> {
     let ProbeSpec {
         kind,
@@ -492,6 +397,13 @@ fn lower_probe(
     let max_attempts = *max_attempts;
     match kind {
         ProbeKind::Tcp => {
+            if !scope.has_primary {
+                return Err(Rejection::TcpProbeWithoutEndpoint {
+                    service: service.to_string(),
+                    class,
+                }
+                .into());
+            }
             if invocation.is_some() {
                 return Err(Rejection::ProbeExecOnTcp {
                     service: service.to_string(),
@@ -499,7 +411,7 @@ fn lower_probe(
                 }
                 .into());
             }
-            Ok(Probe::Tcp(TcpProbe {
+            Ok(Probe::Tcp(ProbePolicy {
                 label: class.to_string(),
                 timeout,
                 retry_interval,
@@ -515,109 +427,131 @@ fn lower_probe(
                 .into());
             };
             let owner = || format!("service {service} {class} probe");
-            let mut exec = resolve_invocation(&owner, invocation, closures)?;
-            exec.timeout = timeout;
+            let (exec, _, _) = resolver.resolve(&owner, invocation, operation_id, scope)?;
             Ok(Probe::Exec(ExecProbe {
-                label: class.to_string(),
                 exec,
-                timeout,
-                retry_interval,
-                max_attempts,
+                policy: ProbePolicy {
+                    label: class.to_string(),
+                    timeout,
+                    retry_interval,
+                    max_attempts,
+                },
             }))
         }
     }
 }
 
-fn probe_exec(probe: &Probe) -> Option<&ResolvedInvocation> {
-    match probe {
-        Probe::Exec(probe) => Some(&probe.exec),
-        Probe::Tcp(_) => None,
-    }
-}
-
-/// The declarative run[0] resolution rule (docs/DERIVATION_SPEC.md §1.1): the
-/// first tool closure whose declared executable basename equals `run[0]`
-/// provides the executable. No filesystem scan, so eval and admission derive
-/// the same answer from the same declarations.
-fn executable_closure<'a>(
-    invocation: &InvocationSpec,
+/// This accumulator exists only during lowering. Selection, effect checks and
+/// derived operation bindings share the same chosen closure.
+struct InvocationResolver<'a> {
     closures: &'a BTreeMap<String, ClosureSpec>,
-) -> Option<(&'a String, &'a ClosureSpec)> {
-    let program = invocation.run.first()?;
-    invocation.tools.iter().find_map(|tool| {
-        let (id, closure) = closures.get_key_value(tool.as_str())?;
-        let basename = Path::new(&closure.executable).file_name()?;
-        (basename.to_str() == Some(program.as_str())).then_some((id, closure))
-    })
+    secrets: &'a BTreeMap<String, nixfied_manifest::SecretDescriptor>,
+    bindings: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Resolve an inline invocation against the declared closures: every tool must
-/// be a declared closure, run[0] must resolve per the derivation spec, and the
-/// carried `executable` must equal that resolution (fail closed). The PATH
-/// roots — each tool executable's parent directory, in declared order — are
-/// carried for the runtime's child-PATH assembly.
-fn resolve_invocation(
-    owner: &impl Fn() -> String,
-    invocation: &InvocationSpec,
-    closures: &BTreeMap<String, ClosureSpec>,
-) -> Result<ResolvedInvocation, Rejection> {
-    let InvocationSpec {
-        tools,
-        run,
-        executable,
-        env,
-        codebase_id: _,
-        cwd,
-        stdin,
-        timeout_ms,
-    } = invocation;
-    let Some(program) = run.first() else {
-        return Err(Rejection::RunUnresolvable {
-            owner: owner(),
-            program: String::new(),
-        });
-    };
-    // PATH is runtime-owned: it is assembled from the tool roots at spawn, so a
-    // declared PATH would be silently overwritten — reject it instead.
-    if env.contains_key("PATH") {
-        return Err(Rejection::ReservedEnvVar {
-            owner: owner(),
-            name: "PATH",
-        });
-    }
-    let mut tool_roots = Vec::with_capacity(tools.len());
-    for tool in tools.iter() {
-        let Some(closure) = closures.get(tool.as_str()) else {
-            return Err(undeclared("invocation.tools", tool.as_str()));
+impl<'a> InvocationResolver<'a> {
+    /// Resolve an inline invocation against the declared closures: every tool must
+    /// be a declared closure, run[0] must resolve per the derivation spec, and the
+    /// carried `executable` must equal that resolution (fail closed). The PATH
+    /// roots — each tool executable's parent directory, in declared order — are
+    /// carried for the runtime's child-PATH assembly.
+    fn resolve(
+        &mut self,
+        owner: &impl Fn() -> String,
+        invocation: &InvocationSpec,
+        operation_id: &OperationId,
+        scope: &Scope<'_>,
+    ) -> RuntimeResult<(ResolvedInvocation, &'a str, &'a ClosureSpec)> {
+        let InvocationSpec {
+            tools,
+            run,
+            executable,
+            env,
+            codebase_id: _,
+            cwd,
+            stdin,
+            timeout_ms: _,
+        } = invocation;
+        let Some(program) = run.first() else {
+            return Err(Rejection::RunUnresolvable {
+                owner: owner(),
+                program: String::new(),
+            }
+            .into());
         };
-        let root = Path::new(&closure.executable)
-            .parent()
-            .map(|parent| parent.display().to_string())
-            .unwrap_or_default();
-        tool_roots.push(root);
+        // PATH is runtime-owned: it is assembled from the tool roots at spawn, so a
+        // declared PATH would be silently overwritten — reject it instead.
+        if env.contains_key("PATH") {
+            return Err(Rejection::ReservedEnvVar {
+                owner: owner(),
+                name: "PATH",
+            }
+            .into());
+        }
+        let mut tool_roots = Vec::with_capacity(tools.len());
+        let mut selected = None;
+        for tool in tools.iter() {
+            let Some((id, closure)) = self.closures.get_key_value(tool.as_str()) else {
+                return Err(undeclared("invocation.tools", tool.as_str()).into());
+            };
+            if selected.is_none()
+                && Path::new(&closure.executable)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    == Some(program.as_str())
+            {
+                selected = Some((id.as_str(), closure));
+            }
+            let root = Path::new(&closure.executable)
+                .parent()
+                .map(|parent| parent.display().to_string())
+                .unwrap_or_default();
+            tool_roots.push(root);
+        }
+        let Some((closure_id, resolved)) = selected else {
+            return Err(Rejection::RunUnresolvable {
+                owner: owner(),
+                program: program.clone(),
+            }
+            .into());
+        };
+        if resolved.executable != *executable {
+            return Err(Rejection::ExecutableMismatch {
+                owner: owner(),
+                carried: executable.clone(),
+                resolved: resolved.executable.clone(),
+            }
+            .into());
+        }
+        self.bindings
+            .entry(closure_id.to_string())
+            .or_default()
+            .insert(operation_id.to_string());
+        Ok((
+            ResolvedInvocation {
+                executable: executable.clone(),
+                args: run[1..]
+                    .iter()
+                    .map(|text| Template::parse(text, scope, self.secrets, false))
+                    .collect::<RuntimeResult<_>>()?,
+                env: env
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            key.clone(),
+                            Template::parse(value, scope, self.secrets, true)?,
+                        ))
+                    })
+                    .collect::<RuntimeResult<_>>()?,
+                cwd: RelativeCwd::new(cwd)
+                    .ok_or_else(|| Rejection::InvalidCwd { owner: owner() })?,
+                stdin: *stdin,
+                tool_roots,
+            },
+            closure_id,
+            resolved,
+        ))
     }
-    let Some((_, resolved)) = executable_closure(invocation, closures) else {
-        return Err(Rejection::RunUnresolvable {
-            owner: owner(),
-            program: program.clone(),
-        });
-    };
-    if resolved.executable != *executable {
-        return Err(Rejection::ExecutableMismatch {
-            owner: owner(),
-            carried: executable.clone(),
-            resolved: resolved.executable.clone(),
-        });
-    }
-    Ok(ResolvedInvocation {
-        executable: executable.clone(),
-        args: run[1..].to_vec(),
-        env: env.clone(),
-        cwd: cwd.clone(),
-        stdin: *stdin,
-        timeout: Duration::from_millis(timeout_ms.get()),
-        tool_roots,
-    })
 }
 
 /// The closed set of reasons the manifest cannot be lowered into an executable
@@ -625,6 +559,9 @@ fn resolve_invocation(
 /// successful `lower` is a proof the references resolve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
+    InvalidCwd {
+        owner: String,
+    },
     UndeclaredReference {
         kind: &'static str,
         id: String,
@@ -654,15 +591,6 @@ pub enum Rejection {
         task_id: String,
         expected: &'static str,
     },
-    TaskPlaceholderWithoutService {
-        task_id: String,
-        placeholder: &'static str,
-    },
-    PlaceholderOutOfScope {
-        owner: String,
-        scope: &'static str,
-        service: String,
-    },
     ProbeExecOnTcp {
         service: String,
         class: &'static str,
@@ -670,10 +598,6 @@ pub enum Rejection {
     TcpProbeWithoutEndpoint {
         service: String,
         class: &'static str,
-    },
-    ServicePlaceholderWithoutEndpoint {
-        service: String,
-        placeholder: &'static str,
     },
     EffectsIncoherent {
         service: String,
@@ -698,6 +622,9 @@ pub enum Rejection {
 impl Rejection {
     fn message(&self) -> String {
         match self {
+            Rejection::InvalidCwd { owner } => {
+                format!("{owner} cwd must be a confined relative path")
+            }
             Rejection::UndeclaredReference { kind, id } => {
                 format!("{kind} references undeclared {id}")
             }
@@ -727,19 +654,6 @@ impl Rejection {
             Rejection::TaskKindIncoherent { task_id, expected } => {
                 format!("task {task_id} is kind-incoherent: {expected}")
             }
-            Rejection::TaskPlaceholderWithoutService {
-                task_id,
-                placeholder,
-            } => format!(
-                "task {task_id} references {placeholder} but requires no service to resolve it"
-            ),
-            Rejection::PlaceholderOutOfScope {
-                owner,
-                scope,
-                service,
-            } => format!(
-                "{owner} references the endpoint of {service} without declaring it in {scope}"
-            ),
             Rejection::ProbeExecOnTcp { service, class } => {
                 format!("service {service} {class} probe is tcp but carries an invocation")
             }
@@ -748,12 +662,6 @@ impl Rejection {
                     "service {service} is endpoint-less but its {class} probe is tcp (no target to connect)"
                 )
             }
-            Rejection::ServicePlaceholderWithoutEndpoint {
-                service,
-                placeholder,
-            } => format!(
-                "service {service} references {placeholder} but declares no endpoint to resolve it"
-            ),
             Rejection::EffectsIncoherent {
                 service,
                 closure_id,
@@ -785,43 +693,6 @@ impl From<Rejection> for RuntimeError {
     }
 }
 
-/// Service ids referenced by named endpoint placeholders (`${port:<id>}` /
-/// `${host:<id>}`) in one invocation value.
-pub(crate) fn named_endpoint_refs(value: &str) -> Vec<&str> {
-    let mut refs = Vec::new();
-    for prefix in ["${port:", "${host:"] {
-        let mut rest = value;
-        while let Some(start) = rest.find(prefix) {
-            rest = &rest[start + prefix.len()..];
-            let Some(end) = rest.find('}') else { break };
-            refs.push(&rest[..end]);
-            rest = &rest[end..];
-        }
-    }
-    refs
-}
-
-fn require_named_refs_in_scope(
-    owner: &impl Fn() -> String,
-    scope: &'static str,
-    exec: &ResolvedInvocation,
-    allowed: &BTreeSet<&str>,
-) -> RuntimeResult<()> {
-    for value in exec.args.iter().chain(exec.env.values()) {
-        for reference in named_endpoint_refs(value) {
-            if !allowed.contains(reference) {
-                return Err(Rejection::PlaceholderOutOfScope {
-                    owner: owner(),
-                    scope,
-                    service: reference.to_string(),
-                }
-                .into());
-            }
-        }
-    }
-    Ok(())
-}
-
 fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
     Rejection::UndeclaredReference {
         kind,
@@ -829,44 +700,9 @@ fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
     }
 }
 
-/// Every invocation position in the manifest with its operation id, in canonical
-/// order: task leaves, then each service's prepare/start/ready/health.
-fn invocation_positions(manifest: &Manifest) -> Vec<(&OperationId, &InvocationSpec)> {
-    let mut positions = Vec::new();
-    for service in manifest.services.values() {
-        let lifecycle = &service.lifecycle;
-        positions.push((&lifecycle.start.operation_id, &lifecycle.start.invocation));
-        for (probe, operation_id) in [
-            (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
-            (&lifecycle.health.probe, &lifecycle.health.operation_id),
-        ] {
-            // A tcp probe carrying an invocation is incoherent; `lower_probe`
-            // rejects it with the precise probe-kind error, so it is not an
-            // invocation position here.
-            if probe.kind != ProbeKind::Exec {
-                continue;
-            }
-            if let Some(invocation) = &probe.invocation {
-                positions.push((operation_id, invocation));
-            }
-        }
-    }
-    for task in manifest.tasks.values() {
-        if let (Some(operation_id), Some(invocation)) = (&task.operation_id, &task.invocation) {
-            positions.push((operation_id, invocation));
-        }
-    }
-    positions
-}
-
-/// Prove the *relational* invariants the per-reference resolver in `lower` cannot
-/// express on its own: every invocation references a declared codebase, closures
-/// match the target system, lifecycle/task operation ids are globally unique, an
-/// environment task requires only services that program starts, and
-/// closure operation bindings name a declared operation. The single-reference
-/// existence checks (tool/service/task/node ids) are discharged where they are
-/// consumed — `lower` resolves each into a typed handle, so a dangling reference
-/// is rejected there. Acyclicity is proven separately by the planner.
+/// Check cross-reference membership and operation identity before local invocation
+/// resolution. Graph algorithms consume these facts without repeating membership
+/// checks; cycles and carried derivations are proved after local resolution.
 fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
     let codebase_ids = manifest
         .codebases
@@ -874,9 +710,9 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
         .map(|codebase| codebase.codebase_id.as_str())
         .collect::<BTreeSet<_>>();
     let mut declared_operations = BTreeSet::new();
-    let positions = invocation_positions(manifest);
+    let positions = super::invocations(manifest).collect::<Vec<_>>();
 
-    for (_, invocation) in &positions {
+    for invocation in &positions {
         if !codebase_ids.contains(invocation.codebase_id.as_str()) {
             return Err(undeclared(
                 "invocation.codebaseId",
@@ -888,7 +724,7 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
     for (closure_id, closure) in &manifest.closures {
         if closure.target_system != manifest.target.closure_system {
             return Err(Rejection::ClosureTargetMismatch {
-                closure_id: closure_id.clone(),
+                closure_id: closure_id.to_string(),
                 target_system: closure.target_system.clone(),
                 closure_system: manifest.target.closure_system.clone(),
             });
@@ -918,31 +754,45 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
         }
     }
 
-    // Per-position tool/resolution coherence first, so an undeclared tool or
-    // unresolvable run[0] surfaces as itself rather than as a downstream
-    // derived-fact mismatch.
-    for (operation_id, invocation) in &positions {
+    for service in manifest.services.values() {
+        for target in service.connects_to.iter() {
+            if !manifest.services.contains_key(target.as_str()) {
+                return Err(undeclared("service.connectsTo", target.as_str()));
+            }
+        }
+        if let Some(prepare) = &service.lifecycle.prepare
+            && !manifest.tasks.contains_key(prepare.task.as_str())
+        {
+            return Err(undeclared("service.prepare.task", prepare.task.as_str()));
+        }
+    }
+    for task in manifest.tasks.values() {
+        for target in task.requires.iter() {
+            if !manifest.services.contains_key(target.as_str()) {
+                return Err(undeclared("task.requires", target.as_str()));
+            }
+        }
+        for step in task.steps.values() {
+            if !manifest.tasks.contains_key(step.task.as_str()) {
+                return Err(undeclared("task.steps.task", step.task.as_str()));
+            }
+            for dependency in step.depends_on.iter() {
+                if !task.steps.contains_key(dependency) {
+                    return Err(undeclared("task.steps.dependsOn", dependency));
+                }
+            }
+        }
+    }
+
+    // Tool membership is a reference check. Executable selection belongs to
+    // the subsequent per-invocation resolution pass.
+    for invocation in &positions {
         for tool in invocation.tools.iter() {
             if !manifest.closures.contains_key(tool.as_str()) {
                 return Err(undeclared("invocation.tools", tool.as_str()));
             }
         }
-        if executable_closure(invocation, &manifest.closures).is_none() {
-            return Err(Rejection::RunUnresolvable {
-                owner: format!("operation {operation_id}"),
-                program: invocation.run.first().cloned().unwrap_or_default(),
-            });
-        }
     }
-
-    // The combined connectsTo + prepare-requires graph must be acyclic before
-    // any union derivation walks it.
-    prove_service_graph_acyclic(manifest)?;
-
-    // DERIVE-1: derived facts are re-derived here and compared with the
-    // carried values, fail closed, naming both sides.
-    prove_derived_operation_bindings(manifest, &positions)?;
-    prove_derived_services_required(manifest)?;
 
     Ok(())
 }
@@ -954,18 +804,14 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
 /// there, and the emitted value is the derived set.
 fn prove_derived_operation_bindings(
     manifest: &Manifest,
-    positions: &[(&OperationId, &InvocationSpec)],
+    bindings: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<(), Rejection> {
     for (closure_id, closure) in &manifest.closures {
-        let derived: Vec<&str> = positions
-            .iter()
-            .filter(|(_, invocation)| {
-                executable_closure(invocation, &manifest.closures)
-                    .is_some_and(|(id, _)| id == closure_id)
-            })
-            .map(|(operation_id, _)| operation_id.as_str())
-            .collect::<BTreeSet<_>>()
+        let derived: Vec<&str> = bindings
+            .get(closure_id)
             .into_iter()
+            .flatten()
+            .map(String::as_str)
             .collect();
         let carried: Vec<&str> = closure
             .operation_bindings
@@ -979,168 +825,6 @@ fn prove_derived_operation_bindings(
                 carried: carried.join(", "),
                 derived: derived.join(", "),
             });
-        }
-    }
-    Ok(())
-}
-
-/// Re-derive each task's `servicesRequired` (docs/DERIVATION_SPEC.md §3): the
-/// union of transitive leaf `requires`, closed over `connectsTo`, byte-sorted.
-fn prove_derived_services_required(manifest: &Manifest) -> Result<(), Rejection> {
-    for (task_id, task) in &manifest.tasks {
-        let derived = derive_services_required(manifest, task_id);
-        let carried: Vec<&str> = task
-            .services_required
-            .iter()
-            .map(|service| service.as_str())
-            .collect();
-        if derived != carried {
-            return Err(Rejection::DerivedFactMismatch {
-                owner: format!("task {task_id}"),
-                fact: "servicesRequired",
-                carried: carried.join(", "),
-                derived: derived.join(", "),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// The derived service union of one task. Set semantics throughout; the
-/// authored task-reference graph is acyclic by the time admission compares
-/// (the planner proves it), but the walk guards with a seen set so this
-/// function is total on any deserialized manifest.
-pub(crate) fn derive_services_required<'a>(manifest: &'a Manifest, task_id: &str) -> Vec<&'a str> {
-    let mut base = BTreeSet::new();
-    leaf_requires(manifest, task_id, &mut BTreeSet::new(), &mut base);
-    // Close over connectsTo AND prepare requirements to a fixpoint: starting a
-    // service runs its prepare task first, whose leaves may require other
-    // services (docs/DERIVATION_SPEC.md §3).
-    loop {
-        let mut additions: Vec<&str> = Vec::new();
-        for service_id in base.iter() {
-            let Some(service) = manifest.services.get(*service_id) else {
-                continue;
-            };
-            additions.extend(
-                service
-                    .connects_to
-                    .iter()
-                    .map(|target| target.as_str())
-                    .filter(|target| !base.contains(target)),
-            );
-            if let Some(prepare) = &service.lifecycle.prepare {
-                let mut prepare_base = BTreeSet::new();
-                leaf_requires(
-                    manifest,
-                    prepare.task.as_str(),
-                    &mut BTreeSet::new(),
-                    &mut prepare_base,
-                );
-                additions.extend(prepare_base.into_iter().filter(|t| !base.contains(t)));
-            }
-        }
-        if additions.is_empty() {
-            break;
-        }
-        base.extend(additions);
-    }
-    base.into_iter().collect()
-}
-
-/// The union of transitive leaf `requires` reachable from one task.
-fn leaf_requires<'a>(
-    manifest: &'a Manifest,
-    task_id: &str,
-    seen: &mut BTreeSet<String>,
-    out: &mut BTreeSet<&'a str>,
-) {
-    if !seen.insert(task_id.to_string()) {
-        return;
-    }
-    let Some(task) = manifest.tasks.get(task_id) else {
-        return;
-    };
-    match task.kind {
-        TaskKind::Leaf => {
-            out.extend(task.requires.iter().map(|service| service.as_str()));
-        }
-        TaskKind::Composite => {
-            for step in task.steps.values() {
-                leaf_requires(manifest, step.task.as_str(), seen, out);
-            }
-        }
-    }
-}
-
-/// The kind-tagged service dependency edges: `connectsTo` wiring plus prepare
-/// requirements (the prepare task's transitive leaf `requires`).
-fn service_edges<'a>(manifest: &'a Manifest, service_id: &str) -> Vec<(&'a str, &'static str)> {
-    let Some(service) = manifest.services.get(service_id) else {
-        return Vec::new();
-    };
-    let mut edges: Vec<(&str, &'static str)> = service
-        .connects_to
-        .iter()
-        .map(|target| (target.as_str(), "connectsTo"))
-        .collect();
-    if let Some(prepare) = &service.lifecycle.prepare {
-        let mut prepare_base = BTreeSet::new();
-        leaf_requires(
-            manifest,
-            prepare.task.as_str(),
-            &mut BTreeSet::new(),
-            &mut prepare_base,
-        );
-        edges.extend(
-            prepare_base
-                .into_iter()
-                .map(|target| (target, "prepare requires")),
-        );
-    }
-    edges
-}
-
-/// The combined `connectsTo` + prepare-requires graph must be acyclic. The
-/// rejection renders the cycle with each edge's kind, so the operator can see
-/// which hops are wiring and which are prepare requirements.
-fn prove_service_graph_acyclic(manifest: &Manifest) -> Result<(), Rejection> {
-    fn visit<'a>(
-        manifest: &'a Manifest,
-        start: &str,
-        current: &'a str,
-        trail: &mut Vec<(&'a str, &'static str)>,
-        seen: &mut BTreeSet<&'a str>,
-    ) -> Option<Vec<(&'a str, &'static str)>> {
-        for (target, kind) in service_edges(manifest, current) {
-            if target == start {
-                let mut cycle = trail.clone();
-                cycle.push((target, kind));
-                return Some(cycle);
-            }
-            if seen.insert(target) {
-                trail.push((target, kind));
-                if let Some(cycle) = visit(manifest, start, target, trail, seen) {
-                    return Some(cycle);
-                }
-                trail.pop();
-            }
-        }
-        None
-    }
-    for start in manifest.services.keys() {
-        if let Some(cycle) = visit(
-            manifest,
-            start,
-            start,
-            &mut Vec::new(),
-            &mut BTreeSet::new(),
-        ) {
-            let mut rendered = start.to_string();
-            for (target, kind) in cycle {
-                rendered.push_str(&format!(" -[{kind}]-> {target}"));
-            }
-            return Err(Rejection::ServiceGraphCycle { cycle: rendered });
         }
     }
     Ok(())
@@ -1295,26 +979,120 @@ mod tests {
     #[test]
     fn lowers_a_valid_manifest() {
         let em = lower(&manifest_from(manifest_value())).expect("valid manifest lowers");
-        let svc = em.services.get("svc").expect("service lowered");
+        let svc = em.services().get("svc").expect("service lowered");
         assert_eq!(svc.endpoints["svc-tcp"].host.to_string(), "127.0.0.1");
         assert_eq!(svc.primary_endpoint.as_deref(), Some("svc-tcp"));
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.is_none());
         // Args are run[1..]; run[0] resolved to the closure executable.
         assert_eq!(svc.start.exec.executable, "/nix/store/c/bin/svc");
-        assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
         assert_eq!(svc.start.exec.tool_roots, vec!["/nix/store/c/bin"]);
         assert_eq!(svc.start.exec.stdin, StdinPolicy::Null);
-        assert_eq!(em.slot_windows[&0].start(), 23080);
+        assert_eq!(em.program.slot_windows[&0].start(), 23080);
         let task = em.leaf("t").expect("task lowered");
         assert_eq!(task.success_codes, vec![0]);
-        assert_eq!(task.exec.args, vec!["--port", "${port}"]);
         assert_eq!(task.exec.tool_roots, vec!["/nix/store/ct/bin"]);
         assert_eq!(task.requires, vec![ServiceId::new("svc")]);
         assert_eq!(
             task.service_lifetime,
             nixfied_manifest::ServiceLifetime::RunScoped
         );
+    }
+
+    #[test]
+    fn first_tool_selection_owns_effects_and_operation_bindings() {
+        for first in ["c", "alternate"] {
+            let mut value = manifest_value();
+            value["closures"]["alternate"] = value["closures"]["c"].clone();
+            value["closures"]["alternate"]["executable"] = json!("/nix/store/alternate/bin/svc");
+            value["closures"]["alternate"]["storePath"] = json!("/nix/store/alternate");
+            let other = if first == "c" { "alternate" } else { "c" };
+            value["services"]["svc"]["lifecycle"]["start"]["invocation"]["tools"] =
+                json!([first, other]);
+            value["services"]["svc"]["lifecycle"]["start"]["invocation"]["executable"] =
+                value["closures"][first]["executable"].clone();
+            value["closures"][other]["effects"] = json!(["process"]);
+            value["closures"][other]["operationBindings"] = json!([]);
+            let execution = lower(&manifest_from(value.clone())).unwrap();
+            assert_eq!(
+                execution.services()["svc"].start.exec.executable,
+                value["closures"][first]["executable"].as_str().unwrap()
+            );
+            value["closures"][first]["effects"] = json!(["process"]);
+            value["closures"][other]["effects"] = json!(["process", "network-listener"]);
+            let error = lower(&manifest_from(value)).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!(
+                    "service svc start closure {first}: declared endpoints require `network-listener` on the start closure"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn local_invocation_errors_precede_cycles_and_carried_facts() {
+        let mut value = manifest_value();
+        value["services"]["svc"]["connectsTo"] = json!(["svc"]);
+        value["closures"]["c"]["operationBindings"] = json!([]);
+        value["tasks"]["t"]["servicesRequired"] = json!([]);
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"]["PATH"] =
+            json!("forbidden");
+        let error = lower(&manifest_from(value.clone())).unwrap_err();
+        assert_eq!(
+            error.message,
+            "service svc declares runtime-owned environment variable PATH"
+        );
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] = json!({});
+        let error = lower(&manifest_from(value)).unwrap_err();
+        assert_eq!(
+            error.message,
+            "the combined connectsTo + prepare-requires service graph has a cycle: svc -[connectsTo]-> svc"
+        );
+    }
+
+    #[test]
+    fn each_service_invocation_finishes_validation_before_the_next_position() {
+        let mut value = manifest_value();
+        with_exec_ready_probe(&mut value);
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["invocation"]["executable"] =
+            json!("/nix/store/incorrect/bin/svc");
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"]["ADDR"] =
+            json!("${port:missing}");
+        let error = lower(&manifest_from(value.clone())).unwrap_err();
+        assert_eq!(
+            error.message,
+            "service svc references the endpoint of missing without declaring it in own endpoints or addressable connectsTo"
+        );
+        value["services"]["svc"]["endpoints"] = json!({});
+        value["services"]["svc"]
+            .as_object_mut()
+            .unwrap()
+            .remove("primaryEndpoint");
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] = json!({});
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] = json!(["svc"]);
+        value["closures"]["c"]["effects"] = json!(["process"]);
+        let error = lower(&manifest_from(value)).unwrap_err();
+        assert_eq!(
+            error.message,
+            "service svc ready probe carries executable /nix/store/incorrect/bin/svc but its tools resolve run[0] to /nix/store/c/bin/svc"
+        );
+    }
+
+    #[test]
+    fn cwd_is_lexically_confined_before_execution() {
+        for cwd in [".", "work/subdir", "./work", "unix\\name"] {
+            let mut value = manifest_value();
+            value["tasks"]["t"]["invocation"]["cwd"] = json!(cwd);
+            lower(&manifest_from(value)).expect("filesystem existence is checked at execution");
+        }
+        for cwd in ["..", "work/../outside", "/absolute", "nul\0byte"] {
+            let mut value = manifest_value();
+            value["tasks"]["t"]["invocation"]["cwd"] = json!(cwd);
+            let error = lower(&manifest_from(value)).unwrap_err();
+            assert_eq!(error.code, ErrorCode::ManifestAdmission);
+            assert_eq!(error.message, "task t cwd must be a confined relative path");
+        }
     }
 
     #[test]
@@ -1343,12 +1121,12 @@ mod tests {
             );
             let execution = lower(&manifest).expect("descriptive strings remain accepted");
             assert_eq!(
-                execution.services["svc"].identity,
-                baseline_execution.services["svc"].identity
+                execution.services()["svc"].identity,
+                baseline_execution.services()["svc"].identity
             );
             assert_eq!(
-                execution.services["svc"].start.exec.args,
-                baseline_execution.services["svc"].start.exec.args
+                execution.services()["svc"].start.exec.args,
+                baseline_execution.services()["svc"].start.exec.args
             );
             assert_eq!(
                 execution.leaf("t").unwrap().exec.args,
@@ -1365,7 +1143,7 @@ mod tests {
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["stdin"] = json!("inherit");
         let em = lower(&manifest_from(value)).expect("inherit stdin lowers");
         assert_eq!(
-            em.services.get("svc").unwrap().start.exec.stdin,
+            em.services().get("svc").unwrap().start.exec.stdin,
             StdinPolicy::Inherit
         );
     }
@@ -1442,13 +1220,9 @@ mod tests {
         // against this closure — a derived-fact mismatch (DERIVE-1).
         let mut value = manifest_value();
         value["closures"]["c"]["operationBindings"] = json!(["svc.start", "task.t.run"]);
-        assert!(matches!(
-            reject_reason(value),
-            Rejection::DerivedFactMismatch {
-                fact: "operationBindings",
-                ..
-            }
-        ));
+        let error = lower(&manifest_from(value)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
+        assert!(error.message.contains("operationBindings"));
     }
 
     #[test]
@@ -1457,13 +1231,21 @@ mod tests {
         // for it.
         let mut value = manifest_value();
         value["closures"]["c"]["operationBindings"] = json!([]);
-        assert!(matches!(
-            reject_reason(value),
-            Rejection::DerivedFactMismatch {
-                fact: "operationBindings",
-                ..
-            }
-        ));
+        let error = lower(&manifest_from(value)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
+        assert!(error.message.contains("operationBindings"));
+    }
+
+    fn planned_services(document: &ValidatedManifest, task: &str) -> Vec<String> {
+        let execution = lower(document).expect("literal carried facts must match");
+        let plan = super::super::plan::plan(&execution, &TaskId::new(task), 0).unwrap();
+        let mut services: Vec<_> = plan
+            .services
+            .iter()
+            .map(|binding| binding.service.name.to_string())
+            .collect();
+        services.sort();
+        services
     }
 
     /// Golden vector V4 (docs/DERIVATION_SPEC.md §6) on the runtime side:
@@ -1482,8 +1264,9 @@ mod tests {
         value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
         let manifest = manifest_from(value);
-        assert_eq!(derive_services_required(&manifest, "t"), vec!["dep", "svc"]);
+        assert_eq!(planned_services(&manifest, "t"), vec!["dep", "svc"]);
     }
 
     #[test]
@@ -1544,10 +1327,7 @@ mod tests {
         value["tasks"]["t"]["requires"] = json!(["a", "b"]);
         value["tasks"]["t"]["servicesRequired"] = json!(["a", "b", "db"]);
         let manifest = manifest_from(value);
-        assert_eq!(
-            derive_services_required(&manifest, "t"),
-            vec!["a", "b", "db"]
-        );
+        assert_eq!(planned_services(&manifest, "t"), vec!["a", "b", "db"]);
         lower(&manifest).expect("diamond service graph should lower");
     }
 
@@ -1598,7 +1378,7 @@ mod tests {
         value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "prep" });
         value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
         let manifest = manifest_from(value);
-        assert_eq!(derive_services_required(&manifest, "t"), vec!["dep", "svc"]);
+        assert_eq!(planned_services(&manifest, "t"), vec!["dep", "svc"]);
         lower(&manifest).expect("composite prepare task should lower");
     }
 
@@ -1620,7 +1400,7 @@ mod tests {
         value["tasks"]["t"]["servicesRequired"] = json!(["api", "cache", "db", "worker"]);
         let manifest = manifest_from(value);
         assert_eq!(
-            derive_services_required(&manifest, "t"),
+            planned_services(&manifest, "t"),
             vec!["api", "cache", "db", "worker"]
         );
         lower(&manifest).expect("long connectsTo closure should lower");
@@ -1700,15 +1480,13 @@ mod tests {
         let mut value = manifest_value();
         with_exec_ready_probe(&mut value);
         let em = lower(&manifest_from(value)).expect("exec probe lowers");
-        let svc = em.services.get("svc").expect("service lowered");
+        let svc = em.services().get("svc").expect("service lowered");
         let Probe::Exec(probe) = &svc.ready.probe else {
             panic!("ready probe should lower to the exec variant");
         };
         // Probe args are run[1..]; the probe's per-attempt timeout overrides the
         // invocation's own timeout.
-        assert_eq!(probe.exec.args, vec!["ping"]);
-        assert_eq!(probe.exec.timeout, Duration::from_millis(500));
-        assert_eq!(probe.max_attempts.get(), 5);
+        assert_eq!(probe.policy.max_attempts.get(), 5);
         assert!(matches!(svc.health.probe, Probe::Tcp(_)));
     }
 
@@ -1775,7 +1553,7 @@ mod tests {
             }
         });
         let em = lower(&manifest_from(value)).expect("composite lowers");
-        let ExecutableTask::Composite(composite) = &em.tasks["pipeline"] else {
+        let ExecutableTask::Composite(composite) = &em.tasks()["pipeline"] else {
             panic!("composite lowered")
         };
         assert_eq!(composite.steps.len(), 2);
@@ -1953,7 +1731,7 @@ mod tests {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
         let em = lower(&manifest_from(value)).expect("endpoint-less service lowers");
-        let worker = em.services.get("worker").expect("worker lowered");
+        let worker = em.services().get("worker").expect("worker lowered");
         assert!(worker.endpoints.is_empty());
         assert!(worker.primary_endpoint.is_none());
     }
@@ -2109,7 +1887,7 @@ mod tests {
         value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
         let em = lower(&manifest_from(value)).expect("cross-service prepare lowers");
         assert_eq!(
-            em.services
+            em.services()
                 .get("svc")
                 .unwrap()
                 .prepare
@@ -2214,15 +1992,6 @@ mod tests {
     }
 
     #[test]
-    fn named_endpoint_refs_are_extracted() {
-        assert_eq!(
-            named_endpoint_refs("--db ${host:postgres}:${port:postgres} --cache ${port:redis}"),
-            vec!["postgres", "redis", "postgres"]
-        );
-        assert!(named_endpoint_refs("--port ${port}").is_empty());
-    }
-
-    #[test]
     fn task_named_placeholders_use_service_ids_not_endpoint_ids() {
         let mut value = manifest_value();
         value["tasks"]["t"]["invocation"]["run"] = json!(["task", "${host:svc}", "${port:svc}"]);
@@ -2288,7 +2057,7 @@ mod tests {
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] =
             json!({ "DB_URL": "tcp://${host:dep}:${port:dep}" });
         let em = lower(&manifest_from(value)).expect("declared named refs lower");
-        let svc = em.services.get("svc").expect("service lowered");
+        let svc = em.services().get("svc").expect("service lowered");
         assert_eq!(svc.connects_to, vec![ServiceId::new("dep")]);
     }
 }

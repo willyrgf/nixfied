@@ -99,6 +99,16 @@ does not resolve source or secret values. Neither exposes mutable proof fields.
 The manifest crate's `ValidatedManifest` is the structural prerequisite for
 lowering; it does not claim host admission.
 
+Lowering builds private candidate storage and moves it into the admitted execution
+manifest after relational proof. One Rust planner supplies cycle checks, occurrence
+flattening, combined service edges, and required-service closure. Admission derives
+each task once and checks endpoint demand against every slot. A selected plan borrows
+definitions and contains each service's prepare occurrences; slot binding allocates
+ports before placement or registry effects. Invocation lowering selects each closure
+once and parses scoped templates. Execution renders values opaquely, and prepared
+probe commands retain concrete arguments and environment across attempts while
+rechecking filesystem confinement each time.
+
 ## Shared contracts and the static reference
 
 Adopters use ordinary Nix modules and the public library. The private declaration

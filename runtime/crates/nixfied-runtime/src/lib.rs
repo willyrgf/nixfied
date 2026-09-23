@@ -13,6 +13,7 @@ pub mod registry;
 pub mod service;
 pub mod slot;
 pub mod state;
+mod template;
 
 pub use admission::{
     AdmissionContext, ControlAdmission, RunAdmission, StoreOriginPolicy, admit_control, admit_run,

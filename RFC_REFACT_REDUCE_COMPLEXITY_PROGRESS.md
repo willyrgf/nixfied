@@ -154,7 +154,73 @@ removed state owners, coordinated change sites, and capture correctness addition
    secret, then closure error precedence and raw provenance. All 33 admission
    tests and Clippy pass; the complete fixture-backed `.#test` floor passes on the
    final admission tree (`/tmp/nixfied-admission-complete-floor.log`).
-7. Graph, invocation, template, and placement ABI cutover: pending.
+7. Graph, invocation, template, and placement ABI cutover: complete.
+   Normative contract, adapter grammar, capability semantics, and native coverage
+   routing are drafted for the atomic change. Direct placement joins replace the
+   fixed template interpreter; original component bytes reject slash/NUL/dot/
+   template syntax while preserving Unix backslashes. All 26 state tests pass.
+   A shared Rust tokenizer now drives early secret checking and detects known
+   references inside unknown child syntax, including secrets nested in malformed
+   endpoint forms. The independent Nix tokenizer is connected to compiler
+   validation. Both pass the same 19 literal JSON grammar vectors; the Nix check
+   is included in the source gate. These are authored literal expectations, not
+   generated answers. New files are staged so Nix source filtering includes them.
+   Logs: `/tmp/nixfied-step7-first.log`, `/tmp/nixfied-template-vectors.log`;
+   direct Nix invocation-template check returned true.
+   Private candidate storage now moves into `ExecutionManifest` after graph proof.
+   The planner owns combined edges, all-task flattening/cycle checks, service union
+   derivation, carried service checks and slot capacity; duplicate raw Rust graph
+   walkers are deleted. Admission discards flattened occurrences per task and
+   consumes temporary service unions into capacity summaries. Selected plans
+   borrow task/service definitions, retain separate prepare occurrences per
+   selected service, and bind ports canonically before placement/registry effects.
+   Main no longer re-flattens or re-resolves planned definitions during execution.
+   Invocation selection now traverses authored tools once and returns the chosen
+   closure for effects; one local binding accumulator supplies derived comparison.
+   The duplicate raw invocation traversal is removed. Task timeout belongs to
+   `ExecTask`; probe timeout remains on its probe; endpoints reuse manifest Endpoint.
+   Private lexical cwd rejects absolute/parent/NUL input during lowering; canonical
+   filesystem confinement remains per spawn/attempt. The old lexical escape runtime
+   test now proves a symlink changed after admission is rejected at execution.
+   New independent proofs cover graph-vs-closure precedence, first-tool selection
+   for effects/bindings, local errors before cycles/carried facts, and separate
+   shared-prepare occurrences. Architect review found per-position service error
+   ordering still deferred scope checks; start/ready/health now complete locally in
+   order, with multifault proofs for invalid start scope versus ready executable,
+   and invalid ready executable versus endpoint-less health TCP.
+   All 68 execution tests, 34 admission tests, 71 service tests, 26 state tests,
+   and workspace/all-target Clippy pass on Linux. Logs:
+   `/tmp/nixfied-local-order.log`, `/tmp/nixfied-step7-graph-cwd.log`,
+   `/tmp/nixfied-step7-service-state.log`, `/tmp/nixfied-graph-cleanup.log`.
+   Parsed templates now hold only private checked pieces and resolved endpoint
+   selectors/declared secret IDs. The renderer appends each piece once, keeping
+   inserted secret/path values opaque. Removed the old endpoint and secret scanners
+   and chained replacement implementation. Prepared probes now hold concrete
+   rendered commands and one scheduling policy; attempts retain temporal cwd checks.
+   Literal rendering proofs cover order-sensitive secrets, placeholder-looking
+   state paths, and nested known references inside unknown child forms. End-to-end
+   output proofs show inserted paths reach children literally and unused graph or
+   template faults create neither state nor child markers. A real blocked probe
+   test proves its own deadline both exceeds and truncates the authored invocation
+   timeout as configured. Old scanner and late invalid-substitution proofs were
+   replaced with parser rejection and rendered-behavior proofs.
+   Architect review found Nix scanned run[0] as a template while Rust selected it
+   literally. Nix now scans only argument tail/env, retaining secret prohibition
+   throughout run. Realised Rust admission and Nix resolve/validate cases accept
+   two placeholder-looking executable basenames but reject them in argument tails.
+   Contract/adapter docs and descriptor record the literal executable position.
+   ABI snapshot deliberately rotates to `nixfied-runtime-abi:1-90d13e80a7e8`.
+   All 116 runtime unit, 35 admission, 71 service (before the new deadline case),
+   21 output, 30 manifest tests and the new two-outcome deadline case pass; current
+   all-target Clippy passes. Independent Nix template+validation check returns true.
+   Logs: `/tmp/nixfied-opaque-templates.log`, `/tmp/nixfied-template-runtime.log`,
+   `/tmp/nixfied-template-effects.log`, `/tmp/nixfied-literal-program-tests.log`,
+   `/tmp/nixfied-probe-deadline-abi.log`, `/tmp/nixfied-nix-template-validation.log`.
+   Cross-layer `nix run .#ci -- --dirty` passed (session `21511`, exit 0),
+   log `/tmp/nixfied-step7-ci.log`: source/freshness/Nix and Rust derivation checks,
+   the complete fixture-backed Cargo floor including recovery, all 22 runtime
+   gate cases, and Nix compiler/install/upgrade integration. Linux proof is current;
+   macOS and separately requested final release/CLI/install builds remain unverified.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.
 10. Terminal/persistent capture integration: pending.
