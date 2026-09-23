@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use nixfied_manifest::{Manifest, SecretSourceKind};
@@ -30,12 +30,11 @@ impl ResolvedSecrets {
 }
 
 pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
-    check_secret_descriptors(manifest)?;
-    let declared = manifest
-        .secrets
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
+    checked_secret_sources(manifest)?;
+    check_references(manifest)
+}
+
+fn check_references(manifest: &Manifest) -> RuntimeResult<()> {
     for invocation in super::invocations(manifest) {
         for value in &invocation.run {
             if value.contains("${secret:") {
@@ -59,7 +58,7 @@ pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
                         "secret placeholder must name a declared secret",
                     ));
                 }
-                if !declared.contains(reference) {
+                if !manifest.secrets.contains_key(reference) {
                     return Err(RuntimeError::new(
                         ErrorCode::ManifestAdmission,
                         format!("secret placeholder references undeclared secret {reference}"),
@@ -72,38 +71,33 @@ pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
 }
 
 pub fn resolve_secrets(manifest: &Manifest) -> RuntimeResult<ResolvedSecrets> {
-    check_secret_references(manifest)?;
+    let sources = checked_secret_sources(manifest)?;
+    check_references(manifest)?;
     let mut base = None;
     let mut values = BTreeMap::new();
-    for (id, descriptor) in &manifest.secrets {
-        let value = match descriptor.source.kind {
-            SecretSourceKind::EnvVar => {
-                let env_var = descriptor
-                    .source
-                    .env_var
-                    .as_deref()
-                    .expect("descriptor validation requires envVar");
-                read_env_secret(id, env_var)?
-            }
-            SecretSourceKind::File => {
+    for (id, source) in sources {
+        let value = match source {
+            SecretSource::EnvVar(env_var) => read_env_secret(id, env_var)?,
+            SecretSource::File(path) => {
                 let base = match &base {
                     Some(base) => base,
                     None => base.insert(secrets_base()?),
                 };
-                let path = descriptor
-                    .source
-                    .path
-                    .as_deref()
-                    .expect("descriptor validation requires path");
                 read_file_secret(id, base, path)?
             }
         };
-        values.insert(id.clone(), value);
+        values.insert(id.to_owned(), value);
     }
     Ok(ResolvedSecrets { values })
 }
 
-fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
+enum SecretSource<'a> {
+    EnvVar(&'a str),
+    File(&'a str),
+}
+
+fn checked_secret_sources(manifest: &Manifest) -> RuntimeResult<Vec<(&str, SecretSource<'_>)>> {
+    let mut sources = Vec::with_capacity(manifest.secrets.len());
     for (id, descriptor) in &manifest.secrets {
         if descriptor.secret_id != *id {
             return Err(RuntimeError::new(
@@ -114,7 +108,7 @@ fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
                 ),
             ));
         }
-        match descriptor.source.kind {
+        let source = match descriptor.source.kind {
             SecretSourceKind::EnvVar => {
                 let env_var = descriptor.source.env_var.as_deref().ok_or_else(|| {
                     RuntimeError::new(
@@ -128,6 +122,7 @@ fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
                         format!("secret {id} env-var resolver must declare only envVar"),
                     ));
                 }
+                SecretSource::EnvVar(env_var)
             }
             SecretSourceKind::File => {
                 let path = descriptor.source.path.as_deref().ok_or_else(|| {
@@ -148,10 +143,12 @@ fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
                         ),
                     ));
                 }
+                SecretSource::File(path)
             }
-        }
+        };
+        sources.push((id.as_str(), source));
     }
-    Ok(())
+    Ok(sources)
 }
 
 pub(crate) fn secret_refs(value: &str) -> Vec<&str> {
@@ -287,6 +284,63 @@ fn secret_unavailable(message: impl Into<String>) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_secret_sources_reject_before_references_or_value_reads() {
+        use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
+        use serde_json::json;
+        for (source, diagnostic) in [
+            (
+                json!({"kind":"env-var"}),
+                "secret bad env-var resolver requires envVar",
+            ),
+            (
+                json!({"kind":"env-var","envVar":""}),
+                "secret bad env-var resolver must declare only envVar",
+            ),
+            (
+                json!({"kind":"env-var","envVar":"TOKEN","path":"token"}),
+                "secret bad env-var resolver must declare only envVar",
+            ),
+            (
+                json!({"kind":"file"}),
+                "secret bad file resolver requires path",
+            ),
+            (
+                json!({"kind":"file","path":""}),
+                "secret bad file resolver must declare only a confined relative path",
+            ),
+            (
+                json!({"kind":"file","path":"/token"}),
+                "secret bad file resolver must declare only a confined relative path",
+            ),
+            (
+                json!({"kind":"file","path":"../token"}),
+                "secret bad file resolver must declare only a confined relative path",
+            ),
+            (
+                json!({"kind":"file","path":"token","envVar":"TOKEN"}),
+                "secret bad file resolver must declare only a confined relative path",
+            ),
+        ] {
+            let mut value = synthetic_manifest(&SyntheticManifestOptions::default());
+            // This earlier valid descriptor must not trigger filesystem access:
+            // validate every descriptor, then references, then resolve values.
+            value["secrets"] = json!({
+                "a": {"secretId":"a","source":{"kind":"file","path":"absent-fixture-secret"}},
+                "bad": {"secretId":"bad","source":source}
+            });
+            value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:undeclared}");
+            let manifest: Manifest = serde_json::from_value(value).unwrap();
+            for error in [
+                check_secret_references(&manifest).unwrap_err(),
+                resolve_secrets(&manifest).unwrap_err(),
+            ] {
+                assert_eq!(error.code, ErrorCode::ManifestAdmission);
+                assert_eq!(error.message, diagnostic);
+            }
+        }
+    }
 
     #[test]
     fn secret_refs_extracts_placeholders() {
