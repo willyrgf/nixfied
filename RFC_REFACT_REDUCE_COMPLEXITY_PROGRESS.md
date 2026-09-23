@@ -51,8 +51,20 @@ removed state owners, coordinated change sites, and capture correctness addition
    accept only `Deleted` or `Failed { safe_reason }`, and prior cleanup evidence
    stores a parsed status. All 24 state tests, 11 endpoint tests, six readiness
    tests, and workspace/all-target Clippy pass on Linux. Remaining: explicit
-   lock-directory injection, applicable wrapper/ceremony subtractions, and the
-   conditional listener representation review.
+   applicable wrapper/ceremony subtractions and conditional listener review.
+   Explicit lock-root injection now replaces ambient thread-local state and fd
+   duplication/restoration. The endpoint owner supplies a validated descriptor;
+   a private acquisition loop receives the validated lock directory. Fixed-root
+   production traversal and the original acquisition phase are retained. Named
+   directory permission policies replace the magic sticky-bit/mode argument.
+   Existing mode, symlink/nonregular, nonblocking, close-on-exec, partial-release,
+   stable-inode, and real-start-before-prepare proofs remain; an unsafe lock child
+   also proves that endpoint-less acquisition bypasses directory access.
+   Clippy, 23 endpoint unit tests, 11 endpoint integration tests, and 75 service
+   tests pass (`/tmp/nixfied-explicit-lock-final-tests.log`). Architect review
+   found no defect and identified a redundant root validation, now removed;
+   the final narrow review check is recorded in
+   `/tmp/nixfied-explicit-lock-review-tests.log`.
 3. Placement characterization: exact slot-one registry/run/log/artifact/summary
    paths are pinned alongside existing slot-zero paths. Materialization rejects
    symlinks at each owned root and nested run path without writing through them.
@@ -319,7 +331,7 @@ removed state owners, coordinated change sites, and capture correctness addition
    `30118`, exit 0, `/tmp/nixfied-evidence-ci.log`): source checks, fixture floor,
    all 22 runtime cases, and downstream Nix/install/upgrade fixtures. Committed
    as `3281b38`; macOS remains unverified.
-12. Registry decoding/event context: implemented; full proof running.
+12. Registry decoding/event context: complete.
    Registry lends disjoint connection, identity, and redactor references to
    service/control/cleanup transitions. Explicit deferred/immediate transaction
    modes, mutation order, temporal checks, redaction, and commit boundaries remain.
@@ -353,7 +365,9 @@ removed state owners, coordinated change sites, and capture correctness addition
    26 state, and 10 upgrade tests pass (`/tmp/nixfied-registry-boundary-tests.log`,
    `/tmp/nixfied-registry-relational-tests.log`). Full fixture-backed floor passed
    (session `71543`, `/tmp/nixfied-registry-owner-floor.log`). Final architect
-   review found no correctness gaps; cross-layer CI remains required.
+   review found no correctness gaps. Full cross-layer CI passed (session `99879`,
+   exit 0, `/tmp/nixfied-registry-owner-ci.log`), including downstream
+   Nix/install/upgrade fixtures; macOS remains unverified.
 13. Shared redaction scanner/safe projections: implemented.
    Whole-buffer and streaming redaction share one private scanner with an eligible
    match-start limit and actual consumed count. Longest-first matching, binary
