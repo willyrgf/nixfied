@@ -32,13 +32,13 @@ let
     inherit explanation;
   };
   shared = arg: arg // { binding = "Shared"; };
-  model = shared (
-    argument "model" "--model" (domain "Path") absent (
-      hidden "Framework-supplied compiled model path; native admission requires a model and checks its origin."
+  manifest = shared (
+    argument "manifest" "--manifest" (domain "Path") absent (
+      hidden "Framework-supplied compiled manifest path; native admission requires a manifest and checks its origin."
     )
   );
   allow = shared (
-    argument "allowNonStoreModel" "--allow-non-store-model" (domain "Flag") (literal false) (
+    argument "allowNonStoreManifest" "--allow-non-store-manifest" (domain "Flag") (literal false) (
       hidden "Test-only origin-policy escape hatch; generated apps do not supply it."
     )
   );
@@ -104,13 +104,13 @@ let
     ) (throw "Missing native run-output-mode variant ${variant}") modes;
 in
 [
-  (runtime "check" "Admit the compiled Nixfied model without executing tasks." [
-    model
+  (runtime "check" "Admit the compiled Nixfied manifest without executing tasks." [
+    manifest
     allow
     slot
   ] 19 "local/CheckOutput")
   (runtime "run" "Run one declared task and its required services." [
-    model
+    manifest
     allow
     state
     (argument "task" "--task" (domain "Text") absent (
@@ -130,20 +130,20 @@ in
     )
   ] 26 "output-schema/run-json")
   (runtime "ps" "Reconcile and report Nixfied-owned processes for a slot." [
-    model
+    manifest
     allow
     state
     slot
   ] 19 "output-schema/ps-json")
   (runtime "down" "Stop Nixfied-owned process groups for a slot." [
-    model
+    manifest
     allow
     state
     slot
     (timeout "Set the stop timeout in milliseconds")
   ] 25 "local/DownReport")
   (runtime "clean" "Safely clean Nixfied-owned state for a slot." [
-    model
+    manifest
     allow
     state
     slot

@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ContainmentRequirement, Model, ServiceLifetime, Validate};
+use nixfied_manifest::{ContainmentRequirement, Manifest, ServiceLifetime, Validate};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
@@ -36,7 +36,7 @@ use common::*;
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -156,7 +156,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
 fn service_start_rejects_exec_cwd_escape() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
     fixture
-        .model
+        .manifest
         .services
         .get_mut("synthetic")
         .expect("fixture service should exist")
@@ -167,7 +167,7 @@ fn service_start_rejects_exec_cwd_escape() {
     fixture.relower();
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -191,7 +191,7 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -254,7 +254,7 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
     let port = available_port_window(2);
     let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -309,7 +309,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -364,7 +364,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     let port = 45000 + (unique_suffix() % 1000) as u16;
     let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -383,11 +383,12 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
 
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
+    let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
+    let identity =
+        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup = run_synthetic_service_clean_for_slot(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -481,7 +482,7 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -496,14 +497,14 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     // A second address with the same exact service contract creates a distinct
     // service instance while preserving the identity/containment facts needed
     // to attribute the first instance truthfully.
-    let mut other = fixture.admission.execution_model.services["synthetic"].clone();
-    other.name = nixfied_model::ServiceId::new("other");
+    let mut other = fixture.admission.execution_manifest.services["synthetic"].clone();
+    other.name = nixfied_manifest::ServiceId::new("other");
     fixture
         .admission
-        .execution_model
+        .execution_manifest
         .services
-        .insert(nixfied_model::ServiceId::new("other"), other);
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
+        .insert(nixfied_manifest::ServiceId::new("other"), other);
+    let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     record_fixture_run(
         &mut fixture.registry,
@@ -574,7 +575,7 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
     drop(listener);
     let mut fixture = test_child_wildcard_listener_fixture(port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -616,22 +617,23 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
 #[test]
 fn slot_one_service_uses_slot_placement_port_window() {
     let tmp = TempDir::new();
-    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
-    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let admission = synthetic_admission(&model, &tmp.path);
-    let selected_slot = select_slot(&model, Some(1)).expect("slot 1 should select");
-    let placement = derive_host_placement_for_slot(&model, &selected_slot, "run-slot-1", &tmp.path)
-        .expect("slot 1 layout should derive");
+    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
+    let admission = synthetic_admission(&manifest, &tmp.path);
+    let selected_slot = select_slot(&manifest, Some(1)).expect("slot 1 should select");
+    let placement =
+        derive_host_placement_for_slot(&manifest, &selected_slot, "run-slot-1", &tmp.path)
+            .expect("slot 1 layout should derive");
     materialize_run_roots(&placement).expect("roots should materialize");
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
-            &model.project.project_id,
+            &manifest.project.project_id,
             selected_slot.environment,
             selected_slot.slot,
-            &model.runtime_abi,
-            &model.toolchain_id,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
         ),
     )
     .expect("registry should open");
@@ -663,11 +665,11 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let tmp = TempDir::new();
     let mut value = test_child_listener_value(23210);
     add_slot_one(&mut value, 23310, 23320);
-    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let admission = synthetic_admission(&model, &tmp.path);
+    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
+    let admission = synthetic_admission(&manifest, &tmp.path);
 
-    let mut slot0 = StartedSlot::start(&model, &admission, &tmp.path, 0, "run-slot-0", 23210);
-    let mut slot1 = StartedSlot::start(&model, &admission, &tmp.path, 1, "run-slot-1", 23310);
+    let mut slot0 = StartedSlot::start(&manifest, &admission, &tmp.path, 0, "run-slot-0", 23210);
+    let mut slot1 = StartedSlot::start(&manifest, &admission, &tmp.path, 1, "run-slot-1", 23310);
 
     assert_ne!(slot0.placement.state_root, slot1.placement.state_root);
     assert_ne!(
@@ -709,7 +711,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
             .any(|process| process.live)
     );
 
-    let slot0_identity = StateIdentity::from_selected_slot(&model, &admission, &slot0.selected);
+    let slot0_identity = StateIdentity::from_selected_slot(&manifest, &admission, &slot0.selected);
     clean_marked_state(
         &slot0.placement.state_base,
         &slot0.placement.state_root,
@@ -721,7 +723,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     assert!(!slot0.placement.state_root.exists());
     assert!(slot1.placement.state_root.exists());
 
-    let slot1_identity = StateIdentity::from_selected_slot(&model, &admission, &slot1.selected);
+    let slot1_identity = StateIdentity::from_selected_slot(&manifest, &admission, &slot1.selected);
     clean_marked_state(
         &slot1.placement.state_base,
         &slot1.placement.state_root,
@@ -748,17 +750,17 @@ fn two_slots_keep_services_state_and_controls_isolated() {
 
 #[test]
 fn service_instance_identity_includes_selected_slot() {
-    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
-    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let service = model
+    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
+    let service = manifest
         .services
         .get("synthetic")
         .expect("fixture has synthetic service");
 
-    let identity = compute_service_identity(service, &model.state, &model.target);
-    let slot_0_address = service_address_hash(&model.project.project_id, "dev", 0, "synthetic");
-    let slot_1_address = service_address_hash(&model.project.project_id, "dev", 1, "synthetic");
+    let identity = compute_service_identity(service, &manifest.state, &manifest.target);
+    let slot_0_address = service_address_hash(&manifest.project.project_id, "dev", 0, "synthetic");
+    let slot_1_address = service_address_hash(&manifest.project.project_id, "dev", 1, "synthetic");
     let slot_0_instance = service_instance_id(&slot_0_address, &identity);
     let slot_1_instance = service_instance_id(&slot_1_address, &identity);
 
@@ -772,10 +774,10 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    set_smoke_args(&mut fixture.model, &["output", "literal", "task-ok", ""]);
+    set_smoke_args(&mut fixture.manifest, &["output", "literal", "task-ok", ""]);
     fixture.relower();
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -794,7 +796,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         &[&service],
         fixture
             .admission
-            .execution_model
+            .execution_manifest
             .tasks
             .get("smoke")
             .expect("smoke task"),
@@ -861,7 +863,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 fn dependent_task_refuses_to_run_before_service_ready() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23186);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -877,7 +879,7 @@ fn dependent_task_refuses_to_run_before_service_ready() {
         &[&service],
         fixture
             .admission
-            .execution_model
+            .execution_manifest
             .tasks
             .get("smoke")
             .expect("smoke task"),
@@ -907,7 +909,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     drop(listener);
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -946,7 +948,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     assert_eq!(failure_events, 1);
 }
 
-/// The fixture model with an exec-based ready probe: a /bin/sh exec whose
+/// The fixture manifest with an exec-based ready probe: a /bin/sh exec whose
 /// args are supplied per test. The probe's operation is bound on the closure,
 /// as admission requires.
 fn exec_probe_fixture_value(
@@ -956,7 +958,7 @@ fn exec_probe_fixture_value(
     probe_args: Value,
     probe_attempts: u32,
 ) -> Value {
-    let mut value = fixture_model(executable, start_args, port);
+    let mut value = fixture_manifest(executable, start_args, port);
     add_probe_shell_closure(&mut value, "service.synthetic.ready");
     let mut run = vec![json!("sh")];
     run.extend(probe_args.as_array().expect("probe args").iter().cloned());
@@ -1023,7 +1025,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     );
     let mut fixture = ServiceFixture::from_value(value);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1090,7 +1092,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
     let value = exec_probe_fixture_value("/bin/sleep", &["30"], port, json!(["-c", "exit 7"]), 3);
     let mut fixture = ServiceFixture::from_value(value);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1140,7 +1142,7 @@ fn exec_health_probe_failure_records_failed() {
     });
     let mut fixture = ServiceFixture::from_value(value);
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1196,7 +1198,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         port,
     ));
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1276,12 +1278,12 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     set_smoke_args(
-        &mut fixture.model,
+        &mut fixture.manifest,
         &["term-tree", &started_arg, &marker_arg],
     );
     fixture.relower();
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1310,7 +1312,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         "smoke",
         fixture
             .admission
-            .execution_model
+            .execution_manifest
             .tasks
             .get("smoke")
             .expect("smoke task"),
@@ -1405,7 +1407,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     fixture
-        .model
+        .manifest
         .tasks
         .get_mut("smoke")
         .expect("fixture has task")
@@ -1414,12 +1416,12 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .expect("leaf task has invocation")
         .timeout_ms = 100u64.try_into().unwrap();
     set_smoke_args(
-        &mut fixture.model,
+        &mut fixture.manifest,
         &["term-tree", &started_arg, &marker_arg],
     );
     fixture.relower();
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1438,7 +1440,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &[&service],
         fixture
             .admission
-            .execution_model
+            .execution_manifest
             .tasks
             .get("smoke")
             .expect("smoke task"),
@@ -1535,24 +1537,25 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let value = test_child_fixture_value(&["term-tree", &started_arg, &marker_arg], port);
-    let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("CLI fixture manifest should parse");
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .arg("--timeout-ms")
@@ -1581,9 +1584,9 @@ fn cli_signal_cancels_run_and_empties_service_group() {
 
     let ps_output = Command::new(runtime_binary())
         .arg("ps")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .current_dir(&tmp.path)
@@ -1641,24 +1644,25 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
         port,
     );
     set_task_run_args(&mut value, &["exit", "0"]);
-    let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("CLI fixture manifest should parse");
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let child = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .arg("--timeout-ms")
@@ -1686,9 +1690,9 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
 
     let ps_output = Command::new(runtime_binary())
         .arg("ps")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .current_dir(&tmp.path)
@@ -1736,7 +1740,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         port,
     ));
     let probe = &mut fixture
-        .model
+        .manifest
         .services
         .get_mut("synthetic")
         .expect("fixture has service")
@@ -1747,7 +1751,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     probe.retry_interval_ms = 20u64.try_into().unwrap();
     fixture.relower();
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1807,7 +1811,7 @@ fn daemonizing_service_is_terminated_and_recorded_failed() {
     ));
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1854,7 +1858,7 @@ fn setsid_descendant_is_identity_killed_before_failed_settlement() {
     ));
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1909,7 +1913,7 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
         23185,
     ));
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -1973,7 +1977,7 @@ fn readiness_refuses_monitored_setsid_escape() {
         port,
     ));
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2031,7 +2035,7 @@ fn readiness_records_foreground_exit_as_escape() {
         port,
     ));
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2097,14 +2101,14 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
         port,
     ));
     fixture
-        .model
+        .manifest
         .services
         .get_mut("synthetic")
         .expect("fixture has service")
         .containment = ContainmentRequirement::ProcessTree;
     fixture.relower();
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2135,7 +2139,7 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
 fn duplicate_active_service_start_is_refused() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23184);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2145,7 +2149,7 @@ fn duplicate_active_service_start_is_refused() {
     .expect("first foreground service should start");
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2208,7 +2212,7 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2223,7 +2227,7 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     let owner_pgid = owner.pgid;
 
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2236,7 +2240,7 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     assert_eq!(borrower.process_key, owner_process_key);
     assert_eq!(borrower.pgid, owner_pgid);
     let concurrent_borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2309,7 +2313,7 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
     let port_b = port_a + 1;
     let mut fixture = test_child_listener_fixture(port_a);
     let mut owner = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2322,7 +2326,7 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
         .expect("owner should become ready before mismatch attempt");
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2359,7 +2363,7 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2395,7 +2399,7 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
     assert_eq!(observed.borrower_count, 0);
 
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2448,7 +2452,7 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2465,7 +2469,7 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
         .stand(&mut fixture.registry)
         .expect("persistent owner should stand");
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2512,7 +2516,7 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2527,7 +2531,7 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
     let service_instance_id = owner.service_instance_id.clone();
     let owner_pgid = owner.pgid;
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2584,11 +2588,12 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
+    let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
+    let identity =
+        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let mut owner = start_synthetic_service_with_lifetime(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2604,7 +2609,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
         .stand(&mut fixture.registry)
         .expect("until-idle service should stand");
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2614,7 +2619,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
     .expect("borrower should reuse until-idle service");
 
     let clean_error = run_synthetic_service_clean_for_slot(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2642,7 +2647,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
 fn ps_reconciles_dead_owned_process_and_port_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 23187);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2697,7 +2702,7 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
 fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23233);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2778,7 +2783,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         port,
     ));
     let mut service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2834,7 +2839,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
 fn ps_marks_expired_dead_run_lease_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23228);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2896,7 +2901,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
         .registry
         .connection()
         .query_row(
-            "SELECT computed_model_hash FROM events WHERE event_type = 'run.lease-stale'",
+            "SELECT computed_manifest_hash FROM events WHERE event_type = 'run.lease-stale'",
             [],
             |row| row.get(0),
         )
@@ -2910,11 +2915,11 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
     assert_eq!(lease_stale_hash.as_deref(), Some("computed-hash"));
 
     // The old runtime handle still owns the startup lock even though its child
-    // has died. Dropping the handle models runtime exit and releases that
+    // has died. Dropping the handle manifests runtime exit and releases that
     // process-scoped guard before a new runtime retries acquisition.
     drop(service);
     let restarted = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2931,7 +2936,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
 fn active_run_lease_refuses_new_service_start_after_terminal_process() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23229);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2959,7 +2964,7 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
     drop(service);
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -2989,7 +2994,7 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
 fn down_stops_verified_owned_process_group_only() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23188);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3031,7 +3036,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     drop(listener);
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3068,8 +3073,9 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     assert!(escaped.live);
     assert_eq!(escaped.reconciled_status, "escaped");
 
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
+    let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
+    let identity =
+        StateIdentity::from_selected_slot(&fixture.manifest, &fixture.admission, &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup_error = clean_marked_state(
         &fixture.placement.state_base,
@@ -3118,7 +3124,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
         port,
     ));
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3194,14 +3200,14 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         port,
     ));
     fixture
-        .model
+        .manifest
         .services
         .get_mut("synthetic")
         .expect("fixture has service")
         .containment = ContainmentRequirement::ProcessTree;
     fixture.relower();
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3267,7 +3273,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let mut escaped = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3279,7 +3285,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         .wait_for_probe_ready(&mut fixture.registry)
         .expect("fixture service should prove exact ownership");
     let borrower = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3301,7 +3307,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     .expect("failed termination should retain escaped plus open-port evidence");
 
     let conflict = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3343,7 +3349,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         "explicit down must prove the escaped containment dead"
     );
     let replacement = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3363,7 +3369,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
 fn down_completes_canceling_lease_and_unblocks_cleanup() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23231);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3389,7 +3395,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .expect("test should mark lease canceling");
     commit_slot_marker(
         &fixture.placement,
-        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -3434,7 +3440,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
-        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -3453,7 +3459,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
 fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23232);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3537,7 +3543,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .expect("test should mark lease canceling");
     commit_slot_marker(
         &fixture.placement,
-        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -3601,7 +3607,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
-        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &StateIdentity::from_manifest(&fixture.manifest, &fixture.admission),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -3648,7 +3654,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
         23189,
     ));
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -3688,7 +3694,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
-        .execution_model
+        .execution_manifest
         .tasks
         .get("smoke")
         .expect("task lowered")
@@ -3705,7 +3711,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
         &mut fixture.registry,
         RunContext {
             run_id: "run-path-proof",
-            computed_model_hash: &fixture.admission.computed_model_hash,
+            computed_manifest_hash: &fixture.admission.computed_manifest_hash,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
@@ -3750,7 +3756,7 @@ fn task_child_environment_is_hermetic() {
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
-        .execution_model
+        .execution_manifest
         .tasks
         .get("smoke")
         .expect("task lowered")
@@ -3767,7 +3773,7 @@ fn task_child_environment_is_hermetic() {
         &mut fixture.registry,
         RunContext {
             run_id: "run-hermetic-proof",
-            computed_model_hash: &fixture.admission.computed_model_hash,
+            computed_manifest_hash: &fixture.admission.computed_manifest_hash,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
@@ -3829,25 +3835,26 @@ fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
     });
     value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
     set_task_run_args(&mut value, &["output", "env", "TOKEN"]);
-    let model: Model = serde_json::from_value(value).expect("secret fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("secret fixture manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let run = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--timeout-ms")
         .arg("5000")
         .args(["--output", "json"])
@@ -3933,16 +3940,16 @@ fn files_under(root: &Path) -> Vec<PathBuf> {
 fn endpoint_less_identity_is_deterministic_and_distinct() {
     // SVC-ID-1 over the empty endpoint set: hashing is deterministic, and an
     // endpoint-less contract has a different identity than a listening one.
-    let value = fixture_model("/bin/sleep", &["30"], 23180);
-    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
-    let listening = model.services.get("synthetic").expect("service");
+    let value = fixture_manifest("/bin/sleep", &["30"], 23180);
+    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
+    let listening = manifest.services.get("synthetic").expect("service");
     let mut endpoint_less = listening.clone();
     endpoint_less.endpoints.clear();
     endpoint_less.primary_endpoint = None;
 
-    let a = compute_service_identity(&endpoint_less, &model.state, &model.target);
-    let b = compute_service_identity(&endpoint_less, &model.state, &model.target);
-    let c = compute_service_identity(listening, &model.state, &model.target);
+    let a = compute_service_identity(&endpoint_less, &manifest.state, &manifest.target);
+    let b = compute_service_identity(&endpoint_less, &manifest.state, &manifest.target);
+    let c = compute_service_identity(listening, &manifest.state, &manifest.target);
     assert_eq!(a.endpoint_identity_hash, b.endpoint_identity_hash);
     assert_ne!(a.endpoint_identity_hash, c.endpoint_identity_hash);
 }
@@ -3965,7 +3972,7 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
 }
 
 fn endpoint_less_fixture() -> ServiceFixture {
-    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
     // Endpoint-less: no listener attestation either (effects coherence).
     value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
     value["services"]["synthetic"]["endpoints"] = json!(null);
@@ -4014,7 +4021,7 @@ fn start_endpoint_less_service(
         &fixture.placement,
         &mut fixture.registry,
         run_id,
-        &select_slot(&fixture.model, None).expect("slot"),
+        &select_slot(&fixture.manifest, None).expect("slot"),
         ServiceSelection {
             service_name: "synthetic",
             service_lifetime: ServiceLifetime::RunScoped,
@@ -4030,7 +4037,7 @@ fn start_endpoint_less_service(
 
 struct ServiceFixture {
     _tmp: TempDir,
-    model: Model,
+    manifest: Manifest,
     admission: Admission,
     placement: nixfied_runtime::state::HostPlacement,
     registry: Registry,
@@ -4038,43 +4045,43 @@ struct ServiceFixture {
 
 impl ServiceFixture {
     fn new(executable: &str, start_args: &[&str], port: u16) -> Self {
-        Self::from_model(model(executable, start_args, port))
+        Self::from_manifest(manifest(executable, start_args, port))
     }
 
     fn from_value(value: Value) -> Self {
-        Self::from_model(serde_json::from_value(value).expect("fixture model should parse"))
+        Self::from_manifest(serde_json::from_value(value).expect("fixture manifest should parse"))
     }
 
-    fn from_model(model: Model) -> Self {
+    fn from_manifest(manifest: Manifest) -> Self {
         let tmp = TempDir::new();
-        let admission = synthetic_admission(&model, &tmp.path);
-        let placement =
-            derive_host_placement(&model, "run-service", &tmp.path).expect("layout should derive");
+        let admission = synthetic_admission(&manifest, &tmp.path);
+        let placement = derive_host_placement(&manifest, "run-service", &tmp.path)
+            .expect("layout should derive");
         materialize_run_roots(&placement).expect("roots should materialize");
         let registry = Registry::open_or_create(
             placement.registry_path(),
             &RegistryIdentity::default_slot(
-                &model.project.project_id,
-                &model.runtime_abi,
-                &model.toolchain_id,
+                &manifest.project.project_id,
+                &manifest.runtime_abi,
+                &manifest.toolchain_id,
             ),
         )
         .expect("registry should open");
         Self {
             _tmp: tmp,
-            model,
+            manifest,
             admission,
             placement,
             registry,
         }
     }
 
-    /// Re-lower the (mutated) model into the admission's ExecutionModel. Tests that
-    /// edit `self.model` after construction must call this so the executor, which
-    /// reads the lowered model, sees the change.
+    /// Re-lower the (mutated) manifest into the admission's ExecutionManifest. Tests that
+    /// edit `self.manifest` after construction must call this so the executor, which
+    /// reads the lowered manifest, sees the change.
     fn relower(&mut self) {
-        self.admission.execution_model =
-            nixfied_runtime::execution::lower(&self.model).expect("mutated model should lower");
+        self.admission.execution_manifest = nixfied_runtime::execution::lower(&self.manifest)
+            .expect("mutated manifest should lower");
     }
 }
 
@@ -4163,27 +4170,27 @@ struct StartedSlot<'a> {
 
 impl<'a> StartedSlot<'a> {
     fn start(
-        model: &'a Model,
+        manifest: &'a Manifest,
         admission: &Admission,
         state_base: &Path,
         slot: u32,
         run_id: &str,
         selected_port: u16,
     ) -> Self {
-        let selected = select_slot(model, Some(slot)).expect("slot should select");
-        let placement = derive_host_placement_for_slot(model, &selected, run_id, state_base)
+        let selected = select_slot(manifest, Some(slot)).expect("slot should select");
+        let placement = derive_host_placement_for_slot(manifest, &selected, run_id, state_base)
             .expect("slot placement should derive");
         materialize_run_roots(&placement).expect("slot roots should materialize");
-        let identity = StateIdentity::from_selected_slot(model, admission, &selected);
+        let identity = StateIdentity::from_selected_slot(manifest, admission, &selected);
         commit_slot_marker(&placement, &identity).expect("slot marker should be written");
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
             &RegistryIdentity::for_slot(
-                &model.project.project_id,
+                &manifest.project.project_id,
                 selected.environment,
                 selected.slot,
-                &model.runtime_abi,
-                &model.toolchain_id,
+                &manifest.runtime_abi,
+                &manifest.toolchain_id,
             ),
         )
         .expect("slot registry should open");
@@ -4214,7 +4221,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
-    let service = &fixture.admission.execution_model.services["synthetic"];
+    let service = &fixture.admission.execution_manifest.services["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
     let endpoint_key = format!("{instance_id}:synthetic-tcp");
@@ -4227,7 +4234,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
     );
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -4257,7 +4264,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
         )
         .expect("crashed reservation should expire");
     let retry = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -4283,7 +4290,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
 #[test]
 fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
     let mut fixture = endpoint_less_fixture();
-    let service = &fixture.admission.execution_model.services["synthetic"];
+    let service = &fixture.admission.execution_manifest.services["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
     insert_crashed_reservation(
@@ -4343,7 +4350,7 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
     let port = available_port_window(1);
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
     let service = start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -4366,7 +4373,7 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
         .expect("test should create impossible open endpoint evidence");
 
     let error = match start_synthetic_service(
-        &fixture.model,
+        &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
@@ -4530,9 +4537,9 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     assert_prepared_retry(&mut fixture, "run-after-spawn-failed", port);
 }
 
-fn model(executable: &str, start_args: &[&str], port: u16) -> Model {
-    serde_json::from_value(fixture_model(executable, start_args, port))
-        .expect("fixture model should parse")
+fn manifest(executable: &str, start_args: &[&str], port: u16) -> Manifest {
+    serde_json::from_value(fixture_manifest(executable, start_args, port))
+        .expect("fixture manifest should parse")
 }
 
 fn add_slot_one(value: &mut Value, start: u16, end: u16) {
@@ -4593,17 +4600,18 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 
     let mut value = test_child_listener_value(port);
     set_task_run_args(&mut value, &["connect", "127.0.0.1", "${port}", "close"]);
-    let model: Model = serde_json::from_value(value).expect("seam fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("seam fixture manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     // A PATH whose nix tools fail loudly and record that they were called.
     let fake_bin = tmp.path.join("fake-bin");
@@ -4634,9 +4642,9 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         let mut invocation = Command::new(runtime_binary());
         invocation
             .arg(command)
-            .arg("--allow-non-store-model")
-            .arg("--model")
-            .arg(&model_path)
+            .arg("--allow-non-store-manifest")
+            .arg("--manifest")
+            .arg(&manifest_path)
             .args(extra)
             .current_dir(&tmp.path)
             .env("PATH", &poisoned_path)
@@ -4788,25 +4796,26 @@ fn composite_run_keys_evidence_by_step_path() {
             "first": { "task": "smoke" }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("composite model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("composite manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let run = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("twice")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--timeout-ms")
         .arg("5000")
         .args(["--output", "json"])
@@ -4889,25 +4898,26 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
             "inner": { "task": "inner" }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("nested fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("nested fixture manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let child = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("outer")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .args(["--output", "json"])
@@ -5006,25 +5016,26 @@ fn composite_starts_full_service_union_before_first_node() {
             "second": { "task": "needs-worker", "dependsOn": ["first"] }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("eager fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("eager fixture manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let output = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("pipeline")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .args(["--output", "json"])
@@ -5062,25 +5073,26 @@ fn task_only_run_records_a_durable_runs_row() {
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["exit", "0"]);
-    let model: Model = serde_json::from_value(value).expect("task-only model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("task-only manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let run = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--timeout-ms")
         .arg("5000")
         .current_dir(&tmp.path)
@@ -5131,25 +5143,26 @@ fn inherit_stdin_reaches_a_task_process() {
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["output", "stdin"]);
     value["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
-    let model: Model = serde_json::from_value(value).expect("inherit-stdin model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("inherit-stdin manifest should parse");
 
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--timeout-ms")
         .arg("5000")
         .current_dir(&tmp.path)
@@ -5224,24 +5237,25 @@ fn failed_composite_run_writes_failure_summary() {
             "fail-node": { "task": "smoke" }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("failure fixture manifest should parse");
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let output = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("wf")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .current_dir(&tmp.path)
@@ -5288,9 +5302,9 @@ fn failed_composite_run_writes_failure_summary() {
         .arg("run")
         .arg("--task")
         .arg("wf")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&json_state_base)
         .args(["--output", "json"])
@@ -5330,9 +5344,9 @@ fn failed_composite_run_writes_failure_summary() {
         .arg("run")
         .arg("--task")
         .arg("wf")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&both_state_base)
         .args(["--output", "both"])
@@ -5380,24 +5394,25 @@ fn service_failure_before_any_node_writes_failed_summary() {
             "never-runs": { "task": "smoke" }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("failure fixture manifest should parse");
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::create_dir_all(&state_base).expect("state base should be created");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
     let output = Command::new(runtime_binary())
         .arg("run")
         .arg("--task")
         .arg("wf")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .args(["--output", "json"])
@@ -5428,18 +5443,18 @@ fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let value = test_child_fixture_value(&["block"], port);
-    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let tmp = TempDir::new();
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     let state_base = tmp.path.join("state");
     fs::write(
-        &model_path,
-        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
     )
-    .expect("model should be written");
+    .expect("manifest should be written");
 
-    let selected_slot = select_slot(&model, None).expect("slot should select");
-    let placement = derive_host_placement_for_slot(&model, &selected_slot, "setup", &state_base)
+    let selected_slot = select_slot(&manifest, None).expect("slot should select");
+    let placement = derive_host_placement_for_slot(&manifest, &selected_slot, "setup", &state_base)
         .expect("placement should derive");
     Registry::open_or_create(
         placement.registry_path(),
@@ -5447,17 +5462,17 @@ fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
             "other-project",
             selected_slot.environment,
             selected_slot.slot,
-            &model.runtime_abi,
-            &model.toolchain_id,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
         ),
     )
     .expect("mismatched registry should be created");
 
     let output = Command::new(runtime_binary())
         .arg("ps")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--state-base")
         .arg(&state_base)
         .current_dir(&tmp.path)
@@ -5485,13 +5500,13 @@ fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
     );
 }
 
-fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
-    common::synthetic_model(executable, start_args, port, port)
+fn fixture_manifest(executable: &str, start_args: &[&str], port: u16) -> Value {
+    common::synthetic_manifest(executable, start_args, port, port)
 }
 
 fn test_child_fixture_value(start_args: &[&str], port: u16) -> Value {
     let child = test_child();
-    fixture_model(
+    fixture_manifest(
         child
             .to_str()
             .expect("test child store path should be valid UTF-8"),
@@ -5520,7 +5535,7 @@ fn service_fixture_with_prepare(
     start_args: &[&str],
     port: u16,
 ) -> ServiceFixture {
-    let mut value = fixture_model(executable, start_args, port);
+    let mut value = fixture_manifest(executable, start_args, port);
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
     value["closures"]["synthetic-helper"]["operationBindings"] = json!([
         "service.synthetic.start",
@@ -5542,9 +5557,12 @@ fn service_fixture_with_prepare(
     ]);
     value["tasks"]["endpoint-prepare"] = prepare;
 
-    let model: Model = serde_json::from_value(value).expect("prepare fixture should deserialize");
-    model.validate().expect("prepare fixture should validate");
-    ServiceFixture::from_model(model)
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("prepare fixture should deserialize");
+    manifest
+        .validate()
+        .expect("prepare fixture should validate");
+    ServiceFixture::from_manifest(manifest)
 }
 
 fn start_prepared_service(
@@ -5560,7 +5578,7 @@ fn start_prepared_service(
         &fixture.placement,
         run_id,
     );
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
+    let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     start_service_for_slot(
         &fixture.admission,
@@ -5671,9 +5689,9 @@ fn set_task_run_args(value: &mut Value, args: &[&str]) {
     }
 }
 
-/// Replace the smoke task's argv tail on the typed model.
-fn set_smoke_args(model: &mut Model, args: &[&str]) {
-    let run = &mut model
+/// Replace the smoke task's argv tail on the typed manifest.
+fn set_smoke_args(manifest: &mut Manifest, args: &[&str]) {
+    let run = &mut manifest
         .tasks
         .get_mut("smoke")
         .expect("fixture has task")
@@ -5803,7 +5821,7 @@ fn mark_started_service_escape(
               AND status IN ('running', 'ready')
               AND EXISTS (
                 SELECT 1 FROM runs
-                WHERE run_id = ?4 AND computed_model_hash = ?6
+                WHERE run_id = ?4 AND computed_manifest_hash = ?6
               )
             ",
             rusqlite::params![
@@ -5812,7 +5830,7 @@ fn mark_started_service_escape(
                 service.pgid,
                 service.run_id,
                 service.service_instance_id,
-                service.computed_model_hash,
+                service.computed_manifest_hash,
                 start_identity,
             ],
         )
@@ -5833,9 +5851,9 @@ fn mark_started_service_escape(
             "
             UPDATE runs
             SET status = 'proc-escaped'
-            WHERE run_id = ?1 AND computed_model_hash = ?2
+            WHERE run_id = ?1 AND computed_manifest_hash = ?2
             ",
-            rusqlite::params![service.run_id, service.computed_model_hash],
+            rusqlite::params![service.run_id, service.computed_manifest_hash],
         )
         .map_err(|error| {
             nixfied_runtime::RuntimeError::new(

@@ -1,6 +1,6 @@
 //! Private authority for endpoint startup coordination and kernel listener proof.
 //!
-//! The model exposes endpoints, but none of the machinery in this module is a
+//! The manifest exposes endpoints, but none of the machinery in this module is a
 //! public runtime surface. Lock files are inert rendezvous inodes; kernel locks
 //! serialize startup and kernel listener records are the steady-state truth.
 
@@ -16,7 +16,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
 
-use nixfied_model::ContainmentRequirement;
+use nixfied_manifest::ContainmentRequirement;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -553,7 +553,7 @@ impl Serialize for EndpointOwnership<'_> {
         #[serde(rename_all = "camelCase")]
         struct Borrowed<'a> {
             endpoint_id: &'a str,
-            address: &'a nixfied_model::LoopbackHost,
+            address: &'a nixfied_manifest::LoopbackHost,
             port: u16,
             listeners: &'a [ListenerRecord],
         }
@@ -1031,7 +1031,7 @@ mod tests {
     fn endpoint(address: &str, port: u16) -> SelectedEndpoint {
         SelectedEndpoint {
             endpoint_id: "test".to_string(),
-            host: nixfied_model::LoopbackHost::parse(address).unwrap(),
+            host: nixfied_manifest::LoopbackHost::parse(address).unwrap(),
             port,
         }
     }
@@ -1469,8 +1469,8 @@ mod tests {
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
         use crate::{Admission, AdmittedSource, ErrorCode};
-        use nixfied_model::fixtures::{SyntheticModelOptions, synthetic_model};
-        use nixfied_model::{DirtyPolicy, Model, ServiceLifetime, SourceMode, Validate};
+        use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
+        use nixfied_manifest::{DirtyPolicy, Manifest, ServiceLifetime, SourceMode, Validate};
         use serde_json::json;
 
         let unsafe_root = TestRoot::new();
@@ -1482,43 +1482,47 @@ mod tests {
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = held.local_addr().unwrap().port();
         drop(held);
-        let mut value = synthetic_model(&SyntheticModelOptions {
+        let mut value = synthetic_manifest(&SyntheticManifestOptions {
             executable: "/bin/sleep".to_string(),
             start_args: vec!["30".to_string()],
             port_start: port,
             port_end: port,
-            ..SyntheticModelOptions::default()
+            ..SyntheticManifestOptions::default()
         });
         value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
         value["tasks"]["smoke"]["requires"] = json!([]);
         value["tasks"]["smoke"]["servicesRequired"] = json!([]);
         value["tasks"]["smoke"]["invocation"]["run"] = json!(["sleep", "0"]);
-        let model: Model = serde_json::from_value(value).unwrap();
-        model.validate().unwrap();
-        let selected = select_slot(&model, None).unwrap();
-        let placement =
-            derive_host_placement_for_slot(&model, &selected, "run-unsafe-lock-root", &workspace.0)
-                .unwrap();
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        manifest.validate().unwrap();
+        let selected = select_slot(&manifest, None).unwrap();
+        let placement = derive_host_placement_for_slot(
+            &manifest,
+            &selected,
+            "run-unsafe-lock-root",
+            &workspace.0,
+        )
+        .unwrap();
         materialize_run_roots(&placement).unwrap();
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
             &RegistryIdentity::for_slot(
-                &model.project.project_id,
+                &manifest.project.project_id,
                 selected.environment,
                 selected.slot,
-                &model.runtime_abi,
-                &model.toolchain_id,
+                &manifest.runtime_abi,
+                &manifest.toolchain_id,
             ),
         )
         .unwrap();
         let admission = Admission {
-            model_path: workspace.0.join("model.json"),
-            computed_model_hash: "unsafe-root-test-hash".to_string(),
+            manifest_path: workspace.0.join("manifest.json"),
+            computed_manifest_hash: "unsafe-root-test-hash".to_string(),
             raw_len: 1,
-            project_id: model.project.project_id.clone(),
-            runtime_abi: model.runtime_abi.clone(),
-            toolchain_id: model.toolchain_id.clone(),
-            target_system: model.target.system.clone(),
+            project_id: manifest.project.project_id.clone(),
+            runtime_abi: manifest.runtime_abi.clone(),
+            toolchain_id: manifest.toolchain_id.clone(),
+            target_system: manifest.target.system.clone(),
             source: Some(AdmittedSource {
                 codebase_id: "main".to_string(),
                 logical_root: ".".to_string(),
@@ -1528,9 +1532,9 @@ mod tests {
                 dirty_policy: DirtyPolicy::Warn,
                 admission_fingerprint_policy: "live-fingerprint".to_string(),
             }),
-            generator_json: serde_json::to_string(&model.generator).unwrap(),
-            target_json: serde_json::to_string(&model.target).unwrap(),
-            execution_model: crate::execution::lower(&model).unwrap(),
+            generator_json: serde_json::to_string(&manifest.generator).unwrap(),
+            target_json: serde_json::to_string(&manifest.target).unwrap(),
+            execution_manifest: crate::execution::lower(&manifest).unwrap(),
             secrets: ResolvedSecrets::empty(),
         };
         record_run_created(

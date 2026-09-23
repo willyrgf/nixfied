@@ -90,7 +90,7 @@ let
     name: op: declared:
     if declared != null then declared else deriveFacts.serviceOperationId name op;
 
-  # Every invocation position in the model, with the (effective) operation id
+  # Every invocation position in the manifest, with the (effective) operation id
   # it executes under: task leaves plus each service's prepare/start and exec
   # probes.
   invocationPositions =
@@ -259,7 +259,7 @@ let
     };
 
   # Service identity is no longer emitted: the runtime derives a service's reuse
-  # identity from its own lowered contract, so the model carries no identity
+  # identity from its own lowered contract, so the manifest carries no identity
   # hashes for it to trust.
   #
   # `endpoint` (single) is sugar for the common one-endpoint service; `endpoints`
@@ -395,14 +395,14 @@ in
 {
   packages = closurePackages;
 
-  model = construct "Model" {
-    modelVersion = constants.modelVersion;
+  manifest = construct "Manifest" {
+    manifestVersion = constants.manifestVersion;
     toolchainId = constants.toolchainId;
     runtimeAbi = constants.runtimeAbi;
     generator = construct "Generator" {
       name = "nixfied";
       version = constants.toolchainId;
-      emitter = "nix/compiler/emit-model.nix";
+      emitter = "nix/compiler/emit-manifest.nix";
     };
     project = construct "Project" {
       inherit (config.nixfied.project) projectId name;

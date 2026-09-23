@@ -8,7 +8,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ContainmentRequirement, LoopbackHost, Model, ServiceLifetime};
+use nixfied_manifest::{ContainmentRequirement, LoopbackHost, Manifest, ServiceLifetime};
 use rusqlite::params;
 use serde::Serialize;
 
@@ -64,7 +64,7 @@ pub struct StartedService {
     monitor: Option<ProcessMonitor>,
     startup_guards: Option<EndpointLockGuards>,
     /// The resolved service: the executor reads lifecycle ops, the bound endpoint,
-    /// and the stop signal from here, never from the raw `Model`.
+    /// and the stop signal from here, never from the raw `Manifest`.
     service: ExecService,
     /// The ready/health probes with exec args/env already substituted against
     /// the slot plan at start time.
@@ -82,7 +82,7 @@ pub struct StartedService {
     /// derived from `service.primary_endpoint`; endpoint-less services keep an
     /// empty map and make no addressability claim.
     selected_endpoints: BTreeMap<String, SelectedEndpoint>,
-    pub computed_model_hash: String,
+    pub computed_manifest_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
     pub secrets: ResolvedSecrets,
@@ -411,7 +411,7 @@ impl StartedService {
             &self.run_id,
             &self.service_instance_id,
             &self.process_key,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             &activations,
             (&record.operation_id, record.class, &record.terminal_success),
         )
@@ -433,7 +433,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 error.code == ErrorCode::Canceled,
             ) {
                 Ok(()) => error,
@@ -474,7 +474,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 &payload,
             )
         } else {
@@ -483,7 +483,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 &payload,
             )
         };
@@ -507,7 +507,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 true,
             );
         }
@@ -522,7 +522,7 @@ impl StartedService {
             &self.run_id,
             &self.service_instance_id,
             &self.process_key,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             &payload,
         )?;
         if let Err(termination_error) = self.terminate_owned(timeout_ms) {
@@ -539,7 +539,7 @@ impl StartedService {
             &self.run_id,
             &self.service_instance_id,
             &self.process_key,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             &payload,
         )
     }
@@ -564,7 +564,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 false,
             );
         }
@@ -573,7 +573,7 @@ impl StartedService {
             &self.run_id,
             &self.service_instance_id,
             &self.process_key,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             self.service_lifetime,
         )?;
         if let Some(monitor) = &mut self.monitor {
@@ -598,7 +598,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 canceled,
             )?;
             return if canceled {
@@ -631,8 +631,8 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
-        // Graceful shutdown is the model's declared stop signal escalated to
-        // SIGKILL. The graceful budget is the model's stopPolicy.timeoutMs, capped
+        // Graceful shutdown is the manifest's declared stop signal escalated to
+        // SIGKILL. The graceful budget is the manifest's stopPolicy.timeoutMs, capped
         // by the CLI timeout as an upper bound.
         if let Some(error) = self.escape_error() {
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
@@ -663,7 +663,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 &payload,
             )?;
             if let Some(monitor) = &mut self.monitor {
@@ -674,7 +674,7 @@ impl StartedService {
                 &self.run_id,
                 &self.service_instance_id,
                 &self.process_key,
-                &self.computed_model_hash,
+                &self.computed_manifest_hash,
                 &payload,
             )?;
             let error = canceled_error();
@@ -693,7 +693,7 @@ impl StartedService {
             &self.run_id,
             &self.service_instance_id,
             &self.process_key,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
         )?;
         record_lifecycle_success(registry, &context, &stop_record)
     }
@@ -757,7 +757,7 @@ impl StartedService {
         match mark_process_escape(
             registry,
             &process,
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             self.platform_start_identity.as_deref(),
             &payload,
         ) {
@@ -791,7 +791,7 @@ impl StartedService {
             Some(self.run_id.as_str()),
             &self.service_instance_id,
             Some(self.process_key.as_str()),
-            &self.computed_model_hash,
+            &self.computed_manifest_hash,
             &payload,
         );
     }
@@ -827,7 +827,7 @@ impl StartedService {
         .map(|_| ())
     }
 
-    /// Graceful shutdown: signal the owned process(es) with the model's declared
+    /// Graceful shutdown: signal the owned process(es) with the manifest's declared
     /// stop signal, then escalate to SIGKILL after the budget. Returns `true` if
     /// escalation to SIGKILL was required.
     fn stop_owned(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
@@ -869,7 +869,7 @@ impl StartedService {
             run_id: Some(self.run_id.clone()),
             service_instance_id: self.service_instance_id.clone(),
             process_key: Some(self.process_key.clone()),
-            computed_model_hash: self.computed_model_hash.clone(),
+            computed_manifest_hash: self.computed_manifest_hash.clone(),
         }
     }
 
@@ -1144,9 +1144,9 @@ impl ServiceStartError {
     }
 }
 
-/// Start a declared foreground service from the lowered model: run prepare,
+/// Start a declared foreground service from the lowered manifest: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
-/// the admission's `ExecutionModel`, never the raw `Model`. The caller must have
+/// the admission's `ExecutionManifest`, never the raw `Manifest`. The caller must have
 /// recorded this exact `run_id` with [`super::record_run_created`] first.
 pub fn start_service_for_slot(
     admission: &Admission,
@@ -1186,7 +1186,7 @@ fn start_service_for_slot_inner(
     let endpoint_ports = selection.endpoint_ports;
     let slot_endpoints = selection.slot_endpoints;
     let service = admission
-        .execution_model
+        .execution_manifest
         .services
         .get(service_name)
         .ok_or_else(|| {
@@ -1316,7 +1316,7 @@ fn start_service_for_slot_inner(
         registry,
         &run_id,
         &owner_token,
-        &admission.computed_model_hash,
+        &admission.computed_manifest_hash,
         &service_instance_id,
         &reservations,
     )?;
@@ -1332,7 +1332,7 @@ fn start_service_for_slot_inner(
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: None,
-        computed_model_hash: admission.computed_model_hash.clone(),
+        computed_manifest_hash: admission.computed_manifest_hash.clone(),
     };
     // prepare is a task reference: the caller supplies a runner that executes
     // the referenced task's flattened nodes (ordinary task evidence — logs,
@@ -1342,7 +1342,7 @@ fn start_service_for_slot_inner(
     if let Some(prepare_task) = &service.prepare {
         let prepare_record = LifecycleRecord::from_meta(
             &OpMeta {
-                operation_id: nixfied_model::OperationId::new(prepare_task.as_str()),
+                operation_id: nixfied_manifest::OperationId::new(prepare_task.as_str()),
                 terminal_success: "initialized".to_string(),
                 terminal_failure: "failed".to_string(),
             },
@@ -1521,13 +1521,13 @@ fn start_service_for_slot_inner(
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: Some(process_key.clone()),
-        computed_model_hash: admission.computed_model_hash.clone(),
+        computed_manifest_hash: admission.computed_manifest_hash.clone(),
     };
     if let Err(error) = record_service_start(
         registry,
         &run_id,
         &owner_token,
-        &admission.computed_model_hash,
+        &admission.computed_manifest_hash,
         &service_record,
         &ProcessRecord {
             process_key: &process_key,
@@ -1580,7 +1580,7 @@ fn start_service_for_slot_inner(
         pgid,
         platform_start_identity: platform_start,
         selected_endpoints: own_endpoints,
-        computed_model_hash: admission.computed_model_hash.clone(),
+        computed_manifest_hash: admission.computed_manifest_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
         secrets: admission.secrets.clone(),
@@ -1876,7 +1876,7 @@ fn borrow_reusable_service(
         registry,
         request.run_id,
         request.owner_token,
-        &request.admission.computed_model_hash,
+        &request.admission.computed_manifest_hash,
         &ServiceReuseGuard {
             service: request.service_record,
             process: process_row,
@@ -1908,7 +1908,7 @@ fn borrow_reusable_service(
         pgid: process_row.pgid,
         platform_start_identity: process_row.platform_start,
         selected_endpoints: registry_endpoints,
-        computed_model_hash: request.admission.computed_model_hash.clone(),
+        computed_manifest_hash: request.admission.computed_manifest_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: request.placement.state_root.clone(),
         secrets: request.admission.secrets.clone(),
@@ -2000,28 +2000,35 @@ fn selected_endpoints_from_snapshot(
 /// slot evidence, so each one's clean lifecycle operation is recorded. Each is
 /// a marker-gated runtime cleanup primitive (no exec).
 pub fn run_slot_clean(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    for service_name in model.services.keys() {
-        record_service_clean(model, admission, registry, selected_slot, service_name)?;
+    for service_name in manifest.services.keys() {
+        record_service_clean(manifest, admission, registry, selected_slot, service_name)?;
     }
-    clean_marked_slot_state(model, admission, placement, registry, selected_slot, mode)
+    clean_marked_slot_state(
+        manifest,
+        admission,
+        placement,
+        registry,
+        selected_slot,
+        mode,
+    )
 }
 
 /// Record the marker-gated clean lifecycle operation for one service.
 fn record_service_clean(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     service_name: &str,
 ) -> RuntimeResult<()> {
-    let service = model.services.get(service_name).ok_or_else(|| {
+    let service = manifest.services.get(service_name).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::LifecycleFailed,
             format!("service {service_name} is missing"),
@@ -2029,20 +2036,20 @@ fn record_service_clean(
     })?;
     let record = LifecycleRecord::from_clean(&service.lifecycle.clean);
     let address_hash = service_address_hash(
-        &model.project.project_id,
+        &manifest.project.project_id,
         selected_slot.environment,
         selected_slot.slot,
         service_name,
     );
     // Recompute the same identity the lowering derived for this service so the
     // clean path keys on the exact registry instance the start path created.
-    let identity = compute_service_identity(service, &model.state, &model.target);
+    let identity = compute_service_identity(service, &manifest.state, &manifest.target);
     let service_instance_id = service_instance_id(&address_hash, &identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
         service_instance_id,
         process_key: None,
-        computed_model_hash: admission.computed_model_hash.clone(),
+        computed_manifest_hash: admission.computed_manifest_hash.clone(),
     };
     record_lifecycle_started(registry, &lifecycle_context, &record)?;
     record_lifecycle_success(registry, &lifecycle_context, &record)
@@ -2050,14 +2057,14 @@ fn record_service_clean(
 
 /// Clean the marker-owned state root for the selected slot.
 fn clean_marked_slot_state(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
+    let identity = StateIdentity::from_selected_slot(manifest, admission, selected_slot);
     // Reconcile first so rows left active by a crashed runtime (no live OS
     // process) are marked stale instead of tripping the active-refs refusal,
     // sparing the operator a manual ps/down before clean can proceed.
@@ -2140,7 +2147,7 @@ fn sql_error(error: rusqlite::Error) -> RuntimeError {
 /// The slot plan's endpoint map: every service selected for the run, resolved
 /// to its deterministic host/port before anything spawns. Named placeholder
 /// substitution addresses this map by service id.
-pub type SlotEndpoints = std::collections::BTreeMap<nixfied_model::ServiceId, SelectedEndpoint>;
+pub type SlotEndpoints = std::collections::BTreeMap<nixfied_manifest::ServiceId, SelectedEndpoint>;
 
 /// Placeholder substitution shared by lifecycle and task exec args/env values.
 /// Bare `${port}`/`${host}` resolve to `own_primary` (the exec's own primary
@@ -2403,7 +2410,7 @@ struct LifecycleEventContext {
     run_id: Option<String>,
     service_instance_id: String,
     process_key: Option<String>,
-    computed_model_hash: String,
+    computed_manifest_hash: String,
 }
 
 /// A lifecycle operation's identity and terminal semantics for durable event
@@ -2426,7 +2433,7 @@ impl LifecycleRecord {
         }
     }
 
-    fn from_clean(clean: &nixfied_model::CleanSpec) -> Self {
+    fn from_clean(clean: &nixfied_manifest::CleanSpec) -> Self {
         Self {
             operation_id: clean.operation_id.as_str().to_string(),
             class: "clean",
@@ -2452,7 +2459,7 @@ fn record_lifecycle_started(
         context.run_id.as_deref(),
         &context.service_instance_id,
         context.process_key.as_deref(),
-        &context.computed_model_hash,
+        &context.computed_manifest_hash,
         &payload_json,
     )
 }
@@ -2501,7 +2508,7 @@ fn record_lifecycle_terminal(
         context.run_id.as_deref(),
         &context.service_instance_id,
         context.process_key.as_deref(),
-        &context.computed_model_hash,
+        &context.computed_manifest_hash,
         &payload_json,
     )
 }
@@ -3254,7 +3261,7 @@ struct CommandRecord<'a> {
 mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
-    use nixfied_model::ServiceId;
+    use nixfied_manifest::ServiceId;
 
     #[test]
     fn conflict_view_preserves_wire_host_owner_omission_and_native_message() {

@@ -22,7 +22,7 @@ use crate::service::registry::{
     record_task_canceling, record_task_started,
 };
 use crate::state::HostPlacement;
-use nixfied_model::ServiceId;
+use nixfied_manifest::ServiceId;
 
 include!("../generated/task.rs");
 
@@ -121,7 +121,7 @@ impl PrepareTaskError {
 #[derive(Debug, Clone, Copy)]
 pub struct RunContext<'a> {
     pub run_id: &'a str,
-    pub computed_model_hash: &'a str,
+    pub computed_manifest_hash: &'a str,
     pub source_root: &'a Path,
     pub state_root: &'a Path,
     pub secrets: &'a ResolvedSecrets,
@@ -134,7 +134,7 @@ impl<'a> RunContext<'a> {
     pub fn from_service(service: &'a StartedService) -> Self {
         Self {
             run_id: &service.run_id,
-            computed_model_hash: &service.computed_model_hash,
+            computed_manifest_hash: &service.computed_manifest_hash,
             source_root: &service.source_root,
             state_root: &service.state_root,
             secrets: &service.secrets,
@@ -303,7 +303,7 @@ fn run_dependent_task_with_evidence(
             pgid,
             start_identity: &start_identity,
             command_json: &command_json,
-            computed_model_hash: run_context.computed_model_hash,
+            computed_manifest_hash: run_context.computed_manifest_hash,
         },
     ) {
         let termination_error = terminate_process_group(pgid, 1000).err();
@@ -338,7 +338,7 @@ fn run_dependent_task_with_evidence(
             run_id: run_context.run_id,
             task_id,
             process_key: &process_key,
-            computed_model_hash: run_context.computed_model_hash,
+            computed_manifest_hash: run_context.computed_manifest_hash,
         },
     )
     .map_err(TaskExecutionError::before)?;
@@ -417,7 +417,7 @@ fn run_dependent_task_with_evidence(
         registry,
         run_context.run_id,
         &process_key,
-        run_context.computed_model_hash,
+        run_context.computed_manifest_hash,
         task_terminal_status(success, timed_out, canceled),
         &payload_json,
     ) {
@@ -626,7 +626,7 @@ struct TaskCancellationContext<'a> {
     run_id: &'a str,
     task_id: &'a str,
     process_key: &'a str,
-    computed_model_hash: &'a str,
+    computed_manifest_hash: &'a str,
 }
 
 fn record_task_cancellation_intent(
@@ -645,7 +645,7 @@ fn record_task_cancellation_intent(
         registry,
         context.run_id,
         context.process_key,
-        context.computed_model_hash,
+        context.computed_manifest_hash,
         &payload,
     )
 }

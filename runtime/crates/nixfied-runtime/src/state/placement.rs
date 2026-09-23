@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use nixfied_model::Model;
+use nixfied_manifest::Manifest;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::slot::SelectedSlot;
@@ -52,16 +52,16 @@ pub fn default_state_base() -> RuntimeResult<PathBuf> {
 }
 
 pub fn derive_host_placement(
-    model: &Model,
+    manifest: &Manifest,
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
-    let selected_slot = crate::slot::select_slot(model, None)?;
-    derive_host_placement_for_slot(model, &selected_slot, run_id, state_base)
+    let selected_slot = crate::slot::select_slot(manifest, None)?;
+    derive_host_placement_for_slot(manifest, &selected_slot, run_id, state_base)
 }
 
 /// The directory layout the runtime owns. These were pinned constants in every
-/// model; the runtime is their single source of truth.
+/// manifest; the runtime is their single source of truth.
 const STATE_ROOT_TEMPLATE: &str = "${projectId}/${environment}/${slot}";
 const REGISTRY_DIR: &str = "registry";
 const RUN_DIR_TEMPLATE: &str = "runs/${runId}";
@@ -69,13 +69,13 @@ const LOGS_DIR_TEMPLATE: &str = "runs/${runId}/logs";
 const ARTIFACTS_DIR_TEMPLATE: &str = "runs/${runId}/artifacts";
 
 pub fn derive_host_placement_for_slot(
-    model: &Model,
+    manifest: &Manifest,
     selected_slot: &SelectedSlot<'_>,
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
     let vars = TemplateVars {
-        project_id: &model.project.project_id,
+        project_id: &manifest.project.project_id,
         environment: selected_slot.environment,
         slot: &selected_slot.slot.to_string(),
         run_id,
@@ -125,7 +125,7 @@ pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
 
 /// Materialize only the state base and registry dir. The registry must exist
 /// before the slot marker is evaluated: the marker decision may need registry
-/// evidence (stale processes from an older model build), and the registry
+/// evidence (stale processes from an older manifest build), and the registry
 /// outlives a slot clean that deletes the state root.
 pub fn materialize_registry_root(placement: &HostPlacement) -> RuntimeResult<()> {
     create_dir(&placement.state_base)?;

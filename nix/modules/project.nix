@@ -24,7 +24,7 @@ in
     ];
     default = system;
     defaultText = lib.literalExpression "system";
-    description = "Target system shared by the compiled model, runtime, and every declared closure.";
+    description = "Target system shared by the compiled manifest, runtime, and every declared closure.";
   };
 
   # The adopter-owned public verb surface (VERB-1): an explicit mapping of

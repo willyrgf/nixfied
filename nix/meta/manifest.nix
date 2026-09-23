@@ -1,4 +1,4 @@
-# Model wire declarations. Algorithms and configured values stay in the native
+# Manifest wire declarations. Algorithms and configured values stay in the native
 # compiler; vocabulary members remain authored only in capability.txt.
 { lib }:
 let
@@ -50,7 +50,7 @@ let
     decoder = "RejectUnknown";
     producer = "Nix";
     rust = {
-      file = "crates/nixfied-model/src/generated/types.rs";
+      file = "crates/nixfied-manifest/src/generated/types.rs";
       name = if name == "Invocation" then "InvocationSpec" else name;
       emission = "Owned";
       visibility = "pub";
@@ -68,7 +68,7 @@ let
     inherit description;
     rust = {
       inherit name;
-      file = "crates/nixfied-model/src/generated/types.rs";
+      file = "crates/nixfied-manifest/src/generated/types.rs";
       emission = "Owned";
       visibility = "pub";
       derives = [
@@ -126,8 +126,8 @@ in
     (vocabulary "StopSignal" true "The closed set of graceful shutdown signals the runtime can send.")
   ];
   records = [
-    (record "Model" "The sole required semantic artifact admitted independently by the runtime." [
-      (field "modelVersion" u32 required "RequiredPresent" "Exact numeric model contract version.")
+    (record "Manifest" "The sole required semantic artifact admitted independently by the runtime." [
+      (field "manifestVersion" u32 required "RequiredPresent" "Exact numeric manifest contract version.")
       (field "toolchainId" text required "RequiredPresent" "Pinned toolchain contract identity.")
       (field "runtimeAbi" text required "RequiredPresent"
         "Exact runtime ABI derived from the authored capability bytes."
@@ -162,7 +162,7 @@ in
     (record "Generator" "Native Nix emitter provenance." [
       (field "name" text required "RequiredPresent" "Generator name.")
       (field "version" text required "RequiredPresent" "Generator toolchain version identity.")
-      (field "emitter" text required "RequiredPresent" "Native model emission owner.")
+      (field "emitter" text required "RequiredPresent" "Native manifest emission owner.")
     ])
     (record "Project" "Stable project identity and human-readable label." [
       (field "projectId" text required "RequiredPresent"

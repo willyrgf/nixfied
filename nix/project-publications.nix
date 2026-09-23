@@ -4,7 +4,7 @@
   system ? throw "project app system demanded",
   moduleRoot ? throw "project app root demanded",
   runtimeBin ? throw "project runtime demanded",
-  modelJson ? throw "project model demanded",
+  manifestJson ? throw "project manifest demanded",
   docs ? throw "project reference package demanded",
 }:
 let
@@ -23,7 +23,7 @@ let
         syntax = (import ./meta/command-default.nix { inherit (pkgs) lib; }).byName.${command};
         program = pkgs.writeShellApplication {
           inherit name;
-          text = ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.model.token} "${modelJson}" "$@"'';
+          text = ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.manifest.token} "${manifestJson}" "$@"'';
         };
       in
       {
@@ -53,7 +53,7 @@ in
     name = "docs";
     description = "Read the authoring and API reference from this project's Nixfied input";
     usage = "nix run .#docs -- option 'nixfied.services.<name>.stateRefs'";
-    effects = "Reads packaged reference content; no model admission, runtime state, or network access.";
+    effects = "Reads packaged reference content; no manifest admission, runtime state, or network access.";
     topic = "discovery";
     binding = {
       type = "app";
@@ -61,10 +61,10 @@ in
     };
   }
   (control "run" "run" "Run one declared Nixfied task"
-    "Admits the model, prepares owned state and runs the selected task and required services."
+    "Admits the manifest, prepares owned state and runs the selected task and required services."
   )
-  (control "model-check" "check" "Admit the compiled Nixfied model without executing tasks"
-    "Checks the compiled model without executing tasks or materialising runtime state."
+  (control "manifest-check" "check" "Admit the compiled Nixfied manifest without executing tasks"
+    "Checks the compiled manifest without executing tasks or materialising runtime state."
   )
   (control "ps" "ps" "Reconcile and report Nixfied-owned processes for a slot"
     "Observes processes and reconciles stale registry evidence for the selected slot."

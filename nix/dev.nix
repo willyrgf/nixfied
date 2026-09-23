@@ -11,7 +11,7 @@
   gate,
   debugRuntime,
   testChild,
-  postgresTestModel,
+  postgresTestManifest,
 }:
 let
   rustToolchain = (import ./toolchain.nix { inherit pkgs; }).dev;
@@ -29,13 +29,13 @@ let
     ];
     text = ''
       NIXFIED_TEST_CHILD="${testChild}/bin/nixfied-test-child" \
-      NIXFIED_TEST_POSTGRES_MODEL="${postgresTestModel}" \
+      NIXFIED_TEST_POSTGRES_MANIFEST="${postgresTestManifest}" \
         cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';
   };
 
   # `.#check`: the hermetic source gate (rustfmt/clippy/check + every build) plus
-  # a runtime admission sanity on a built model that the flake checks don't cover.
+  # a runtime admission sanity on a built manifest that the flake checks don't cover.
   check = pkgs.writeShellApplication {
     name = "nixfied-check";
     runtimeInputs = [
@@ -45,9 +45,9 @@ let
     text = ''
       echo "==> nix flake check" >&2
       nix flake check
-      echo "==> model admission" >&2
-      model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
-      "${debugRuntime}/bin/nixfied-runtime" check --model "$model"
+      echo "==> manifest admission" >&2
+      manifest="$(nix build .#minimal-manifest --no-link --print-out-paths)/manifest.json"
+      "${debugRuntime}/bin/nixfied-runtime" check --manifest "$manifest"
     '';
   };
 

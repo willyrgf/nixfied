@@ -24,8 +24,8 @@
     in
     {
       packages = forAllSystems (system: {
-        default = nixfied.lib.${system}.compileModel ./nixfied.nix;
-        model = nixfied.lib.${system}.compileModel ./nixfied.nix;
+        default = nixfied.lib.${system}.compileManifest ./nixfied.nix;
+        manifest = nixfied.lib.${system}.compileManifest ./nixfied.nix;
       });
     };
 }

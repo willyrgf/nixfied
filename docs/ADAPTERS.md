@@ -3,8 +3,8 @@
 ## Import and compose adapters
 
 An adapter is a Nix module that compiles one concrete service into the generic
-model primitives. The runtime never learns the domain — an adapter is pure
-model authorship, importable by any project:
+manifest primitives. The runtime never learns the domain — an adapter is pure
+manifest authorship, importable by any project:
 
 [`OPTIONS.md`](OPTIONS.md) is the generated reference for the exact option
 types and defaults used below.
@@ -102,7 +102,7 @@ Use escaped interpolation in Nix strings, for example `"\${port:postgres}"`, or
 syntax is not a registry of Nixfied placeholders; consult these exact supported
 forms rather than inferring additional names from examples.
 
-## Multiple listeners: model every endpoint
+## Multiple listeners: declare every endpoint
 
 A service that binds more than one listener (reth: http/ws/authrpc) declares each
 as a named `endpoint` and names the primary with `primaryEndpoint` (see
@@ -115,8 +115,8 @@ receives the planned ports as arguments (`${port:reth-http}`, `${port:reth-ws}`,
 and derives nothing.
 
 Do **not** derive auxiliary ports (`+1/+2/+3`) inside the wrapper: a derived port
-is outside the plan, so it is neither reserved nor isolated across slots. Model it
-as an endpoint instead. A listener the adapter cannot model (no fixed offset, or an
+is outside the plan, so it is neither reserved nor isolated across slots. Declare it
+as an endpoint instead. A listener the adapter cannot represent (no fixed offset, or an
 out-of-band socket) must be disabled rather than left unreserved — see reth's
 `--ipcdisable`.
 

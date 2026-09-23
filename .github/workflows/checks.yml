@@ -49,12 +49,12 @@ jobs:
             cargo test --workspace
           '
 
-      # 2. Structural gates (debug): rustfmt + clippy -D warnings + every model +
+      # 2. Structural gates (debug): rustfmt + clippy -D warnings + every manifest +
       #    the debug runtime build, all hermetic.
       - name: nix flake check
         run: nix flake check
 
-      # 3. Gate (debug): the framework runs the example models the way adopters do
+      # 3. Gate (debug): the framework runs the example manifests the way adopters do
       #    — through the runtime under test — plus the cross-slot, fail-closed, and
       #    adoption checks. Uses the debug runtime built by step 2 (cached).
       - name: gate

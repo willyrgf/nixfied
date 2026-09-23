@@ -18,18 +18,18 @@ pub struct RuntimeError {
     pub details: serde_json::Value,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub causes: Box<Vec<RuntimeCause>>,
-    pub model_path: Option<PathBuf>,
-    pub computed_model_hash: Option<String>,
+    pub manifest_path: Option<PathBuf>,
+    pub computed_manifest_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ErrorCode {
-    #[serde(rename = "MODEL_NOT_STORE_OUTPUT")]
-    ModelNotStoreOutput,
-    #[serde(rename = "MODEL_INVALID")]
-    ModelInvalid,
-    #[serde(rename = "MODEL_ADMISSION")]
-    ModelAdmission,
+    #[serde(rename = "MANIFEST_NOT_STORE_OUTPUT")]
+    ManifestNotStoreOutput,
+    #[serde(rename = "MANIFEST_INVALID")]
+    ManifestInvalid,
+    #[serde(rename = "MANIFEST_ADMISSION")]
+    ManifestAdmission,
     #[serde(rename = "RUNTIME_ABI_MISMATCH")]
     RuntimeAbiMismatch,
     #[serde(rename = "SOURCE_MISMATCH")]

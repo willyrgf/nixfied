@@ -1,7 +1,7 @@
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 
-use nixfied_model::LoopbackHost;
+use nixfied_manifest::LoopbackHost;
 
 use crate::cancellation::CancellationToken;
 use crate::error::RuntimeResult;

@@ -12,7 +12,7 @@ let
   membersByPackage = {
     nixfied-cli = [ "crates/nixfied-cli" ];
     nixfied-runtime = [
-      "crates/nixfied-model"
+      "crates/nixfied-manifest"
       "crates/nixfied-runtime"
     ];
     nixfied-test-child = [ "crates/nixfied-test-child" ];
@@ -27,7 +27,7 @@ let
   canonicalMembers = ''
 members = [
   "crates/nixfied-cli",
-  "crates/nixfied-model",
+  "crates/nixfied-manifest",
   "crates/nixfied-runtime",
   "crates/nixfied-test-child",
 ]

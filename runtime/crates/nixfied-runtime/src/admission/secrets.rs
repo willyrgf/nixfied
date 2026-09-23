@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-use nixfied_model::{Model, SecretSourceKind};
+use nixfied_manifest::{Manifest, SecretSourceKind};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
@@ -29,18 +29,18 @@ impl ResolvedSecrets {
     }
 }
 
-pub fn check_secret_references(model: &Model) -> RuntimeResult<()> {
-    check_secret_descriptors(model)?;
-    let declared = model
+pub fn check_secret_references(manifest: &Manifest) -> RuntimeResult<()> {
+    check_secret_descriptors(manifest)?;
+    let declared = manifest
         .secrets
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    for invocation in invocations(model) {
+    for invocation in invocations(manifest) {
         for value in &invocation.run {
             if value.contains("${secret:") {
                 return Err(RuntimeError::new(
-                    ErrorCode::ModelAdmission,
+                    ErrorCode::ManifestAdmission,
                     "secret placeholders are only allowed in invocation.env values",
                 ));
             }
@@ -48,20 +48,20 @@ pub fn check_secret_references(model: &Model) -> RuntimeResult<()> {
         for value in invocation.env.values() {
             if has_unclosed_secret_ref(value) {
                 return Err(RuntimeError::new(
-                    ErrorCode::ModelAdmission,
+                    ErrorCode::ManifestAdmission,
                     format!("malformed secret placeholder in invocation env value: {value}"),
                 ));
             }
             for reference in secret_refs(value) {
                 if reference.is_empty() {
                     return Err(RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         "secret placeholder must name a declared secret",
                     ));
                 }
                 if !declared.contains(reference) {
                     return Err(RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         format!("secret placeholder references undeclared secret {reference}"),
                     ));
                 }
@@ -71,11 +71,11 @@ pub fn check_secret_references(model: &Model) -> RuntimeResult<()> {
     Ok(())
 }
 
-pub fn resolve_secrets(model: &Model) -> RuntimeResult<ResolvedSecrets> {
-    check_secret_references(model)?;
+pub fn resolve_secrets(manifest: &Manifest) -> RuntimeResult<ResolvedSecrets> {
+    check_secret_references(manifest)?;
     let mut base = None;
     let mut values = BTreeMap::new();
-    for (id, descriptor) in &model.secrets {
+    for (id, descriptor) in &manifest.secrets {
         let value = match descriptor.source.kind {
             SecretSourceKind::EnvVar => {
                 let env_var = descriptor
@@ -103,11 +103,11 @@ pub fn resolve_secrets(model: &Model) -> RuntimeResult<ResolvedSecrets> {
     Ok(ResolvedSecrets { values })
 }
 
-fn check_secret_descriptors(model: &Model) -> RuntimeResult<()> {
-    for (id, descriptor) in &model.secrets {
+fn check_secret_descriptors(manifest: &Manifest) -> RuntimeResult<()> {
+    for (id, descriptor) in &manifest.secrets {
         if descriptor.secret_id != *id {
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::ManifestAdmission,
                 format!(
                     "secret descriptor key {id} disagrees with secretId {}",
                     descriptor.secret_id
@@ -118,13 +118,13 @@ fn check_secret_descriptors(model: &Model) -> RuntimeResult<()> {
             SecretSourceKind::EnvVar => {
                 let env_var = descriptor.source.env_var.as_deref().ok_or_else(|| {
                     RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         format!("secret {id} env-var resolver requires envVar"),
                     )
                 })?;
                 if env_var.is_empty() || descriptor.source.path.is_some() {
                     return Err(RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         format!("secret {id} env-var resolver must declare only envVar"),
                     ));
                 }
@@ -132,7 +132,7 @@ fn check_secret_descriptors(model: &Model) -> RuntimeResult<()> {
             SecretSourceKind::File => {
                 let path = descriptor.source.path.as_deref().ok_or_else(|| {
                     RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         format!("secret {id} file resolver requires path"),
                     )
                 })?;
@@ -142,7 +142,7 @@ fn check_secret_descriptors(model: &Model) -> RuntimeResult<()> {
                     || descriptor.source.env_var.is_some()
                 {
                     return Err(RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::ManifestAdmission,
                         format!(
                             "secret {id} file resolver must declare only a confined relative path"
                         ),
@@ -158,14 +158,14 @@ pub(crate) fn secret_refs(value: &str) -> Vec<&str> {
     refs_after_prefix("${secret:", value)
 }
 
-fn invocations(model: &Model) -> impl Iterator<Item = &nixfied_model::InvocationSpec> {
-    let service_values = model.services.values().flat_map(|service| {
+fn invocations(manifest: &Manifest) -> impl Iterator<Item = &nixfied_manifest::InvocationSpec> {
+    let service_values = manifest.services.values().flat_map(|service| {
         let lifecycle = &service.lifecycle;
         std::iter::once(&lifecycle.start.invocation)
             .chain(lifecycle.ready.probe.invocation.as_ref())
             .chain(lifecycle.health.probe.invocation.as_ref())
     });
-    let task_values = model
+    let task_values = manifest
         .tasks
         .values()
         .filter_map(|task| task.invocation.as_ref());

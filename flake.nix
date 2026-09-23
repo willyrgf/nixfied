@@ -47,14 +47,14 @@
       libraryDeclarations =
         { pkgs, system }:
         let
-          compileModel =
+          compileManifest =
             module:
             import ./nix/compiler/default.nix {
               inherit (nixpkgs) lib;
               inherit pkgs system module;
             };
           # The release runtime an adopter's apps run against. Lazy: only forced
-          # when `projectApps` is used, so `compileModel`-only callers don't build it.
+          # when `projectApps` is used, so `compileManifest`-only callers don't build it.
           releaseRuntime = mkNixfiedPackage {
             inherit pkgs;
             package = "nixfied-runtime";
@@ -71,18 +71,18 @@
           {
             kind = "function";
             scope = "library";
-            name = "compileModel";
-            description = "Compile a native Nixfied module into a model package.";
+            name = "compileManifest";
+            description = "Compile a native Nixfied module into a manifest package.";
             input = "A native module function, attribute set, or module path.";
-            result = "Derivation containing model.json and disposable views/docs.md.";
-            usage = "nixfied.lib.${system}.compileModel ./nixfied.nix";
+            result = "Derivation containing manifest.json and disposable views/docs.md.";
+            usage = "nixfied.lib.${system}.compileManifest ./nixfied.nix";
             references = [
               {
                 kind = "topic";
-                id = "model";
+                id = "manifest";
               }
             ];
-            binding = compileModel;
+            binding = compileManifest;
           }
           {
             kind = "function";
@@ -130,7 +130,7 @@
                 inherit (nixpkgs) lib;
                 docs = docsFor { inherit pkgs system; };
                 publicationTargets = (authoringFor { inherit pkgs system; }).targets;
-                model = compileModel module;
+                manifest = compileManifest module;
                 config = resolveConfig module;
               };
           }
@@ -216,7 +216,7 @@
             buildType = "debug";
           };
           nixfiedTestChild = mkNixfiedTestChild pkgs;
-          taskOutputModel = nixfiedLib.compileModel (
+          taskOutputManifest = nixfiedLib.compileManifest (
             { ... }:
             {
               nixfied.project.projectId = "task-output";
@@ -329,8 +329,8 @@
               };
             }
           );
-          minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
-          persistentEndpointModel = nixfiedLib.compileModel (
+          minimalManifest = nixfiedLib.compileManifest ./examples/minimal/nixfied.nix;
+          persistentEndpointManifest = nixfiedLib.compileManifest (
             { pkgs, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
@@ -368,7 +368,7 @@
               };
             }
           );
-          purgeMinimalModel = nixfiedLib.compileModel (
+          purgeMinimalManifest = nixfiedLib.compileManifest (
             { ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
@@ -376,46 +376,46 @@
               nixfied.state.persistence = "persistent";
             }
           );
-          postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
+          postgresManifest = nixfiedLib.compileManifest ./examples/postgres/nixfied.nix;
           # The cargo lifecycle test runs immediately before the gate in `.#ci`.
           # Keep its Postgres window distinct: a stopped server may leave a
           # non-listening TIME_WAIT claim that the gate's raw-bind preflight must
           # continue to refuse rather than treating as available.
-          postgresTestModel = nixfiedLib.compileModel (
+          postgresTestManifest = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/postgres/nixfied.nix ];
               nixfied.placement.ports.base = lib.mkForce 44580;
             }
           );
-          compositeModel = nixfiedLib.compileModel ./examples/composite/nixfied.nix;
-          polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
-          downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
+          compositeManifest = nixfiedLib.compileManifest ./examples/composite/nixfied.nix;
+          polyglotManifest = nixfiedLib.compileManifest ./examples/polyglot-stack/nixfied.nix;
+          downstreamManifest = nixfiedLib.compileManifest ./examples/downstream/nixfied.nix;
           # The example shard and the later slot-concurrency shard use distinct
           # deterministic windows. A stopped Postgres can leave a non-listening
           # TIME_WAIT claim that the required raw-bind preflight must refuse as
           # unverifiable rather than silently treating as available.
-          downstreamSlotsModel = nixfiedLib.compileModel (
+          downstreamSlotsManifest = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/downstream/nixfied.nix ];
               nixfied.placement.ports.base = lib.mkForce 34880;
             }
           );
-          rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
-          toolchainModel = nixfiedLib.compileModel ./examples/toolchain/nixfied.nix;
-          # Gate-only variants of the example models, for the state lifecycle
-          # shard: a provenance-only delta (same identity, new model hash), an
+          rethManifest = nixfiedLib.compileManifest ./examples/reth/nixfied.nix;
+          toolchainManifest = nixfiedLib.compileManifest ./examples/toolchain/nixfied.nix;
+          # Gate-only variants of the example manifests, for the state lifecycle
+          # shard: a provenance-only delta (same identity, new manifest hash), an
           # epoch bump (declared state-compatibility boundary), and a postgres
           # whose smoke query sleeps long enough to interrupt mid-run.
-          minimalModelB = nixfiedLib.compileModel (
+          minimalManifestB = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
               nixfied.project.name = lib.mkForce "Minimal B";
             }
           );
-          minimalModelEpoch2 = nixfiedLib.compileModel (
+          minimalManifestEpoch2 = nixfiedLib.compileManifest (
             { ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
@@ -424,7 +424,7 @@
           );
           # A deterministically failing composite (its leaf dials a closed
           # port), for the gate's failure-identity negative check.
-          negativeFailModel = nixfiedLib.compileModel (
+          negativeFailManifest = nixfiedLib.compileManifest (
             { ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
@@ -458,10 +458,10 @@
             inherit pkgs;
             debugRuntime = nixfiedRuntimeDebug;
           };
-          # Runtime-layer tests expressed as a first-class nixfied model.
-          # The compileModel override injects the runtime closure and all model
+          # Runtime-layer tests expressed as a first-class nixfied manifest.
+          # The compileManifest override injects the runtime closure and all manifest
           # paths as compile-time env vars.
-          gateRuntimeModel = nixfiedLib.compileModel (
+          gateRuntimeManifest = nixfiedLib.compileManifest (
             { ... }:
             {
               imports = [ ./nix/gate-runtime/nixfied.nix ];
@@ -473,34 +473,34 @@
                   "file-write"
                 ];
               };
-              nixfied.tasks.example-minimal.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.example-postgres.invocation.env.POSTGRES_MODEL = toString postgresModel;
-              nixfied.tasks.example-composite.invocation.env.COMPOSITE_MODEL = toString compositeModel;
-              nixfied.tasks.example-polyglot.invocation.env.POLYGLOT_MODEL = toString polyglotModel;
-              nixfied.tasks.example-downstream.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
-              nixfied.tasks.example-reth.invocation.env.RETH_MODEL = toString rethModel;
-              nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
-              nixfied.tasks.task-output.invocation.env.TASK_OUTPUT_MODEL = toString taskOutputModel;
+              nixfied.tasks.example-minimal.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.example-postgres.invocation.env.POSTGRES_MANIFEST = toString postgresManifest;
+              nixfied.tasks.example-composite.invocation.env.COMPOSITE_MANIFEST = toString compositeManifest;
+              nixfied.tasks.example-polyglot.invocation.env.POLYGLOT_MANIFEST = toString polyglotManifest;
+              nixfied.tasks.example-downstream.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamManifest;
+              nixfied.tasks.example-reth.invocation.env.RETH_MANIFEST = toString rethManifest;
+              nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MANIFEST = toString toolchainManifest;
+              nixfied.tasks.task-output.invocation.env.TASK_OUTPUT_MANIFEST = toString taskOutputManifest;
               nixfied.tasks.task-output.invocation.env.NIXFIED_TASK_OUTPUT_SECRET = "task-output-gate-secret";
-              nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL =
-                toString negativeFailModel;
-              nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MODEL = toString minimalModelB;
-              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL =
-                toString minimalModelEpoch2;
-              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL =
-                toString minimalModelEpoch2;
-              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_ENDPOINT_MODEL =
-                toString persistentEndpointModel;
-              nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
-              nixfied.tasks.endpoint-cross-root.invocation.env.PERSISTENT_ENDPOINT_MODEL =
-                toString persistentEndpointModel;
-              nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
-              nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
-              nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
+              nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MANIFEST =
+                toString negativeFailManifest;
+              nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MANIFEST = toString minimalManifestB;
+              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MANIFEST =
+                toString minimalManifestEpoch2;
+              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MANIFEST =
+                toString minimalManifestEpoch2;
+              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_ENDPOINT_MANIFEST =
+                toString persistentEndpointManifest;
+              nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MANIFEST = toString purgeMinimalManifest;
+              nixfied.tasks.endpoint-cross-root.invocation.env.PERSISTENT_ENDPOINT_MANIFEST =
+                toString persistentEndpointManifest;
+              nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;
+              nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;
+              nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;
             }
           );
           nixfiedGateRuntime = pkgs.writeShellApplication {
@@ -508,13 +508,13 @@
             runtimeInputs = [ nixfiedRuntimeDebug ];
             text = ''
               nixfied-runtime run \
-                --model "${gateRuntimeModel}/model.json" \
+                --manifest "${gateRuntimeManifest}/manifest.json" \
                 --task all \
                 --timeout-ms 300000
             '';
           };
           # `nix run .#gate`: the framework gate — runtime-layer tests via the
-          # gate-runtime nixfied model, then nix-layer tests via gate-nix.
+          # gate-runtime nixfied manifest, then nix-layer tests via gate-nix.
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
             gateNix = nixfiedGateNix;
@@ -522,24 +522,24 @@
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
-            inherit pkgs postgresTestModel;
+            inherit pkgs postgresTestManifest;
             gate = nixfiedGate;
             debugRuntime = nixfiedRuntimeDebug;
             testChild = nixfiedTestChild;
           };
         in
         [
-          (publishPackage "root" "default" "Default minimal example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            minimalModel
+          (publishPackage "root" "default" "Default minimal example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            minimalManifest
           )
-          (publishPackage "root" "toolchain-model" "Heterogeneous toolchain example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            toolchainModel
+          (publishPackage "root" "toolchain-manifest" "Heterogeneous toolchain example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            toolchainManifest
           )
-          (publishPackage "root" "gate-runtime-model" "Runtime integration gate model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            gateRuntimeModel
+          (publishPackage "root" "gate-runtime-manifest" "Runtime integration gate manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            gateRuntimeManifest
           )
           (publishPackage "root" "nixfied-cli" "Release scaffold installer CLI"
             "Executable under bin/ with its native runtime dependencies."
@@ -561,7 +561,7 @@
             "Executable under bin/ with its native runtime dependencies."
             nixfiedGate
           )
-          (publishPackage "root" "check" "Hermetic source and model-admission check program"
+          (publishPackage "root" "check" "Hermetic source and manifest-admission check program"
             "Executable under bin/ with its native runtime dependencies."
             devApps.check
           )
@@ -573,29 +573,29 @@
             "Executable under bin/ with its native runtime dependencies."
             devApps.ci
           )
-          (publishPackage "root" "minimal-model" "Minimal service example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            minimalModel
+          (publishPackage "root" "minimal-manifest" "Minimal service example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            minimalManifest
           )
-          (publishPackage "root" "postgres-model" "PostgreSQL example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            postgresModel
+          (publishPackage "root" "postgres-manifest" "PostgreSQL example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            postgresManifest
           )
-          (publishPackage "root" "composite-model" "Composite task example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            compositeModel
+          (publishPackage "root" "composite-manifest" "Composite task example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            compositeManifest
           )
-          (publishPackage "root" "polyglot-stack-model" "Polyglot service example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            polyglotModel
+          (publishPackage "root" "polyglot-stack-manifest" "Polyglot service example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            polyglotManifest
           )
-          (publishPackage "root" "downstream-model" "Downstream workflow example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            downstreamModel
+          (publishPackage "root" "downstream-manifest" "Downstream workflow example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            downstreamManifest
           )
-          (publishPackage "root" "reth-model" "Reth multi-endpoint example model"
-            "model.json and disposable views/docs.md, with realised closure dependencies."
-            rethModel
+          (publishPackage "root" "reth-manifest" "Reth multi-endpoint example manifest"
+            "manifest.json and disposable views/docs.md, with realised closure dependencies."
+            rethManifest
           )
           (publishPackage "root" "docs" "Revision-bound authoring and API reference"
             "bin/nixfied-docs and share/nixfied/reference/API.md."
@@ -640,7 +640,7 @@
             )
           )
           (app "docs" "Read the authoring and API reference from this Nixfied source"
-            "Reads packaged reference content without model admission, runtime state or network access."
+            "Reads packaged reference content without manifest admission, runtime state or network access."
             { topic = "discovery"; }
             (program "docs")
           )
@@ -650,7 +650,7 @@
             (program "install")
           )
           (app "upgrade" "Repin the Nixfied flake input without touching project-owned declarations"
-            "Inspects pinned sources and reports documentation changes; checked apply updates project wiring after model preflight."
+            "Inspects pinned sources and reports documentation changes; checked apply updates project wiring after manifest preflight."
             { command = "upgrade"; }
             (program "upgrade")
           )
@@ -659,8 +659,8 @@
             { topic = "development"; }
             (program "gate")
           )
-          (app "check" "Hermetic source gate (rustfmt/clippy/check) + model admission"
-            "Runs flake checks and admits a realised example model."
+          (app "check" "Hermetic source gate (rustfmt/clippy/check) + manifest admission"
+            "Runs flake checks and admits a realised example manifest."
             { topic = "development"; }
             (program "check")
           )
@@ -696,8 +696,8 @@
           };
         in
         [
-          (publishPackage "check" "minimal-model" "Build the minimal example model" "Realised model package."
-            self.packages.${system}.minimal-model
+          (publishPackage "check" "minimal-manifest" "Build the minimal example manifest" "Realised manifest package."
+            self.packages.${system}.minimal-manifest
           )
           (publishPackage "check" "derive-facts-vectors" "Check independent Nix derivation golden vectors"
             "Successful evaluation of the derivation-spec vectors."

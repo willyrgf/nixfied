@@ -1,4 +1,4 @@
-//! The run planner: a pure function of `(ExecutionModel, selected task, slot)`
+//! The run planner: a pure function of `(ExecutionManifest, selected task, slot)`
 //! that derives the service union, assigns service ports, and orders the
 //! flattened nodes — or rejects when no concrete executable plan exists.
 //! Admission runs it over every slot and every declared task so that
@@ -7,10 +7,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nixfied_model::{NodeId, ServiceId, ServiceLifetime, TaskId};
+use nixfied_manifest::{NodeId, ServiceId, ServiceLifetime, TaskId};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecutionModel, PortWindow};
+use crate::execution::types::{ExecutionManifest, PortWindow};
 
 /// A concrete, executable plan for one slot: services bound to ports in start
 /// order, and tasks in execution order.
@@ -36,29 +36,29 @@ pub struct PlanNode {
     pub task_id: TaskId,
 }
 
-pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<RunPlan> {
-    let window = model.slot_windows.get(&slot).ok_or_else(|| {
+pub fn plan(manifest: &ExecutionManifest, task: &TaskId, slot: u32) -> RuntimeResult<RunPlan> {
+    let window = manifest.slot_windows.get(&slot).ok_or_else(|| {
         RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::ManifestAdmission,
             format!("slot {slot} has no candidate port window"),
         )
     })?;
 
-    let service_lifetime = selected_service_lifetime(model, task)?;
-    let nodes = flatten_task(model, task)?;
+    let service_lifetime = selected_service_lifetime(manifest, task)?;
+    let nodes = flatten_task(manifest, task)?;
     // The derived service union (docs/DERIVATION_SPEC.md §3): the flattened
     // leaves' requires, closed over connectsTo, in canonical (byte) order —
     // ports are assigned from the sorted set, so a service's port depends only
     // on membership, never on authoring order.
     let mut union: BTreeSet<ServiceId> = nodes
         .iter()
-        .filter_map(|node| model.tasks.get(&node.task_id))
+        .filter_map(|node| manifest.tasks.get(&node.task_id))
         .flat_map(|leaf| leaf.requires.iter().cloned())
         .collect();
     loop {
         let mut additions: Vec<ServiceId> = Vec::new();
         for name in union.iter() {
-            let Some(service) = model.services.get(name) else {
+            let Some(service) = manifest.services.get(name) else {
                 continue;
             };
             additions.extend(
@@ -72,7 +72,7 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
             // requirements belong to the union (docs/DERIVATION_SPEC.md §3).
             if let Some(prepare_task) = &service.prepare {
                 additions.extend(
-                    prepare_requires(model, prepare_task)?
+                    prepare_requires(manifest, prepare_task)?
                         .into_iter()
                         .filter(|target| !union.contains(target)),
                 );
@@ -91,7 +91,10 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
     // before its dependent spawns. Validation proved the wiring graph acyclic,
     // and the union is connectsTo-closed by construction, so the sort always
     // completes.
-    let services = order_for_start(assign_ports(&service_names, model, *window, slot)?, model);
+    let services = order_for_start(
+        assign_ports(&service_names, manifest, *window, slot)?,
+        manifest,
+    );
     Ok(RunPlan {
         service_lifetime,
         services,
@@ -100,17 +103,17 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
 }
 
 fn selected_service_lifetime(
-    model: &ExecutionModel,
+    manifest: &ExecutionManifest,
     task: &TaskId,
 ) -> RuntimeResult<ServiceLifetime> {
-    if let Some(task) = model.tasks.get(task) {
+    if let Some(task) = manifest.tasks.get(task) {
         return Ok(task.service_lifetime);
     }
-    if let Some(task) = model.composites.get(task) {
+    if let Some(task) = manifest.composites.get(task) {
         return Ok(task.service_lifetime);
     }
     Err(RuntimeError::new(
-        ErrorCode::ModelAdmission,
+        ErrorCode::ManifestAdmission,
         format!("task {task} is missing"),
     ))
 }
@@ -118,12 +121,12 @@ fn selected_service_lifetime(
 /// The services a prepare task's leaves require — the prepare-requires edges
 /// of the combined service graph.
 fn prepare_requires(
-    model: &ExecutionModel,
+    manifest: &ExecutionManifest,
     prepare_task: &TaskId,
 ) -> RuntimeResult<Vec<ServiceId>> {
-    Ok(flatten_task(model, prepare_task)?
+    Ok(flatten_task(manifest, prepare_task)?
         .iter()
-        .filter_map(|node| model.tasks.get(&node.task_id))
+        .filter_map(|node| manifest.tasks.get(&node.task_id))
         .flat_map(|leaf| leaf.requires.iter().cloned())
         .collect())
 }
@@ -131,19 +134,22 @@ fn prepare_requires(
 /// Stable topological order over the combined connectsTo + prepare-requires
 /// graph: among services whose dependencies are all started, canonical order
 /// wins, so a wiring-free union keeps its canonical order.
-fn order_for_start(bindings: Vec<ServiceBinding>, model: &ExecutionModel) -> Vec<ServiceBinding> {
+fn order_for_start(
+    bindings: Vec<ServiceBinding>,
+    manifest: &ExecutionManifest,
+) -> Vec<ServiceBinding> {
     let mut remaining = bindings;
     let mut ordered = Vec::with_capacity(remaining.len());
     let mut started: BTreeSet<ServiceId> = BTreeSet::new();
     let edges_of = |name: &ServiceId| -> Vec<ServiceId> {
-        let Some(service) = model.services.get(name) else {
+        let Some(service) = manifest.services.get(name) else {
             return Vec::new();
         };
         let mut edges: Vec<ServiceId> = service.connects_to.clone();
         if let Some(Ok(required)) = service
             .prepare
             .as_ref()
-            .map(|prepare_task| prepare_requires(model, prepare_task))
+            .map(|prepare_task| prepare_requires(manifest, prepare_task))
         {
             edges.extend(required);
         }
@@ -172,18 +178,18 @@ fn order_for_start(bindings: Vec<ServiceBinding>, model: &ExecutionModel) -> Vec
 /// a service can never run an unreserved port.
 fn assign_ports(
     service_names: &[ServiceId],
-    model: &ExecutionModel,
+    manifest: &ExecutionManifest,
     window: PortWindow,
     slot: u32,
 ) -> RuntimeResult<Vec<ServiceBinding>> {
     let demand: usize = service_names
         .iter()
-        .filter_map(|name| model.services.get(name))
+        .filter_map(|name| manifest.services.get(name))
         .map(|service| service.endpoints.len())
         .sum();
     if demand > window.capacity() as usize {
         return Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::ManifestAdmission,
             format!(
                 "slot {slot} candidate window {}-{} cannot host {demand} endpoints across {} services",
                 window.start,
@@ -198,7 +204,7 @@ fn assign_ports(
     for service_name in service_names {
         // Lowering proved every selected service resolves; an absent one would be
         // a planner/lowering skew, so treat it as an empty endpoint set.
-        let endpoint_ids = model
+        let endpoint_ids = manifest
             .services
             .get(service_name)
             .map(|service| service.endpoints.keys().cloned().collect::<Vec<_>>())
@@ -225,7 +231,7 @@ fn assign_ports(
 /// topological order: emission order, earliest node whose dependencies are
 /// already placed first. Cycles through nesting are rejected here — admission
 /// proves every selection plans, so a cyclic reference never survives it.
-pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
+pub fn flatten_task(manifest: &ExecutionManifest, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
     struct FlatNode {
         step_path: String,
         leaf: TaskId,
@@ -233,13 +239,13 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
     }
 
     fn emit(
-        model: &ExecutionModel,
+        manifest: &ExecutionManifest,
         task: &TaskId,
         path: String,
         visiting: &mut Vec<TaskId>,
         out: &mut Vec<FlatNode>,
     ) -> RuntimeResult<()> {
-        if model.tasks.contains_key(task) {
+        if manifest.tasks.contains_key(task) {
             out.push(FlatNode {
                 step_path: path,
                 leaf: task.clone(),
@@ -247,9 +253,9 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
             });
             return Ok(());
         }
-        let Some(composite) = model.composites.get(task) else {
+        let Some(composite) = manifest.composites.get(task) else {
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::ManifestAdmission,
                 format!("task {task} is missing"),
             ));
         };
@@ -261,7 +267,7 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
                 .collect::<Vec<_>>()
                 .join(" -> ");
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::ManifestAdmission,
                 format!("task reference cycle: {chain}"),
             ));
         }
@@ -273,7 +279,7 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
         for step in &composite.steps {
             let start = out.len();
             emit(
-                model,
+                manifest,
                 &step.task,
                 format!("{path}.{}", step.name),
                 visiting,
@@ -302,7 +308,7 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
 
     let mut flat = Vec::new();
     emit(
-        model,
+        manifest,
         root,
         root.as_str().to_string(),
         &mut Vec::new(),
@@ -325,7 +331,7 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::ManifestAdmission,
                 format!("task {root} has a step dependency cycle through: {stuck}"),
             ));
         };
@@ -343,10 +349,10 @@ pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<
 /// declared task. Admission calls this so "admitted" implies "runnable for any
 /// slot/task the user can select" — including composite acyclicity and the
 /// derived union's port feasibility.
-pub fn prove_all_plans_feasible(model: &ExecutionModel) -> RuntimeResult<()> {
-    for &slot in model.slot_windows.keys() {
-        for task in model.tasks.keys().chain(model.composites.keys()) {
-            plan(model, task, slot)?;
+pub fn prove_all_plans_feasible(manifest: &ExecutionManifest) -> RuntimeResult<()> {
+    for &slot in manifest.slot_windows.keys() {
+        for task in manifest.tasks.keys().chain(manifest.composites.keys()) {
+            plan(manifest, task, slot)?;
         }
     }
     Ok(())
@@ -359,7 +365,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
+    use nixfied_manifest::{
+        ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId,
+    };
 
     use crate::execution::ServiceIdentity;
 
@@ -435,16 +443,16 @@ mod tests {
         }
     }
 
-    /// A model whose `all` leaf requires the given services — selecting it
+    /// A manifest whose `all` leaf requires the given services — selecting it
     /// derives exactly that union.
-    fn model(
+    fn manifest(
         services: Vec<&str>,
         required: Vec<&str>,
         windows: Vec<(u32, u16, u16)>,
-    ) -> ExecutionModel {
+    ) -> ExecutionManifest {
         let mut leaf = leaf_task("all");
         leaf.requires = required.into_iter().map(ServiceId::new).collect();
-        ExecutionModel {
+        ExecutionManifest {
             services: services
                 .into_iter()
                 .map(|name| (ServiceId::new(name), service(name)))
@@ -460,7 +468,7 @@ mod tests {
 
     #[test]
     fn assigns_ports_from_window_start_in_order() {
-        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
+        let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
         let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
         assert_eq!(
             plan.services,
@@ -479,15 +487,15 @@ mod tests {
 
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
-        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
+        let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         let error = plan(&em, &TaskId::new("all"), 0).expect_err("window too small");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
     }
 
     #[test]
     fn feasibility_is_checked_per_slot() {
         // Slot 0 fits two services; slot 1's window holds only one.
-        let em = model(
+        let em = manifest(
             vec!["a", "b"],
             vec!["a", "b"],
             vec![(0, 23080, 23090), (1, 24000, 24000)],
@@ -497,13 +505,13 @@ mod tests {
             plan(&em, &TaskId::new("all"), 1)
                 .expect_err("slot 1 too small")
                 .code,
-            ErrorCode::ModelAdmission
+            ErrorCode::ManifestAdmission
         );
         assert_eq!(
             prove_all_plans_feasible(&em)
                 .expect_err("not all slots feasible")
                 .code,
-            ErrorCode::ModelAdmission
+            ErrorCode::ManifestAdmission
         );
     }
 
@@ -532,8 +540,8 @@ mod tests {
         }
     }
 
-    fn vector_model(leaves: Vec<&str>, composites: Vec<ExecComposite>) -> ExecutionModel {
-        let mut em = model(vec![], vec![], vec![(0, 23080, 23090)]);
+    fn vector_manifest(leaves: Vec<&str>, composites: Vec<ExecComposite>) -> ExecutionManifest {
+        let mut em = manifest(vec![], vec![], vec![(0, 23080, 23090)]);
         em.tasks.clear();
         for leaf in leaves {
             em.tasks.insert(TaskId::new(leaf), leaf_task(leaf));
@@ -544,7 +552,7 @@ mod tests {
         em
     }
 
-    fn plan_paths(em: &ExecutionModel, root: &str) -> Vec<String> {
+    fn plan_paths(em: &ExecutionManifest, root: &str) -> Vec<String> {
         plan(em, &TaskId::new(root), 0)
             .expect("plan exists")
             .nodes
@@ -557,7 +565,7 @@ mod tests {
     /// canonical step order, whole-subtree dependencies.
     #[test]
     fn flattening_vector_v1_nesting_and_step_paths() {
-        let em = vector_model(
+        let em = vector_manifest(
             vec!["fmt", "clippy", "tests"],
             vec![
                 composite(
@@ -586,7 +594,7 @@ mod tests {
     /// distinct step paths.
     #[test]
     fn flattening_vector_v2_run_once_is_per_step() {
-        let em = vector_model(
+        let em = vector_manifest(
             vec!["unit"],
             vec![composite(
                 "twice",
@@ -600,7 +608,7 @@ mod tests {
     /// path is the task id.
     #[test]
     fn flattening_vector_v3_leaf_selection() {
-        let em = vector_model(vec!["fmt"], vec![]);
+        let em = vector_manifest(vec!["fmt"], vec![]);
         assert_eq!(plan_paths(&em, "fmt"), vec!["fmt"]);
     }
 
@@ -611,7 +619,7 @@ mod tests {
         leaf.requires = vec![ServiceId::new("db")];
         let mut composite = composite("stack", vec![("smoke", "smoke", vec![])]);
         composite.service_lifetime = ServiceLifetime::UntilIdle;
-        let mut em = model(vec!["db"], vec![], vec![(0, 23080, 23090)]);
+        let mut em = manifest(vec!["db"], vec![], vec![(0, 23080, 23090)]);
         em.tasks = BTreeMap::from([(TaskId::new("smoke"), leaf)]);
         em.composites = BTreeMap::from([(TaskId::new("stack"), composite)]);
 
@@ -643,7 +651,7 @@ mod tests {
 
     #[test]
     fn flattening_rejects_a_task_reference_cycle() {
-        let em = vector_model(
+        let em = vector_manifest(
             vec![],
             vec![
                 composite("a", vec![("to-b", "b", vec![])]),
@@ -651,13 +659,13 @@ mod tests {
             ],
         );
         let error = plan(&em, &TaskId::new("a"), 0).expect_err("cycle must reject");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
 
     #[test]
     fn flattening_rejects_a_sibling_depends_on_cycle() {
-        let em = vector_model(
+        let em = vector_manifest(
             vec!["unit"],
             vec![composite(
                 "spin",
@@ -665,7 +673,7 @@ mod tests {
             )],
         );
         let error = plan(&em, &TaskId::new("spin"), 0).expect_err("cycle must reject");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
 
@@ -673,7 +681,7 @@ mod tests {
     fn start_order_honors_connects_to_but_ports_stay_declared() {
         // app sorts first (and keeps the first port), but connects to db, so
         // db must start first.
-        let mut em = model(
+        let mut em = manifest(
             vec!["app", "db"],
             vec!["app", "db"],
             vec![(0, 23080, 23090)],
@@ -702,7 +710,7 @@ mod tests {
     fn assigns_a_contiguous_block_per_multi_endpoint_service() {
         // `multi` declares three endpoints, so it consumes a three-port block; the
         // single-endpoint `solo` takes the next port after the block.
-        let mut em = model(
+        let mut em = manifest(
             vec!["multi", "solo"],
             vec!["multi", "solo"],
             vec![(0, 23080, 23090)],
@@ -749,12 +757,12 @@ mod tests {
     #[test]
     fn rejects_when_window_cannot_host_all_endpoints() {
         // Two single-endpoint services need two ports; a one-port window cannot.
-        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
+        let em = manifest(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         assert_eq!(
             plan(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")
                 .code,
-            ErrorCode::ModelAdmission
+            ErrorCode::ManifestAdmission
         );
     }
 }

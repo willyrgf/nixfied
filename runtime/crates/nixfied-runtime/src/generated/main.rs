@@ -3,8 +3,8 @@
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CheckOutput {
-    model_path: PathBuf,
-    computed_model_hash: String,
+    manifest_path: PathBuf,
+    computed_manifest_hash: String,
     raw_len: usize,
     project_id: String,
     runtime_abi: String,
@@ -41,8 +41,8 @@ struct NodeResult {
 #[serde(rename_all = "camelCase")]
 struct RunOutput {
     run_id: String,
-    model_path: PathBuf,
-    computed_model_hash: String,
+    manifest_path: PathBuf,
+    computed_manifest_hash: String,
     duration_ms: u64,
     services: Vec<ServiceRunOutput>,
     tasks: Vec<TaskRun>,

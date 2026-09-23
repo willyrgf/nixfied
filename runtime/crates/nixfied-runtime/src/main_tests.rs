@@ -6,8 +6,8 @@ mod common;
 #[test]
 fn local_check_and_run_records_preserve_required_and_omitted_members() {
     let checked = CheckOutput {
-        model_path: "/model".into(),
-        computed_model_hash: "hash".into(),
+        manifest_path: "/manifest".into(),
+        computed_manifest_hash: "hash".into(),
         raw_len: 7,
         project_id: "project".into(),
         runtime_abi: "abi".into(),
@@ -20,12 +20,12 @@ fn local_check_and_run_records_preserve_required_and_omitted_members() {
     assert_eq!(raw_len, 7);
     assert_eq!(
         serde_json::to_string(&checked).unwrap(),
-        r#"{"modelPath":"/model","computedModelHash":"hash","rawLen":7,"projectId":"project","runtimeAbi":"abi","toolchainId":"tool","targetSystem":"system","environment":"dev","slot":2}"#
+        r#"{"manifestPath":"/manifest","computedManifestHash":"hash","rawLen":7,"projectId":"project","runtimeAbi":"abi","toolchainId":"tool","targetSystem":"system","environment":"dev","slot":2}"#
     );
     let run = RunOutput {
         run_id: "run".into(),
-        model_path: "/model".into(),
-        computed_model_hash: "hash".into(),
+        manifest_path: "/manifest".into(),
+        computed_manifest_hash: "hash".into(),
         duration_ms: 3,
         services: vec![],
         tasks: vec![],
@@ -36,7 +36,7 @@ fn local_check_and_run_records_preserve_required_and_omitted_members() {
     };
     assert_eq!(
         serde_json::to_string(&run).unwrap(),
-        r#"{"runId":"run","modelPath":"/model","computedModelHash":"hash","durationMs":3,"services":[],"tasks":[]}"#
+        r#"{"runId":"run","manifestPath":"/manifest","computedManifestHash":"hash","durationMs":3,"services":[],"tasks":[]}"#
     );
 }
 
@@ -104,7 +104,7 @@ fn command_args(values: &[&str]) -> Vec<String> {
 #[test]
 fn native_run_acquisition_repetition_and_integer_domains() {
     let parse = |extra: &[&str]| {
-        let mut args = command_args(&["--model", "model", "--state-base", "state"]);
+        let mut args = command_args(&["--manifest", "manifest", "--state-base", "state"]);
         args.extend(command_args(extra));
         parse_run_options(&args)
     };
@@ -135,9 +135,9 @@ fn native_run_acquisition_repetition_and_integer_domains() {
             "--task may be specified only once",
         ),
         (
-            vec!["--model"],
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            "missing --model path",
+            vec!["--manifest"],
+            nixfied_runtime::ErrorCode::ManifestAdmission,
+            "missing --manifest path",
         ),
         (
             vec!["--output", "--slot"],
@@ -164,19 +164,19 @@ fn native_run_acquisition_repetition_and_integer_domains() {
         );
     }
     let options = parse(&[
-        "--model",
+        "--manifest",
         "first",
-        "--model",
+        "--manifest",
         "--literal",
         "--state-base",
         "--path",
         "--task",
         "--a",
-        "--allow-non-store-model",
-        "--allow-non-store-model",
+        "--allow-non-store-manifest",
+        "--allow-non-store-manifest",
     ])
     .unwrap();
-    assert_eq!(options.model_path, PathBuf::from("--literal"));
+    assert_eq!(options.manifest_path, PathBuf::from("--literal"));
     assert_eq!(options.state_base, PathBuf::from("--path"));
     assert_eq!(options.task.as_deref(), Some("--a"));
     assert!(options.allow_non_store);
@@ -228,7 +228,7 @@ fn native_control_and_check_loops_keep_their_own_boundaries() {
         ControlCommand::Clean,
     ] {
         let parse = |extra: &[&str]| {
-            let mut args = command_args(&["--model", "model", "--state-base", "state"]);
+            let mut args = command_args(&["--manifest", "manifest", "--state-base", "state"]);
             args.extend(command_args(extra));
             parse_control_options(command, &args)
         };
@@ -236,8 +236,8 @@ fn native_control_and_check_loops_keep_their_own_boundaries() {
         assert_eq!(options.selection.slot, Some(2));
         assert_eq!(options.timeout_ms, 5000);
         assert_eq!(
-            parse(&["--model"]).err().unwrap().message,
-            "missing --model path"
+            parse(&["--manifest"]).err().unwrap().message,
+            "missing --manifest path"
         );
         for value in ["-1", " 1", "4294967296"] {
             assert!(parse(&["--slot", value]).is_err());
@@ -254,17 +254,17 @@ fn native_control_and_check_loops_keep_their_own_boundaries() {
         assert!(parse(&["--"]).is_err());
     }
     assert_eq!(
-        check(&command_args(&["--model", "earlier", "--model"]))
+        check(&command_args(&["--manifest", "earlier", "--manifest"]))
             .unwrap_err()
             .message,
-        "missing --model path"
+        "missing --manifest path"
     );
     for value in ["0", "+1", "4294967295"] {
         assert_eq!(
             check(&command_args(&["--slot", value]))
                 .unwrap_err()
                 .message,
-            "missing --model path"
+            "missing --manifest path"
         );
     }
     for value in ["-1", " 1", "4294967296"] {

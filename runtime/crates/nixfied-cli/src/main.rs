@@ -245,8 +245,8 @@ fn flake_template(nixfied_url: &str) -> String {
     in
     {{
       packages = forAllSystems (system: {{
-        default = self.packages.${{system}}.model;
-        model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
+        default = self.packages.${{system}}.manifest;
+        manifest = nixfied.lib.${{system}}.compileManifest ./nixfied.nix;
       }});
       # The generated discovery/control apps plus one app per task id exported
       # in `nixfied.surface.verbs`.
@@ -262,7 +262,7 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
     format!(
         r#"{{ adapters, ... }}:
 {{
-  # The synthetic adapter is a runnable starter service so `nix build .#model`
+  # The synthetic adapter is a runnable starter service so `nix build .#manifest`
   # succeeds out of the box. Replace it with your own service/task declarations
   # or another adapter (e.g. adapters.postgres).
   imports = [ adapters.synthetic ];
@@ -308,7 +308,7 @@ fn flake_merge_snippet(nixfied_url: &str) -> String {
     format!(
         r#"inputs.nixfied.url = "{}";
 
-packages.${{system}}.model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
+packages.${{system}}.manifest = nixfied.lib.${{system}}.compileManifest ./nixfied.nix;
 
 # The generated discovery/control apps plus one app per exported task id
 # (`nixfied.surface.verbs`).
@@ -406,7 +406,7 @@ mod tests {
         assert!(!flake.contains("x86_64-darwin"));
         let module = read(&root.join("nixfied.nix"));
         assert!(module.contains("nixfied.project.projectId = \"install-proof\""));
-        // The scaffold ships a runnable service so `nix build .#model` builds,
+        // The scaffold ships a runnable service so `nix build .#manifest` builds,
         // and exports the starter task so `nix run .#smoke` works out of the
         // box.
         assert!(module.contains("imports = [ adapters.synthetic ];"));
@@ -433,8 +433,8 @@ mod tests {
         assert_eq!(read(&root.join("flake.nix")), "{}\n");
         assert!(error.message.contains("No files were changed."));
         // The merge instructions must wire the same surface the fresh-flake
-        // template does: the model package and the generated apps.
-        assert!(error.message.contains("compileModel ./nixfied.nix"));
+        // template does: the manifest package and the generated apps.
+        assert!(error.message.contains("compileManifest ./nixfied.nix"));
         assert!(
             error
                 .message

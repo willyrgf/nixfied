@@ -154,7 +154,7 @@ name = "nixfied-cli"
 version = "0.1.0"
 
 [[package]]
-name = "nixfied-model"
+name = "nixfied-manifest"
 version = "0.1.0"
 dependencies = [
  "hex",
@@ -170,7 +170,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "libc",
- "nixfied-model",
+ "nixfied-manifest",
  "rusqlite",
  "serde",
  "serde_json",

@@ -1,17 +1,17 @@
 # Batched Nix-layer negative cases for gate-nix.
 #
-# Each case must fail during Nix evaluation. Model cases force the compiled
+# Each case must fail during Nix evaluation. Manifest cases force the compiled
 # derivation; help cases force the complete rendered string. The result lists
 # cases that unexpectedly evaluated.
 { checkout }:
 
 let
   flake = builtins.getFlake (toString checkout);
-  compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel;
+  compileManifest = (builtins.getAttr builtins.currentSystem flake.lib).compileManifest;
   projectApps = (builtins.getAttr builtins.currentSystem flake.lib).projectApps;
   composite = checkout + /examples/composite/nixfied.nix;
 
-  compiles = module: (builtins.tryEval ((compileModel module).drvPath)).success;
+  compiles = module: (builtins.tryEval ((compileManifest module).drvPath)).success;
   projects = module: (builtins.tryEval ((projectApps module).help.program)).success;
   renderHelp = import (checkout + /nix/help-renderer.nix);
   renders = apps: (builtins.tryEval (builtins.stringLength (renderHelp apps))).success;
@@ -28,7 +28,7 @@ let
   );
 in
 if !validCompositeCompiles then
-  throw "gate-nix negatives sanity check failed: valid composite model did not compile"
+  throw "gate-nix negatives sanity check failed: valid composite manifest did not compile"
 else
   builtins.concatLists [
     (rejectHelp "a help app whose program does not evaluate" {

@@ -1,15 +1,17 @@
-use nixfied_model::{MODEL_VERSION, Model, TOOLCHAIN_ID, Validate, ValidationError, runtime_abi};
+use nixfied_manifest::{
+    MANIFEST_VERSION, Manifest, TOOLCHAIN_ID, Validate, ValidationError, runtime_abi,
+};
 use serde_json::{Value, json};
 
-fn valid_model_json() -> Value {
+fn valid_manifest_json() -> Value {
     json!({
-        "modelVersion": MODEL_VERSION,
+        "manifestVersion": MANIFEST_VERSION,
         "toolchainId": TOOLCHAIN_ID,
         "runtimeAbi": runtime_abi(),
         "generator": {
             "name": "nixfied",
             "version": "1",
-            "emitter": "nix/compiler/emit-model.nix"
+            "emitter": "nix/compiler/emit-manifest.nix"
         },
         "project": {
             "projectId": "example",
@@ -125,8 +127,8 @@ fn smoke_task() -> Value {
     })
 }
 
-fn parse_valid_model() -> Model {
-    serde_json::from_value(valid_model_json()).expect("valid model JSON should deserialize")
+fn parse_valid_manifest() -> Manifest {
+    serde_json::from_value(valid_manifest_json()).expect("valid manifest JSON should deserialize")
 }
 
 /// Adds a second service named `worker` that reuses the helper exec/closure but
@@ -151,31 +153,33 @@ fn add_worker_service(value: &mut Value) {
 
 #[test]
 fn parses_and_validates_contract() {
-    let model = parse_valid_model();
-    model
+    let manifest = parse_valid_manifest();
+    manifest
         .validate()
-        .expect("valid model should pass structural validation");
+        .expect("valid manifest should pass structural validation");
 
     // The lifecycle is a per-class record: every class is present by construction.
-    let lifecycle = &model.services["synthetic"].lifecycle;
+    let lifecycle = &manifest.services["synthetic"].lifecycle;
     assert_eq!(
         lifecycle.start.operation_id.as_str(),
         "service.synthetic.start"
     );
-    assert_eq!(lifecycle.stop.signal, nixfied_model::StopSignal::Term);
+    assert_eq!(lifecycle.stop.signal, nixfied_manifest::StopSignal::Term);
 }
 
 #[test]
 fn task_default_output_round_trips_for_a_leaf() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["tasks"]["smoke"]["defaultOutput"] = json!("task-output");
-    let model: Model = serde_json::from_value(value).expect("task default should parse");
-    model.validate().expect("leaf task default should validate");
+    let manifest: Manifest = serde_json::from_value(value).expect("task default should parse");
+    manifest
+        .validate()
+        .expect("leaf task default should validate");
     assert_eq!(
-        model.tasks["smoke"].default_output,
-        nixfied_model::TaskDefaultOutput::TaskOutput
+        manifest.tasks["smoke"].default_output,
+        nixfied_manifest::TaskDefaultOutput::TaskOutput
     );
-    let emitted = serde_json::to_value(model).expect("task default should serialize");
+    let emitted = serde_json::to_value(manifest).expect("task default should serialize");
     assert_eq!(
         emitted["tasks"]["smoke"]["defaultOutput"],
         json!("task-output")
@@ -184,16 +188,16 @@ fn task_default_output_round_trips_for_a_leaf() {
 
 #[test]
 fn composite_task_default_output_is_rejected() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "defaultOutput": "task-output",
         "serviceLifetime": "run-scoped",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
-    let model: Model = serde_json::from_value(value).expect("composite should deserialize");
+    let manifest: Manifest = serde_json::from_value(value).expect("composite should deserialize");
     assert!(matches!(
-        model.validate(),
+        manifest.validate(),
         Err(ValidationError::UnsupportedValue {
             field: "tasks.defaultOutput",
             ..
@@ -203,7 +207,7 @@ fn composite_task_default_output_is_rejected() {
 
 #[test]
 fn secret_descriptors_round_trip_without_values() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["secrets"] = json!({
         "api-token": {
             "secretId": "api-token",
@@ -223,21 +227,22 @@ fn secret_descriptors_round_trip_without_values() {
     value["tasks"]["smoke"]["serviceLifetime"] = json!("until-idle");
     value["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"] = json!("${secret:api-token}");
 
-    let model: Model = serde_json::from_value(value).expect("secret descriptors should parse");
-    let api_token = &model.secrets["api-token"];
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("secret descriptors should parse");
+    let api_token = &manifest.secrets["api-token"];
     assert_eq!(api_token.secret_id.as_str(), "api-token");
     assert_eq!(
         api_token.source.kind,
-        nixfied_model::SecretSourceKind::EnvVar
+        nixfied_manifest::SecretSourceKind::EnvVar
     );
     assert_eq!(api_token.source.env_var.as_deref(), Some("API_TOKEN"));
     assert_eq!(api_token.source.path, None);
     assert_eq!(
-        model.tasks["smoke"].service_lifetime,
-        nixfied_model::ServiceLifetime::UntilIdle
+        manifest.tasks["smoke"].service_lifetime,
+        nixfied_manifest::ServiceLifetime::UntilIdle
     );
 
-    let emitted = serde_json::to_value(&model).expect("model should serialize");
+    let emitted = serde_json::to_value(&manifest).expect("manifest should serialize");
     assert_eq!(
         emitted["secrets"]["tls-key"]["source"]["kind"],
         json!("file")
@@ -250,7 +255,7 @@ fn secret_descriptors_round_trip_without_values() {
 
 #[test]
 fn cache_env_is_an_unknown_invocation_field() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
         "CARGO_TARGET_DIR": {
             "family": "cargo-target",
@@ -260,7 +265,7 @@ fn cache_env_is_an_unknown_invocation_field() {
         }
     });
 
-    let error = serde_json::from_value::<Model>(value)
+    let error = serde_json::from_value::<Manifest>(value)
         .expect_err("removed cacheEnv field must fail deserialization");
     assert!(error.to_string().contains("unknown field `cacheEnv`"));
 }
@@ -268,31 +273,33 @@ fn cache_env_is_an_unknown_invocation_field() {
 #[test]
 fn service_lifetime_variants_round_trip() {
     for (wire, expected) in [
-        ("run-scoped", nixfied_model::ServiceLifetime::RunScoped),
-        ("until-idle", nixfied_model::ServiceLifetime::UntilIdle),
+        ("run-scoped", nixfied_manifest::ServiceLifetime::RunScoped),
+        ("until-idle", nixfied_manifest::ServiceLifetime::UntilIdle),
         (
             "persistent-until-down",
-            nixfied_model::ServiceLifetime::PersistentUntilDown,
+            nixfied_manifest::ServiceLifetime::PersistentUntilDown,
         ),
     ] {
-        let mut value = valid_model_json();
+        let mut value = valid_manifest_json();
         value["tasks"]["smoke"]["serviceLifetime"] = json!(wire);
-        let model: Model = serde_json::from_value(value).expect("service lifetime should parse");
-        assert_eq!(model.tasks["smoke"].service_lifetime, expected);
+        let manifest: Manifest =
+            serde_json::from_value(value).expect("service lifetime should parse");
+        assert_eq!(manifest.tasks["smoke"].service_lifetime, expected);
     }
 }
 
 #[test]
 fn accepts_immutable_source_modes() {
     for mode in ["snapshot", "flake-input"] {
-        let mut value = valid_model_json();
+        let mut value = valid_manifest_json();
         value["codebases"][0]["sourceMode"] = json!(mode);
         value["codebases"][0]["sourceIdentity"] =
             json!("/nix/store/00000000000000000000000000000000-source");
         value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
-        let model: Model = serde_json::from_value(value).expect("model JSON should deserialize");
+        let manifest: Manifest =
+            serde_json::from_value(value).expect("manifest JSON should deserialize");
 
-        model
+        manifest
             .validate()
             .expect("immutable source mode should pass structural validation");
     }
@@ -302,11 +309,13 @@ fn accepts_immutable_source_modes() {
 fn accepts_arbitrary_service_names() {
     // The synthetic/smoke names are not special. A second service validates as
     // long as the structural contract holds.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     add_worker_service(&mut value);
 
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model.validate().expect("multi-service models are valid");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest
+        .validate()
+        .expect("multi-service manifests are valid");
 }
 
 #[test]
@@ -314,52 +323,53 @@ fn rejects_path_hostile_unit_ids() {
     // Ids key filesystem artifacts (log files, registry keys); separators and
     // traversal segments must be refused before any path is built from them.
     for hostile in ["../escape", "a/b", "/abs", ".hidden"] {
-        let mut value = valid_model_json();
+        let mut value = valid_manifest_json();
         value["tasks"][hostile] = value["tasks"]["smoke"].clone();
-        let model: Model = serde_json::from_value(value).expect("model should deserialize");
-        model
+        let manifest: Manifest =
+            serde_json::from_value(value).expect("manifest should deserialize");
+        manifest
             .validate()
             .expect_err("path-hostile ids must be rejected");
     }
 }
 
 #[test]
-fn accepts_task_only_models() {
-    // The compiler admits a model with no services as long as bounded tasks
+fn accepts_task_only_manifests() {
+    // The compiler admits a manifest with no services as long as bounded tasks
     // exist; the structural validator must honor the same contract.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"] = json!({});
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
 
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model.validate().expect("task-only models are valid");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest.validate().expect("task-only manifests are valid");
 }
 
 #[test]
-fn rejects_models_with_nothing_to_run() {
-    let mut value = valid_model_json();
+fn rejects_manifests_with_nothing_to_run() {
+    let mut value = valid_manifest_json();
     value["services"] = json!({});
     value["tasks"] = json!({});
 
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest
         .validate()
-        .expect_err("a model with no services and no tasks has nothing to run");
+        .expect_err("a manifest with no services and no tasks has nothing to run");
 }
 
 #[test]
 fn prepare_may_bind_a_task_reference() {
     // initdb-style preparation is a task reference with full task semantics.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model.validate().expect("prepare may reference a task");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest.validate().expect("prepare may reference a task");
 }
 
 #[test]
 fn validates_explicit_slot_placement_range() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["slotPolicy"]["max"] = json!(1);
     let placement = value["placement"]["slotPlacements"]["0"].clone();
     let mut slot_one = placement;
@@ -367,28 +377,29 @@ fn validates_explicit_slot_placement_range() {
     slot_one["candidatePorts"] = json!({ "start": 23180, "end": 23190 });
     value["placement"]["slotPlacements"]["1"] = slot_one;
 
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest
         .validate()
         .expect("explicit slot placements should cover the slot range");
 }
 
 #[test]
 fn unknown_top_level_field_is_invalid() {
-    let mut value = valid_model_json();
-    value["computedModelHash"] = json!("must-not-be-embedded");
+    let mut value = valid_manifest_json();
+    value["computedManifestHash"] = json!("must-not-be-embedded");
 
-    let error = serde_json::from_value::<Model>(value).expect_err("unknown field must be refused");
-    assert!(error.to_string().contains("computedModelHash"));
+    let error =
+        serde_json::from_value::<Manifest>(value).expect_err("unknown field must be refused");
+    assert!(error.to_string().contains("computedManifestHash"));
 }
 
 #[test]
 fn removed_docs_field_is_invalid() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["docs"] = json!({ "title": "legacy", "summary": "legacy" });
 
-    let error = serde_json::from_value::<Model>(value)
-        .expect_err("the removed docs model section must be refused");
+    let error = serde_json::from_value::<Manifest>(value)
+        .expect_err("the removed docs manifest section must be refused");
     assert!(error.to_string().contains("docs"));
 }
 
@@ -396,44 +407,45 @@ fn removed_docs_field_is_invalid() {
 fn duplicate_environment_is_refused_at_the_wire() {
     // `environments` is a set of isolation namespaces; a duplicate is
     // inexpressible at the wire.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["environments"] = json!(["dev", "dev"]);
-    let error = serde_json::from_value::<Model>(value)
+    let error = serde_json::from_value::<Manifest>(value)
         .expect_err("a duplicate environment must be refused");
     assert!(error.to_string().contains("duplicate element"));
 }
 
 #[test]
 fn duplicate_task_success_code_is_refused_at_the_wire() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([0, 0]);
-    let error =
-        serde_json::from_value::<Model>(value).expect_err("a duplicate exit code must be refused");
+    let error = serde_json::from_value::<Manifest>(value)
+        .expect_err("a duplicate exit code must be refused");
     assert!(error.to_string().contains("duplicate element"));
 }
 
 #[test]
 fn secret_descriptor_rejects_unknown_fields() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": {
             "kind": "env-var",
             "envVar": "API_TOKEN"
         },
-        "value": "must-not-be-in-model"
+        "value": "must-not-be-in-manifest"
     });
-    let error = serde_json::from_value::<Model>(value).expect_err("secret values must not parse");
+    let error =
+        serde_json::from_value::<Manifest>(value).expect_err("secret values must not parse");
     assert!(error.to_string().contains("value"));
 }
 
 #[test]
 fn abi_mismatch_is_contract_error() {
-    let mut model = parse_valid_model();
-    model.runtime_abi = "nixfied-runtime-abi:legacy".to_string();
+    let mut manifest = parse_valid_manifest();
+    manifest.runtime_abi = "nixfied-runtime-abi:legacy".to_string();
 
     assert_eq!(
-        model.validate().expect_err("ABI mismatch should fail"),
+        manifest.validate().expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
             expected: runtime_abi(),
             actual: "nixfied-runtime-abi:legacy".to_string(),
@@ -443,7 +455,7 @@ fn abi_mismatch_is_contract_error() {
 
 #[test]
 fn accepts_a_bounded_acyclic_composite() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
@@ -452,8 +464,8 @@ fn accepts_a_bounded_acyclic_composite() {
             "second": { "task": "smoke", "dependsOn": ["first"] }
         }
     });
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest
         .validate()
         .expect("a bounded acyclic composite is valid");
 }
@@ -462,53 +474,54 @@ fn accepts_a_bounded_acyclic_composite() {
 fn non_loopback_endpoint_host_is_rejected_at_parse() {
     // The endpoint host is a typed loopback literal; a hostname or wildcard cannot
     // deserialize.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["host"] = json!("localhost");
-    serde_json::from_value::<Model>(value).expect_err("a non-loopback host must not parse");
+    serde_json::from_value::<Manifest>(value).expect_err("a non-loopback host must not parse");
 }
 
 #[test]
 fn lifecycle_must_have_full_generic_class_set() {
     // The lifecycle is a per-class record: a missing class is a missing struct
     // field, rejected at parse rather than by a validation rule.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]
         .as_object_mut()
         .unwrap()
         .remove("clean");
-    serde_json::from_value::<Model>(value).expect_err("a missing lifecycle class must not parse");
+    serde_json::from_value::<Manifest>(value)
+        .expect_err("a missing lifecycle class must not parse");
 }
 
 #[test]
 fn probe_kind_is_required_on_the_wire() {
     // The emitter always writes the discriminator; a probe without it is an
     // out-of-contract document, rejected at parse.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
     });
-    serde_json::from_value::<Model>(value).expect_err("a kind-less probe must not parse");
+    serde_json::from_value::<Manifest>(value).expect_err("a kind-less probe must not parse");
 }
 
 #[test]
 fn probe_rejects_unknown_fields() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["httpPath"] = json!("/health");
-    serde_json::from_value::<Model>(value).expect_err("an unknown probe field must not parse");
+    serde_json::from_value::<Manifest>(value).expect_err("an unknown probe field must not parse");
 }
 
 #[test]
 fn exec_probe_round_trips() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "kind": "exec",
         "invocation": helper_invocation(json!(["synthetic-helper", "ping", "-p", "${port}"])),
         "timeoutMs": 2000, "retryIntervalMs": 200, "maxAttempts": 30
     });
-    let model: Model = serde_json::from_value(value).expect("an exec probe should parse");
-    let probe = &model.services["synthetic"].lifecycle.ready.probe;
-    assert_eq!(probe.kind, nixfied_model::ProbeKind::Exec);
-    let emitted = serde_json::to_value(&model).expect("model should serialize");
+    let manifest: Manifest = serde_json::from_value(value).expect("an exec probe should parse");
+    let probe = &manifest.services["synthetic"].lifecycle.ready.probe;
+    assert_eq!(probe.kind, nixfied_manifest::ProbeKind::Exec);
+    let emitted = serde_json::to_value(&manifest).expect("manifest should serialize");
     assert_eq!(
         emitted["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["run"][0],
         json!("synthetic-helper")
@@ -524,37 +537,40 @@ fn exec_probe_round_trips() {
 fn clean_operation_stays_marker_gated_runtime_cleanup() {
     // clean binds nothing: an invocation on it is an unknown field, rejected at
     // parse.
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["clean"]["invocation"] =
         helper_invocation(json!(["synthetic-helper"]));
-    serde_json::from_value::<Model>(value).expect_err("a clean invocation binding must not parse");
+    serde_json::from_value::<Manifest>(value)
+        .expect_err("a clean invocation binding must not parse");
 }
 
 #[test]
 fn connects_to_undeclared_service_is_rejected() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     value["services"]["synthetic"]["connectsTo"] = json!(["missing"]);
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    let error = model.validate().expect_err("undeclared target must fail");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    let error = manifest
+        .validate()
+        .expect_err("undeclared target must fail");
     assert!(error.to_string().contains("connectsTo"));
 }
 
 #[test]
 fn connects_to_cycle_is_rejected() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     add_worker_service(&mut value);
     value["services"]["synthetic"]["connectsTo"] = json!(["worker"]);
     value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    let error = model.validate().expect_err("cycle must fail");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    let error = manifest.validate().expect_err("cycle must fail");
     assert!(error.to_string().contains("acyclic"));
 }
 
 #[test]
 fn connects_to_chain_is_accepted() {
-    let mut value = valid_model_json();
+    let mut value = valid_manifest_json();
     add_worker_service(&mut value);
     value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model.validate().expect("acyclic wiring should validate");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
+    manifest.validate().expect("acyclic wiring should validate");
 }

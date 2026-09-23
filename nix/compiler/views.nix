@@ -1,4 +1,4 @@
-{ model }:
+{ manifest }:
 
 let
   inherit (builtins) attrNames concatStringsSep;
@@ -13,7 +13,7 @@ let
   taskDocs =
     taskId:
     let
-      task = model.tasks.${taskId};
+      task = manifest.tasks.${taskId};
       stepNames = attrNames (task.steps or { });
     in
     concatStringsSep "\n" (
@@ -46,7 +46,7 @@ let
   serviceDocs =
     serviceId:
     let
-      service = model.services.${serviceId};
+      service = manifest.services.${serviceId};
       endpointNames = attrNames (service.endpoints or { });
     in
     concatStringsSep "\n" (
@@ -77,14 +77,14 @@ let
       )
     );
 
-  taskNames = attrNames model.tasks;
-  serviceNames = attrNames model.services;
-  slotNames = attrNames model.placement.slotPlacements;
+  taskNames = attrNames manifest.tasks;
+  serviceNames = attrNames manifest.services;
+  slotNames = attrNames manifest.placement.slotPlacements;
   slotWindows = concatStringsSep "\n" (
     map (
       slotName:
       let
-        placement = model.placement.slotPlacements.${slotName};
+        placement = manifest.placement.slotPlacements.${slotName};
       in
       "  - slot `${toString placement.slot}`: `${toString placement.candidatePorts.start}` through `${
         toString placement.candidatePorts.end
@@ -93,28 +93,28 @@ let
   );
 in
 ''
-  # ${model.project.name}
+  # ${manifest.project.name}
 
   ## Project
 
-  - id: `${model.project.projectId}`
-  - target system: `${model.target.system}`
-  - runtime ABI: `${model.runtimeAbi}`
-  - toolchain: `${model.toolchainId}`
+  - id: `${manifest.project.projectId}`
+  - target system: `${manifest.target.system}`
+  - runtime ABI: `${manifest.runtimeAbi}`
+  - toolchain: `${manifest.toolchainId}`
 
   ## Slots
 
-  - allowed: `${toString model.slotPolicy.min}` through `${toString model.slotPolicy.max}`
-  - default: `${toString model.slotPolicy.default}`
+  - allowed: `${toString manifest.slotPolicy.min}` through `${toString manifest.slotPolicy.max}`
+  - default: `${toString manifest.slotPolicy.default}`
   - candidate port windows:
   ${slotWindows}
 
   ## State
 
-  - marker identity: `${model.state.markerIdentity}`
-  - epoch: `${model.state.stateEpoch}`
-  - cleanup: `${model.state.cleanupPolicy}`
-  - persistence: `${model.state.persistence}`
+  - marker identity: `${manifest.state.markerIdentity}`
+  - epoch: `${manifest.state.stateEpoch}`
+  - cleanup: `${manifest.state.cleanupPolicy}`
+  - persistence: `${manifest.state.persistence}`
 
   ## Tasks
 

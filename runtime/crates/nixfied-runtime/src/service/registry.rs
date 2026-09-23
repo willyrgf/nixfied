@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::execution::ServiceIdentity;
-use nixfied_model::ServiceLifetime;
+use nixfied_manifest::ServiceLifetime;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::admission::Admission;
@@ -112,7 +112,7 @@ pub(crate) struct TaskProcessRecord<'a> {
     pub(crate) pgid: i32,
     pub(crate) start_identity: &'a str,
     pub(crate) command_json: &'a str,
-    pub(crate) computed_model_hash: &'a str,
+    pub(crate) computed_manifest_hash: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,7 +139,7 @@ pub(crate) fn reserve_service_start(
     registry: &mut Registry,
     run_id: &str,
     owner_token: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     service_instance_id: &str,
     endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
@@ -154,7 +154,7 @@ pub(crate) fn reserve_service_start(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_model_hash)?;
+    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
     ensure_service_start_allowed_transaction(&transaction, service_instance_id, run_id)?;
     transaction
         .execute(
@@ -216,7 +216,7 @@ pub(crate) fn reserve_service_start(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: None,
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -248,7 +248,7 @@ pub fn record_run_created(
         .execute(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
+              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
@@ -258,8 +258,8 @@ pub fn record_run_created(
                 identity.environment.as_str(),
                 identity.slot,
                 RunStatus::ServiceStarting.as_str(),
-                admission.model_path.display().to_string(),
-                admission.computed_model_hash.as_str(),
+                admission.manifest_path.display().to_string(),
+                admission.computed_manifest_hash.as_str(),
                 admission.runtime_abi.as_str(),
                 admission.toolchain_id.as_str(),
                 admission.generator_json.as_str(),
@@ -278,7 +278,7 @@ pub fn record_run_created(
             run_id: Some(run_id),
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: Some(&admission.computed_model_hash),
+            computed_manifest_hash: Some(&admission.computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -386,7 +386,7 @@ pub(crate) fn settle_service_reservation(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: None,
-            computed_model_hash: None,
+            computed_manifest_hash: None,
             payload_json: "{}",
         },
     )?;
@@ -398,7 +398,7 @@ pub(crate) fn record_service_start(
     registry: &mut Registry,
     run_id: &str,
     owner_token: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     service: &ServiceRecord<'_>,
     process: &ProcessRecord<'_>,
     endpoints: &[PortReservation<'_>],
@@ -416,7 +416,7 @@ pub(crate) fn record_service_start(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_model_hash)?;
+    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
     ensure_service_start_allowed_transaction(&transaction, service.service_instance_id, run_id)?;
     require_active_reservation(
         &transaction,
@@ -516,7 +516,7 @@ pub(crate) fn record_service_start(
             run_id: Some(run_id),
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -529,7 +529,7 @@ pub(crate) fn record_service_start(
             run_id: Some(run_id),
             service_instance_id: Some(service.service_instance_id),
             process_key: Some(process.process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &process_command_json,
         },
     )?;
@@ -541,7 +541,7 @@ pub(crate) fn record_service_borrow(
     registry: &mut Registry,
     run_id: &str,
     owner_token: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     guard: &ServiceReuseGuard<'_>,
 ) -> RuntimeResult<bool> {
     let identity = registry.identity().clone();
@@ -550,7 +550,7 @@ pub(crate) fn record_service_borrow(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_model_hash)?;
+    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
     let snapshot = read_service_snapshot_conn(&transaction, guard.service.service_instance_id)?;
     if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
@@ -592,7 +592,7 @@ pub(crate) fn record_service_borrow(
             run_id: Some(run_id),
             service_instance_id: Some(guard.service.service_instance_id),
             process_key: Some(&guard.process.process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -605,7 +605,7 @@ pub(crate) fn release_service_borrow(
     run_id: &str,
     service_instance_id: &str,
     borrowed_process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     canceled: bool,
 ) -> RuntimeResult<()> {
     let lease_status = if canceled {
@@ -666,7 +666,7 @@ pub(crate) fn release_service_borrow(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(borrowed_process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -679,7 +679,7 @@ pub(crate) fn mark_service_standing(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     service_lifetime: ServiceLifetime,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
@@ -744,7 +744,7 @@ pub(crate) fn mark_service_standing(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -757,7 +757,7 @@ pub(crate) fn activate_service_ready(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     endpoints: &[VerifiedEndpointActivation<'_>],
     lifecycle: (&str, &str, &str),
 ) -> RuntimeResult<()> {
@@ -864,7 +864,7 @@ pub(crate) fn activate_service_ready(
                 run_id: Some(run_id),
                 service_instance_id: Some(service_instance_id),
                 process_key: Some(process_key),
-                computed_model_hash: Some(computed_model_hash),
+                computed_manifest_hash: Some(computed_manifest_hash),
                 payload_json: endpoint.ownership_json,
             },
         )?;
@@ -899,7 +899,7 @@ pub(crate) fn activate_service_ready(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -920,7 +920,7 @@ pub(crate) fn activate_service_ready(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &lifecycle_payload,
         },
     )?;
@@ -933,14 +933,14 @@ pub(crate) fn mark_service_stopped(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
         run_id,
         service_instance_id,
         process_key,
-        computed_model_hash,
+        computed_manifest_hash,
         ServiceTerminal::Stopped,
     )
 }
@@ -956,7 +956,7 @@ fn settle_service_terminal(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     terminal: ServiceTerminal<'_>,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
@@ -1070,7 +1070,7 @@ fn settle_service_terminal(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -1083,7 +1083,7 @@ pub(crate) fn record_service_canceling(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     record_canceling(
@@ -1091,7 +1091,7 @@ pub(crate) fn record_service_canceling(
         run_id,
         Some(service_instance_id),
         process_key,
-        computed_model_hash,
+        computed_manifest_hash,
         "service.canceling",
         payload_json,
     )
@@ -1102,7 +1102,7 @@ fn record_canceling(
     run_id: &str,
     service_instance_id: Option<&str>,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     event_type: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
@@ -1141,7 +1141,7 @@ fn record_canceling(
             run_id: Some(run_id),
             service_instance_id,
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -1154,7 +1154,7 @@ pub(crate) fn mark_service_canceled(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
@@ -1162,7 +1162,7 @@ pub(crate) fn mark_service_canceled(
         run_id,
         service_instance_id,
         process_key,
-        computed_model_hash,
+        computed_manifest_hash,
         ServiceTerminal::Canceled(payload_json),
     )
 }
@@ -1173,7 +1173,7 @@ pub(crate) fn record_service_lifecycle_event(
     run_id: Option<&str>,
     service_instance_id: &str,
     process_key: Option<&str>,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
@@ -1188,7 +1188,7 @@ pub(crate) fn record_service_lifecycle_event(
             run_id,
             service_instance_id: Some(service_instance_id),
             process_key,
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -1200,7 +1200,7 @@ pub(crate) fn record_task_canceling(
     registry: &mut Registry,
     run_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     record_canceling(
@@ -1208,7 +1208,7 @@ pub(crate) fn record_task_canceling(
         run_id,
         None,
         process_key,
-        computed_model_hash,
+        computed_manifest_hash,
         "task.canceling",
         payload_json,
     )
@@ -1219,7 +1219,7 @@ pub(crate) fn mark_service_failed(
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
@@ -1227,7 +1227,7 @@ pub(crate) fn mark_service_failed(
         run_id,
         service_instance_id,
         process_key,
-        computed_model_hash,
+        computed_manifest_hash,
         ServiceTerminal::Failed(payload_json),
     )
 }
@@ -1235,7 +1235,7 @@ pub(crate) fn mark_service_failed(
 pub(crate) fn mark_process_escape(
     registry: &mut Registry,
     process: &ProcessRecord<'_>,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     platform_start: Option<&str>,
     payload_json: &str,
 ) -> RuntimeResult<()> {
@@ -1320,14 +1320,14 @@ pub(crate) fn mark_process_escape(
             UPDATE runs
             SET status = ?3
             WHERE run_id = ?1
-              AND computed_model_hash = ?2
+              AND computed_manifest_hash = ?2
               AND status IN ({})
             ",
                 status::sql_in_list(&run_pre_states)
             ),
             params![
                 process.run_id,
-                computed_model_hash,
+                computed_manifest_hash,
                 RunStatus::ProcEscaped.as_str()
             ],
         )
@@ -1350,7 +1350,7 @@ pub(crate) fn mark_process_escape(
             run_id: Some(process.run_id),
             service_instance_id: Some(process.service_instance_id),
             process_key: Some(process.process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -1366,7 +1366,7 @@ pub(crate) fn release_unresolved_escape_ports(
     process_key: &str,
     run_id: &str,
     service_instance_id: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
@@ -1386,7 +1386,7 @@ pub(crate) fn release_unresolved_escape_ports(
                   AND p.run_id = ?2
                   AND p.service_instance_id = ?3
                   AND p.status = ?4
-                  AND r.computed_model_hash = ?5
+                  AND r.computed_manifest_hash = ?5
                   AND EXISTS (
                     SELECT 1 FROM ports ep
                     WHERE ep.service_instance_id = p.service_instance_id
@@ -1401,7 +1401,7 @@ pub(crate) fn release_unresolved_escape_ports(
                 run_id,
                 service_instance_id,
                 ProcessStatus::Escaped.as_str(),
-                computed_model_hash,
+                computed_manifest_hash,
             ],
             |row| row.get(0),
         )
@@ -1450,7 +1450,7 @@ pub(crate) fn release_unresolved_escape_ports(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -1518,7 +1518,7 @@ pub(crate) fn record_task_started(
             run_id: Some(process.run_id),
             service_instance_id: None,
             process_key: Some(process.process_key),
-            computed_model_hash: Some(process.computed_model_hash),
+            computed_manifest_hash: Some(process.computed_manifest_hash),
             payload_json: &command_json,
         },
     )?;
@@ -1530,7 +1530,7 @@ pub(crate) fn mark_task_finished(
     registry: &mut Registry,
     run_id: &str,
     process_key: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     terminal_status: TaskTerminalStatus,
     payload_json: &str,
 ) -> RuntimeResult<()> {
@@ -1599,7 +1599,7 @@ pub(crate) fn mark_task_finished(
             run_id: Some(run_id),
             service_instance_id: None,
             process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -1919,7 +1919,7 @@ fn require_run(
     transaction: &Transaction<'_>,
     identity: &RegistryIdentity,
     run_id: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
     let matches: i64 = transaction
         .query_row(
@@ -1929,13 +1929,13 @@ fn require_run(
             WHERE run_id = ?1
               AND environment = ?2
               AND slot = ?3
-              AND computed_model_hash = ?4
+              AND computed_manifest_hash = ?4
             ",
             params![
                 run_id,
                 identity.environment.as_str(),
                 identity.slot,
-                computed_model_hash,
+                computed_manifest_hash,
             ],
             |row| row.get(0),
         )
@@ -2217,7 +2217,7 @@ mod tests {
     use super::*;
 
     const RUN_ID: &str = "run-test";
-    const MODEL_HASH: &str = "model-hash";
+    const MANIFEST_HASH: &str = "manifest-hash";
     const OWNER_TOKEN: &str = "owner-token";
     const SERVICE_ID: &str = "service-instance";
     const PROCESS_KEY: &str = "process-key";
@@ -2302,16 +2302,16 @@ mod tests {
             .execute(
                 "
                 INSERT INTO runs (
-                  run_id, environment, slot, status, model_path, computed_model_hash,
+                  run_id, environment, slot, status, manifest_path, computed_manifest_hash,
                   runtime_abi, toolchain_id, generator_json, target_json, source_json,
                   summary_path
-                ) VALUES (?1, ?2, ?3, 'service-starting', '/model', ?4, ?5, ?6, '{}', '{}', '{}', NULL)
+                ) VALUES (?1, ?2, ?3, 'service-starting', '/manifest', ?4, ?5, ?6, '{}', '{}', '{}', NULL)
                 ",
                 params![
                     run_id,
                     identity.environment,
                     identity.slot,
-                    MODEL_HASH,
+                    MANIFEST_HASH,
                     identity.runtime_abi,
                     identity.toolchain_id,
                 ],
@@ -2325,7 +2325,7 @@ mod tests {
             registry,
             run_id,
             owner_token,
-            MODEL_HASH,
+            MANIFEST_HASH,
             SERVICE_ID,
             endpoints.as_slice(),
         )
@@ -2340,7 +2340,7 @@ mod tests {
             registry,
             RUN_ID,
             OWNER_TOKEN,
-            MODEL_HASH,
+            MANIFEST_HASH,
             &service_record(&identity),
             &process_record(123),
             &[endpoint()],
@@ -2396,7 +2396,7 @@ mod tests {
                 &mut fixture.registry,
                 RUN_ID,
                 OWNER_TOKEN,
-                MODEL_HASH,
+                MANIFEST_HASH,
                 &service_record(&identity),
                 &process_record(123),
                 &[endpoint()],
@@ -2425,7 +2425,7 @@ mod tests {
             &mut fixture.registry,
             "reserve-a",
             "owner-a",
-            MODEL_HASH,
+            MANIFEST_HASH,
             "service-a",
             &[endpoint()],
         )
@@ -2434,7 +2434,7 @@ mod tests {
             &mut fixture.registry,
             "reserve-b",
             "owner-b",
-            MODEL_HASH,
+            MANIFEST_HASH,
             "service-b",
             &[PortReservation {
                 endpoint_key: "service-b:endpoint",
@@ -2496,7 +2496,7 @@ mod tests {
                         .registry
                         .connection()
                         .execute(
-                            "UPDATE runs SET computed_model_hash = 'wrong-hash' WHERE run_id = ?1",
+                            "UPDATE runs SET computed_manifest_hash = 'wrong-hash' WHERE run_id = ?1",
                             [RUN_ID],
                         )
                         .unwrap();
@@ -2525,7 +2525,7 @@ mod tests {
             let error = mark_process_escape(
                 &mut fixture.registry,
                 &process,
-                MODEL_HASH,
+                MANIFEST_HASH,
                 None,
                 r#"{"reason":"test"}"#,
             )

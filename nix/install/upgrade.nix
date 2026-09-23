@@ -29,7 +29,7 @@ pkgs.writeShellApplication {
     #   - The project owns every semantic declaration in nixfied.nix.
     # This command therefore only ever rewrites the `nixfied.url` input pin and
     # refreshes the lock entry for that input. It never creates, edits, or deletes
-    # nixfied.nix, and it makes no compatibility promise for already-compiled models.
+    # nixfied.nix, and it makes no compatibility promise for already-compiled manifests.
 
     ${projection.shell "upgrade"}
     root="$UPGRADE_ROOT_INITIAL"
@@ -546,14 +546,14 @@ PY
     verify_candidate() {
       status_break
       if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
-        "$root#model.drvPath" >/dev/null; then
-        echo "candidate verification: failed (model preflight)" >&2
+        "$root#manifest.drvPath" >/dev/null; then
+        echo "candidate verification: failed (manifest preflight)" >&2
         echo "upgrade applied: no" >&2
         echo "candidate source is shown above; project declaration remains unchanged" >&2
         echo "upgrade not applied; no project files were changed" >&2
         exit 5
       fi
-      echo "candidate verification: passed (model preflight)" >&2
+      echo "candidate verification: passed (manifest preflight)" >&2
     }
 
     verify_candidate
@@ -628,8 +628,8 @@ PY
       if [[ "$mode" == "plan" ]]; then
         echo "  rerun upgrade without --plan to apply the candidate" >&2
       fi
-      echo "  nix build $root#model" >&2
-      echo "  nix run $root#model-check" >&2
+      echo "  nix build $root#manifest" >&2
+      echo "  nix run $root#manifest-check" >&2
     }
 
     if [[ "$plan" -eq 1 ]]; then

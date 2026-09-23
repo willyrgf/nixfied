@@ -7,7 +7,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use nixfied_model::{Model, Validate};
+use nixfied_manifest::{Manifest, Validate};
 use serde_json::{Value, json};
 
 mod common;
@@ -21,7 +21,7 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -34,11 +34,11 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
     fs::create_dir_all(&root_a).unwrap();
     fs::create_dir_all(&root_b).unwrap();
 
-    let first = run_command(&model, &root_a).output().unwrap();
+    let first = run_command(&manifest, &root_a).output().unwrap();
     assert_success(&first, "root A persistent start");
     assert!(find_named(&root_a, "endpoint-prepare-sentinel").is_some());
 
-    let blocked = run_command(&model, &root_b).output().unwrap();
+    let blocked = run_command(&manifest, &root_b).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
@@ -52,14 +52,14 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
     );
 
     assert_success(
-        &down_command(&model, &root_a).output().unwrap(),
+        &down_command(&manifest, &root_a).output().unwrap(),
         "root A down",
     );
-    let second = run_command(&model, &root_b).output().unwrap();
+    let second = run_command(&manifest, &root_b).output().unwrap();
     assert_success(&second, "root B start after root A down");
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_some());
     assert_success(
-        &down_command(&model, &root_b).output().unwrap(),
+        &down_command(&manifest, &root_b).output().unwrap(),
         "root B down",
     );
 }
@@ -70,16 +70,16 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
     fs::create_dir_all(&root_b).unwrap();
 
-    let winner = spawn_run(&model, &root_a);
+    let winner = spawn_run(&manifest, &root_a);
     let sentinel = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("root A should enter prepare while retaining the lock");
-    let loser = spawn_run(&model, &root_b);
+    let loser = spawn_run(&manifest, &root_b);
     let loser_output = wait_for_child_output(loser, Duration::from_secs(5));
     assert_port_conflict(&loser_output, "startup-lock-contended", port);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
@@ -95,13 +95,13 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
     fs::create_dir_all(&root_b).unwrap();
 
-    let runtime = spawn_run(&model, &root_a);
+    let runtime = spawn_run(&manifest, &root_a);
     let sentinel_a = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("first runtime should block in prepare");
     let runtime_pid = runtime.id();
@@ -119,7 +119,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     )
     .unwrap();
 
-    let successor = spawn_run(&model, &root_b);
+    let successor = spawn_run(&manifest, &root_b);
     let sentinel_b = wait_for_named(&root_b, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("successor should acquire the released kernel lock");
     fs::write(
@@ -139,11 +139,11 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let runtime = spawn_run(&model, &root);
+    let runtime = spawn_run(&manifest, &root);
     let sentinel = wait_for_named(&root, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("runtime should finish preflight and enter prepare");
     let external = TcpListener::bind(("127.0.0.1", port))
@@ -173,11 +173,12 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
         let external = TcpListener::bind((address, 0)).unwrap();
         enable_address_reuse(&external);
         let port = external.local_addr().unwrap().port();
-        let model = write_endpoint_model(&temp.path, &child, port, false, "run-scoped", "hold");
+        let manifest =
+            write_endpoint_manifest(&temp.path, &child, port, false, "run-scoped", "hold");
         let root = temp.path.join("root");
         fs::create_dir_all(&root).unwrap();
 
-        let output = run_command(&model, &root).output().unwrap();
+        let output = run_command(&manifest, &root).output().unwrap();
         let error = assert_port_conflict(&output, "listener-occupied", port);
         assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
         assert!(
@@ -194,7 +195,7 @@ fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -205,11 +206,11 @@ fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "first active-close lifecycle");
     assert_nonreusable_bind_is_occupied(port);
 
-    let second = run_command(&model, &root).output().unwrap();
+    let second = run_command(&manifest, &root).output().unwrap();
     assert_success(&second, "immediate lifecycle repeat");
 }
 
@@ -219,7 +220,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -230,7 +231,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "initial persistent owner");
     let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
     let first_process = first_json["services"][0]["processKey"]
@@ -238,7 +239,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
         .unwrap()
         .to_string();
     let owner_pid = process_pid(&root, &first_process);
-    let lease_blocked = run_command(&model, &root).output().unwrap();
+    let lease_blocked = run_command(&manifest, &root).output().unwrap();
     assert_error_code(&lease_blocked, "LEASE_CONFLICT", 29);
     assert_eq!(
         unsafe { libc::kill(owner_pid, 0) },
@@ -247,7 +248,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     );
     mark_open_leases_stale(&root);
 
-    let ownership_blocked = run_command(&model, &root).output().unwrap();
+    let ownership_blocked = run_command(&manifest, &root).output().unwrap();
     let error = assert_error_code(&ownership_blocked, "PORT_UNVERIFIABLE", 24);
     assert!(
         error["message"]
@@ -263,10 +264,10 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     );
 
     assert_success(
-        &down_command(&model, &root).output().unwrap(),
+        &down_command(&manifest, &root).output().unwrap(),
         "preserved owner down",
     );
-    let retry = run_command(&model, &root).output().unwrap();
+    let retry = run_command(&manifest, &root).output().unwrap();
     assert_success(&retry, "retry after explicit down");
     let retry_json: Value = serde_json::from_slice(&retry.stdout).unwrap();
     assert_ne!(
@@ -274,7 +275,10 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
         json!(first_process),
         "retry after down must start a new process"
     );
-    assert_success(&down_command(&model, &root).output().unwrap(), "retry down");
+    assert_success(
+        &down_command(&manifest, &root).output().unwrap(),
+        "retry down",
+    );
 }
 
 #[test]
@@ -283,7 +287,7 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -294,10 +298,10 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "initial persistent owner");
     let (owner_pid, owner_process_key) = insert_active_borrower(&root, "run-active-borrower");
-    let blocked = run_command(&model, &root).output().unwrap();
+    let blocked = run_command(&manifest, &root).output().unwrap();
     let error = assert_error_code(&blocked, "LEASE_CONFLICT", 29);
     assert!(
         error["message"]
@@ -342,7 +346,7 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
         .expect("test borrower run should complete");
     drop(connection);
     assert_success(
-        &down_command(&model, &root).output().unwrap(),
+        &down_command(&manifest, &root).output().unwrap(),
         "persistent owner down",
     );
 }
@@ -353,7 +357,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -364,7 +368,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "initial persistent owner");
     let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
     let first_process = first_json["services"][0]["processKey"]
@@ -374,7 +378,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
     let owner_pid = process_pid(&root, &first_process);
     force_live_starting_process_without_open_lease(&root);
 
-    let second = run_command(&model, &root).output().unwrap();
+    let second = run_command(&manifest, &root).output().unwrap();
     assert_error_code(&second, "PORT_UNVERIFIABLE", 24);
     assert_eq!(
         unsafe { libc::kill(owner_pid, 0) },
@@ -399,7 +403,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
     assert_eq!(evidence, ("starting".into(), "active".into()));
     drop(connection);
     assert_success(
-        &down_command(&model, &root).output().unwrap(),
+        &down_command(&manifest, &root).output().unwrap(),
         "Starting owner down",
     );
 }
@@ -410,7 +414,7 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(
+    let manifest = write_endpoint_manifest(
         &temp.path,
         &child,
         port,
@@ -421,7 +425,7 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "initial persistent owner");
     let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
     let first_process = first_json["services"][0]["processKey"]
@@ -433,7 +437,7 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
         .expect("external listener should replace the service socket");
     mark_open_leases_stale(&root);
 
-    let blocked = run_command(&model, &root).output().unwrap();
+    let blocked = run_command(&manifest, &root).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
@@ -447,14 +451,14 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
         "wrong listener ownership must not signal the recorded process"
     );
     assert_success(
-        &down_command(&model, &root).output().unwrap(),
+        &down_command(&manifest, &root).output().unwrap(),
         "wrong-owner service down",
     );
     drop(external);
-    let retry = run_command(&model, &root).output().unwrap();
+    let retry = run_command(&manifest, &root).output().unwrap();
     assert_success(&retry, "retry after wrong-owner down");
     assert_success(
-        &down_command(&model, &root).output().unwrap(),
+        &down_command(&manifest, &root).output().unwrap(),
         "wrong-owner retry down",
     );
 }
@@ -465,11 +469,11 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(2);
-    let model = write_multi_endpoint_model(&temp.path, &child, port);
+    let manifest = write_multi_endpoint_manifest(&temp.path, &child, port);
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let first = run_command(&model, &root).output().unwrap();
+    let first = run_command(&manifest, &root).output().unwrap();
     let first_error = stderr_json(&first.stderr);
     assert_eq!(
         first.status.code(),
@@ -500,7 +504,7 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
 
     // A second full attempt reaches the same truthful readiness result rather
     // than startup-lock contention, proving all guards left the failed start.
-    let second = run_command(&model, &root).output().unwrap();
+    let second = run_command(&manifest, &root).output().unwrap();
     let second_error = stderr_json(&second.stderr);
     assert_eq!(
         second.status.code(),
@@ -510,7 +514,7 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
     assert_eq!(second_error["code"], json!("READINESS_TIMEOUT"));
 }
 
-fn write_endpoint_model(
+fn write_endpoint_manifest(
     directory: &Path,
     child: &Path,
     port: u16,
@@ -524,7 +528,7 @@ fn write_endpoint_model(
         .file_name()
         .and_then(|name| name.to_str())
         .expect("test child should have a UTF-8 file name");
-    let mut value = synthetic_model(
+    let mut value = synthetic_manifest(
         &child.to_string_lossy(),
         &["listen", "127.0.0.1", "${port}", "hold"],
         port,
@@ -605,27 +609,30 @@ fn write_endpoint_model(
     };
     value["tasks"]["endpoint-prepare"] = prepare;
 
-    let model: Model = serde_json::from_value(value).expect("endpoint model should parse");
-    model.validate().expect("endpoint model should validate");
-    let path = directory.join("endpoint-model.json");
-    fs::write(&path, serde_json::to_vec_pretty(&model).unwrap()).unwrap();
+    let manifest: Manifest = serde_json::from_value(value).expect("endpoint manifest should parse");
+    manifest
+        .validate()
+        .expect("endpoint manifest should validate");
+    let path = directory.join("endpoint-manifest.json");
+    fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
 }
 
-fn write_multi_endpoint_model(directory: &Path, child: &Path, port: u16) -> PathBuf {
-    let path = write_endpoint_model(directory, child, port, false, "run-scoped", "hold");
+fn write_multi_endpoint_manifest(directory: &Path, child: &Path, port: u16) -> PathBuf {
+    let path = write_endpoint_manifest(directory, child, port, false, "run-scoped", "hold");
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     value["services"]["synthetic"]["endpoints"]["admin"] = json!({
         "endpointId": "admin",
         "host": "127.0.0.1"
     });
-    let model: Model = serde_json::from_value(value).expect("multi-endpoint model should parse");
-    model
+    let manifest: Manifest =
+        serde_json::from_value(value).expect("multi-endpoint manifest should parse");
+    manifest
         .validate()
         .expect("two endpoints should fit the two-port window");
-    let path = directory.join("multi-endpoint-model.json");
-    fs::write(&path, serde_json::to_vec_pretty(&model).unwrap()).unwrap();
+    let path = directory.join("multi-endpoint-manifest.json");
+    fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
 }
 
@@ -678,41 +685,41 @@ fn assert_nonreusable_bind_is_occupied(port: u16) {
     );
 }
 
-fn run_command(model: &Path, state_root: &Path) -> Command {
+fn run_command(manifest: &Path, state_root: &Path) -> Command {
     let mut command = Command::new(runtime_binary());
     command
         .arg("run")
         .arg("--task")
         .arg("smoke")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(model)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(manifest)
         .arg("--timeout-ms")
         .arg("20000")
         .args(["--output", "json"])
         .env("NIXFIED_STATE_DIR", state_root)
-        .current_dir(model.parent().unwrap())
+        .current_dir(manifest.parent().unwrap())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
 }
 
-fn down_command(model: &Path, state_root: &Path) -> Command {
+fn down_command(manifest: &Path, state_root: &Path) -> Command {
     let mut command = Command::new(runtime_binary());
     command
         .arg("down")
-        .arg("--allow-non-store-model")
-        .arg("--model")
-        .arg(model)
+        .arg("--allow-non-store-manifest")
+        .arg("--manifest")
+        .arg(manifest)
         .env("NIXFIED_STATE_DIR", state_root)
-        .current_dir(model.parent().unwrap())
+        .current_dir(manifest.parent().unwrap())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
 }
 
-fn spawn_run(model: &Path, state_root: &Path) -> Child {
-    run_command(model, state_root)
+fn spawn_run(manifest: &Path, state_root: &Path) -> Child {
+    run_command(manifest, state_root)
         .spawn()
         .expect("runtime should spawn")
 }
@@ -818,12 +825,12 @@ fn insert_active_borrower(root: &Path, borrower_run_id: &str) -> (libc::pid_t, S
             .execute(
                 "
                 INSERT INTO runs (
-                  run_id, environment, slot, status, model_path, computed_model_hash,
+                  run_id, environment, slot, status, manifest_path, computed_manifest_hash,
                   runtime_abi, toolchain_id, generator_json, target_json, source_json,
                   summary_path
                 )
-                SELECT ?1, environment, slot, 'service-starting', model_path,
-                       computed_model_hash, runtime_abi, toolchain_id, generator_json,
+                SELECT ?1, environment, slot, 'service-starting', manifest_path,
+                       computed_manifest_hash, runtime_abi, toolchain_id, generator_json,
                        target_json, source_json, summary_path
                 FROM runs WHERE run_id = ?2
                 ",

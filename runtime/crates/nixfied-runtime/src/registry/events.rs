@@ -10,7 +10,7 @@ pub struct EventInsert {
     pub run_id: Option<String>,
     pub service_instance_id: Option<String>,
     pub process_key: Option<String>,
-    pub computed_model_hash: Option<String>,
+    pub computed_manifest_hash: Option<String>,
     pub payload_json: String,
 }
 
@@ -21,7 +21,7 @@ impl EventInsert {
             run_id: None,
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: None,
+            computed_manifest_hash: None,
             payload_json: payload_json.into(),
         }
     }
@@ -32,7 +32,7 @@ pub(crate) struct BorrowedEvent<'a> {
     pub(crate) run_id: Option<&'a str>,
     pub(crate) service_instance_id: Option<&'a str>,
     pub(crate) process_key: Option<&'a str>,
-    pub(crate) computed_model_hash: Option<&'a str>,
+    pub(crate) computed_manifest_hash: Option<&'a str>,
     pub(crate) payload_json: &'a str,
 }
 
@@ -54,7 +54,7 @@ pub(crate) fn append_event(
             run_id: event.run_id.as_deref(),
             service_instance_id: event.service_instance_id.as_deref(),
             process_key: event.process_key.as_deref(),
-            computed_model_hash: event.computed_model_hash.as_deref(),
+            computed_manifest_hash: event.computed_manifest_hash.as_deref(),
             payload_json: &event.payload_json,
         },
     )?;
@@ -76,7 +76,7 @@ pub(crate) fn insert_event(
             "
             INSERT INTO events (
               at, environment, slot, event_type, run_id, service_instance_id,
-              process_key, computed_model_hash, payload_json
+              process_key, computed_manifest_hash, payload_json
             ) VALUES (
               strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
             )
@@ -88,7 +88,7 @@ pub(crate) fn insert_event(
                 event.run_id,
                 event.service_instance_id,
                 event.process_key,
-                event.computed_model_hash,
+                event.computed_manifest_hash,
                 payload_json,
             ],
         )

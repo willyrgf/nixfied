@@ -34,7 +34,7 @@ let
       default = terminalDefaults.${class};
       description = "Typed terminal result tokens (defaulted per lifecycle class).";
     };
-  # The one way anything in the model says "run this program" (INVOKE-1):
+  # The one way anything in the manifest says "run this program" (INVOKE-1):
   # inline, anonymous, fully applied. `tools` is the tool set whose bin roots
   # form the child PATH: declared closure ids (strings) or plain packages the
   # compiler synthesizes tool closures from. `run` is the argv; `run[0]` is
@@ -247,15 +247,15 @@ let
           accepted, not an enum of storage backends or selectable roots.
           Execution lowering discards these labels: changing them does not select
           a state directory or change service reuse identity. They remain in
-          model.json and its generated view, so changing them changes the raw
-          model hash. ''${stateDir} names the runtime-owned slot root; state
+          manifest.json and its generated view, so changing them changes the raw
+          manifest hash. ''${stateDir} names the runtime-owned slot root; state
           policy controls its compatibility and cleanup.
         '';
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity.";
+        description = "Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity.";
       };
       containment = mkOption {
         type = types.enum vocabulary."enum ContainmentRequirement".members;
@@ -290,7 +290,7 @@ let
         default = null;
         description = ''
           Optional narrowing gate: the operation ids this closure may be
-          dispatched against. The model carries the *derived* bindings (from
+          dispatched against. The manifest carries the *derived* bindings (from
           the invocation graph); declaring a list additionally requires the
           derived set to be a subset of it.
         '';
@@ -337,7 +337,7 @@ let
     options = {
       kind = mkOption {
         type = types.enum vocabulary."enum SecretSourceKind".members;
-        description = "Runtime resolver used to obtain the secret without embedding its value in the model.";
+        description = "Runtime resolver used to obtain the secret without embedding its value in the manifest.";
       };
       envVar = mkOption {
         type = types.nullOr types.nonEmptyStr;
@@ -355,7 +355,7 @@ let
   secretType = types.submodule {
     options.source = mkOption {
       type = secretSourceType;
-      description = "Runtime secret resolver descriptor. The model carries this reference, never the value.";
+      description = "Runtime secret resolver descriptor. The manifest carries this reference, never the value.";
     };
   };
 
@@ -414,17 +414,17 @@ let
       artifactRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Descriptive artifact labels retained in the model and generated view, then discarded by execution lowering; they do not create, collect or place artifacts.";
+        description = "Descriptive artifact labels retained in the manifest and generated view, then discarded by execution lowering; they do not create, collect or place artifacts.";
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select evidence paths.";
+        description = "Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select evidence paths.";
       };
       summaryRefs = mkOption {
         type = types.listOf types.str;
         default = [ "summary" ];
-        description = "Descriptive summary labels retained in the model and generated view, then discarded by execution lowering; they do not select summary paths.";
+        description = "Descriptive summary labels retained in the manifest and generated view, then discarded by execution lowering; they do not select summary paths.";
       };
     };
   };
@@ -451,7 +451,7 @@ in
   options.nixfied.secrets = mkOption {
     type = types.attrsOf secretType;
     default = { };
-    description = "Secret descriptors keyed by secret id. Values are resolved by the runtime, never embedded in the model.";
+    description = "Secret descriptors keyed by secret id. Values are resolved by the runtime, never embedded in the manifest.";
   };
 
   options.nixfied.placement.ports = {

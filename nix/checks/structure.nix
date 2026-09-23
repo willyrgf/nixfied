@@ -1,11 +1,11 @@
 # Named independent wire/presence vectors. Expected bytes are not generated.
 { lib }:
 let
-  model = import ../meta/model.nix { inherit lib; };
+  manifest = import ../meta/manifest.nix { inherit lib; };
   outputs = import ../meta/outputs.nix { inherit lib; };
   d = import ../meta/declarations.nix;
   inventory = import ../meta/inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
   check =
     bundle:
@@ -19,7 +19,7 @@ let
   errorAnnotationInventory =
     (builtins.head (builtins.filter (v: v.coordinate == "error-code") outputs.vocabularies))
     .annotations;
-  checked = check model;
+  checked = check manifest;
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
   changeRecord =
     bundle: name: f:
@@ -36,8 +36,8 @@ let
         fields = map (field: if field.name == name then f field else field) r.fields;
       }
     );
-  badField = f: rejects (map (r: r.id) (check (changeField model "Project" "name" f)).records);
-  badRecord = f: rejects (map (r: r.id) (check (changeRecord model "Project" f)).records);
+  badField = f: rejects (map (r: r.id) (check (changeField manifest "Project" "name" f)).records);
+  badRecord = f: rejects (map (r: r.id) (check (changeRecord manifest "Project" f)).records);
   badOutput = name: f: rejects (map (r: r.id) (check (changeRecord outputs name f)).records);
   make = name: checked.constructors.${"primitive/${name}"};
   invocation = {
@@ -270,7 +270,7 @@ let
     invalidEnumDefault = {
       expr = rejects (
         map (r: r.id)
-          (check (changeField model "TaskSpec" "defaultOutput" (f: f // { presence.member = "missing"; })))
+          (check (changeField manifest "TaskSpec" "defaultOutput" (f: f // { presence.member = "missing"; })))
           .records
       );
       expected = true;
@@ -301,7 +301,7 @@ let
     };
     duplicateRecords = {
       expr = rejects (
-        map (r: r.id) (check (model // { records = model.records ++ model.records; })).records
+        map (r: r.id) (check (manifest // { records = manifest.records ++ manifest.records; })).records
       );
       expected = true;
     };
@@ -393,8 +393,8 @@ let
       expr =
         builtins.isString
           ((import ../meta/rust.nix { inherit lib; }) (
-            check (changeField model "Project" "name" (f: f // { value = native; }))
-          ))."crates/nixfied-model/src/generated/types.rs";
+            check (changeField manifest "Project" "name" (f: f // { value = native; }))
+          ))."crates/nixfied-manifest/src/generated/types.rs";
       expected = true;
     };
     outputConstructors = {

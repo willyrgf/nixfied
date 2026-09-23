@@ -6,7 +6,7 @@ pub mod cancellation;
 pub mod control;
 pub mod error;
 pub mod execution;
-pub mod model_loader;
+pub mod manifest_loader;
 pub mod output;
 pub mod redaction;
 pub mod registry;
@@ -16,4 +16,6 @@ pub mod state;
 
 pub use admission::{Admission, AdmissionContext, StoreOriginPolicy, source::AdmittedSource};
 pub use error::{ErrorCode, RuntimeError, RuntimeResult};
-pub use model_loader::{LoadedModel, RawModel, load_model, parse_loaded_model, read_raw_model};
+pub use manifest_loader::{
+    LoadedManifest, RawManifest, load_manifest, parse_loaded_manifest, read_raw_manifest,
+};

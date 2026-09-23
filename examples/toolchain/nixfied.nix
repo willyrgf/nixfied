@@ -1,7 +1,7 @@
 # The toolchain-shaped standing regression proof for the current task/service
 # algebra, based on the adopter shape the previous vocabulary could not express.
 #
-# It demonstrates, in one model the gate runs like every other example:
+# It demonstrates, in one manifest the gate runs like every other example:
 #   - leaves with a real multi-tool PATH (plain packages synthesized into tool
 #     closures; the runtime only assembles PATH from their roots);
 #   - heterogeneous per-leaf `requires` (a lint that needs nothing next to a
@@ -147,7 +147,7 @@ in
   # STATIC-1's boundary, demonstrated: composites are static DAGs — no
   # retries, conditionals, or loops in the contract. A flaky operation's
   # sanctioned escape is dynamism INSIDE the opaque leaf: this leaf retries
-  # its own work and presents one bounded exit to the model.
+  # its own work and presents one bounded exit to the manifest.
   nixfied.tasks.flaky-probe = {
     invocation = {
       tools = [

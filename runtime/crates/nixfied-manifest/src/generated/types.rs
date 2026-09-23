@@ -2,8 +2,8 @@
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Model {
-    pub model_version: u32,
+pub struct Manifest {
+    pub manifest_version: u32,
     pub toolchain_id: String,
     pub runtime_abi: String,
     pub generator: Generator,

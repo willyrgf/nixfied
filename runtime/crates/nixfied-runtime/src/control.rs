@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use nixfied_model::ServiceLifetime;
+use nixfied_manifest::ServiceLifetime;
 use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -86,16 +86,16 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
 #[derive(Debug, Clone, Copy)]
 pub enum ProcessFilter<'a> {
     All,
-    /// Only processes started by a run of a different model hash — the
-    /// upgrade path's teardown of what an older model build left running.
-    ModelHashNot(&'a str),
+    /// Only processes started by a run of a different manifest hash — the
+    /// upgrade path's teardown of what an older manifest build left running.
+    ManifestHashNot(&'a str),
 }
 
 impl ProcessFilter<'_> {
     fn matches(&self, row: &ProcessRow) -> bool {
         match self {
             ProcessFilter::All => true,
-            ProcessFilter::ModelHashNot(hash) => row.computed_model_hash != *hash,
+            ProcessFilter::ManifestHashNot(hash) => row.computed_manifest_hash != *hash,
         }
     }
 }
@@ -201,7 +201,7 @@ struct ProcessRow {
     run_id: String,
     service_instance_id: Option<String>,
     status: String,
-    computed_model_hash: String,
+    computed_manifest_hash: String,
     service_lifetime: Option<String>,
     unresolved_escape: bool,
 }
@@ -214,7 +214,7 @@ struct RunLeaseRow {
     heartbeat_at: String,
     expires_at: String,
     status: String,
-    computed_model_hash: String,
+    computed_manifest_hash: String,
 }
 
 #[derive(Debug)]
@@ -297,7 +297,7 @@ fn settle_control_escape(
     match mark_process_escape(
         registry,
         &process,
-        &row.computed_model_hash,
+        &row.computed_manifest_hash,
         row.start_identity.platform_start.as_deref(),
         &payload,
     ) {
@@ -319,7 +319,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
             "
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
-              p.run_id, p.service_instance_id, p.status, r.computed_model_hash,
+              p.run_id, p.service_instance_id, p.status, r.computed_manifest_hash,
               s.service_lifetime,
               CASE WHEN p.status = '{escaped_process}'
                          AND EXISTS (
@@ -369,7 +369,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 run_id,
                 service_instance_id,
                 status,
-                computed_model_hash,
+                computed_manifest_hash,
                 service_lifetime,
                 unresolved_escape,
             )| {
@@ -391,7 +391,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                     run_id,
                     service_instance_id,
                     status,
-                    computed_model_hash,
+                    computed_manifest_hash,
                     service_lifetime,
                     unresolved_escape,
                 })
@@ -442,7 +442,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             run_id: Some(&row.run_id),
             service_instance_id: row.service_instance_id.as_deref(),
             process_key: Some(&row.process_key),
-            computed_model_hash: Some(&row.computed_model_hash),
+            computed_manifest_hash: Some(&row.computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -493,7 +493,7 @@ fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
         .prepare(&format!(
             "
             SELECT l.run_id, l.service_instance_id, l.owner_token, l.heartbeat_at,
-                   l.expires_at, l.status, r.computed_model_hash
+                   l.expires_at, l.status, r.computed_manifest_hash
             FROM run_leases l
             JOIN runs r ON r.run_id = l.run_id
             WHERE l.status IN ({})
@@ -512,7 +512,7 @@ fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
                 heartbeat_at: row.get(3)?,
                 expires_at: row.get(4)?,
                 status: row.get(5)?,
-                computed_model_hash: row.get(6)?,
+                computed_manifest_hash: row.get(6)?,
             })
         })
         .map_err(sql_error)?
@@ -766,7 +766,7 @@ fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Run
             run_id: Some(&lease.run_id),
             service_instance_id: Some(&lease.service_instance_id),
             process_key: None,
-            computed_model_hash: Some(&lease.computed_model_hash),
+            computed_manifest_hash: Some(&lease.computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -813,7 +813,7 @@ fn mark_port_stale(
             run_id: Some(&process.run_id),
             service_instance_id: Some(&port.service_instance_id),
             process_key: Some(&process.process_key),
-            computed_model_hash: Some(&process.computed_model_hash),
+            computed_manifest_hash: Some(&process.computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -828,7 +828,7 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
             &row.run_id,
             service_instance_id,
             &row.process_key,
-            &row.computed_model_hash,
+            &row.computed_manifest_hash,
         );
     }
     let payload_json = serde_json::json!({
@@ -842,7 +842,7 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
         registry,
         &row.run_id,
         &row.process_key,
-        &row.computed_model_hash,
+        &row.computed_manifest_hash,
         TaskTerminalStatus::Canceled,
         &payload_json,
     )
@@ -871,7 +871,7 @@ fn reconcile_unresolved_escape(registry: &mut Registry, row: &ProcessRow) -> Run
         &row.process_key,
         &row.run_id,
         service_instance_id,
-        &row.computed_model_hash,
+        &row.computed_manifest_hash,
     )
 }
 

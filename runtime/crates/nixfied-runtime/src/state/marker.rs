@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_model::{CleanupPolicy, Model, PersistencePolicy, Target};
+use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::Admission;
@@ -20,45 +20,50 @@ pub struct StateIdentity {
     pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
-    pub model_path: PathBuf,
-    pub computed_model_hash: String,
+    pub manifest_path: PathBuf,
+    pub computed_manifest_hash: String,
     pub runtime_abi: String,
     pub toolchain_id: String,
     pub target: Target,
 }
 
 impl StateIdentity {
-    pub fn from_model(model: &Model, admission: &Admission) -> Self {
-        Self::for_slot(model, admission, "dev", 0)
+    pub fn from_manifest(manifest: &Manifest, admission: &Admission) -> Self {
+        Self::for_slot(manifest, admission, "dev", 0)
     }
 
     pub fn from_selected_slot(
-        model: &Model,
+        manifest: &Manifest,
         admission: &Admission,
         selected_slot: &SelectedSlot<'_>,
     ) -> Self {
         Self::for_slot(
-            model,
+            manifest,
             admission,
             selected_slot.environment,
             selected_slot.slot,
         )
     }
 
-    pub fn for_slot(model: &Model, admission: &Admission, environment: &str, slot: u32) -> Self {
+    pub fn for_slot(
+        manifest: &Manifest,
+        admission: &Admission,
+        environment: &str,
+        slot: u32,
+    ) -> Self {
         Self {
-            marker_identity: model.state.marker_identity.clone(),
-            project_id: model.project.project_id.clone(),
+            marker_identity: manifest.state.marker_identity.clone(),
+            project_id: manifest.project.project_id.clone(),
             environment: environment.to_string(),
             slot,
-            state_epoch: model.state.state_epoch.clone(),
-            cleanup_policy: model.state.cleanup_policy.clone(),
-            persistence: model.state.persistence.clone(),
-            model_path: admission.model_path.clone(),
-            computed_model_hash: admission.computed_model_hash.clone(),
+            state_epoch: manifest.state.state_epoch.clone(),
+            cleanup_policy: manifest.state.cleanup_policy.clone(),
+            persistence: manifest.state.persistence.clone(),
+            manifest_path: admission.manifest_path.clone(),
+            computed_manifest_hash: admission.computed_manifest_hash.clone(),
             runtime_abi: admission.runtime_abi.clone(),
             toolchain_id: admission.toolchain_id.clone(),
-            target: model.target.clone(),
+            target: manifest.target.clone(),
         }
     }
 }
@@ -76,8 +81,8 @@ pub struct StateMarker {
     pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
-    pub model_path: PathBuf,
-    pub computed_model_hash: String,
+    pub manifest_path: PathBuf,
+    pub computed_manifest_hash: String,
     pub runtime_abi: String,
     pub toolchain_id: String,
     pub target: Target,
@@ -96,8 +101,8 @@ impl StateMarker {
             state_epoch: identity.state_epoch.clone(),
             cleanup_policy: identity.cleanup_policy.clone(),
             persistence: identity.persistence.clone(),
-            model_path: identity.model_path.clone(),
-            computed_model_hash: identity.computed_model_hash.clone(),
+            manifest_path: identity.manifest_path.clone(),
+            computed_manifest_hash: identity.computed_manifest_hash.clone(),
             runtime_abi: identity.runtime_abi.clone(),
             toolchain_id: identity.toolchain_id.clone(),
             target: identity.target.clone(),
@@ -106,7 +111,7 @@ impl StateMarker {
 
     /// Whether this marker's state root belongs to the requested identity at
     /// all: same project, environment, slot, and marker scheme. Ownership is
-    /// deliberately blind to which model build last used the root — a model
+    /// deliberately blind to which manifest build last used the root — a manifest
     /// evolves, its slot does not.
     pub fn matches_ownership(&self, identity: &StateIdentity) -> bool {
         self.marker_version == 1
@@ -120,9 +125,9 @@ impl StateMarker {
 
     /// Classify this marker against the requested identity. Ownership and
     /// runtime ABI gate access; everything else is provenance — a difference
-    /// there means the same slot was last used by another model build and
+    /// there means the same slot was last used by another manifest build and
     /// must be upgraded in place, not refused. A state-epoch difference is the
-    /// model's declared state-compatibility boundary, so it upgrades with a
+    /// manifest's declared state-compatibility boundary, so it upgrades with a
     /// state clean.
     pub fn compare(&self, identity: &StateIdentity) -> MarkerComparison {
         if !self.matches_ownership(identity) {
@@ -134,8 +139,8 @@ impl StateMarker {
         if self.state_epoch != identity.state_epoch {
             return MarkerComparison::UpgradeEpoch;
         }
-        let provenance_matches = self.model_path == identity.model_path
-            && self.computed_model_hash == identity.computed_model_hash
+        let provenance_matches = self.manifest_path == identity.manifest_path
+            && self.computed_manifest_hash == identity.computed_manifest_hash
             && self.toolchain_id == identity.toolchain_id
             && self.target == identity.target
             && self.persistence == identity.persistence
@@ -164,7 +169,7 @@ pub enum MarkerDecision {
     Fresh,
     /// The marker matches the requested identity exactly.
     Adopt(StateMarker),
-    /// Same owner, different model build: tear down what the old model left
+    /// Same owner, different manifest build: tear down what the old manifest left
     /// behind, clean the state root when the state epoch changed, and rewrite
     /// the marker.
     Upgrade {

@@ -1,4 +1,4 @@
-use nixfied_model::{InvocationSpec, Lifecycle, ServiceSpec, TaskDefaultOutput, TaskSpec};
+use nixfied_manifest::{InvocationSpec, Lifecycle, ServiceSpec, TaskDefaultOutput, TaskSpec};
 use serde_json::{Value, json};
 
 fn invocation() -> Value {

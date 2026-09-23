@@ -27,7 +27,7 @@ let
       }
     ) (builtins.filter (command: command.name == "install") declarations);
     inventory = import ../meta/inventory.nix { inherit lib; } (
-      builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+      builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
     );
     topics = builtins.attrNames (import ../docs/topics.nix);
     publications = [ ];

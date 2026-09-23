@@ -1,9 +1,9 @@
-# The framework gate coordinator: runtime-layer tests (gate-runtime nixfied model)
+# The framework gate coordinator: runtime-layer tests (gate-runtime nixfied manifest)
 # followed by nix-layer tests (gate-nix). No bash functions; all test logic lives
 # in the two sub-programs.
 #
-# `nix run .#gate` rebuilds the debug runtime, all example models, and the
-# gate-runtime model from the working tree, then runs both gates sequentially.
+# `nix run .#gate` rebuilds the debug runtime, all example manifests, and the
+# gate-runtime manifest from the working tree, then runs both gates sequentially.
 {
   pkgs,
   gateNix,

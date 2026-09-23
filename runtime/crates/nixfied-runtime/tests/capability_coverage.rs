@@ -1,14 +1,14 @@
-//! The capability descriptor must name every wire field, so a model struct that
+//! The capability descriptor must name every wire field, so a manifest struct that
 //! gains a field without a matching descriptor edit cannot slip through with an
 //! unrotated ABI digest (the failure mode the descriptor exists to prevent).
 //!
-//! Serialize a fully-populated model, collect every struct field name — skipping
+//! Serialize a fully-populated manifest, collect every struct field name — skipping
 //! the data keys of map-typed fields, the only place object keys are ids rather
 //! than schema fields — and require each to appear as a token in the descriptor.
 
 use std::collections::BTreeSet;
 
-use nixfied_model::constants::CAPABILITY_DESCRIPTOR;
+use nixfied_manifest::constants::CAPABILITY_DESCRIPTOR;
 use serde_json::{Value, json};
 
 mod common;
@@ -51,22 +51,22 @@ fn collect_fields(value: &Value, in_map: bool, out: &mut BTreeSet<String>) {
 fn capability_descriptor_names_every_wire_field() {
     // The synthetic fixture has no composite; inject one so the StepSpec
     // fields are exercised too.
-    let mut model = synthetic_model_default(23080, 23090);
-    model["secrets"]["api-token"] = json!({
+    let mut manifest = synthetic_manifest_default(23080, 23090);
+    manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": {
             "kind": "env-var",
             "envVar": "API_TOKEN"
         }
     });
-    model["tasks"]["pipeline"] = json!({
+    manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
 
     let mut fields = BTreeSet::new();
-    collect_fields(&model, false, &mut fields);
+    collect_fields(&manifest, false, &mut fields);
 
     let tokens: BTreeSet<&str> = CAPABILITY_DESCRIPTOR.split_whitespace().collect();
     let missing: Vec<&String> = fields
@@ -82,6 +82,13 @@ fn capability_descriptor_names_every_wire_field() {
 #[test]
 fn capability_descriptor_rejects_removed_contract_vocabulary() {
     for removed in [
+        "Model",
+        "modelVersion",
+        "modelPath",
+        "computedModelHash",
+        "MODEL_INVALID",
+        "MODEL_ADMISSION",
+        "MODEL_NOT_STORE_OUTPUT",
         "cacheEnv",
         "CacheEnvSpec",
         "CacheKeySpec",

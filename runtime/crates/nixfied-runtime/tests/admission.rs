@@ -2,17 +2,17 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use nixfied_model::{CleanupPolicy, PersistencePolicy};
+use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
 use nixfied_runtime::{
-    Admission, AdmissionContext, ErrorCode, StoreOriginPolicy, load_model, read_raw_model,
+    Admission, AdmissionContext, ErrorCode, StoreOriginPolicy, load_manifest, read_raw_manifest,
 };
 use serde_json::{Value, json};
 
 mod common;
 use common::*;
 
-fn fixture_model() -> Value {
-    common::synthetic_model_default(23080, 23090)
+fn fixture_manifest() -> Value {
+    common::synthetic_manifest_default(23080, 23090)
 }
 
 fn unique_env_name(prefix: &str) -> String {
@@ -20,19 +20,34 @@ fn unique_env_name(prefix: &str) -> String {
 }
 
 #[test]
-fn load_model_hashes_raw_bytes() {
-    let (_tmp, model_path, _closure) = write_fixture_model(fixture_model(), true);
-    let loaded = load_model(&model_path).expect("fixture should load");
-    let raw = fs::read(&model_path).expect("fixture should be readable");
+fn load_manifest_hashes_raw_bytes() {
+    let (_tmp, manifest_path, _closure) = write_fixture_manifest(fixture_manifest(), true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
+    let raw = fs::read(&manifest_path).expect("fixture should be readable");
     let expected = sha256_hex(&raw);
 
     assert_eq!(loaded.raw_len, raw.len());
-    assert_eq!(loaded.computed_model_hash, expected);
+    assert_eq!(loaded.computed_manifest_hash, expected);
 }
 
 #[test]
-fn removed_cache_env_is_model_invalid_before_admission_or_lowering() {
-    let mut value = fixture_model();
+fn obsolete_model_version_is_rejected_before_admission() {
+    for retain_manifest_version in [false, true] {
+        let mut value = fixture_manifest();
+        value["modelVersion"] = value["manifestVersion"].clone();
+        if !retain_manifest_version {
+            value.as_object_mut().unwrap().remove("manifestVersion");
+        }
+        let (_tmp, manifest_path, _closure) = write_fixture_manifest(value, true);
+        let error = load_manifest(&manifest_path).expect_err("old field must not be an alias");
+        assert_eq!(error.code, ErrorCode::ManifestInvalid);
+        assert!(error.message.contains("unknown field `modelVersion`"));
+    }
+}
+
+#[test]
+fn removed_cache_env_is_manifest_invalid_before_admission_or_lowering() {
+    let mut value = fixture_manifest();
     value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
         "CARGO_TARGET_DIR": {
             "family": "cargo-target",
@@ -41,28 +56,29 @@ fn removed_cache_env_is_model_invalid_before_admission_or_lowering() {
             "key": { "parts": ["cache-v1"] }
         }
     });
-    let (_tmp, model_path, _closure) = write_fixture_model(value, true);
+    let (_tmp, manifest_path, _closure) = write_fixture_manifest(value, true);
 
-    let error = load_model(&model_path).expect_err("removed cacheEnv must fail while parsing");
+    let error =
+        load_manifest(&manifest_path).expect_err("removed cacheEnv must fail while parsing");
 
-    assert_eq!(error.code, ErrorCode::ModelInvalid);
+    assert_eq!(error.code, ErrorCode::ManifestInvalid);
     assert!(error.message.contains("unknown field `cacheEnv`"));
 }
 
 #[test]
-fn normal_admission_refuses_non_store_model() {
-    let (_tmp, model_path, _closure) = write_fixture_model(fixture_model(), true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+fn normal_admission_refuses_non_store_manifest() {
+    let (_tmp, manifest_path, _closure) = write_fixture_manifest(fixture_manifest(), true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let error = Admission::check(
         &loaded,
         &AdmissionContext::current(StoreOriginPolicy::RequireStore),
     )
-    .expect_err("non-store model must be refused");
+    .expect_err("non-store manifest must be refused");
 
-    assert_eq!(error.code, ErrorCode::ModelNotStoreOutput);
+    assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
     assert_eq!(
-        error.computed_model_hash.as_deref(),
-        Some(loaded.computed_model_hash.as_str())
+        error.computed_manifest_hash.as_deref(),
+        Some(loaded.computed_manifest_hash.as_str())
     );
 }
 
@@ -71,9 +87,9 @@ fn normal_origin_refuses_non_store_before_parse() {
     let tmp = TempDir::new();
     let outside = tmp.path.join("outside");
     fs::create_dir_all(&outside).unwrap();
-    let model_path = outside.join("model.json");
-    fs::write(&model_path, b"{not json").unwrap();
-    let raw = read_raw_model(&model_path).expect("raw bytes should be readable");
+    let manifest_path = outside.join("manifest.json");
+    fs::write(&manifest_path, b"{not json").unwrap();
+    let raw = read_raw_manifest(&manifest_path).expect("raw bytes should be readable");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::RequireStore,
         store_root: tmp.path.join("store"),
@@ -83,7 +99,7 @@ fn normal_origin_refuses_non_store_before_parse() {
     let error = nixfied_runtime::admission::origin::check_raw_store_origin(&raw, &context)
         .expect_err("origin should gate before JSON parse");
 
-    assert_eq!(error.code, ErrorCode::ModelNotStoreOutput);
+    assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
 }
 
 #[test]
@@ -93,10 +109,14 @@ fn origin_rejects_canonical_path_escape() {
     let outside = tmp.path.join("outside");
     fs::create_dir_all(&store).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    let real_model = outside.join("model.json");
-    fs::write(&real_model, serde_json::to_vec(&fixture_model()).unwrap()).unwrap();
-    let escaped_model = store.join("../outside/model.json");
-    let raw = read_raw_model(&escaped_model).expect("escaped path should read");
+    let real_manifest = outside.join("manifest.json");
+    fs::write(
+        &real_manifest,
+        serde_json::to_vec(&fixture_manifest()).unwrap(),
+    )
+    .unwrap();
+    let escaped_manifest = store.join("../outside/manifest.json");
+    let raw = read_raw_manifest(&escaped_manifest).expect("escaped path should read");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::RequireStore,
         store_root: store,
@@ -105,13 +125,13 @@ fn origin_rejects_canonical_path_escape() {
     let error = nixfied_runtime::admission::origin::check_raw_store_origin(&raw, &context)
         .expect_err("canonical path outside store must fail");
 
-    assert_eq!(error.code, ErrorCode::ModelNotStoreOutput);
+    assert_eq!(error.code, ErrorCode::ManifestNotStoreOutput);
 }
 
 #[test]
-fn unstable_escape_hatch_admits_non_store_model() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+fn unstable_escape_hatch_admits_non_store_manifest() {
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root
@@ -122,14 +142,17 @@ fn unstable_escape_hatch_admits_non_store_model() {
     };
     let admission = Admission::check(&loaded, &context).expect("escape hatch should admit fixture");
 
-    assert_eq!(admission.computed_model_hash, loaded.computed_model_hash);
+    assert_eq!(
+        admission.computed_manifest_hash,
+        loaded.computed_manifest_hash
+    );
     assert_eq!(admission.project_id, "runtime-test");
 }
 
 #[test]
 fn source_admission_records_invocation_root() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -150,19 +173,19 @@ fn source_admission_records_invocation_root() {
 }
 
 #[test]
-fn lowering_failure_carries_model_provenance() {
+fn lowering_failure_carries_manifest_provenance() {
     // A composite step referencing an undeclared task fails during lowering,
     // not parse/origin/abi/closure checks. That admission error must still
-    // carry the model path and computed hash, like every other admission
+    // carry the manifest path and computed hash, like every other admission
     // failure.
-    let mut model = fixture_model();
-    model["tasks"]["pipeline"] = json!({
+    let mut manifest = fixture_manifest();
+    manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
         "steps": { "build": { "task": "missing-task" } }
     });
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -171,24 +194,24 @@ fn lowering_failure_carries_model_provenance() {
     let error =
         Admission::check(&loaded, &context).expect_err("undeclared step task must be refused");
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::ManifestAdmission);
     assert!(
-        error.model_path.is_some(),
-        "lowering error must carry a model path"
+        error.manifest_path.is_some(),
+        "lowering error must carry a manifest path"
     );
     assert_eq!(
-        error.computed_model_hash.as_deref(),
-        Some(loaded.computed_model_hash.as_str())
+        error.computed_manifest_hash.as_deref(),
+        Some(loaded.computed_manifest_hash.as_str())
     );
 }
 
 #[test]
 fn control_admission_does_not_resolve_a_live_source() {
-    // Recovery (ps/down/clean) must admit from the store model alone, so control
+    // Recovery (ps/down/clean) must admit from the store manifest alone, so control
     // admission leaves the live workspace unresolved instead of failing when the
     // caller is outside the project root or the workspace has gone.
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -206,10 +229,10 @@ fn control_admission_does_not_resolve_a_live_source() {
 
 #[test]
 fn dirty_policy_reject_fails_closed() {
-    let mut model = fixture_model();
-    model["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let mut manifest = fixture_manifest();
+    manifest["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -220,8 +243,8 @@ fn dirty_policy_reject_fails_closed() {
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
     assert_eq!(
-        error.computed_model_hash.as_deref(),
-        Some(loaded.computed_model_hash.as_str())
+        error.computed_manifest_hash.as_deref(),
+        Some(loaded.computed_manifest_hash.as_str())
     );
 }
 
@@ -229,14 +252,14 @@ fn dirty_policy_reject_fails_closed() {
 fn env_var_secret_resolves_during_admission() {
     let env_var = unique_env_name("NIXFIED_TEST_SECRET");
     unsafe { std::env::set_var(&env_var, "resolved-secret") };
-    let mut model = fixture_model();
-    model["secrets"]["api-token"] = json!({
+    let mut manifest = fixture_manifest();
+    manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": { "kind": "env-var", "envVar": env_var }
     });
-    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -253,14 +276,14 @@ fn env_var_secret_resolves_during_admission() {
 fn missing_secret_fails_admission_before_execution() {
     let env_var = unique_env_name("NIXFIED_TEST_MISSING_SECRET");
     unsafe { std::env::remove_var(&env_var) };
-    let mut model = fixture_model();
-    model["secrets"]["api-token"] = json!({
+    let mut manifest = fixture_manifest();
+    manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": { "kind": "env-var", "envVar": env_var }
     });
-    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -271,8 +294,8 @@ fn missing_secret_fails_admission_before_execution() {
 
     assert_eq!(error.code, ErrorCode::SecretUnavailable);
     assert_eq!(
-        error.computed_model_hash.as_deref(),
-        Some(loaded.computed_model_hash.as_str())
+        error.computed_manifest_hash.as_deref(),
+        Some(loaded.computed_manifest_hash.as_str())
     );
 }
 
@@ -280,14 +303,14 @@ fn missing_secret_fails_admission_before_execution() {
 fn empty_secret_material_is_unavailable() {
     let env_var = unique_env_name("NIXFIED_TEST_EMPTY_SECRET");
     unsafe { std::env::set_var(&env_var, "") };
-    let mut model = fixture_model();
-    model["secrets"]["api-token"] = json!({
+    let mut manifest = fixture_manifest();
+    manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": { "kind": "env-var", "envVar": env_var }
     });
-    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -302,20 +325,20 @@ fn empty_secret_material_is_unavailable() {
 
 #[test]
 fn file_secret_is_confined_and_normalized() {
-    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let secrets_dir = tmp.path.join("secrets");
     fs::create_dir_all(&secrets_dir).expect("secrets dir should exist");
     fs::write(secrets_dir.join("api-token"), "file-secret\n").expect("secret file should write");
     unsafe { std::env::set_var("NIXFIED_SECRETS_DIR", &secrets_dir) };
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": { "kind": "file", "path": "api-token" }
     });
     value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -329,11 +352,11 @@ fn file_secret_is_confined_and_normalized() {
 }
 
 #[test]
-fn undeclared_secret_reference_is_model_admission_error() {
-    let mut model = fixture_model();
-    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:missing}");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+fn undeclared_secret_reference_is_manifest_admission_error() {
+    let mut manifest = fixture_manifest();
+    manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:missing}");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -342,21 +365,21 @@ fn undeclared_secret_reference_is_model_admission_error() {
 
     let error = Admission::check(&loaded, &context).expect_err("undeclared secret must fail");
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::ManifestAdmission);
 }
 
 #[test]
-fn secret_reference_in_args_is_model_admission_error() {
+fn secret_reference_in_args_is_manifest_admission_error() {
     let env_var = unique_env_name("NIXFIED_TEST_ARG_SECRET");
     unsafe { std::env::set_var(&env_var, "resolved-secret") };
-    let mut model = fixture_model();
-    model["secrets"]["api-token"] = json!({
+    let mut manifest = fixture_manifest();
+    manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": { "kind": "env-var", "envVar": env_var }
     });
-    model["tasks"]["smoke"]["invocation"]["run"][1] = json!("${secret:api-token}");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    manifest["tasks"]["smoke"]["invocation"]["run"][1] = json!("${secret:api-token}");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -366,23 +389,23 @@ fn secret_reference_in_args_is_model_admission_error() {
     let error = Admission::check(&loaded, &context).expect_err("arg secret must fail");
     unsafe { std::env::remove_var(&env_var) };
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::ManifestAdmission);
 }
 
 #[test]
 fn snapshot_source_admits_immutable_store_root_with_reject() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let store_root = closure_root.parent().unwrap().to_path_buf();
     let source_root = store_root.join("source-snapshot");
     fs::create_dir_all(source_root.join("app")).expect("immutable logical root should exist");
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["codebases"][0]["sourceMode"] = json!("snapshot");
     value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
     value["codebases"][0]["logicalRoot"] = json!("app");
     value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
@@ -392,7 +415,7 @@ fn snapshot_source_admits_immutable_store_root_with_reject() {
     let admission = Admission::check(&loaded, &context).expect("snapshot source should admit");
     let source = admission.require_source().expect("source should resolve");
 
-    assert_eq!(source.source_mode, nixfied_model::SourceMode::Snapshot);
+    assert_eq!(source.source_mode, nixfied_manifest::SourceMode::Snapshot);
     assert_eq!(
         source.observed_root,
         source_root.join("app").canonicalize().unwrap()
@@ -401,16 +424,16 @@ fn snapshot_source_admits_immutable_store_root_with_reject() {
 
 #[test]
 fn flake_input_source_admits_immutable_store_root() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let store_root = closure_root.parent().unwrap().to_path_buf();
     let source_root = store_root.join("source-flake-input");
     fs::create_dir_all(&source_root).expect("immutable source root should exist");
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["codebases"][0]["sourceMode"] = json!("flake-input");
     value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
@@ -420,21 +443,21 @@ fn flake_input_source_admits_immutable_store_root() {
     let admission = Admission::check(&loaded, &context).expect("flake input source should admit");
     let source = admission.require_source().expect("source should resolve");
 
-    assert_eq!(source.source_mode, nixfied_model::SourceMode::FlakeInput);
+    assert_eq!(source.source_mode, nixfied_manifest::SourceMode::FlakeInput);
     assert_eq!(source.observed_root, source_root.canonicalize().unwrap());
 }
 
 #[test]
 fn immutable_source_must_be_under_store_root() {
-    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let outside_source = tmp.path.join("outside-source");
     fs::create_dir_all(&outside_source).expect("outside source should exist");
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["codebases"][0]["sourceMode"] = json!("snapshot");
     value["codebases"][0]["sourceIdentity"] = json!(outside_source.to_string_lossy());
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -449,17 +472,17 @@ fn immutable_source_must_be_under_store_root() {
 
 #[test]
 fn immutable_source_logical_root_escape_is_rejected() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let store_root = closure_root.parent().unwrap().to_path_buf();
     let source_root = store_root.join("source-snapshot-escape");
     fs::create_dir_all(&source_root).expect("immutable source root should exist");
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["codebases"][0]["sourceMode"] = json!("snapshot");
     value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
     value["codebases"][0]["logicalRoot"] = json!("..");
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root,
@@ -474,10 +497,10 @@ fn immutable_source_logical_root_escape_is_rejected() {
 
 #[test]
 fn logical_root_escape_is_rejected() {
-    let mut model = fixture_model();
-    model["codebases"][0]["logicalRoot"] = json!("..");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let mut manifest = fixture_manifest();
+    manifest["codebases"][0]["logicalRoot"] = json!("..");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -490,12 +513,12 @@ fn logical_root_escape_is_rejected() {
 }
 
 #[test]
-fn protected_persistent_state_is_valid_model_data() {
-    let mut model = fixture_model();
-    model["state"]["cleanupPolicy"] = json!("protected");
-    model["state"]["persistence"] = json!("persistent");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("protected persistent state should load");
+fn protected_persistent_state_is_valid_manifest_data() {
+    let mut manifest = fixture_manifest();
+    manifest["state"]["cleanupPolicy"] = json!("protected");
+    manifest["state"]["persistence"] = json!("persistent");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("protected persistent state should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -503,28 +526,31 @@ fn protected_persistent_state_is_valid_model_data() {
     };
     Admission::check(&loaded, &context).expect("protected persistent state should admit");
 
-    assert_eq!(loaded.model.state.cleanup_policy, CleanupPolicy::Protected);
     assert_eq!(
-        loaded.model.state.persistence,
+        loaded.manifest.state.cleanup_policy,
+        CleanupPolicy::Protected
+    );
+    assert_eq!(
+        loaded.manifest.state.persistence,
         PersistencePolicy::Persistent
     );
 }
 
 #[test]
 fn abi_mismatch_is_runtime_abi_error() {
-    let mut model = fixture_model();
-    model["runtimeAbi"] = json!("nixfied-runtime-abi:legacy");
-    let (_tmp, model_path, _closure) = write_fixture_model(model, true);
-    let error = load_model(&model_path).expect_err("ABI mismatch should fail during load");
+    let mut manifest = fixture_manifest();
+    manifest["runtimeAbi"] = json!("nixfied-runtime-abi:legacy");
+    let (_tmp, manifest_path, _closure) = write_fixture_manifest(manifest, true);
+    let error = load_manifest(&manifest_path).expect_err("ABI mismatch should fail during load");
 
     assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
-    assert!(error.computed_model_hash.is_some());
+    assert!(error.computed_manifest_hash.is_some());
 }
 
 #[test]
 fn missing_closure_is_rejected() {
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), false);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), false);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root
@@ -551,22 +577,22 @@ fn closure_store_path_escape_is_rejected() {
     perms.set_mode(0o755);
     fs::set_permissions(&executable, perms).unwrap();
 
-    let mut model = fixture_model();
-    model["closures"]["synthetic-helper"]["storePath"] = json!(
+    let mut manifest = fixture_manifest();
+    manifest["closures"]["synthetic-helper"]["storePath"] = json!(
         store
             .join("../outside-closure/test-synthetic-helper")
             .to_string_lossy()
     );
-    model["closures"]["synthetic-helper"]["executable"] = json!(
+    manifest["closures"]["synthetic-helper"]["executable"] = json!(
         store
             .join("../outside-closure/test-synthetic-helper/bin/synthetic-helper")
             .to_string_lossy()
     );
-    let escaped_executable = model["closures"]["synthetic-helper"]["executable"].clone();
-    set_invocation_executables(&mut model, escaped_executable);
-    let model_path = tmp.path.join("model.json");
-    fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let escaped_executable = manifest["closures"]["synthetic-helper"]["executable"].clone();
+    set_invocation_executables(&mut manifest, escaped_executable);
+    let manifest_path = tmp.path.join("manifest.json");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: store,
@@ -581,13 +607,13 @@ fn closure_store_path_escape_is_rejected() {
 fn invocation_executable_must_match_run_resolution() {
     // A carried executable that disagrees with the declarative run[0]
     // resolution is rejected at lowering, fail closed.
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["executable"] =
         json!(closure_root.join("bin/other-helper").to_string_lossy());
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -596,7 +622,7 @@ fn invocation_executable_must_match_run_resolution() {
     let error = Admission::check(&loaded, &context)
         .expect_err("invocation executable mismatch should fail");
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::ManifestAdmission);
     assert!(error.message.contains("resolve"));
 }
 
@@ -605,16 +631,16 @@ fn exec_bound_closure_without_executable_bit_is_rejected() {
     // requiresExecutable=false must not let an invoked closure skip the
     // executable-bit check: it is run via Command::new, so admission has to fail
     // closed (CLOSURE_MISSING) rather than defer to a runtime ProcEscape.
-    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let executable = closure_root.join("bin/synthetic-helper");
     let mut perms = fs::metadata(&executable).unwrap().permissions();
     perms.set_mode(0o644);
     fs::set_permissions(&executable, perms).unwrap();
     let mut value: Value =
-        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).expect("fixture JSON");
     value["closures"]["synthetic-helper"]["requiresExecutable"] = json!(false);
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -628,10 +654,10 @@ fn exec_bound_closure_without_executable_bit_is_rejected() {
 
 #[test]
 fn target_os_and_arch_must_match_host() {
-    let mut model = fixture_model();
-    model["target"]["os"] = json!("definitely-not-this-os");
-    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let mut manifest = fixture_manifest();
+    manifest["target"]["os"] = json!("definitely-not-this-os");
+    let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -648,7 +674,7 @@ fn symlinked_closure_executable_is_admitted() {
     // the same closure (a Rust toolchain joins cargo/rustc components). The
     // declared executable lives under the declared storePath; following the
     // symlink must not break containment.
-    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     // Move the real binary outside the declared root and symlink it back in.
     let real_dir = tmp.path.join("store/real-component/bin");
     fs::create_dir_all(&real_dir).unwrap();
@@ -656,7 +682,7 @@ fn symlinked_closure_executable_is_admitted() {
     let declared = closure_root.join("bin/synthetic-helper");
     fs::rename(&declared, &real).unwrap();
     std::os::unix::fs::symlink(&real, &declared).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -667,14 +693,14 @@ fn symlinked_closure_executable_is_admitted() {
 
 #[test]
 fn symlinked_closure_executable_outside_store_root_is_rejected() {
-    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
     let outside_dir = tmp.path.join("outside/bin");
     fs::create_dir_all(&outside_dir).unwrap();
     let outside = outside_dir.join("synthetic-helper");
     let declared = closure_root.join("bin/synthetic-helper");
     fs::rename(&declared, &outside).unwrap();
     std::os::unix::fs::symlink(&outside, &declared).unwrap();
-    let loaded = load_model(&model_path).expect("fixture should load");
+    let loaded = load_manifest(&manifest_path).expect("fixture should load");
     let context = AdmissionContext {
         policy: StoreOriginPolicy::AllowNonStoreForTests,
         store_root: closure_root.parent().unwrap().to_path_buf(),
@@ -692,14 +718,17 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
     );
 }
 
-fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, PathBuf, PathBuf) {
+fn write_fixture_manifest(
+    mut value: Value,
+    create_executable: bool,
+) -> (TempDir, PathBuf, PathBuf) {
     let tmp = TempDir::new();
     let closure_root = tmp.path.join("store/test-synthetic-helper");
     let executable = closure_root.join("bin/synthetic-helper");
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
     set_invocation_executables(&mut value, json!(executable.to_string_lossy()));
-    let model_path = tmp.path.join("model.json");
+    let manifest_path = tmp.path.join("manifest.json");
     if create_executable {
         fs::create_dir_all(executable.parent().expect("executable parent")).unwrap();
         fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
@@ -707,8 +736,8 @@ fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, P
         perms.set_mode(0o755);
         fs::set_permissions(&executable, perms).unwrap();
     }
-    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
-    (tmp, model_path, closure_root)
+    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    (tmp, manifest_path, closure_root)
 }
 
 /// Point every fixture invocation's carried executable at the relocated

@@ -16,8 +16,8 @@ import ./cargo-fixture.nix { inherit pkgs; } {
   name = "nixfied-inventory-mutation-check";
   script = ''
     # Test fixture only: product builds never overlay regenerated sources.
-    cp ${generated}/crates/nixfied-model/src/generated/types.rs crates/nixfied-model/src/generated/types.rs
-    cp ${./inventory-mutation.rs} crates/nixfied-model/tests/inventory_mutation.rs
-    cargo test --offline --locked -p nixfied-model --test inventory_mutation
+    cp ${generated}/crates/nixfied-manifest/src/generated/types.rs crates/nixfied-manifest/src/generated/types.rs
+    cp ${./inventory-mutation.rs} crates/nixfied-manifest/tests/inventory_mutation.rs
+    cargo test --offline --locked -p nixfied-manifest --test inventory_mutation
   '';
 }

@@ -32,7 +32,7 @@ in
       (entry "command" "down")
       (entry "command" "clean")
       (entry "package" "root/nixfied-runtime")
-      (entry "record" "primitive/Model")
+      (entry "record" "primitive/Manifest")
       (entry "record" "local/CheckOutput")
       (entry "record" "local/DownReport")
       (entry "record" "local/CleanupOutcome")
@@ -46,7 +46,7 @@ in
       (fragment ../../docs/ARCHITECTURE.md "## Ports, state, containment")
     ];
     related = [
-      "model"
+      "manifest"
       "services"
       "state"
       "outputs"
@@ -54,7 +54,7 @@ in
   };
   authoring = {
     select = [
-      (entry "function" "library/compileModel")
+      (entry "function" "library/compileManifest")
       (entry "function" "library/projectApps")
       (entry "function" "library/seq")
       (category "argument")
@@ -222,7 +222,7 @@ in
     fragments = [
       (fragment ../../docs/ADAPTERS.md "## What an adapter provides")
       (fragment ../../docs/ADAPTERS.md "## Conventions")
-      (fragment ../../docs/ADAPTERS.md "## Multiple listeners: model every endpoint")
+      (fragment ../../docs/ADAPTERS.md "## Multiple listeners: declare every endpoint")
       (fragment ../../docs/ADAPTERS.md "## Endpoint-less services: durable is not listening")
     ];
     related = [
@@ -497,13 +497,13 @@ in
     ];
     related = [
       "state"
-      "model"
+      "manifest"
     ];
   };
   discovery = {
     select = [
       (entry "app" "project/run")
-      (entry "app" "project/model-check")
+      (entry "app" "project/manifest-check")
       (entry "app" "project/ps")
       (entry "app" "project/down")
       (entry "app" "project/clean")
@@ -522,16 +522,16 @@ in
       "commands"
     ];
   };
-  model = {
+  manifest = {
     select = [
       (entry "command" "check")
-      (entry "record" "primitive/Model")
+      (entry "record" "primitive/Manifest")
       (entry "record" "primitive/Generator")
       (entry "record" "primitive/Target")
       (entry "record" "primitive/ClosureSpec")
     ];
     fragments = [
-      (fragment ../../docs/CONTRACT.md "## Model and version boundary")
+      (fragment ../../docs/CONTRACT.md "## Manifest and version boundary")
     ];
     related = [
       "runtime"
@@ -573,7 +573,7 @@ in
       (fragment ../../docs/DERIVATION_SPEC.md "## 6. Golden vectors")
     ];
     related = [
-      "model"
+      "manifest"
       "tasks"
     ];
   };
@@ -582,7 +582,7 @@ in
       (entry "package" "check/rust-workspace")
       (entry "package" "check/derive-facts-vectors")
       (entry "package" "check/nixfied-runtime")
-      (entry "package" "check/minimal-model")
+      (entry "package" "check/minimal-manifest")
       (entry "package" "devShell/default")
     ];
     fragments = [
@@ -592,7 +592,7 @@ in
     ];
     related = [
       "derivation"
-      "model"
+      "manifest"
     ];
   };
 }

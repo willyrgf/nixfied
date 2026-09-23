@@ -1,23 +1,23 @@
 { pkgs, derived }:
 
 let
-  modelJson = builtins.toJSON derived.model;
-  docsMarkdown = import ./views.nix { model = derived.model; };
+  manifestJson = builtins.toJSON derived.manifest;
+  docsMarkdown = import ./views.nix { manifest = derived.manifest; };
 in
-pkgs.runCommand "nixfied-model"
+pkgs.runCommand "nixfied-manifest"
   {
     # Keep every realised closure in the build closure; the runtime requires
     # each referenced store path to already exist before it starts.
     buildInputs = derived.packages;
     passAsFile = [
-      "modelJson"
+      "manifestJson"
       "docsMarkdown"
     ];
-    inherit modelJson docsMarkdown;
+    inherit manifestJson docsMarkdown;
   }
   ''
     mkdir -p "$out"
     mkdir -p "$out/views"
-    cp "$modelJsonPath" "$out/model.json"
+    cp "$manifestJsonPath" "$out/manifest.json"
     cp "$docsMarkdownPath" "$out/views/docs.md"
   ''

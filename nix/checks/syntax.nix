@@ -4,7 +4,7 @@ let
   structure = import ../meta/default.nix { inherit lib; };
   declarations = import ../meta/commands.nix { inherit lib structure; };
   inventory = import ../meta/inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
   check =
     declarations:
@@ -213,7 +213,7 @@ assert invalidArg (
   }
 );
 assert lib.hasInfix "  --budget-ms <number>    Fixture budget\n  -h, --help" extended.help.run;
-assert !(lib.hasInfix "--model" extended.help.run);
+assert !(lib.hasInfix "--manifest" extended.help.run);
 assert lib.hasInfix "type RunBudgetMsValue = u64;" (
   (import ../meta/syntax-project.nix { inherit lib structure; } extended).rust [ "run" ]
 );

@@ -8,14 +8,14 @@ rust-version.workspace = true
 [dependencies]
 hex = "0.4"
 libc = "0.2"
-nixfied-model = { path = "../nixfied-model" }
+nixfied-manifest = { path = "../nixfied-manifest" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 
 [dev-dependencies]
-nixfied-model = { path = "../nixfied-model", features = ["test-fixtures"] }
+nixfied-manifest = { path = "../nixfied-manifest", features = ["test-fixtures"] }
 
 [lib]
 path = "src/lib.rs"

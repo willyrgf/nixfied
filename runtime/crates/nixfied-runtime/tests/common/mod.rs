@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use rusqlite::params;
 use serde_json::Value;
 
-use nixfied_model::fixtures::{self, SyntheticModelOptions};
-pub use nixfied_model::fixtures::{SYNTHETIC_EXECUTABLE, SYNTHETIC_START_ARGS};
+use nixfied_manifest::fixtures::{self, SyntheticManifestOptions};
+pub use nixfied_manifest::fixtures::{SYNTHETIC_EXECUTABLE, SYNTHETIC_START_ARGS};
 
 pub fn runtime_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_nixfied-runtime") {
@@ -71,25 +71,25 @@ pub fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {
 
 /// The canonical admission fixture — a `synthetic` foreground service plus a
 /// `smoke` task in slot 0 over the given candidate port window. Delegates to
-/// `nixfied_model::fixtures`, the single source of truth for the model shape.
-pub fn synthetic_model(
+/// `nixfied_manifest::fixtures`, the single source of truth for the manifest shape.
+pub fn synthetic_manifest(
     executable: &str,
     start_args: &[&str],
     port_start: u16,
     port_end: u16,
 ) -> Value {
-    fixtures::synthetic_model(&SyntheticModelOptions {
+    fixtures::synthetic_manifest(&SyntheticManifestOptions {
         executable: executable.to_string(),
         start_args: start_args.iter().map(|s| s.to_string()).collect(),
         port_start,
         port_end,
-        ..SyntheticModelOptions::default()
+        ..SyntheticManifestOptions::default()
     })
 }
 
-/// [`synthetic_model`] with the default executable and start arguments.
-pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
-    synthetic_model(
+/// [`synthetic_manifest`] with the default executable and start arguments.
+pub fn synthetic_manifest_default(port_start: u16, port_end: u16) -> Value {
+    synthetic_manifest(
         SYNTHETIC_EXECUTABLE,
         SYNTHETIC_START_ARGS,
         port_start,
@@ -97,9 +97,9 @@ pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
     )
 }
 
-pub use nixfied_model::fixtures::{host_arch, host_os, host_system};
+pub use nixfied_manifest::fixtures::{host_arch, host_os, host_system};
 
-use nixfied_model::{DirtyPolicy, Model, ServiceLifetime, SourceMode};
+use nixfied_manifest::{DirtyPolicy, Manifest, ServiceLifetime, SourceMode};
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
     ServiceSelection, SlotEndpoints, StartedService, record_run_created, run_slot_clean,
@@ -110,15 +110,15 @@ use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
 use nixfied_runtime::{Admission, AdmittedSource, RuntimeResult};
 
 /// Synthetic run admission for lifecycle/state tests; real admission checks are bypassed.
-pub fn synthetic_admission(model: &Model, source_root: &Path) -> Admission {
+pub fn synthetic_admission(manifest: &Manifest, source_root: &Path) -> Admission {
     Admission {
-        model_path: PathBuf::from("/nix/store/test-model/model.json"),
-        computed_model_hash: "computed-hash".to_string(),
+        manifest_path: PathBuf::from("/nix/store/test-manifest/manifest.json"),
+        computed_manifest_hash: "computed-hash".to_string(),
         raw_len: 100,
-        project_id: model.project.project_id.clone(),
-        runtime_abi: model.runtime_abi.clone(),
-        toolchain_id: model.toolchain_id.clone(),
-        target_system: model.target.system.clone(),
+        project_id: manifest.project.project_id.clone(),
+        runtime_abi: manifest.runtime_abi.clone(),
+        toolchain_id: manifest.toolchain_id.clone(),
+        target_system: manifest.target.system.clone(),
         source: Some(AdmittedSource {
             codebase_id: "main".to_string(),
             logical_root: ".".to_string(),
@@ -130,9 +130,10 @@ pub fn synthetic_admission(model: &Model, source_root: &Path) -> Admission {
             dirty_policy: DirtyPolicy::Warn,
             admission_fingerprint_policy: "live-fingerprint".to_string(),
         }),
-        generator_json: serde_json::to_string(&model.generator).unwrap(),
-        target_json: serde_json::to_string(&model.target).unwrap(),
-        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
+        generator_json: serde_json::to_string(&manifest.generator).unwrap(),
+        target_json: serde_json::to_string(&manifest.target).unwrap(),
+        execution_manifest: nixfied_runtime::execution::lower(manifest)
+            .expect("manifest should lower"),
         secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
     }
 }
@@ -214,14 +215,14 @@ fn service_lifetime_wire(lifetime: ServiceLifetime) -> &'static str {
 /// Start the fixture's `synthetic` service on the default slot through the
 /// generic runtime API.
 pub fn start_synthetic_service(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
-    let selected_slot = select_slot(model, None)?;
+    let selected_slot = select_slot(manifest, None)?;
     start_synthetic_service_for_slot(
         admission,
         placement,
@@ -233,7 +234,7 @@ pub fn start_synthetic_service(
 }
 
 pub fn start_synthetic_service_with_lifetime(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
@@ -241,7 +242,7 @@ pub fn start_synthetic_service_with_lifetime(
     selected_port: u16,
     service_lifetime: ServiceLifetime,
 ) -> RuntimeResult<StartedService> {
-    let selected_slot = select_slot(model, None)?;
+    let selected_slot = select_slot(manifest, None)?;
     start_synthetic_service_for_slot_with_lifetime(
         admission,
         placement,
@@ -311,14 +312,14 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
 /// `[synthetic]`, so the generic slot clean equals cleaning the single service
 /// plus the slot state.
 pub fn run_synthetic_service_clean_for_slot(
-    model: &Model,
+    manifest: &Manifest,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
     run_slot_clean(
-        model,
+        manifest,
         admission,
         placement,
         registry,

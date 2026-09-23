@@ -6,7 +6,7 @@ use crate::registry::records::RegistryIdentity;
 
 include!("../generated/registry_identity.rs");
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
@@ -63,7 +63,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               run_id TEXT,
               service_instance_id TEXT,
               process_key TEXT,
-              computed_model_hash TEXT,
+              computed_manifest_hash TEXT,
               payload_json TEXT NOT NULL
             );
 
@@ -72,8 +72,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
               status TEXT NOT NULL,
-              model_path TEXT NOT NULL,
-              computed_model_hash TEXT NOT NULL,
+              manifest_path TEXT NOT NULL,
+              computed_manifest_hash TEXT NOT NULL,
               runtime_abi TEXT NOT NULL,
               toolchain_id TEXT NOT NULL,
               generator_json TEXT NOT NULL,

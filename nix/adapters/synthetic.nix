@@ -1,7 +1,7 @@
 # Synthetic service adapter.
 #
 # A Nix-side adapter is a library that compiles a concrete service into the
-# generic model primitives. This one provides a self-contained foreground TCP
+# generic manifest primitives. This one provides a self-contained foreground TCP
 # service plus a dependent smoke task, used by the minimal example and proofs.
 # The runtime gains no knowledge of it; everything here is generic data.
 { pkgs, ... }:

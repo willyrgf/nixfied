@@ -1,6 +1,6 @@
 # Reth (Ethereum dev node) reference adapter.
 #
-# Compiles a dev-mode reth node into the generic model primitives. The runtime
+# Compiles a dev-mode reth node into the generic manifest primitives. The runtime
 # gains no Ethereum knowledge: start is a wrapper invocation that derives the node's
 # auxiliary ports and dev credentials, readiness and health are JSON-RPC
 # protocol probes (`curl` posting `eth_blockNumber`), the smoke task is the

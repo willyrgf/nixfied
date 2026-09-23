@@ -30,7 +30,7 @@ The split is defined by the verb, not by timing:
 
 - **Nix is the integration *and* correctness layer.** It is programmable, typed,
   reproducible, and already where people describe environments. Typed modules
-  evaluate to `model.json`; invalid intent never produces an admitted model. Nix
+  evaluate to `manifest.json`; invalid intent never produces an admitted manifest. Nix
   builds/realises closures and emits the disposable docs view. It is also the
   public extension API:
   adopters integrate by importing a module, not by vendoring internals or
@@ -45,10 +45,10 @@ The split is defined by the verb, not by timing:
 
 Three properties, deliberately distinct:
 
-- **Codified & discoverable** — the whole project is typed data in `model.json`; a
-  human or agent learns its structure from the model or generated docs view.
-- **Deterministic model & logical placement** — same typed input ⇒ same compiled
-  model and logical placement. Host-absolute paths are *not* part of this; Rust
+- **Codified & discoverable** — the whole project is typed data in `manifest.json`; a
+  human or agent learns its structure from the manifest or generated docs view.
+- **Deterministic manifest & logical placement** — same typed input ⇒ same compiled
+  manifest and logical placement. Host-absolute paths are *not* part of this; Rust
   materialises them at admission.
 - **Owned execution** — runtime timing/scheduling is not deterministic, but every
   process is owned, tracked, attributable, OS-reconciled, and cleanable.
@@ -59,34 +59,34 @@ change sites instead of coordinating more of them. Net LOC reduction is useful
 evidence when it removes semantic machinery while keeping the typed boundaries,
 fail-closed checks, and independent seam proofs explicit.
 
-## Why one `model.json` seam
+## Why one `manifest.json` seam
 
 The single most important hardening choice. Each clause replaced a v1 failure
 mode:
 
-- **Many artifacts → one semantic model.** No required `manifest.json`,
-  `schema.json`, or `capabilities.json`. The model package contains only
-  `model.json` plus the disposable, model-derived `views/docs.md` human
+- **Many artifacts → one semantic manifest.** No required sidecar,
+  `schema.json`, or `capabilities.json`. The manifest package contains only
+  `manifest.json` plus the disposable, manifest-derived `views/docs.md` human
   reference. (v1: artifact sealing kept growing toward a mini package format.)
-- **Manifest hardening → model-owned admission contract.** Source identity,
+- **Separate admission metadata → manifest-owned admission contract.** Source identity,
   target identity, generator/toolchain identity, closure metadata, layered service
-  identity, and state policy are first-class `model.json` fields — so the model
+  identity, and state policy are first-class `manifest.json` fields — so the manifest
   *is* the admission contract, not just an execution graph. The contract is also
   *typed*: illegal shapes (a malformed lifecycle, a non-loopback endpoint, a zero
   timeout) are unrepresentable rather than caught by a rule, and the
-  cross-references are proven by lowering the model into the executor's input.
-- **Self-hash → computed provenance hash.** The model embeds no self-hash
-  (circular). The runtime computes `computedModelHash = sha256(raw bytes)` at
+  cross-references are proven by lowering the manifest into the executor's input.
+- **Self-hash → computed provenance hash.** The manifest embeds no self-hash
+  (circular). The runtime computes `computedManifestHash = sha256(raw bytes)` at
   admission and records it in registry/summaries/logs/errors.
-- **Model origin → Nix store output.** Normal admission requires `model.json`
+- **Manifest origin → Nix store output.** Normal admission requires `manifest.json`
   under the Nix store: a local origin/trust + immutability policy, not a proof of
   compiler provenance. A non-store escape hatch exists only for framework
-  tests/dev (`--allow-non-store-model`).
+  tests/dev (`--allow-non-store-manifest`).
 - **Replacement instead of compatibility.** Exact ABI/toolchain matching means
   adopters recompile when the contract changes. Translators and dual
   implementations would multiply parsers, branches, tests, and future change
   sites; Git preserves removed implementations. The capability digest records
-  every model/runtime contract change, while numeric versions change only for
+  every manifest/runtime contract change, while numeric versions change only for
   their separately defined semantics.
 
 ## Shared contracts and the static reference
@@ -97,11 +97,11 @@ machinery has four responsibilities:
 | Mechanism | Shared facts | Native owner retained |
 | --- | --- | --- |
 | Option metadata | Paths, types, defaults and explanations | Nixpkgs evaluation, merging and transformations |
-| Serialized structures | Model, result and error fields; inventory-linked vocabularies | Native scalar types, relational validation, derivation and runtime behavior |
+| Serialized structures | Manifest, result and error fields; inventory-linked vocabularies | Native scalar types, relational validation, derivation and runtime behavior |
 | Command syntax | Tokens, value domains, literal defaults and help | Native parsers, encoding, precedence, contextual defaults and effects |
 | Publications | Exported names, descriptions and lazy bindings | Native functions, modules, apps and packages |
 
-Model, result and error records share one structural vocabulary and Rust
+Manifest, result and error records share one structural vocabulary and Rust
 renderer. `NativeDomain` binds an existing scalar representation and preserves
 its validation and serialization; it cannot hide an entire record. Native IDs,
 LoopbackHost, paths and unique collections retain their native guarantees.
@@ -131,7 +131,7 @@ native effects. Unknown targets and invalid selectors reject during reference
 construction. `nix run .#docs -- topic runtime` demonstrates the runtime view;
 exact `api` and `option` queries provide the full entries it references.
 Only serialized presentation data loses Nix string context; executable values
-keep their dependencies. Reference queries need no admitted model or runtime.
+keep their dependencies. Reference queries need no admitted manifest or runtime.
 Structural agreement and reference freshness do not prove behavioral parity:
 native guarantees still require independent admission, output and OS evidence.
 
@@ -145,7 +145,7 @@ The first external adoption exposed the original sin of the authoring
 surface: it was the runtime's **wire format exposed
 raw** — closures, invocations, operationIds, terminal tokens — so adopter concepts
 with no runtime equivalent (a *command*, a *toolchain*, a *pipeline*, a
-*verb*) escaped the model: below it into opaque shell dispatchers, above it
+*verb*) escaped the manifest: below it into opaque shell dispatchers, above it
 into the adopter's own flake. The accepted fix is a closed algebra of exactly
 **two semantic kinds** (KIND-2):
 
@@ -164,7 +164,7 @@ The connective tissue is the **invocation** — the one way anything says
 `nix run .#docs -- api record primitive/Invocation`.
 Invocations are **anonymous and inline** (INVOKE-1): naming them for reuse would
 recreate the named-invocation registry and its reuse/wiring entanglement;
-content reuse is a Nix `let`, and the model carries the fully-applied copies.
+content reuse is a Nix `let`, and the manifest carries the fully-applied copies.
 Cache is not a third semantic kind or a runtime resource. Tool acceleration is
 child/tool/project-owned and may use ordinary declared invocation environment
 or arguments; Nixfied does not identify, place, create, lock, report, retain, or
@@ -185,7 +185,7 @@ its value is the exact nonempty user-facing description. Exported verbs share
 a namespace with framework apps reserved by VERB-1 and derive only from
 adopter-exported task names. Contextual help is a source-bound, reference-neutral
 Nix projection of final current-flake metadata; a mismatched caller context
-fails instead of projecting another flake. It adds nothing to the model algebra
+fails instead of projecting another flake. It adds nothing to the manifest algebra
 or runtime ABI. Environment
 **membership does not exist**: running a task brings up exactly the services
 its leaves require —
@@ -199,14 +199,14 @@ runtime-owned PATH assembled from the tool roots, nothing inherited.
 
 ## Correctness in four layers
 
-1. **Model correctness (Nix).** Reject invalid names, broken references, cyclic
+1. **Manifest correctness (Nix).** Reject invalid names, broken references, cyclic
    task graphs, malformed state/placement, missing closures, invalid primitives, or
    bad source/target policy — before runtime is even possible.
 2. **Closure correctness (Nix).** Reproducibly realise the store paths the runtime
    may execute.
 3. **Admission correctness (Rust).** Host checks Nix cannot prove: store origin,
    exact ABI/toolchain, target support, source policy, already-realised closures,
-   reference resolution (the model lowers into the executor's input only if every
+   reference resolution (the manifest lowers into the executor's input only if every
    cross-reference exists), writable marker-owned state, registry acquisition, port
    ownership strategy, and stale-lease reconciliation.
 4. **Execution correctness (Rust).** The impure graph: process groups, signals,
@@ -232,12 +232,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   runtimeCompatibilityHash, targetIdentity)`. Reuse requires an exact match across
   all layers. (v1: reuse blurred incompatible runtime configs.)
 - **Placement is split by phase.** Nix bakes only the *logical* placement the
-  model needs — the per-slot candidate port windows — into `model.json`; the
+  manifest needs — the per-slot candidate port windows — into `manifest.json`; the
   directory layout (state root, registry, run/logs/artifacts) is a runtime-owned
   constant, and Rust materialises *host-absolute* placement at admission
   (`$NIXFIED_STATE_DIR` or a platform default), with run-scoped paths using the
   `runId` known only at runtime. (v1: placement drifted when both sides derived it;
-  the layout templates were later pinned constants in the model, then removed.)
+  the layout templates were later pinned constants in the manifest, then removed.)
 
 ## Registry, liveness, leases
 
@@ -342,7 +342,7 @@ with human run-summary narration suppressed. Its fields and nested records are
 rendered by `nix run .#docs -- api record output-schema/run-json`.
 `--output both` emits both projections
 explicitly for diagnostics. When the option is omitted, the runtime uses the
-selected root task's model `defaultOutput`, whose normal value is `summary`.
+selected root task's manifest `defaultOutput`, whose normal value is `summary`.
 
 `--output task-output` is a separate direct-leaf boundary. The runtime validates
 one explicit leaf after admission but before slot selection, placement, state,
@@ -376,13 +376,13 @@ encouraging broad deletion: `REGISTRY_CORRUPT` is structural registry damage,
 
 A system cannot fully certify itself, so framework verification is split across
 independent assurance layers: white-box Cargo tests grade the runtime primitives;
-hermetic Nix checks grade source, model compilation, and builds; an
-adopter-shaped gate exercises the runtime against realised models; and hosted CI
+hermetic Nix checks grade source, manifest compilation, and builds; an
+adopter-shaped gate exercises the runtime against realised manifests; and hosted CI
 adds platform-specific coverage plus a release build. These are logical layers,
 not one universal execution order. The current entrypoints and their exact order
 are documented in [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
-The runtime-shaped portion is a first-class Nixfied model, while compiler and
+The runtime-shaped portion is a first-class Nixfied manifest, while compiler and
 installer cases remain ordinary shell around Nix. The latter perform open-ended
 Nix builds and external fetches, which do not fit the bounded role of those
 framework tasks and obscure which layer is under test. SEAM-1 itself constrains
@@ -408,7 +408,7 @@ The exhaustive normative list is in
 design rather than wait on a roadmap. Multi-host execution, a required daemon,
 central log aggregation, and UI are outside a per-project, per-slot, single-host
 authority. A manifest envelope re-opens the v1 artifact-sealing failure
-(SINGLE-MODEL-1), while a dynamic runtime adapter protocol restores domain
+(SINGLE-MANIFEST-1), while a dynamic runtime adapter protocol restores domain
 awareness and v1 adapter complexity (RUNTIME-GENERIC-1). The no-daemon assumption
 is especially load-bearing because it shapes the lease/liveness model (LIVE-1).
 Adding one of these concepts deliberately redefines the product.

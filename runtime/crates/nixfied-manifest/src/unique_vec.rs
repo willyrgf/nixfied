@@ -1,5 +1,5 @@
 //! A list whose elements are required to be distinct. `Deserialize` rejects a
-//! duplicate at the wire boundary, so a model that lists the same service,
+//! duplicate at the wire boundary, so a manifest that lists the same service,
 //! binding, or exit code twice is *inexpressible* rather than admitted-then-
 //! mis-run. The wire shape is an ordinary JSON array (`#[serde(transparent)]` on
 //! serialize), so this carries no schema change.

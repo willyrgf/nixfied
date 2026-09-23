@@ -9,27 +9,27 @@ use common::*;
 
 /// Kill-and-recover: the runtime is SIGKILL'd while postgres is still
 /// running, leaving an orphaned service process. The next run of the same
-/// model must reconcile the evidence, stop the orphan, adopt the pgdata
+/// manifest must reconcile the evidence, stop the orphan, adopt the pgdata
 /// cluster, and complete smoke-query against the live cluster. Clean then
 /// removes the state root.
 ///
-/// Skipped when `NIXFIED_TEST_POSTGRES_MODEL` is not set — only the
+/// Skipped when `NIXFIED_TEST_POSTGRES_MANIFEST` is not set — only the
 /// nix-wrapped test runner (`.#test`) provides it.
 #[test]
 fn interrupt_and_recover_adopts_orphaned_postgres() {
-    let model_dir = match std::env::var("NIXFIED_TEST_POSTGRES_MODEL") {
+    let manifest_dir = match std::env::var("NIXFIED_TEST_POSTGRES_MANIFEST") {
         Ok(v) => v,
         Err(_) => return,
     };
-    let model_path = format!("{model_dir}/model.json");
-    let model: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&model_path).expect("postgres test model should be readable"),
+    let manifest_path = format!("{manifest_dir}/manifest.json");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&manifest_path).expect("postgres test manifest should be readable"),
     )
-    .expect("postgres test model should be JSON");
-    let port = model["placement"]["slotPlacements"]["0"]["candidatePorts"]["start"]
+    .expect("postgres test manifest should be JSON");
+    let port = manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["start"]
         .as_u64()
         .and_then(|port| u16::try_from(port).ok())
-        .expect("postgres test model should carry a valid slot-zero port window start");
+        .expect("postgres test manifest should carry a valid slot-zero port window start");
 
     let tmp = TempDir::new();
     let state_base = tmp.path.join("state");
@@ -37,8 +37,8 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--task")
         .arg("smoke-query")
         .arg("--timeout-ms")
@@ -70,8 +70,8 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
 
     let ps = Command::new(runtime_binary())
         .arg("ps")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--manifest")
+        .arg(&manifest_path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .output()
         .expect("ps should run");
@@ -124,8 +124,8 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
 
     let recovery = Command::new(runtime_binary())
         .arg("run")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--manifest")
+        .arg(&manifest_path)
         .arg("--task")
         .arg("smoke-query")
         .arg("--timeout-ms")
@@ -147,8 +147,8 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
 
     let clean = Command::new(runtime_binary())
         .arg("clean")
-        .arg("--model")
-        .arg(&model_path)
+        .arg("--manifest")
+        .arg(&manifest_path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .output()
         .expect("clean should run");

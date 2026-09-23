@@ -42,11 +42,11 @@ fn context_child() {
         return;
     }
     assert_eq!(kind, "secrets");
-    let mut value = common::synthetic_model_default(23080, 23080);
+    let mut value = common::synthetic_manifest_default(23080, 23080);
     value["secrets"]["token"] = json!({"secretId":"token","source":{"kind":"file","path":"token"}});
     value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
-    let model = serde_json::from_value(value).unwrap();
-    let result = resolve_secrets(&model);
+    let manifest = serde_json::from_value(value).unwrap();
+    let result = resolve_secrets(&manifest);
     if let Ok(expected) = std::env::var("EXPECTED_SECRET") {
         assert_eq!(result.unwrap().get("token"), Some(expected.as_str()));
     } else {

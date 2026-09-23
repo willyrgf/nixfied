@@ -4,7 +4,7 @@ let
   structure = import ../meta/default.nix { inherit lib; };
   syntax = import ../meta/command-default.nix { inherit lib; };
   inventory = import ../meta/inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
   topics = import ../docs/topics.nix;
   records = map (record: lib.replaceStrings [ "/" ] [ " " ] record.id) (
@@ -14,7 +14,7 @@ let
   # These deliberately retain native owners. The matching routing table is in
   # DEVELOPMENT's delivery audit and the packaged topics contain those owners.
   native = {
-    model-version = "model";
+    manifest-version = "manifest";
     substitution = "placeholders";
     surface = "commands";
     surface-help = "commands";

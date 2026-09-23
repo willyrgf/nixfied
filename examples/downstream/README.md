@@ -5,16 +5,16 @@ Nixfied: a Postgres database, a first-party `api` service, a `worker` service,
 and a `release` composite task that ties them together. The framework gate installs and
 drives this example (among the others) to prove the framework works end to end.
 
-Everything is declared as typed Nix that compiles into the generic model
+Everything is declared as typed Nix that compiles into the generic manifest
 primitives. The Rust runtime knows nothing about Postgres, the api, or the
-worker — it executes `model.json`.
+worker — it executes `manifest.json`.
 
 ## Layout
 
 | File | Owner | Purpose |
 | --- | --- | --- |
 | `nixfied.nix` | you | every semantic declaration: services, tasks, composites, verbs, slots, ports |
-| `flake.nix` | example wiring | declares the `nixfied` input and exposes `packages.<system>.model` |
+| `flake.nix` | example wiring | declares the `nixfied` input and exposes `packages.<system>.manifest` |
 
 The split keeps reusable project declarations separate from this repository's
 example-only flake wiring.
@@ -37,7 +37,7 @@ Read the exact tasks, services, derived requirements, composite steps and slot
 windows from the compiled example rather than a separately maintained list:
 
 ```sh
-nix build --no-write-lock-file ./examples/downstream#model
+nix build --no-write-lock-file ./examples/downstream#manifest
 less result/views/docs.md
 ```
 
@@ -48,20 +48,20 @@ when an adopter wires `projectApps`. For that framework interface, use
 ## Build and run
 
 ```sh
-# Compile the model (a Nix store output).
-nix build --no-write-lock-file ./examples/downstream#model
-model="$(nix build --no-write-lock-file ./examples/downstream#model --no-link --print-out-paths)/model.json"
+# Compile the manifest (a Nix store output).
+nix build --no-write-lock-file ./examples/downstream#manifest
+manifest="$(nix build --no-write-lock-file ./examples/downstream#manifest --no-link --print-out-paths)/manifest.json"
 
 # Build the runtime from this repo (host-Rust-free).
 runtime="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
 
 # Validate the admission contract without starting anything.
-"$runtime" check --model "$model"
+"$runtime" check --manifest "$manifest"
 
 # Run the release composite: it starts the derived service union (postgres,
 # api, worker), runs the flattened steps, then stops everything.
-NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" run --model "$model" --task release
-NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --model "$model"
+NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" run --manifest "$manifest" --task release
+NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --manifest "$manifest"
 
 # `run` with no --task refuses and lists the declared tasks.
 ```

@@ -1,6 +1,6 @@
 # PostgreSQL reference adapter.
 #
-# Compiles a production-shaped Postgres service into the generic model
+# Compiles a production-shaped Postgres service into the generic manifest
 # primitives. The runtime gains no Postgres knowledge: data-dir init is an
 # idempotent prepare exec (a wrapper around `initdb` that adopts an existing
 # cluster), the server is a foreground start exec (`postgres`), readiness and

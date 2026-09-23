@@ -5,7 +5,7 @@
 # - the **project verbs**, adopter-owned: one app per task id exported in
 #   `nixfied.surface.verbs` (`.#check` -> `runtime run --task check`).
 #
-# Runtime-backed apps use the model store path baked in at evaluation. The help
+# Runtime-backed apps use the manifest store path baked in at evaluation. The help
 # app instead projects final flake metadata through Nix and never enters the
 # runtime, so SEAM-1 remains intact.
 {
@@ -14,7 +14,7 @@
   lib,
   releaseRuntime,
   system,
-  model,
+  manifest,
   config,
   docs,
   publicationTargets,
@@ -28,7 +28,7 @@ let
     && builtins.pathExists "${moduleRoot}/flake.nix"
     && builtins.pathExists "${moduleRoot}/flake.lock";
   runtimeBin = "${releaseRuntime}/bin/nixfied-runtime";
-  modelJson = "${model}/model.json";
+  manifestJson = "${manifest}/manifest.json";
   syntax = (import ./meta/command-default.nix { inherit lib; }).byName.run;
   verbs = config.nixfied.surface.verbs;
   verbIds = builtins.attrNames verbs;
@@ -50,7 +50,7 @@ let
       name = verb;
       value =
         mkApp verb verbs.${verb}
-          ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.model.token} "${modelJson}" ${syntax.args.task.token} "${verb}" "$@"'';
+          ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.manifest.token} "${manifestJson}" ${syntax.args.task.token} "${verb}" "$@"'';
     }) verbIds
   );
   framework = import ./meta/publications.nix { inherit lib; } {
@@ -61,7 +61,7 @@ let
         system
         moduleRoot
         runtimeBin
-        modelJson
+        manifestJson
         docs
         ;
     };

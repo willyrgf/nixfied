@@ -173,7 +173,7 @@ Pinned consequences:
   (eval + admission error otherwise; the existing undeclared-reference
   checks).
 - The runtime re-derives this set at admission and compares it with the
-  model-carried value; a mismatch is `MODEL_ADMISSION` naming both values
+  manifest-carried value; a mismatch is `MANIFEST_ADMISSION` naming both values
   (DERIVE-1, fail closed).
 
 An explicit `operationBindings`-style narrowing does **not** exist for
@@ -188,7 +188,7 @@ exactly one declared closure (its *executable closure*).
 
 ```
 operationBindings(closure c):
-  return sorted({ opId(P) | P is an invocation position in the model,
+  return sorted({ opId(P) | P is an invocation position in the manifest,
                             executableClosure(P) == c })
 ```
 
@@ -221,7 +221,7 @@ Pinned consequences:
   against `op` but its declared bindings do not allow it"). Absent a
   declaration, the derived set is authoritative.
 - The runtime re-derives and compares at admission like §3 (fail closed,
-  `MODEL_ADMISSION` naming both values).
+  `MANIFEST_ADMISSION` naming both values).
 
 ## 5. Default operation ids and terminal tokens
 
@@ -269,7 +269,7 @@ wire.
 
 ### 6.1 Representative examples
 
-Each vector is input (the relevant model fragment) and the exact expected
+Each vector is input (the relevant manifest fragment) and the exact expected
 derivation. These land verbatim as fixtures in **both** implementations:
 Nix eval fixtures under the compiler tests, and cargo fixtures next to the
 runtime lowering. A fixture diverging from this section is a bug in the

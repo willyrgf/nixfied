@@ -1,21 +1,21 @@
-//! The executor's input types. An `ExecutionModel` is a resolved, fully-typed
-//! view of a `nixfied_model::Model` containing only what the runtime can
-//! execute, shaped so unsupported model states are unrepresentable here. It is
+//! The executor's input types. An `ExecutionManifest` is a resolved, fully-typed
+//! view of a `nixfied_manifest::Manifest` containing only what the runtime can
+//! execute, shaped so unsupported manifest states are unrepresentable here. It is
 //! produced by [`crate::execution::lower`]; the executor consumes it and never
-//! reads `Model` directly.
+//! reads `Manifest` directly.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
-pub use nixfied_model::{LoopbackHost, StdinPolicy};
+use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
+pub use nixfied_manifest::{LoopbackHost, StdinPolicy};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
-/// contract — never supplied by the model. The four components hash the endpoint,
+/// contract — never supplied by the manifest. The four components hash the endpoint,
 /// the state policy, the behavioral runtime contract (lifecycle/wiring/execs), and
 /// the build target; the runtime folds them with the slot address into the
 /// `service_instance_id` registry key, so the reuse boundary is a pure function of
-/// the contract the runtime executes, not of values the model carries.
+/// the contract the runtime executes, not of values the manifest carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceIdentity {
     pub endpoint_identity_hash: String,
@@ -29,7 +29,7 @@ pub struct ServiceIdentity {
 /// windows the planner assigns from. `tasks` holds the leaves; `composites` the named-step DAGs the
 /// planner flattens onto the run plan with stable step paths.
 #[derive(Debug, Clone)]
-pub struct ExecutionModel {
+pub struct ExecutionManifest {
     pub services: BTreeMap<ServiceId, ExecService>,
     pub tasks: BTreeMap<TaskId, ExecTask>,
     pub composites: BTreeMap<TaskId, ExecComposite>,
@@ -248,13 +248,13 @@ impl StopSignal {
     }
 }
 
-impl From<nixfied_model::StopSignal> for StopSignal {
-    fn from(signal: nixfied_model::StopSignal) -> Self {
+impl From<nixfied_manifest::StopSignal> for StopSignal {
+    fn from(signal: nixfied_manifest::StopSignal) -> Self {
         match signal {
-            nixfied_model::StopSignal::Term => Self::Term,
-            nixfied_model::StopSignal::Int => Self::Int,
-            nixfied_model::StopSignal::Quit => Self::Quit,
-            nixfied_model::StopSignal::Hup => Self::Hup,
+            nixfied_manifest::StopSignal::Term => Self::Term,
+            nixfied_manifest::StopSignal::Int => Self::Int,
+            nixfied_manifest::StopSignal::Quit => Self::Quit,
+            nixfied_manifest::StopSignal::Hup => Self::Hup,
         }
     }
 }

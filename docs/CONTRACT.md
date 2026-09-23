@@ -1,54 +1,53 @@
 # Nixfied contract
 
 This document is the normative product and behavioral contract for the current
-Nixfied architecture, authoring surface, model/runtime boundary, and public
+Nixfied architecture, authoring surface, manifest/runtime boundary, and public
 outputs. [`ARCHITECTURE.md`](ARCHITECTURE.md) explains why these constraints
 exist; [`DEVELOPMENT.md`](DEVELOPMENT.md) explains how to work on the
 implementation.
 
-The runtime ABI's model-field and enum names, hidden runtime-command surface,
+The runtime ABI's manifest-field and enum names, hidden runtime-command surface,
 output-field vocabulary, and error vocabulary are inventoried in
-[`runtime/crates/nixfied-model/capability.txt`](../runtime/crates/nixfied-model/capability.txt).
+[`runtime/crates/nixfied-manifest/capability.txt`](../runtime/crates/nixfied-manifest/capability.txt).
 That authored descriptor is hashed identically by Nix and Rust to derive the
 `runtimeAbi` suffix. The complete typed shape and validation live in the Nix
-producer and `nixfied-model`; the descriptor records the vocabulary the runtime
-understands, and its digest ensures a recorded model/runtime change rotates the
+producer and `nixfied-manifest`; the descriptor records the vocabulary the runtime
+understands, and its digest ensures a recorded manifest/runtime change rotates the
 ABI. Nix-only library and flake-app surfaces are public integration API but stay
-outside `runtimeAbi` unless they change emitted model data or runtime behavior.
+outside `runtimeAbi` unless they change emitted manifest data or runtime behavior.
 [`DERIVATION_SPEC.md`](DERIVATION_SPEC.md) is separately normative for facts
 derived from the task/service graph.
 
 Do not weaken an invariant below without an explicit contract change and
 coordinated implementation, documentation, and test updates. Rotate the ABI
-when the model/runtime contract changes.
+when the manifest/runtime contract changes.
 
-## Model and version boundary
+## Manifest and version boundary
 
-- **MODEL-SEAM-1 / SINGLE-MODEL-1:** `model.json` is the only required semantic
+- **MANIFEST-SEAM-1 / SINGLE-MANIFEST-1:** `manifest.json` is the only required semantic
   artifact. The generated `views/docs.md` human reference is a disposable
-  projection and never independent authority. Do not add a required manifest,
-  sidecar, or envelope.
-- **MODEL-ORIGIN-1:** normal admission requires `model.json` under the Nix store.
-  `--allow-non-store-model` is an unstable framework test/development escape
+  projection and never independent authority. Do not add a required sidecar or envelope.
+- **MANIFEST-ORIGIN-1:** normal admission requires `manifest.json` under the Nix store.
+  `--allow-non-store-manifest` is an unstable framework test/development escape
   hatch, not an adopter path.
-- **MODEL-CONTRACT-1:** the model carries the complete admission contract:
+- **MANIFEST-CONTRACT-1:** the manifest carries the complete admission contract:
   generator and toolchain identity, runtime ABI, target, source policy, closure
   metadata, the inputs needed to derive layered service identity, state policy,
   and secret descriptors. Secret descriptors are references; secret values are
-  never model data.
-- **HASH-1:** the runtime computes `computedModelHash` as SHA-256 over the raw
-  model bytes. The model contains no self-hash.
+  never manifest data.
+- **HASH-1:** the runtime computes `computedManifestHash` as SHA-256 over the raw
+  manifest bytes. The manifest contains no self-hash.
 - **ABI-1:** admission requires exact `runtimeAbi` and `toolchainId` matches.
   Backward compatibility imposes no design constraint: a deliberate contract
-  change may break any prior model, runtime command, output, or error surface.
+  change may break any prior manifest, runtime command, output, or error surface.
   The new contract replaces the old one; old contracts are rejected, never
   migrated, translated, or admitted through a compatibility fallback. The
   runtime ABI suffix is the capability-descriptor digest, computed identically
-  by `nixfied-model::constants` and `nix/spec/constants.nix`.
+  by `nixfied-manifest::constants` and `nix/spec/constants.nix`.
 - **PREPARE-1:** Nix realises every referenced closure before runtime start. The
   runtime verifies existence, executability, target, and declaration; it never
   builds missing closures.
-- Admission is a global pre-spawn barrier. Invalid model origin, ABI, toolchain,
+- Admission is a global pre-spawn barrier. Invalid manifest origin, ABI, toolchain,
   target, source, closure, state policy, or unsupported host feature fails before
   any child process starts.
 
@@ -57,12 +56,12 @@ when the model/runtime contract changes.
 - **SEAM-1:** `nixfied-runtime` never invokes `nix`, `nix-store`, `nix build`, or
   `nix eval`, and never imports Nix expressions.
 - SEAM-1 governs the runtime binary. A declared child invocation may execute a
-  Nix tool if the model supplies it. Framework compiler/install tests stay
+  Nix tool if the manifest supplies it. Framework compiler/install tests stay
   outside runtime tasks because their open-ended Nix builds and external fetches
   do not fit the bounded role of those framework tasks and blur test ownership,
   not because the child process is technically unable to run Nix.
 - **RUNTIME-GENERIC-1:** Rust executes generic primitives and knows no service
-  domain. Concrete adapters are Nix-side model generators. A domain-specific
+  domain. Concrete adapters are Nix-side manifest generators. A domain-specific
   runtime need signals a missing generic primitive, not permission to specialize
   the runtime.
 - **NIX-API-1:** typed Nix modules are the public integration and correctness
@@ -73,7 +72,7 @@ when the model/runtime contract changes.
 
 ## Task and service algebra
 
-- **KIND-2:** the model has exactly two semantic kinds: task and service. New
+- **KIND-2:** the manifest has exactly two semantic kinds: task and service. New
   adopter vocabulary must first be expressed as names over that algebra; a new
   schema kind requires proof that the algebra cannot represent it.
 - **INVOKE-1:** invocations are inline anonymous structural values. There is no
@@ -99,18 +98,18 @@ when the model/runtime contract changes.
   description. Project verbs derive only from those task names; undeclared ids,
   reserved-name collisions, empty/non-string descriptions, and the former list
   form fail at Nix evaluation. `{}` emits no adopter task apps. The descriptions
-  are Nix-only app metadata: they are not emitted into `model.json` or
+  are Nix-only app metadata: they are not emitted into `manifest.json` or
   `views/docs.md`, and do not enter `runtimeAbi`.
 - **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
-  capability descriptor, not declared by an adopter in the model. The adopter
+  capability descriptor, not declared by an adopter in the manifest. The adopter
   declaration owns only its exported task-verb surface; unrelated custom flake
-  apps remain ordinary Nix integration. `model-check` is the generated app name
+  apps remain ordinary Nix integration. `manifest-check` is the generated app name
   for the runtime's admission-only `check` command. Every runtime-backed control
   and exported task app accepts `-h` and `--help`; that help completes before
-  model admission, source resolution, state materialisation, or execution. The
+  manifest admission, source resolution, state materialisation, or execution. The
   generated `.#help` app is instead a Nix-only projection of final current-flake
   app metadata, sorted by app name and rendered without a caller-relative flake
-  reference. It maps to no runtime command, admits or executes no model, and
+  reference. It maps to no runtime command, admits or executes no manifest, and
   stays outside `runtimeAbi`. `projectApps` requires project-root `flake.nix`,
   `flake.lock`, and `nixfied.nix`; its help app is source-bound and rejects a
   current-flake context that does not match that source.
@@ -119,7 +118,7 @@ when the model/runtime contract changes.
   project apps use `packages.<system>.docs`, whose supported interfaces are
   `bin/nixfied-docs` and `share/nixfied/reference/API.md`. Exact option/API queries,
   namespace listing, topic navigation and source provenance are read-only after
-  realization: no Nix invocation, model admission, runtime or secret lookup.
+  realization: no Nix invocation, manifest admission, runtime or secret lookup.
   Topic queries compose ordered, explicitly selected sections from their authored
   documents, including each section's subsections, with concise entries from
   their owning definitions and related references. Cross-document composition
@@ -128,7 +127,7 @@ when the model/runtime contract changes.
   does not establish a behavioral prerequisite. Missing or ambiguous section
   headings, unknown or wrong-kind reference targets, and invalid topic selectors
   fail reference construction before packaging.
-  Private lookup files are presentation data, not model artifacts. Outer flake
+  Private lookup files are presentation data, not manifest artifacts. Outer flake
   evaluation still occurs; recovery from broken project evaluation uses that
   project's explicit supplying framework source, never an unpinned substitute.
 - **Hermetic child environment:** every leaf, probe, and service start receives
@@ -152,7 +151,7 @@ when the model/runtime contract changes.
   `codebaseId`s. `live-workspace` roots resolve from the invocation root;
   immutable `snapshot` and `flake-input` roots resolve from the Nix store path in
   `sourceIdentity`, independent of the current working directory.
-- Host-absolute placement never enters `model.json`; Rust materialises host paths
+- Host-absolute placement never enters `manifest.json`; Rust materialises host paths
   during admission and execution.
 - **SVC-ID-1:** service reuse requires exact service address, endpoint identity,
   state identity, runtime compatibility hash, and target identity.
@@ -193,7 +192,7 @@ when the model/runtime contract changes.
   environments. Files and sockets written directly by a child are outside this
   guarantee. A rejected non-UTF-8 environment-secret value is never formatted
   into an admission diagnostic; the error identifies the encoding failure.
-- A task's `defaultOutput` is part of the model contract. `summary` is the
+- A task's `defaultOutput` is part of the manifest contract. `summary` is the
   normal default; `task-output` is valid only for a directly selected leaf.
   A leaf's default never propagates through a composite or a service prepare
   execution.
@@ -204,9 +203,9 @@ when the model/runtime contract changes.
   documentation report from the adopter's old and candidate locked Nixfied
   sources, comparing only `README.md` and regular files under `docs/`. The
   report is framed on stdout; status, warnings, and Nix diagnostics are on
-  stderr. Checked mode performs candidate model preflight before changing
+  stderr. Checked mode performs candidate manifest preflight before changing
   project wiring, preserves `nixfied.nix`, and leaves `flake.nix` and
-  `flake.lock` unchanged when lock resolution or model preflight fails.
+  `flake.lock` unchanged when lock resolution or manifest preflight fails.
   `--plan` performs the same inspection without mutation and uses the same
   candidate preflight and status summary as apply, reporting `would change`
   where apply reports `changed`. Source identities are reported as readable
@@ -216,7 +215,7 @@ when the model/runtime contract changes.
   validation commands; those commands are guidance and are not run by
   `upgrade`. `--no-lock` is an explicit URL-only mode that reports
   documentation and candidate verification as skipped. This surface is Nix-only
-  and does not enter `model.json`, `runtimeAbi`, or Rust runtime behavior.
+  and does not enter `manifest.json`, `runtimeAbi`, or Rust runtime behavior.
 - `run` resolves its output projection as explicit `--output <mode>`, then the
   selected root task's `defaultOutput`, then `summary`. The canonical mode domain
   is rendered by `nix run .#docs -- api command run`; the older mode-specific
@@ -226,7 +225,7 @@ when the model/runtime contract changes.
   stderr. It emits no runtime JSON metadata to stdout. Callers must check the
   process status before consuming replayed bytes; accepted child exit codes
   still produce a successful run. Composite selections, missing/unknown/
-  repeated selections, invalid repeated output options, and invalid model
+  repeated selections, invalid repeated output options, and invalid manifest
   defaults are rejected before state or child side effects. There is no
   `--json`, `--both`, `--summary`, or `--task-output` alias and no `logs`
   control command.
@@ -244,14 +243,14 @@ when the model/runtime contract changes.
   Containment, registry, lease, and state failures take precedence over
   `OUTPUT_PROJECTION_FAILED`, which takes
   precedence over task outcomes. Post-admission failures use lifecycle,
-  registry, state, or selection codes; `MODEL_ADMISSION` is never a late phase
+  registry, state, or selection codes; `MANIFEST_ADMISSION` is never a late phase
   projection.
 - JSON fields, text projection tokens, error codes, and exit classes are public
   for the current exact ABI. Their authoritative inventory is the capability
   descriptor, and the runtime tests enforce agreement with the typed Rust enums.
 - Admission failures and execution failures remain distinct. Once admission has
   succeeded, task, lifecycle, and dependency failures use their execution-class
-  codes; a later `MODEL_ADMISSION` is a phase leak.
+  codes; a later `MANIFEST_ADMISSION` is a phase leak.
 
 ## Runtime error diagnostics
 
@@ -275,7 +274,7 @@ Native producers place task evidence under `taskRun`, projection issues under
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.
-Replay diagnostic paths deliberately use lossy display strings. Task, model and
+Replay diagnostic paths deliberately use lossy display strings. Task, manifest and
 cleanup paths retain native path
 serialization and its failure behavior.
 
@@ -310,15 +309,15 @@ effects, and environment membership.
 
 A contract change must be explicit and atomic:
 
-1. Record every model/runtime contract change in the capability descriptor so
+1. Record every manifest/runtime contract change in the capability descriptor so
    the runtime ABI rotates. This includes wire data, admitted vocabulary,
    behavioral semantics, hidden runtime command surfaces, output schemas, and
    error vocabulary. Nix-only flake-app changes do not enter the descriptor
-   unless they also change emitted model data or runtime behavior.
+   unless they also change emitted manifest data or runtime behavior.
 2. Update the derived ABI snapshot and confirm Nix and Rust compute the same
-   value. Change numeric model, ABI-base, or toolchain versions only when their
+   value. Change numeric manifest, ABI-base, or toolchain versions only when their
    defined semantics require it.
-3. When the model seam is affected, change the Nix producer and Rust consumer
+3. When the manifest seam is affected, change the Nix producer and Rust consumer
    together, including structural validation and fail-closed admission.
 4. Update this contract, relevant rationale or derivation documentation, and
    focused tests/golden vectors, and delete the superseded implementation,
@@ -335,14 +334,14 @@ repetition, errors and effects; declarations do not implement parsing policy.
 
 Runtime collects UTF-8 arguments before selecting a command. No arguments selects
 `check`; unknown commands reject. For a recognized command, either help spelling
-anywhere after the command wins before option validation or model admission.
+anywhere after the command wins before option validation or manifest admission.
 Signal installation still precedes help. Help does not materialize source/state
 or execute declared children. Invalid UTF-8 fails during input collection even
 when a help token is present.
 
 Runtime consumes the next token as an operand even when it looks like an option.
-Model and state-base paths use the last occurrence; a trailing bare flag clears
-an earlier value. Missing model rejection and state-base environment fallback
+Manifest and state-base paths use the last occurrence; a trailing bare flag clears
+an earlier value. Missing manifest rejection and state-base environment fallback
 follow parsing. Slots parse each occurrence as `u32`, timeouts as `u64`; the last
 valid occurrence wins. Native integer parsing accepts leading plus and zero,
 and rejects whitespace, negative values and overflow. Task repetition acquires
@@ -372,5 +371,5 @@ flags are idempotent. The empty initial URL preserves current selection, and
 preflight, plan/apply and transaction ownership remain native continuations.
 
 These commands do not accept equals-form options, positional operands, short
-clusters or an option terminator. Hidden model/state arguments remain documented
-for framework and test integration; generated app wrappers supply the model.
+clusters or an option terminator. Hidden manifest/state arguments remain documented
+for framework and test integration; generated app wrappers supply the manifest.

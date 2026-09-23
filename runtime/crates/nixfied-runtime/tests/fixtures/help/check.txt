@@ -1,7 +1,7 @@
-Admit the compiled Nixfied model without executing tasks.
+Admit the compiled Nixfied manifest without executing tasks.
 
 Usage:
-  nix run .#model-check -- [options]
+  nix run .#manifest-check -- [options]
 
 Options:
   --slot <number>  Select a declared project slot

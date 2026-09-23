@@ -40,7 +40,7 @@ fn native_paths_keep_non_utf8_failure_instead_of_becoming_lossy() {
     };
     assert!(serde_json::to_value(cleanup).is_err());
     let mut error = RuntimeError::new(ErrorCode::StateUnwritable, "failed");
-    error.model_path = Some(invalid);
+    error.manifest_path = Some(invalid);
     assert!(serde_json::to_value(error).is_err());
 }
 
@@ -51,7 +51,7 @@ fn runtime_error_is_one_owned_native_error_with_open_details() {
     assert!(error.source().is_none());
     assert_eq!(
         serde_json::to_string(&error).unwrap(),
-        r#"{"code":"TASK_FAILED","exitClass":"error","message":"task failed","details":null,"modelPath":null,"computedModelHash":null}"#
+        r#"{"code":"TASK_FAILED","exitClass":"error","message":"task failed","details":null,"manifestPath":null,"computedManifestHash":null}"#
     );
     // This annotation proves the existing boxed native storage at compilation.
     let causes: Box<Vec<RuntimeCause>> = error.causes;

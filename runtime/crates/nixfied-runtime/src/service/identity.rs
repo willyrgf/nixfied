@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use nixfied_model::{
+use nixfied_manifest::{
     CleanupPolicy, ContainmentRequirement, Endpoint, Lifecycle, PersistencePolicy, ServiceId,
     ServiceSpec, StatePolicy, Target, UniqueVec,
 };
@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::execution::ServiceIdentity;
 
 /// Compute a service's reuse identity from its actual lowered contract, replacing
-/// the hashes the model used to carry. The components mirror the wire contract a
+/// the hashes the manifest used to carry. The components mirror the wire contract a
 /// service reuse must be sensitive to — endpoint, state policy, behavioral runtime
 /// contract, and build target — but are derived here, so the `service_instance_id`
 /// registry key is a pure function of what the runtime executes. The values are
@@ -82,7 +82,7 @@ struct RuntimeIdentityInputs<'a> {
 }
 
 /// Hash a serializable identity component under a domain tag. Serialization of
-/// these admitted-model structs cannot fail; an empty string on the impossible
+/// these admitted-manifest structs cannot fail; an empty string on the impossible
 /// error path still yields a deterministic digest.
 fn hash_json<T: Serialize>(tag: &str, value: &T) -> String {
     let json = serde_json::to_string(value).unwrap_or_default();

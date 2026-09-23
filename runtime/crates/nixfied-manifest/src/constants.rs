@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sha2::{Digest, Sha256};
 
-pub const MODEL_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 1;
 pub const TOOLCHAIN_ID: &str = "nixfied-toolchain:1";
 
 /// The semantic prefix of the runtime ABI. The full ABI appends a digest of the
@@ -12,7 +12,7 @@ const RUNTIME_ABI_BASE: &str = "nixfied-runtime-abi:1";
 /// The declared wire-contract surface the runtime understands: the admitted
 /// primitives, command surfaces, stop signals, and registry status domains.
 /// Editing it is how a contract change is recorded; its digest is baked into the
-/// runtime ABI (and into the Nix-emitted `runtimeAbi`), so an out-of-date model
+/// runtime ABI (and into the Nix-emitted `runtimeAbi`), so an out-of-date manifest
 /// fails the identity check instead of being silently mis-executed.
 pub const CAPABILITY_DESCRIPTOR: &str = include_str!("../capability.txt");
 
@@ -42,7 +42,7 @@ mod tests {
     /// (the gate checks producer/consumer agreement).
     #[test]
     fn runtime_abi_snapshot() {
-        assert_eq!(runtime_abi(), "nixfied-runtime-abi:1-0b5224fb6746");
+        assert_eq!(runtime_abi(), "nixfied-runtime-abi:1-1abc2008afe0");
     }
 
     #[test]

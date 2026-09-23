@@ -1,7 +1,7 @@
 # Adopting Nixfied
 
 This guide covers the stable adopter workflow: wire an existing project through
-`compileModel` and `projectApps`, author `nixfied.nix`, discover and run the
+`compileManifest` and `projectApps`, author `nixfied.nix`, discover and run the
 generated surface, and operate or upgrade it. The complete declaration schema
 is in the generated [option reference](OPTIONS.md).
 
@@ -28,20 +28,20 @@ The ownership split is intentional:
 
 | File | Responsibility |
 | --- | --- |
-| `flake.nix` | Declare Nixfied and expose the compiled model and generated apps |
+| `flake.nix` | Declare Nixfied and expose the compiled manifest and generated apps |
 | `flake.lock` | Pin exact input revisions for reproducible evaluation |
 | `nixfied.nix` | Declare project-owned tasks, services, slots, state policy, and exported verbs |
 
 ### Existing flake
 
-Add the input, compile the module as the existing `model` package, and expose
+Add the input, compile the module as the existing `manifest` package, and expose
 the existing generated app set:
 
 ```nix
 inputs.nixfied.url = "github:willyrgf/nixfied";
 
-packages.${system}.model =
-  nixfied.lib.${system}.compileModel ./nixfied.nix;
+packages.${system}.manifest =
+  nixfied.lib.${system}.compileManifest ./nixfied.nix;
 
 apps.${system} =
   nixfied.lib.${system}.projectApps ./nixfied.nix;
@@ -84,12 +84,12 @@ Read the function inputs/results and exported-verb declaration from their
 owning definitions:
 
 ```sh
-nix run .#docs -- api function library/compileModel
+nix run .#docs -- api function library/compileManifest
 nix run .#docs -- api function library/projectApps
 nix run .#docs -- option nixfied.surface.verbs
 ```
 
-Verb descriptions are Nix-only app metadata and do not enter the model.
+Verb descriptions are Nix-only app metadata and do not enter the manifest.
 `projectApps` accepts only the project-local, root-level `./nixfied.nix` form shown above in a flake with
 `flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
 sourced modules are unsupported so help can bind its catalog to the defining
@@ -132,7 +132,7 @@ stays local (`.#help` → `.#check`).
 framework apps, exported verbs, and custom apps merged after `projectApps`.
 Descriptions come only from each app's `meta.description`; a missing or invalid
 description fails the whole catalog instead of producing partial help. This Nix
-evaluation neither admits nor executes the model and does not materialise
+evaluation neither admits nor executes the manifest and does not materialise
 runtime state, but declaration or app evaluation errors surface directly.
 
 Generated adopter help is bound to its defining source and deliberately uses
@@ -148,7 +148,7 @@ nix run .#docs
 nix run .#docs -- options nixfied.services
 nix run .#docs -- option 'nixfied.services.<name>.stateRefs'
 nix run .#docs -- topic placeholders
-nix run .#docs -- api function library/compileModel
+nix run .#docs -- api function library/compileManifest
 nix run .#docs -- source
 ```
 
@@ -158,7 +158,7 @@ Topic lookup combines selected authored sections with related definitions and
 commands for further reference queries. For example, `docs topic runtime` explains runtime
 responsibilities, admission, execution, lifecycle, state ownership and cleanup.
 Unknown names and empty queries fail with guidance. The realised command reads
-static content without a browser, pager, network, model admission or runtime
+static content without a browser, pager, network, manifest admission or runtime
 state. It reports the supplying source path and revision when available;
 path/dirty sources are not presented as committed revisions. The readable
 reference is also in `packages.<system>.docs/share/nixfied/reference/API.md`.
@@ -170,17 +170,17 @@ supplying framework source from the project's lock, for example
 source. Unlike contextual help, docs does not require the caller's directory to
 match the project.
 
-For project-specific model facts, build the existing model package:
+For project-specific manifest facts, build the existing manifest package:
 
 ```sh
-nix build .#model
+nix build .#manifest
 less result/views/docs.md
 ```
 
 The generated view lists project identity, ABI and target, allowed slots and
 their exact port windows, state policy, task kinds and derived service
 requirements, composite steps, services, and endpoints. It is derived from
-`result/model.json`; neither file should be edited. `model.json` remains the
+`result/manifest.json`; neither file should be edited. `manifest.json` remains the
 only semantic input to the runtime.
 
 ## Author `nixfied.nix`
@@ -306,15 +306,15 @@ vocabulary.
 After a declaration change, compile and admit it before running a workflow:
 
 ```sh
-nix build .#model
-nix run .#model-check
+nix build .#manifest
+nix run .#manifest-check
 ```
 
 ## Run and control
 
 Use `.#help` for the available project apps and their one-line descriptions.
 
-`model-check` is framework admission. A verb such as `check` is project-owned:
+`manifest-check` is framework admission. A verb such as `check` is project-owned:
 it exists only when the project declares a task with that name and exports it,
 and running it executes that project workflow.
 
@@ -402,7 +402,7 @@ nix run .#clean -- --slot 2
 
 Each slot has its own state root, registry, leases, process records, and
 deterministic candidate port window. `nixfied.placement.ports` controls the base,
-window size, and stride; the generated model view shows the resolved windows.
+window size, and stride; the generated manifest view shows the resolved windows.
 
 Runtime state defaults to `$XDG_STATE_HOME/nixfied`, then the platform-specific
 user state directory. Set `NIXFIED_STATE_DIR` to choose another base, for
@@ -439,7 +439,7 @@ evidence paths to answer these questions:
 
 Keep the original diagnostics and reported evidence paths when investigating.
 For a failure following an upgrade, use `docs topic recovery` to separate
-model admission from preparation of existing state.
+manifest admission from preparation of existing state.
 
 ### Descriptive references and state roots
 
@@ -447,11 +447,11 @@ Read the declaration and default with
 `nix run .#docs -- option 'nixfied.services.<name>.stateRefs'`.
 These labels are not a storage-backend selector or a registry of state roots.
 Execution lowering discards these labels, so changing them does not move state
-or change service reuse identity. They remain serialized in `model.json` and
-shown in `views/docs.md`; changing them therefore changes the raw model hash.
+or change service reuse identity. They remain serialized in `manifest.json` and
+shown in `views/docs.md`; changing them therefore changes the raw manifest hash.
 
 Service/task `logRefs`, task `artifactRefs`, and task `summaryRefs` are likewise
-descriptive model/view data, discarded during execution lowering. They do not
+descriptive manifest/view data, discarded during execution lowering. They do not
 choose evidence paths, collect artifacts, or configure cleanup. Runtime evidence
 and cleanup retain their native behavior.
 
@@ -480,11 +480,11 @@ nix run .#docs -- option nixfied.codebases.main.sourceIdentity
 ```
 
 Source identity conversion retains dependency context. Live source roots resolve
-from the invocation root; immutable source roots come from the model's store source.
+from the invocation root; immutable source roots come from the manifest's store source.
 Children receive only declared environment variables and the runtime-owned
 `PATH` built from invocation tools. Use `docs topic secrets` for secret values.
 
-Host directories are resolved natively, outside `model.json`:
+Host directories are resolved natively, outside `manifest.json`:
 
 | Base | Selection order | Linux HOME fallback | macOS HOME fallback |
 | --- | --- | --- | --- |
@@ -503,14 +503,14 @@ secret values never enter diagnostics.
 
 On Linux, runtime admission may warn when a declared candidate-port window
 overlaps the observed host ephemeral-port range. This optional advisory neither
-changes the model nor reserves a port; endpoint ownership still requires the
+changes the manifest nor reserves a port; endpoint ownership still requires the
 native listener/process proof. A host without that observation produces no
 such advisory.
 
 
 ## Secrets
 
-The model contains secret descriptors, never values. An environment-backed
+The manifest contains secret descriptors, never values. An environment-backed
 secret and its use look like this:
 
 ```nix
@@ -550,9 +550,17 @@ authoring conventions.
 
 ## Upgrade and recover
 
-There are no model migrations, compatibility shims, or simultaneous old/new
-contracts. A new pin compiles a new model and ships its exactly matching
+There are no manifest migrations, compatibility shims, or simultaneous old/new
+contracts. A new pin compiles a new manifest and ships its exactly matching
 runtime. Treat an upgrade as a deliberate contract transition.
+
+For projects adopting the manifest terminology change, update the project-owned
+`flake.nix` integration to `compileManifest`, `packages.${system}.manifest`,
+and any default-package references before candidate preflight. Update scripts to
+`manifest-check` and `manifest.json`; the former names have no aliases. The
+registry schema also changes: stop and clean incompatible runtime-owned state
+with the previous pin before switching, following the state recovery guidance
+below. Existing registry history is never rewritten into the new schema.
 
 Before repinning, use the old pin to inspect and stop every active slot:
 
@@ -563,31 +571,31 @@ nix run .#down -- --slot 0
 
 If the new declaration intentionally changes the state epoch, clean incompatible
 state with the old pin as well; add `--purge` only for state declared protected
-or persistent. Then update the input and verify the new model:
+or persistent. Then update the input and verify the new manifest:
 
 ```sh
 nix run github:willyrgf/nixfied#upgrade -- --root . --plan > nixfied-upgrade.diff
 nix run github:willyrgf/nixfied#upgrade -- --root .
-nix build .#model
-nix run .#model-check
+nix build .#manifest
+nix run .#manifest-check
 ```
 
 `upgrade` refreshes only the `nixfied` input/lock entry. Read its arguments and
 defaults with `nix run .#docs -- api command upgrade`. A checked upgrade requires
 the existing `flake.lock`: it uses that exact locked Nixfied source as the old side of the comparison, resolves a candidate lock in
-a temporary file, and applies it only after the candidate model passes
-preflight. It does not edit `nixfied.nix` or translate old models or state.
+a temporary file, and applies it only after the candidate manifest passes
+preflight. It does not edit `nixfied.nix` or translate old manifests or state.
 
 The checked command prints a framed unified diff to stdout for `README.md` and
 the regular files under `docs/`; status, warnings, and Nix diagnostics go to
 stderr. `--plan` performs the same candidate resolution, documentation diff,
-and `model.drvPath` preflight without changing project files, so the redirected
-diff is safe to inspect before applying. A lock-resolution or model-preflight
+and `manifest.drvPath` preflight without changing project files, so the redirected
+diff is safe to inspect before applying. A lock-resolution or manifest-preflight
 failure is nonzero and leaves `flake.nix`, `flake.lock`, and `nixfied.nix`
 unchanged. If either source cannot be materialized, the report says that the
 documentation diff is unavailable; if the scoped files are identical, it says
 that no checked-in documentation changed. Neither result is a compatibility
-claim—the model preflight is the gate.
+claim—the manifest preflight is the gate.
 
 The status report presents each locked source as a readable identity block
 with its type, original source, revision when available, and NAR hash when
@@ -595,7 +603,7 @@ available. Plan and apply use the same candidate verification, wiring,
 ownership, and next-step summary: plan says `would change` and includes the
 command to rerun without `--plan`; apply says `changed` when it writes the
 candidate. Both report that post-upgrade validation was not run and print the
-recommended `nix build <root>#model` and `nix run <root>#model-check` commands.
+recommended `nix build <root>#manifest` and `nix run <root>#manifest-check` commands.
 The documentation diff itself remains the only stdout payload, so this
 distinction is preserved when redirecting it to a file.
 
@@ -603,16 +611,16 @@ distinction is preserved when redirecting it to a file.
 documentation diff and candidate verification and reports both skips; use it
 only when that checked inspection is intentionally unavailable.
 
-If the new model is rejected, restore the previous input and lock from version
-control and use that pin for recovery. `model-check` checks model origin and
+If the new manifest is rejected, restore the previous input and lock from version
+control and use that pin for recovery. `manifest-check` checks manifest origin and
 shape, ABI and target, closures, secret references, and plan feasibility without
 resolving source or secret material or preparing state. First identify whether
-the failure occurred in that model check or later while preparing or executing
+the failure occurred in that manifest check or later while preparing or executing
 the run; retain the error and any reported evidence paths. Confirm the affected
 pin, project identity, slot, and state base before issuing control commands.
 Use `docs topic state` for the checks that govern inspection and cleanup.
 
-If the model check passes but a run fails while preparing existing state,
+If the manifest check passes but a run fails while preparing existing state,
 an empty temporary state base can help isolate whether the failure depends on
 that state. Only retry a task whose effects are appropriate to repeat; this
 starts a new run and does not repair the original state:

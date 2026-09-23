@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use nixfied_model::{ServiceLifetime, TaskDefaultOutput};
+use nixfied_manifest::{ServiceLifetime, TaskDefaultOutput};
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::RuntimeCause;
 use nixfied_runtime::execution::plan;
@@ -25,8 +25,8 @@ use nixfied_runtime::state::{
     state_base_from_env,
 };
 use nixfied_runtime::{
-    Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_model,
-    read_raw_model,
+    Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_manifest,
+    read_raw_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -239,8 +239,8 @@ impl<'a> RunSession<'a> {
         };
         let output = RunOutput {
             run_id: self.run_id.to_string(),
-            model_path: self.admission.model_path.clone(),
-            computed_model_hash: self.admission.computed_model_hash.clone(),
+            manifest_path: self.admission.manifest_path.clone(),
+            computed_manifest_hash: self.admission.computed_manifest_hash.clone(),
             duration_ms,
             services,
             summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
@@ -483,17 +483,17 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, CHECK_HELP) {
         return Ok(());
     }
-    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
     let mut slot = RUNTIME_SLOT_INITIAL;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            RUNTIME_MODEL => {
+            RUNTIME_MANIFEST => {
                 index += 1;
-                model_path = args.get(index).map(PathBuf::from);
+                manifest_path = args.get(index).map(PathBuf::from);
             }
-            RUNTIME_ALLOW_NON_STORE_MODEL => {
+            RUNTIME_ALLOW_NON_STORE_MANIFEST => {
                 allow_non_store = true;
             }
             RUNTIME_SLOT => {
@@ -502,24 +502,24 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
             }
             other => {
                 return Err(RuntimeError::new(
-                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    nixfied_runtime::ErrorCode::ManifestAdmission,
                     format!("unknown check argument: {other}"),
                 ));
             }
         }
         index += 1;
     }
-    let model_path = model_path.ok_or_else(|| {
+    let manifest_path = manifest_path.ok_or_else(|| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {RUNTIME_MODEL} path"),
+            nixfied_runtime::ErrorCode::ManifestAdmission,
+            format!("missing {RUNTIME_MANIFEST} path"),
         )
     })?;
-    let (loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
-    let selected_slot = select_slot(&loaded.model, slot).map_err(post_admission_error)?;
+    let (loaded, admission) = load_admitted_manifest(manifest_path, allow_non_store)?;
+    let selected_slot = select_slot(&loaded.manifest, slot).map_err(post_admission_error)?;
     let output = CheckOutput {
-        model_path: admission.model_path,
-        computed_model_hash: admission.computed_model_hash,
+        manifest_path: admission.manifest_path,
+        computed_manifest_hash: admission.computed_manifest_hash,
         raw_len: admission.raw_len,
         project_id: admission.project_id,
         runtime_abi: admission.runtime_abi,
@@ -544,26 +544,26 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let parsed_options = parse_run_options(args)?;
     let cancellation = CancellationToken::new();
     let run_id = new_run_id();
-    let (loaded, admission) = load_admitted_model(
-        parsed_options.model_path.clone(),
+    let (loaded, admission) = load_admitted_manifest(
+        parsed_options.manifest_path.clone(),
         parsed_options.allow_non_store,
     )?;
     let output_mode = resolve_run_output_mode(
-        &loaded.model,
+        &loaded.manifest,
         parsed_options.output_mode,
         parsed_options.task.as_deref(),
     );
     validate_run_selection(
-        &admission.execution_model,
+        &admission.execution_manifest,
         output_mode,
         parsed_options.task.as_deref(),
     )?;
     let options = parsed_options.resolve(output_mode);
     let redactor = Redactor::from_secrets(&admission.secrets);
-    let model_path = admission.model_path.clone();
-    let computed_model_hash = admission.computed_model_hash.clone();
+    let manifest_path = admission.manifest_path.clone();
+    let computed_manifest_hash = admission.computed_manifest_hash.clone();
     let output = run_m0_admitted(
-        &loaded.model,
+        &loaded.manifest,
         &admission,
         &redactor,
         &options,
@@ -571,7 +571,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         &cancellation,
     )
     .map_err(|error| {
-        redactor.redact_error(error.with_model_if_missing(model_path, computed_model_hash))
+        redactor.redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
     })?;
     if options.output_mode.emit_json() {
         print_json_redacted(&output, &redactor)?;
@@ -580,7 +580,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
 }
 
 fn run_m0_admitted(
-    model: &nixfied_model::Model,
+    manifest: &nixfied_manifest::Manifest,
     admission: &Admission,
     redactor: &Redactor,
     options: &RunOptions,
@@ -588,15 +588,16 @@ fn run_m0_admitted(
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
     cancellation.check()?;
-    let selected_slot = select_slot(model, options.selection.slot).map_err(post_admission_error)?;
+    let selected_slot =
+        select_slot(manifest, options.selection.slot).map_err(post_admission_error)?;
     let placement =
-        derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)
+        derive_host_placement_for_slot(manifest, &selected_slot, &run_id, &options.state_base)
             .map_err(post_admission_error)?;
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
     run_m0_placed(
-        model,
+        manifest,
         admission,
         redactor,
         options,
@@ -624,9 +625,9 @@ fn enrich_run_error(
 
 /// Lowering and admission prove that the execution plan is concrete. Any
 /// defensive invariant error encountered after that boundary is therefore a
-/// runtime lifecycle failure, never another model-admission failure.
+/// runtime lifecycle failure, never another manifest-admission failure.
 fn post_admission_error(error: RuntimeError) -> RuntimeError {
-    if error.code != nixfied_runtime::ErrorCode::ModelAdmission {
+    if error.code != nixfied_runtime::ErrorCode::ManifestAdmission {
         return error;
     }
     RuntimeError::new(
@@ -655,7 +656,7 @@ fn enrich_placed_error(
 
 #[allow(clippy::too_many_arguments)]
 fn run_m0_placed(
-    model: &nixfied_model::Model,
+    manifest: &nixfied_manifest::Manifest,
     admission: &Admission,
     redactor: &Redactor,
     options: &RunOptions,
@@ -667,18 +668,18 @@ fn run_m0_placed(
     let run_started = Instant::now();
     let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
     // The registry opens before the marker decision: when the slot was last
-    // used by a different model build, the upgrade path needs registry evidence
+    // used by a different manifest build, the upgrade path needs registry evidence
     // to tear down what that build left running.
     materialize_registry_root(placement)?;
-    let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
+    let identity = StateIdentity::from_selected_slot(manifest, admission, selected_slot);
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
-            &model.project.project_id,
+            &manifest.project.project_id,
             selected_slot.environment,
             selected_slot.slot,
-            &model.runtime_abi,
-            &model.toolchain_id,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
         ),
     )?;
     registry.set_redactor(redactor.clone());
@@ -689,8 +690,8 @@ fn run_m0_placed(
         && let Err(error) = write_diagnostic(
             options.output_mode,
             format_args!(
-                "  upgraded slot state from model {} (state {})",
-                upgrade.from_model_hash.as_deref().unwrap_or("unknown"),
+                "  upgraded slot state from manifest {} (state {})",
+                upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
                 if upgrade.cleaned {
                     "cleaned: state epoch changed"
                 } else {
@@ -704,7 +705,7 @@ fn run_m0_placed(
 
     // A run drives one selected task: its flattened nodes plus the derived
     // service union, started eagerly. The plan (service ports + node order) is
-    // a pure function of the lowered model, the task, and the slot, already
+    // a pure function of the lowered manifest, the task, and the slot, already
     // proven feasible at admission. `run` with no selection refuses and lists
     // the declared tasks — there is no implicit default.
     let Some(task_name) = options.task.as_deref() else {
@@ -713,14 +714,17 @@ fn run_m0_placed(
             "admitted run selection lost its task identity",
         ));
     };
-    let selected_task = nixfied_model::TaskId::new(task_name);
+    let selected_task = nixfied_manifest::TaskId::new(task_name);
     let plan = plan(
-        &admission.execution_model,
+        &admission.execution_manifest,
         &selected_task,
         selected_slot.slot,
     )
     .map_err(post_admission_error)?;
-    let direct_selected = admission.execution_model.tasks.contains_key(&selected_task);
+    let direct_selected = admission
+        .execution_manifest
+        .tasks
+        .contains_key(&selected_task);
 
     // Record the run row before any service starts, so even a service-less
     // selection (a task tree whose leaves require nothing) leaves durable run
@@ -736,7 +740,7 @@ fn run_m0_placed(
         .iter()
         .filter_map(|binding| {
             let service = admission
-                .execution_model
+                .execution_manifest
                 .services
                 .get(binding.service_name.as_str())?;
             let primary_id = service.primary_endpoint.as_ref()?;
@@ -809,7 +813,7 @@ fn run_m0_placed(
         // nodes inside the service reservation, resolving each leaf's
         // requirements against the services already started (the combined
         // connectsTo + prepare-requires ordering guarantees they are ready).
-        let Some(service_def) = admission.execution_model.services.get(service_name) else {
+        let Some(service_def) = admission.execution_manifest.services.get(service_name) else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -827,7 +831,7 @@ fn run_m0_placed(
                 Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
                     let mut task_runs = Vec::new();
                     let nodes = match nixfied_runtime::execution::flatten_task(
-                        &admission.execution_model,
+                        &admission.execution_manifest,
                         &prepare_task,
                     ) {
                         Ok(nodes) => nodes,
@@ -839,7 +843,7 @@ fn run_m0_placed(
                         }
                     };
                     for node in nodes {
-                        let Some(task) = admission.execution_model.tasks.get(node.task_id.as_str())
+                        let Some(task) = admission.execution_manifest.tasks.get(node.task_id.as_str())
                         else {
                             return Err(PrepareTaskError::new(
                                 RuntimeError::new(
@@ -884,7 +888,7 @@ fn run_m0_placed(
                             registry,
                             RunContext {
                                 run_id,
-                                computed_model_hash: &admission.computed_model_hash,
+                                computed_manifest_hash: &admission.computed_manifest_hash,
                                 source_root: &source_root,
                                 state_root: &placement.state_root,
                                 secrets: &admission.secrets,
@@ -1018,7 +1022,7 @@ fn run_m0_placed(
     // composite's step dependencies.
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let Some(task) = admission.execution_model.tasks.get(task_id.as_str()) else {
+        let Some(task) = admission.execution_manifest.tasks.get(task_id.as_str()) else {
             finish_run!(
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::LifecycleFailed,
@@ -1056,7 +1060,7 @@ fn run_m0_placed(
             dep_indices.iter().map(|&index| &started[index]).collect();
         let run_context = RunContext {
             run_id,
-            computed_model_hash: &admission.computed_model_hash,
+            computed_manifest_hash: &admission.computed_manifest_hash,
             source_root: &source_root,
             state_root: &placement.state_root,
             secrets: &admission.secrets,
@@ -1427,7 +1431,7 @@ enum ControlCommand {
 }
 
 struct ControlOptions {
-    model_path: PathBuf,
+    manifest_path: PathBuf,
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: u64,
@@ -1457,11 +1461,13 @@ fn control_help(command: ControlCommand) -> &'static str {
 
 /// The refusal for a missing or unknown task selection: name every declared
 /// task so the operator can pick one.
-fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) -> RuntimeError {
-    let declared: Vec<&str> = model
+fn selection_required_error(
+    manifest: &nixfied_runtime::execution::ExecutionManifest,
+) -> RuntimeError {
+    let declared: Vec<&str> = manifest
         .tasks
         .keys()
-        .chain(model.composites.keys())
+        .chain(manifest.composites.keys())
         .map(|task| task.as_str())
         .collect();
     RuntimeError::new(
@@ -1475,18 +1481,18 @@ fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) 
 }
 
 fn validate_run_selection(
-    model: &nixfied_runtime::execution::ExecutionModel,
+    manifest: &nixfied_runtime::execution::ExecutionManifest,
     output_mode: RunOutputMode,
     task: Option<&str>,
 ) -> Result<(), RuntimeError> {
     let Some(task) = task else {
-        return Err(selection_required_error(model));
+        return Err(selection_required_error(manifest));
     };
-    let task_id = nixfied_model::TaskId::new(task);
-    if model.tasks.contains_key(&task_id) {
-        return validate_selection_nodes(model, &task_id, task);
+    let task_id = nixfied_manifest::TaskId::new(task);
+    if manifest.tasks.contains_key(&task_id) {
+        return validate_selection_nodes(manifest, &task_id, task);
     }
-    if let Some(composite) = model.composites.get(&task_id) {
+    if let Some(composite) = manifest.composites.get(&task_id) {
         if output_mode.is_task_output() {
             return Err(RuntimeError::new(
                 nixfied_runtime::ErrorCode::TaskSelectionInvalid,
@@ -1495,18 +1501,18 @@ fn validate_run_selection(
             .with_detail("task", task)
             .with_detail("compositeSteps", composite.steps.len()));
         }
-        return validate_selection_nodes(model, &task_id, task);
+        return validate_selection_nodes(manifest, &task_id, task);
     }
-    Err(selection_required_error(model).with_detail("unknownTask", task))
+    Err(selection_required_error(manifest).with_detail("unknownTask", task))
 }
 
 fn resolve_run_output_mode(
-    model: &nixfied_model::Model,
+    manifest: &nixfied_manifest::Manifest,
     explicit: Option<RunOutputMode>,
     task: Option<&str>,
 ) -> RunOutputMode {
     explicit.unwrap_or_else(|| {
-        task.and_then(|task| model.tasks.get(task))
+        task.and_then(|task| manifest.tasks.get(task))
             .map(|task| match task.default_output {
                 TaskDefaultOutput::Summary => RunOutputMode::Summary,
                 TaskDefaultOutput::TaskOutput => RunOutputMode::TaskOutput,
@@ -1516,12 +1522,12 @@ fn resolve_run_output_mode(
 }
 
 fn validate_selection_nodes(
-    model: &nixfied_runtime::execution::ExecutionModel,
-    task_id: &nixfied_model::TaskId,
+    manifest: &nixfied_runtime::execution::ExecutionManifest,
+    task_id: &nixfied_manifest::TaskId,
     task: &str,
 ) -> Result<(), RuntimeError> {
-    let nodes =
-        nixfied_runtime::execution::flatten_task(model, task_id).map_err(post_admission_error)?;
+    let nodes = nixfied_runtime::execution::flatten_task(manifest, task_id)
+        .map_err(post_admission_error)?;
     if nodes.is_empty() {
         return Err(RuntimeError::new(
             nixfied_runtime::ErrorCode::TaskSelectionInvalid,
@@ -1551,32 +1557,33 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
     }
     let options = parse_control_options(command, args)?;
     let (loaded, admission) =
-        load_admitted_model_for_control(options.model_path.clone(), options.allow_non_store)?;
-    let model_path = admission.model_path.clone();
-    let computed_model_hash = admission.computed_model_hash.clone();
-    run_control_admitted(command, &loaded.model, &admission, &options)
-        .map_err(|error| error.with_model_if_missing(model_path, computed_model_hash))
+        load_admitted_manifest_for_control(options.manifest_path.clone(), options.allow_non_store)?;
+    let manifest_path = admission.manifest_path.clone();
+    let computed_manifest_hash = admission.computed_manifest_hash.clone();
+    run_control_admitted(command, &loaded.manifest, &admission, &options)
+        .map_err(|error| error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
 }
 
 fn run_control_admitted(
     command: ControlCommand,
-    model: &nixfied_model::Model,
+    manifest: &nixfied_manifest::Manifest,
     admission: &Admission,
     options: &ControlOptions,
 ) -> Result<(), RuntimeError> {
-    let selected_slot = select_slot(model, options.selection.slot).map_err(post_admission_error)?;
+    let selected_slot =
+        select_slot(manifest, options.selection.slot).map_err(post_admission_error)?;
     let placement =
-        derive_host_placement_for_slot(model, &selected_slot, "control", &options.state_base)
+        derive_host_placement_for_slot(manifest, &selected_slot, "control", &options.state_base)
             .map_err(post_admission_error)?;
     let result = (|| {
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
             &RegistryIdentity::for_slot(
-                &model.project.project_id,
+                &manifest.project.project_id,
                 selected_slot.environment,
                 selected_slot.slot,
-                &model.runtime_abi,
-                &model.toolchain_id,
+                &manifest.runtime_abi,
+                &manifest.toolchain_id,
             ),
         )?;
         match command {
@@ -1588,7 +1595,7 @@ fn run_control_admitted(
                 )?)
             }
             ControlCommand::Clean => print_json(&run_slot_clean(
-                model,
+                manifest,
                 admission,
                 &placement,
                 &mut registry,
@@ -1601,8 +1608,8 @@ fn run_control_admitted(
 }
 
 fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> {
-    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
     let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = RUN_TIMEOUT_MS_INITIAL;
     let mut output_mode = RUN_OUTPUT_INITIAL;
@@ -1611,11 +1618,11 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            RUNTIME_MODEL => {
+            RUNTIME_MANIFEST => {
                 index += 1;
-                model_path = args.get(index).map(PathBuf::from);
+                manifest_path = args.get(index).map(PathBuf::from);
             }
-            RUNTIME_ALLOW_NON_STORE_MODEL => {
+            RUNTIME_ALLOW_NON_STORE_MANIFEST => {
                 allow_non_store = true;
             }
             RUNTIME_STATE_BASE => {
@@ -1648,13 +1655,13 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        nixfied_runtime::ErrorCode::ManifestAdmission,
                         format!("missing {RUN_TIMEOUT_MS} value"),
                     )
                 })?;
                 timeout_ms = value.parse::<RunTimeoutMsValue>().map_err(|error| {
                     RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        nixfied_runtime::ErrorCode::ManifestAdmission,
                         format!("invalid {RUN_TIMEOUT_MS} value {value}: {error}"),
                     )
                 })?;
@@ -1686,22 +1693,22 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
             }
             other => {
                 return Err(RuntimeError::new(
-                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    nixfied_runtime::ErrorCode::ManifestAdmission,
                     format!("unknown run argument: {other}"),
                 ));
             }
         }
         index += 1;
     }
-    let model_path = model_path.ok_or_else(|| {
+    let manifest_path = manifest_path.ok_or_else(|| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {RUNTIME_MODEL} path"),
+            nixfied_runtime::ErrorCode::ManifestAdmission,
+            format!("missing {RUNTIME_MANIFEST} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
     Ok(ParsedRunOptions {
-        model_path,
+        manifest_path,
         allow_non_store,
         state_base,
         timeout_ms,
@@ -1712,7 +1719,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
 }
 
 struct ParsedRunOptions {
-    model_path: PathBuf,
+    manifest_path: PathBuf,
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: RunTimeoutMsValue,
@@ -1745,8 +1752,8 @@ fn parse_control_options(
     command: ControlCommand,
     args: &[String],
 ) -> Result<ControlOptions, RuntimeError> {
-    let mut model_path = RUNTIME_MODEL_INITIAL.map(PathBuf::from);
-    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MODEL_INITIAL;
+    let mut manifest_path = RUNTIME_MANIFEST_INITIAL.map(PathBuf::from);
+    let mut allow_non_store = RUNTIME_ALLOW_NON_STORE_MANIFEST_INITIAL;
     let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
     let mut timeout_ms = DOWN_TIMEOUT_MS_INITIAL;
     let mut slot = RUNTIME_SLOT_INITIAL;
@@ -1758,11 +1765,11 @@ fn parse_control_options(
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            value if value == RUNTIME_MODEL => {
+            value if value == RUNTIME_MANIFEST => {
                 index += 1;
-                model_path = args.get(index).map(PathBuf::from);
+                manifest_path = args.get(index).map(PathBuf::from);
             }
-            value if value == RUNTIME_ALLOW_NON_STORE_MODEL => {
+            value if value == RUNTIME_ALLOW_NON_STORE_MANIFEST => {
                 allow_non_store = true;
             }
             value if value == RUNTIME_STATE_BASE => {
@@ -1780,35 +1787,35 @@ fn parse_control_options(
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        nixfied_runtime::ErrorCode::ManifestAdmission,
                         format!("missing {DOWN_TIMEOUT_MS} value"),
                     )
                 })?;
                 timeout_ms = value.parse::<DownTimeoutMsValue>().map_err(|error| {
                     RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        nixfied_runtime::ErrorCode::ManifestAdmission,
                         format!("invalid {DOWN_TIMEOUT_MS} value {value}: {error}"),
                     )
                 })?;
             }
             other => {
                 return Err(RuntimeError::new(
-                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    nixfied_runtime::ErrorCode::ManifestAdmission,
                     format!("unknown control argument: {other}"),
                 ));
             }
         }
         index += 1;
     }
-    let model_path = model_path.ok_or_else(|| {
+    let manifest_path = manifest_path.ok_or_else(|| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("missing {RUNTIME_MODEL} path"),
+            nixfied_runtime::ErrorCode::ManifestAdmission,
+            format!("missing {RUNTIME_MANIFEST} path"),
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
     Ok(ControlOptions {
-        model_path,
+        manifest_path,
         allow_non_store,
         state_base,
         timeout_ms,
@@ -1820,13 +1827,13 @@ fn parse_control_options(
 fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<RuntimeSlotValue, RuntimeError> {
     let value = value.ok_or_else(|| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
+            nixfied_runtime::ErrorCode::ManifestAdmission,
             format!("missing {flag} value"),
         )
     })?;
     value.parse::<RuntimeSlotValue>().map_err(|error| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
+            nixfied_runtime::ErrorCode::ManifestAdmission,
             format!("invalid {flag} value {value}: {error}"),
         )
     })
@@ -1840,44 +1847,44 @@ fn new_run_id() -> String {
     format!("run-{}-{now}", std::process::id())
 }
 
-fn load_admitted_model(
-    model_path: PathBuf,
+fn load_admitted_manifest(
+    manifest_path: PathBuf,
     allow_non_store: bool,
-) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
-    load_model_admitted(model_path, allow_non_store, true)
+) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
+    load_manifest_admitted(manifest_path, allow_non_store, true)
 }
 
-/// Load and admit a model for a recovery/control command (`ps`/`down`/`clean`)
+/// Load and admit a manifest for a recovery/control command (`ps`/`down`/`clean`)
 /// without resolving the live workspace, so control can reconcile, stop, and
-/// clean a slot from the store model and registry even when run outside the
+/// clean a slot from the store manifest and registry even when run outside the
 /// project root or after the workspace has moved or been deleted.
-fn load_admitted_model_for_control(
-    model_path: PathBuf,
+fn load_admitted_manifest_for_control(
+    manifest_path: PathBuf,
     allow_non_store: bool,
-) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
-    load_model_admitted(model_path, allow_non_store, false)
+) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
+    load_manifest_admitted(manifest_path, allow_non_store, false)
 }
 
-fn load_model_admitted(
-    model_path: PathBuf,
+fn load_manifest_admitted(
+    manifest_path: PathBuf,
     allow_non_store: bool,
     resolve_source: bool,
-) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
+) -> Result<(nixfied_runtime::manifest_loader::LoadedManifest, Admission), RuntimeError> {
     let policy = if allow_non_store {
         StoreOriginPolicy::AllowNonStoreForTests
     } else {
         StoreOriginPolicy::RequireStore
     };
     let context = AdmissionContext::current(policy);
-    let raw_model = read_raw_model(&model_path)?;
-    nixfied_runtime::admission::origin::check_raw_store_origin(&raw_model, &context)?;
-    let loaded = parse_loaded_model(raw_model)?;
+    let raw_manifest = read_raw_manifest(&manifest_path)?;
+    nixfied_runtime::admission::origin::check_raw_store_origin(&raw_manifest, &context)?;
+    let loaded = parse_loaded_manifest(raw_manifest)?;
     let admission = if resolve_source {
         Admission::check(&loaded, &context)?
     } else {
         Admission::check_for_control(&loaded, &context)?
     };
-    warn_on_ephemeral_port_overlap(&loaded.model)?;
+    warn_on_ephemeral_port_overlap(&loaded.manifest)?;
     Ok((loaded, admission))
 }
 
@@ -1886,11 +1893,13 @@ fn load_model_admitted(
 /// any process, so a deterministic window inside it can collide with unrelated
 /// ephemeral allocations. The range is host state only Linux exposes a stable
 /// path for; elsewhere the check is silently skipped.
-fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) -> Result<(), RuntimeError> {
+fn warn_on_ephemeral_port_overlap(
+    manifest: &nixfied_manifest::Manifest,
+) -> Result<(), RuntimeError> {
     let Some((low, high)) = host_ephemeral_port_range() else {
         return Ok(());
     };
-    for placement in model.placement.slot_placements.values() {
+    for placement in manifest.placement.slot_placements.values() {
         let window = &placement.candidate_ports;
         if u32::from(window.start) <= high && u32::from(window.end) >= low {
             write_stderr_line(format_args!(
@@ -1945,12 +1954,12 @@ fn print_json_redacted(value: &impl Serialize, redactor: &Redactor) -> Result<()
 fn exit_code(error: &RuntimeError) -> i32 {
     match error.code {
         nixfied_runtime::ErrorCode::RuntimeAbiMismatch => 12,
-        nixfied_runtime::ErrorCode::ModelNotStoreOutput => 13,
-        nixfied_runtime::ErrorCode::ModelInvalid => 14,
+        nixfied_runtime::ErrorCode::ManifestNotStoreOutput => 13,
+        nixfied_runtime::ErrorCode::ManifestInvalid => 14,
         nixfied_runtime::ErrorCode::PlatformUnsupported => 15,
         nixfied_runtime::ErrorCode::ClosureMissing => 16,
         nixfied_runtime::ErrorCode::SourceMismatch => 17,
-        nixfied_runtime::ErrorCode::ModelAdmission => 18,
+        nixfied_runtime::ErrorCode::ManifestAdmission => 18,
         nixfied_runtime::ErrorCode::RegistryCorrupt => 19,
         nixfied_runtime::ErrorCode::StateUnwritable => 20,
         nixfied_runtime::ErrorCode::StateUnowned => 21,

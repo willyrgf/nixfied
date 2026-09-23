@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use nixfied_model::{CleanupPolicy, Model, PersistencePolicy};
+use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy};
 use nixfied_runtime::ErrorCode;
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
@@ -68,12 +68,12 @@ fn materializes_m0_roots_and_slot_marker() {
 #[test]
 fn selects_explicit_slot_placement() {
     let tmp = TempDir::new();
-    let mut value = fixture_model();
+    let mut value = fixture_manifest();
     add_slot_one(&mut value, 23180, 23190);
-    let model: Model = serde_json::from_value(value).expect("model should parse");
-    let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should parse");
+    let selected = select_slot(&manifest, Some(1)).expect("slot 1 should select");
 
-    let layout = derive_host_placement_for_slot(&model, &selected, "run-2", &tmp.path)
+    let layout = derive_host_placement_for_slot(&manifest, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
 
     assert_eq!(selected.slot, 1);
@@ -87,15 +87,15 @@ fn selects_explicit_slot_placement() {
 #[test]
 fn slot_one_marker_records_selected_identity() {
     let tmp = TempDir::new();
-    let mut value = fixture_model();
+    let mut value = fixture_manifest();
     add_slot_one(&mut value, 23180, 23190);
-    let model: Model = serde_json::from_value(value).expect("model should parse");
-    let admission = synthetic_admission(&model, &tmp.path);
-    let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
-    let layout = derive_host_placement_for_slot(&model, &selected, "run-2", &tmp.path)
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should parse");
+    let admission = synthetic_admission(&manifest, &tmp.path);
+    let selected = select_slot(&manifest, Some(1)).expect("slot 1 should select");
+    let layout = derive_host_placement_for_slot(&manifest, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
     materialize_run_roots(&layout).expect("roots should materialize");
-    let identity = StateIdentity::from_selected_slot(&model, &admission, &selected);
+    let identity = StateIdentity::from_selected_slot(&manifest, &admission, &selected);
 
     let marker = commit_slot_marker(&layout, &identity).expect("marker should be written");
 
@@ -106,18 +106,19 @@ fn slot_one_marker_records_selected_identity() {
 
 #[test]
 fn slot_out_of_range_is_refused() {
-    let model = model();
-    let error = select_slot(&model, Some(1)).expect_err("slot 1 is outside default M1 fixture");
+    let manifest = manifest();
+    let error = select_slot(&manifest, Some(1)).expect_err("slot 1 is outside default M1 fixture");
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::ManifestAdmission);
 }
 
 #[cfg(unix)]
 #[test]
 fn materialization_refuses_symlinked_roots() {
     let tmp = TempDir::new();
-    let model = model();
-    let layout = derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
+    let manifest = manifest();
+    let layout =
+        derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
     fs::create_dir_all(&layout.state_root).expect("state root should be created");
     fs::create_dir_all(layout.registry_dir.parent().expect("registry has a parent"))
         .expect("registry parent should be created");
@@ -153,11 +154,11 @@ fn marker_evaluate_refuses_foreign_ownership() {
 fn clean_accepts_old_provenance_marker() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
-    // The marker on disk was written by an older build of the same model:
+    // The marker on disk was written by an older build of the same manifest:
     // cleanup is gated on ownership, so the current build may still clean it.
     let mut old = fixture.identity.clone();
-    old.computed_model_hash = "older-model-hash".to_string();
-    old.model_path = PathBuf::from("/nix/store/older-model/model.json");
+    old.computed_manifest_hash = "older-manifest-hash".to_string();
+    old.manifest_path = PathBuf::from("/nix/store/older-manifest/manifest.json");
     commit_slot_marker(&fixture.layout, &old).expect("old-provenance marker should be written");
 
     let outcome = clean_marked_state(
@@ -605,11 +606,11 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
+              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
-              'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
+              'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
@@ -802,11 +803,11 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
+              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
-              'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
+              'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
@@ -932,12 +933,12 @@ struct StateFixture {
 impl StateFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
-        let model = model();
-        let admission = synthetic_admission(&model, &tmp.path);
+        let manifest = manifest();
+        let admission = synthetic_admission(&manifest, &tmp.path);
         let layout =
-            derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
+            derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
-        let identity = StateIdentity::from_model(&model, &admission);
+        let identity = StateIdentity::from_manifest(&manifest, &admission);
         commit_slot_marker(&layout, &identity).expect("marker should be written");
         Self {
             tmp,
@@ -961,8 +962,8 @@ impl StateFixture {
     }
 }
 
-fn model() -> Model {
-    serde_json::from_value(fixture_model()).expect("fixture model should parse")
+fn manifest() -> Manifest {
+    serde_json::from_value(fixture_manifest()).expect("fixture manifest should parse")
 }
 
 fn add_slot_one(value: &mut Value, start: u16, end: u16) {
@@ -976,6 +977,6 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     });
 }
 
-fn fixture_model() -> Value {
-    common::synthetic_model_default(23080, 23090)
+fn fixture_manifest() -> Value {
+    common::synthetic_manifest_default(23080, 23090)
 }

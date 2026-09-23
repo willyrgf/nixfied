@@ -26,6 +26,6 @@ let
       ;
   };
 in
-import ./emit-model.nix {
+import ./emit-manifest.nix {
   inherit pkgs derived;
 }

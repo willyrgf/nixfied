@@ -4,11 +4,11 @@
 # Postgres database (via the reusable `adapters.postgres` Nix-side adapter) with
 # two first-party services written as plain Nix-built executables - an `api` and
 # a `worker` - and orchestrates them with a `release` composite task. Everything below
-# compiles into the generic model primitives; the runtime gains no knowledge of
+# compiles into the generic manifest primitives; the runtime gains no knowledge of
 # Postgres, the api, or the worker.
 #
-# Build it:    nix build --no-write-lock-file ./examples/downstream#model
-# Run it:      nixfied-runtime run --model <store>/model.json
+# Build it:    nix build --no-write-lock-file ./examples/downstream#manifest
+# Run it:      nixfied-runtime run --manifest <store>/manifest.json
 { pkgs, adapters, ... }:
 let
   # A tiny TCP app used for both the api and the worker. In `service` mode it

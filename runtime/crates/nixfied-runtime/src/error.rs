@@ -20,7 +20,7 @@ impl RuntimeCause {
 
 fn cause_message(error: &RuntimeError) -> String {
     match error.code {
-        // These execution messages are constructed from validated model ids
+        // These execution messages are constructed from validated manifest ids
         // and terminal facts, so retaining them makes compound failures
         // actionable without admitting arbitrary infrastructure text.
         ErrorCode::TaskFailed => task_failure_cause_message(&error.details)
@@ -102,9 +102,9 @@ fn cause_details(code: ErrorCode, details: Value) -> Value {
     // listed above. Keep the match exhaustive at the code boundary so adding a
     // new error class prompts a conscious public-cause decision.
     match code {
-        ErrorCode::ModelNotStoreOutput
-        | ErrorCode::ModelInvalid
-        | ErrorCode::ModelAdmission
+        ErrorCode::ManifestNotStoreOutput
+        | ErrorCode::ManifestInvalid
+        | ErrorCode::ManifestAdmission
         | ErrorCode::RuntimeAbiMismatch
         | ErrorCode::SourceMismatch
         | ErrorCode::PlatformUnsupported
@@ -149,13 +149,13 @@ impl RuntimeError {
             message: message.into(),
             details: Value::Object(Map::new()),
             causes: Box::new(Vec::new()),
-            model_path: None,
-            computed_model_hash: None,
+            manifest_path: None,
+            computed_manifest_hash: None,
         }
     }
 
     pub fn unsupported_feature(feature: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::ModelAdmission, message)
+        Self::new(ErrorCode::ManifestAdmission, message)
             .with_detail("unsupportedFeature", feature.into())
     }
 
@@ -194,22 +194,22 @@ impl RuntimeError {
         self
     }
 
-    pub fn with_model(mut self, path: impl Into<PathBuf>, hash: impl Into<String>) -> Self {
-        self.model_path = Some(path.into());
-        self.computed_model_hash = Some(hash.into());
+    pub fn with_manifest(mut self, path: impl Into<PathBuf>, hash: impl Into<String>) -> Self {
+        self.manifest_path = Some(path.into());
+        self.computed_manifest_hash = Some(hash.into());
         self
     }
 
-    pub fn with_model_if_missing(
+    pub fn with_manifest_if_missing(
         mut self,
         path: impl Into<PathBuf>,
         hash: impl Into<String>,
     ) -> Self {
-        if self.model_path.is_none() {
-            self.model_path = Some(path.into());
+        if self.manifest_path.is_none() {
+            self.manifest_path = Some(path.into());
         }
-        if self.computed_model_hash.is_none() {
-            self.computed_model_hash = Some(hash.into());
+        if self.computed_manifest_hash.is_none() {
+            self.computed_manifest_hash = Some(hash.into());
         }
         self
     }
@@ -225,9 +225,9 @@ mod tests {
     // public API for the current ABI — it must not drift silently.
     fn _error_code_is_listed(code: ErrorCode) {
         match code {
-            ErrorCode::ModelNotStoreOutput
-            | ErrorCode::ModelInvalid
-            | ErrorCode::ModelAdmission
+            ErrorCode::ManifestNotStoreOutput
+            | ErrorCode::ManifestInvalid
+            | ErrorCode::ManifestAdmission
             | ErrorCode::RuntimeAbiMismatch
             | ErrorCode::SourceMismatch
             | ErrorCode::PlatformUnsupported
@@ -265,9 +265,9 @@ mod tests {
     /// new variant cannot be added without being seen; this list and the snapshot
     /// pin the exact wire values.
     const ALL_ERROR_CODES: &[ErrorCode] = &[
-        ErrorCode::ModelNotStoreOutput,
-        ErrorCode::ModelInvalid,
-        ErrorCode::ModelAdmission,
+        ErrorCode::ManifestNotStoreOutput,
+        ErrorCode::ManifestInvalid,
+        ErrorCode::ManifestAdmission,
         ErrorCode::RuntimeAbiMismatch,
         ErrorCode::SourceMismatch,
         ErrorCode::PlatformUnsupported,
@@ -309,7 +309,7 @@ mod tests {
     /// to compile in the sentinels above, listing it in `capability.txt` is then the
     /// only way past this test, and that edit rotates the ABI digest (caught by the
     /// `runtime_abi_snapshot` test) — the error vocabulary cannot change silently or
-    /// without the runtime/model identity check noticing.
+    /// without the runtime/manifest identity check noticing.
     #[test]
     fn public_error_contract_is_in_capability_descriptor() {
         use std::collections::BTreeSet;
@@ -319,7 +319,7 @@ mod tests {
         _error_code_is_listed(ErrorCode::Canceled);
         _exit_class_is_listed(ExitClass::Ok);
 
-        let tokens: BTreeSet<&str> = nixfied_model::constants::CAPABILITY_DESCRIPTOR
+        let tokens: BTreeSet<&str> = nixfied_manifest::constants::CAPABILITY_DESCRIPTOR
             .split_whitespace()
             .collect();
 

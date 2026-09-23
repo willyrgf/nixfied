@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_model::{CleanupPolicy, PersistencePolicy};
+use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
 use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -48,7 +48,7 @@ pub fn inspect_cleanup_target(
     reject_target_symlink(target)?;
     let marker = read_marker(&canonical_target)?;
     // Cleanup is gated on ownership, not provenance: the slot's current owner
-    // may clean a state root last used by an older build of the same model.
+    // may clean a state root last used by an older build of the same manifest.
     if !marker.matches_ownership(expected) {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
@@ -98,7 +98,7 @@ pub fn clean_marked_state(
         let _ = record_cleanup_terminal(
             registry,
             &cleanup_id,
-            &marker.computed_model_hash,
+            &marker.computed_manifest_hash,
             &payload_json,
             CleanupStatus::Failed,
             Some(cleanup_error.message.as_str()),
@@ -108,7 +108,7 @@ pub fn clean_marked_state(
     record_cleanup_terminal(
         registry,
         &cleanup_id,
-        &marker.computed_model_hash,
+        &marker.computed_manifest_hash,
         &payload_json,
         CleanupStatus::Deleted,
         None,
@@ -136,7 +136,7 @@ fn finish_missing_target_cleanup(
         record_cleanup_terminal(
             registry,
             &cleanup.cleanup_id,
-            &cleanup.marker.computed_model_hash,
+            &cleanup.marker.computed_manifest_hash,
             &payload_json,
             CleanupStatus::Deleted,
             None,
@@ -379,7 +379,7 @@ fn record_cleanup_intent(
             run_id: None,
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: Some(&marker.computed_model_hash),
+            computed_manifest_hash: Some(&marker.computed_manifest_hash),
             payload_json,
         },
     )?;
@@ -390,7 +390,7 @@ fn record_cleanup_intent(
 fn record_cleanup_terminal(
     registry: &mut Registry,
     cleanup_id: &str,
-    computed_model_hash: &str,
+    computed_manifest_hash: &str,
     payload_json: &str,
     status: CleanupStatus,
     refusal_reason: Option<&str>,
@@ -422,7 +422,7 @@ fn record_cleanup_terminal(
             run_id: None,
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: Some(computed_model_hash),
+            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;

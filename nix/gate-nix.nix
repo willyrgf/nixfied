@@ -147,7 +147,7 @@ MODULE
   cmp "$work/source-$variant" "$work/direct-$variant" \
     || fail 'reference: realised docs changed source with its caller'
   test ! -e "$work/no-state" || fail 'reference: docs materialised runtime state'
-  # Help retains its native final-app evaluation boundary. Supply valid model
+  # Help retains its native final-app evaluation boundary. Supply valid manifest
   # metadata for that separate discovery proof after the poisoned docs queries.
   cat > "$project/nixfied.nix" <<'MODULE'
 { adapters, ... }: {
@@ -188,20 +188,20 @@ let
 in builtins.listToAttrs (map (name: { inherit name; value = product name; })
   [ "nixfied-cli" "nixfied-runtime" "nixfied-test-child" ])
 NIX
-for variant in baseline cli runtime model generated runtime-generated cli-generated child reference declaration; do
+for variant in baseline cli runtime manifest generated runtime-generated cli-generated child reference declaration; do
   mkdir -p "$work/$variant"
   cp -R "$source/." "$work/$variant/"
   chmod -R u+w "$work/$variant"
   case "$variant" in
     cli) printf '\n// CLI source variation.\n' >> "$work/$variant/runtime/crates/nixfied-cli/src/main.rs" ;;
     runtime) printf '\n// Runtime source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/main.rs" ;;
-    model) printf '\n// Native model source variation.\n' >> "$work/$variant/runtime/crates/nixfied-model/src/types.rs" ;;
-    generated) printf '\n// Generated model source variation.\n' >> "$work/$variant/runtime/crates/nixfied-model/src/generated/types.rs" ;;
+    manifest) printf '\n// Native manifest source variation.\n' >> "$work/$variant/runtime/crates/nixfied-manifest/src/types.rs" ;;
+    generated) printf '\n// Generated manifest source variation.\n' >> "$work/$variant/runtime/crates/nixfied-manifest/src/generated/types.rs" ;;
     runtime-generated) printf '\n// Generated output source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/generated/output.rs" ;;
     cli-generated) printf '\n// Generated CLI source variation.\n' >> "$work/$variant/runtime/crates/nixfied-cli/src/generated/commands.rs" ;;
     child) printf '\n// Test child source variation.\n' >> "$work/$variant/runtime/crates/nixfied-test-child/src/main.rs" ;;
     reference) printf '\nReference variation\n' >> "$work/$variant/docs/GUIDE.md" ;;
-    declaration) printf '\n# Declaration variation\n' >> "$work/$variant/nix/meta/model.nix" ;;
+    declaration) printf '\n# Declaration variation\n' >> "$work/$variant/nix/meta/manifest.nix" ;;
   esac
   NIXFIED_MATRIX_EXPR="$work/identity.nix" NIXFIED_MATRIX_FRAMEWORK="$source" NIXFIED_MATRIX_VARIANT="$work/$variant" \
     nix eval --impure --json --expr 'import (builtins.getEnv "NIXFIED_MATRIX_EXPR") {
@@ -209,11 +209,11 @@ for variant in baseline cli runtime model generated runtime-generated cli-genera
       variant = builtins.getEnv "NIXFIED_MATRIX_VARIANT";
     }'  > "$work/$variant.json" || fail 'source matrix evaluation failed'
 done
-for variant in cli runtime model generated runtime-generated cli-generated child reference declaration; do
+for variant in cli runtime manifest generated runtime-generated cli-generated child reference declaration; do
   for product in nixfied-cli nixfied-runtime nixfied-test-child; do
     local changed=false
     case "$variant:$product" in
-      cli:nixfied-cli|cli-generated:nixfied-cli|runtime:nixfied-runtime|model:nixfied-runtime|generated:nixfied-runtime|runtime-generated:nixfied-runtime|child:nixfied-test-child) changed=true ;;
+      cli:nixfied-cli|cli-generated:nixfied-cli|runtime:nixfied-runtime|manifest:nixfied-runtime|generated:nixfied-runtime|runtime-generated:nixfied-runtime|child:nixfied-test-child) changed=true ;;
     esac
     jq -en --arg product "$product" --argjson changed "$changed" \
       --slurpfile baseline "$work/baseline.json" --slurpfile variant "$work/$variant.json" '
@@ -233,9 +233,9 @@ work=$(mktemp -d)
 source=$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)
 cp -R "$source/." "$work/"
 chmod -R u+w "$work"
-capability=$(<"$work/runtime/crates/nixfied-model/capability.txt")
+capability=$(<"$work/runtime/crates/nixfied-manifest/capability.txt")
 printf '%s\n' "''${capability/enum StdinPolicy: null inherit/enum StdinPolicy: null pipe}" \
-  > "$work/runtime/crates/nixfied-model/capability.txt"
+  > "$work/runtime/crates/nixfied-manifest/capability.txt"
 NIXFIED_MUTATION_SOURCE="$work" nix build --impure --no-link --expr '
   let
     root = builtins.getEnv "NIXFIED_MUTATION_SOURCE";
@@ -258,7 +258,7 @@ rm -rf "$work"
     inventory_mutation
     printf '  framework_reference: %ds\n' "$((SECONDS - t0))" >&2
 
-    # Nix-layer validation must fail before an invalid model or app catalog can
+    # Nix-layer validation must fail before an invalid manifest or app catalog can
     # become executable. Batch the negative expressions into one evaluation.
     reject_invalid_evaluations() {
       local unexpected
@@ -273,16 +273,16 @@ rm -rf "$work"
     }
 
     t0=$SECONDS
-    echo "  negative (invalid models and app metadata must fail at nix evaluation)" >&2
+    echo "  negative (invalid manifests and app metadata must fail at nix evaluation)" >&2
     reject_invalid_evaluations
     printf '  reject_invalid_evaluations: %ds\n' "$((SECONDS - t0))" >&2
 
     echo "  positive (immutable source dirtyPolicy reject admits)" >&2
     t0=$SECONDS
-    immutable_model=$(nix build --no-link --print-out-paths --impure --expr \
-      "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ ... }: { imports = [ $checkout/examples/minimal/nixfied.nix ]; nixfied.codebases.main.sourceMode = \"snapshot\"; nixfied.codebases.main.sourceIdentity = builtins.path { path = $checkout/examples/minimal; name = \"nixfied-minimal-source\"; }; nixfied.codebases.main.dirtyPolicy = \"reject\"; })") \
-      || fail "immutable source: model build failed"
-    "$rt" check --model "$immutable_model/model.json" >/dev/null \
+    immutable_manifest=$(nix build --no-link --print-out-paths --impure --expr \
+      "let flake = builtins.getFlake (toString $checkout); compileManifest = (builtins.getAttr builtins.currentSystem flake.lib).compileManifest; in compileManifest ({ ... }: { imports = [ $checkout/examples/minimal/nixfied.nix ]; nixfied.codebases.main.sourceMode = \"snapshot\"; nixfied.codebases.main.sourceIdentity = builtins.path { path = $checkout/examples/minimal; name = \"nixfied-minimal-source\"; }; nixfied.codebases.main.dirtyPolicy = \"reject\"; })") \
+      || fail "immutable source: manifest build failed"
+    "$rt" check --manifest "$immutable_manifest/manifest.json" >/dev/null \
       || fail "immutable source: runtime check failed"
     printf '  immutable_source: %ds\n' "$((SECONDS - t0))" >&2
 
@@ -310,7 +310,7 @@ rm -rf "$work"
     upgrade_old_url="file://$upgrade_old_archive"
     upgrade_new_url="file://$upgrade_new_archive"
     upgrade_transaction_tests() {
-      local project model_project lock_failure_project no_lock_project
+      local project manifest_project lock_failure_project no_lock_project
       local before_flake before_lock before_project bad_pin no_lock_url
 
       echo "  upgrade transaction and mode semantics" >&2
@@ -333,11 +333,9 @@ rm -rf "$work"
       rm -rf "$missing_lock_project"
 
       project=$(mktemp -d)
-      if [ -n "$dirty" ]; then
-        race_candidate_pin="git+file://$checkout?rev=$(git -C "$checkout" rev-parse HEAD)&shallow=1"
-      else
-        race_candidate_pin="path:$checkout"
-      fi
+      # A distinct pin of the current source keeps the candidate compatible
+      # across uncommitted API cutovers. HEAD may still expose the previous API.
+      race_candidate_pin="path:$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)"
       nix run "$checkout#install" -- --root "$project" --project-id upgrade-race --name upgrade-race --nixfied-url "$pin" >/dev/null \
         || fail "upgrade transaction: race fixture install failed"
       nix flake lock "$project" >/dev/null || fail "upgrade transaction: race fixture lock failed"
@@ -383,13 +381,8 @@ rm -rf "$work"
         || fail "upgrade transaction: concurrent upgrade did not apply flake.lock"
       grep -Fq "$race_candidate_pin" "$project/flake.nix" \
         || fail "upgrade transaction: concurrent upgrade applied the wrong flake pin"
-      if [ -n "$dirty" ]; then
-        grep -Fq '  type: git' "$project/race-one.stderr" "$project/race-two.stderr" \
-          || fail "upgrade transaction: concurrent Git candidate identity was not reported"
-      else
-        grep -Fq '  type: path' "$project/race-one.stderr" "$project/race-two.stderr" \
-          || fail "upgrade transaction: concurrent path candidate identity was not reported"
-      fi
+      grep -Fq '  type: path' "$project/race-one.stderr" "$project/race-two.stderr" \
+        || fail "upgrade transaction: concurrent path candidate identity was not reported"
       [ -z "$(find "$project" -maxdepth 1 -type f -name '*nixfied-upgrade*' -print -quit)" ] \
         || fail "upgrade transaction: concurrent upgrade left temporary files"
       [ ! -e "$race_state" ] || fail "upgrade transaction: concurrent upgrade materialized runtime state"
@@ -431,23 +424,23 @@ rm -rf "$work"
         || fail "upgrade transaction: interrupted apply left temporary files"
       rm -rf "$interrupt_project"
 
-      model_project=$(mktemp -d)
-      nix run "$checkout#install" -- --root "$model_project" --project-id upgrade-model-failure --name upgrade-model-failure --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: model fixture install failed"
-      nix flake lock "$model_project" >/dev/null || fail "upgrade transaction: model fixture lock failed"
-      ${pkgs.gnused}/bin/sed -i '/^  nixfied.surface.verbs.smoke = /c\  nixfied.surface.verbs = [ "smoke" ];' "$model_project/nixfied.nix"
-      before_flake=$(sha256sum "$model_project/flake.nix")
-      before_lock=$(sha256sum "$model_project/flake.lock")
-      before_project=$(sha256sum "$model_project/nixfied.nix")
-      if nix run "$checkout#upgrade" -- --root "$model_project" --nixfied-url "$pin" >"$model_project/stdout" 2>"$model_project/stderr"; then
+      manifest_project=$(mktemp -d)
+      nix run "$checkout#install" -- --root "$manifest_project" --project-id upgrade-manifest-failure --name upgrade-manifest-failure --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: manifest fixture install failed"
+      nix flake lock "$manifest_project" >/dev/null || fail "upgrade transaction: manifest fixture lock failed"
+      ${pkgs.gnused}/bin/sed -i '/^  nixfied.surface.verbs.smoke = /c\  nixfied.surface.verbs = [ "smoke" ];' "$manifest_project/nixfied.nix"
+      before_flake=$(sha256sum "$manifest_project/flake.nix")
+      before_lock=$(sha256sum "$manifest_project/flake.lock")
+      before_project=$(sha256sum "$manifest_project/nixfied.nix")
+      if nix run "$checkout#upgrade" -- --root "$manifest_project" --nixfied-url "$pin" >"$manifest_project/stdout" 2>"$manifest_project/stderr"; then
         fail "upgrade transaction: incompatible candidate unexpectedly succeeded"
       fi
-      grep -Fq "candidate verification: failed (model preflight)" "$model_project/stderr" || fail "upgrade transaction: model failure was not reported"
-      grep -Fq "upgrade applied: no" "$model_project/stderr" || fail "upgrade transaction: model failure omitted apply status"
-      grep -Fq "upgrade not applied; no project files were changed" "$model_project/stderr" || fail "upgrade transaction: model failure omitted no-mutation status"
-      [ "$before_flake" = "$(sha256sum "$model_project/flake.nix")" ] || fail "upgrade transaction: model failure changed flake.nix"
-      [ "$before_lock" = "$(sha256sum "$model_project/flake.lock")" ] || fail "upgrade transaction: model failure changed flake.lock"
-      [ "$before_project" = "$(sha256sum "$model_project/nixfied.nix")" ] || fail "upgrade transaction: model failure changed nixfied.nix"
-      rm -rf "$model_project"
+      grep -Fq "candidate verification: failed (manifest preflight)" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure was not reported"
+      grep -Fq "upgrade applied: no" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure omitted apply status"
+      grep -Fq "upgrade not applied; no project files were changed" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure omitted no-mutation status"
+      [ "$before_flake" = "$(sha256sum "$manifest_project/flake.nix")" ] || fail "upgrade transaction: manifest failure changed flake.nix"
+      [ "$before_lock" = "$(sha256sum "$manifest_project/flake.lock")" ] || fail "upgrade transaction: manifest failure changed flake.lock"
+      [ "$before_project" = "$(sha256sum "$manifest_project/nixfied.nix")" ] || fail "upgrade transaction: manifest failure changed nixfied.nix"
+      rm -rf "$manifest_project"
 
       lock_failure_project=$(mktemp -d)
       nix run "$checkout#install" -- --root "$lock_failure_project" --project-id upgrade-lock-failure --name upgrade-lock-failure --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: lock failure fixture install failed"
@@ -494,6 +487,16 @@ rm -rf "$work"
       local scope_old_patch scope_new_patch scope_expected scope_expected_hash
       local before_flake before_lock before_project state run_status expected_empty
       local old_commit new_commit old_archive_hash new_archive_hash expected_diff_hash
+
+      prepare_historical_project() {
+        # These frozen inputs predate the manifest API. Adapt only the throwaway
+        # adopter flake to expose the current preflight package name using the
+        # historical compiler; never rewrite archives or documentation goldens.
+        ${pkgs.gnused}/bin/sed -i \
+          -e 's/compileManifest/compileModel/g' \
+          -e 's/\.model/\.manifest/g' \
+          -e 's/        model =/        manifest =/' "$1/flake.nix"
+      }
 
       sha256_file() {
         sha256sum "$1" | cut -d ' ' -f1
@@ -609,6 +612,7 @@ rm -rf "$work"
         || fail "upgrade golden: historical install failed"
       grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$failure_project/nixfied.nix" \
         || fail "upgrade golden: historical installer did not produce the list-form declaration"
+      prepare_historical_project "$failure_project"
       nix flake lock "$failure_project" >/dev/null \
         || fail "upgrade golden: historical failure fixture lock failed"
       jq -e --arg expected "$upgrade_old_nar_hash" \
@@ -632,8 +636,8 @@ rm -rf "$work"
         || fail "upgrade golden: old tarball NAR hash was not reported"
       grep -Fq "  narHash: $upgrade_new_nar_hash" "$failure_project/plan.stderr" \
         || fail "upgrade golden: candidate tarball NAR hash was not reported"
-      grep -Fq 'candidate verification: failed (model preflight)' "$failure_project/plan.stderr" \
-        || fail "upgrade golden: incompatible plan omitted model preflight failure"
+      grep -Fq 'candidate verification: failed (manifest preflight)' "$failure_project/plan.stderr" \
+        || fail "upgrade golden: incompatible plan omitted manifest preflight failure"
       grep -Fq 'upgrade applied: no' "$failure_project/plan.stderr" \
         || fail "upgrade golden: incompatible plan omitted apply status"
       grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/plan.stderr" \
@@ -648,8 +652,8 @@ rm -rf "$work"
         || run_status=$?
       [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible apply returned $run_status instead of 5"
       assert_upgrade_golden "$failure_project/apply.stdout" "incompatible apply"
-      grep -Fq 'candidate verification: failed (model preflight)' "$failure_project/apply.stderr" \
-        || fail "upgrade golden: incompatible apply omitted model preflight failure"
+      grep -Fq 'candidate verification: failed (manifest preflight)' "$failure_project/apply.stderr" \
+        || fail "upgrade golden: incompatible apply omitted manifest preflight failure"
       grep -Fq 'upgrade applied: no' "$failure_project/apply.stderr" \
         || fail "upgrade golden: incompatible apply omitted apply status"
       grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/apply.stderr" \
@@ -663,6 +667,7 @@ rm -rf "$work"
         --root "$unsupported_project" --project-id upgrade-golden-unsupported --name upgrade-golden-unsupported \
         --nixfied-url "$upgrade_old_url" >/dev/null \
         || fail "upgrade golden: unsupported identity install failed"
+      prepare_historical_project "$unsupported_project"
       nix flake lock "$unsupported_project" >/dev/null \
         || fail "upgrade golden: unsupported identity fixture lock failed"
       jq '.nodes[.nodes[.root].inputs.nixfied].locked.type = "sourcehut"' \
@@ -706,6 +711,7 @@ rm -rf "$work"
         "$success_project/nixfied.nix"
       ! grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$success_project/nixfied.nix" \
         || fail "upgrade golden: compatible fixture retained the incompatible list declaration"
+      prepare_historical_project "$success_project"
       nix flake lock "$success_project" >/dev/null \
         || fail "upgrade golden: historical compatible fixture lock failed"
       before_flake=$(sha256sum "$success_project/flake.nix")
@@ -717,10 +723,10 @@ rm -rf "$work"
         >"$success_project/plan.stdout" 2>"$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan failed"
       assert_upgrade_golden "$success_project/plan.stdout" "compatible plan"
-      grep -Fq 'candidate verification: passed (model preflight)' "$success_project/plan.stderr" \
-        || fail "upgrade golden: compatible plan omitted model preflight success"
+      grep -Fq 'candidate verification: passed (manifest preflight)' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted manifest preflight success"
       assert_blank_after "$success_project/plan.stderr" \
-        'candidate verification: passed (model preflight)' 'compatible plan'
+        'candidate verification: passed (manifest preflight)' 'compatible plan'
       grep -Fq 'upgrade applied: no (--plan)' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted plan apply status"
       grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
@@ -738,9 +744,9 @@ rm -rf "$work"
       grep -Fq 'rerun upgrade without --plan' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted apply next step"
       grep -Fq '  nix build ' "$success_project/plan.stderr" \
-        || fail "upgrade golden: compatible plan omitted model build next step"
+        || fail "upgrade golden: compatible plan omitted manifest build next step"
       grep -Fq '  nix run ' "$success_project/plan.stderr" \
-        || fail "upgrade golden: compatible plan omitted model-check next step"
+        || fail "upgrade golden: compatible plan omitted manifest-check next step"
       grep -Fq "  narHash: $upgrade_old_nar_hash" "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted old NAR identity"
       grep -Fq "  narHash: $upgrade_new_nar_hash" "$success_project/plan.stderr" \
@@ -753,10 +759,10 @@ rm -rf "$work"
         >"$success_project/apply.stdout" 2>"$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply failed"
       assert_upgrade_golden "$success_project/apply.stdout" "compatible apply"
-      grep -Fq 'candidate verification: passed (model preflight)' "$success_project/apply.stderr" \
-        || fail "upgrade golden: compatible apply omitted model preflight success"
+      grep -Fq 'candidate verification: passed (manifest preflight)' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted manifest preflight success"
       assert_blank_after "$success_project/apply.stderr" \
-        'candidate verification: passed (model preflight)' 'compatible apply'
+        'candidate verification: passed (manifest preflight)' 'compatible apply'
       grep -Fq 'upgrade applied: yes' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted apply status"
       grep -Fq 'changed: flake.nix' "$success_project/apply.stderr" \
@@ -770,9 +776,9 @@ rm -rf "$work"
       grep -Fxq 'next:' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted next-step header"
       grep -Fq '  nix build ' "$success_project/apply.stderr" \
-        || fail "upgrade golden: compatible apply omitted model build next step"
+        || fail "upgrade golden: compatible apply omitted manifest build next step"
       grep -Fq '  nix run ' "$success_project/apply.stderr" \
-        || fail "upgrade golden: compatible apply omitted model-check next step"
+        || fail "upgrade golden: compatible apply omitted manifest-check next step"
       grep -Fq "$upgrade_new_url" "$success_project/flake.nix" \
         || fail "upgrade golden: compatible apply did not apply the pinned new URL"
       jq -e --arg expected "$upgrade_new_nar_hash" \
@@ -783,10 +789,10 @@ rm -rf "$work"
         || fail "upgrade golden: compatible apply changed nixfied.nix"
       [ ! -e "$state" ] \
         || fail "upgrade golden: compatible apply materialized runtime state"
-      nix build --no-link "$success_project#model" >/dev/null \
-        || fail "upgrade golden: compatible applied model did not build"
+      nix build --no-link "$success_project#manifest" >/dev/null \
+        || fail "upgrade golden: compatible applied manifest did not build"
       nix run --no-write-lock-file "$success_project#model-check" >/dev/null \
-        || fail "upgrade golden: compatible applied model-check failed"
+        || fail "upgrade golden: compatible applied manifest-check failed"
 
       expected_empty="$success_project/empty.expected"
       printf '%s\n' \
@@ -826,6 +832,7 @@ rm -rf "$work"
         --root "$scope_project" --project-id upgrade-golden-scope --name upgrade-golden-scope \
         --nixfied-url "path:$scope_old_source" >/dev/null \
         || fail "upgrade golden: scope fixture install failed"
+      prepare_historical_project "$scope_project"
       nix flake lock "$scope_project" >/dev/null \
         || fail "upgrade golden: scope fixture lock failed"
       before_flake=$(sha256sum "$scope_project/flake.nix")
@@ -842,8 +849,8 @@ rm -rf "$work"
         || fail "upgrade golden: scope fixture path identity was not reported"
       ! grep -Fq '  rev:' "$scope_project/stderr" \
         || fail "upgrade golden: scope fixture path identity fabricated a revision"
-      grep -Fq 'candidate verification: passed (model preflight)' "$scope_project/stderr" \
-        || fail "upgrade golden: documentation scope plan omitted model preflight success"
+      grep -Fq 'candidate verification: passed (manifest preflight)' "$scope_project/stderr" \
+        || fail "upgrade golden: documentation scope plan omitted manifest preflight success"
       assert_upgrade_unchanged "$scope_project" "$before_flake" "$before_lock" "$before_project" "documentation scope plan"
       [ ! -e "$state" ] || fail "upgrade golden: documentation scope plan materialized runtime state"
       rm -rf "$scope_project" "$scope_root"
@@ -864,6 +871,7 @@ rm -rf "$work"
         --root "$path_project" --project-id upgrade-golden-path --name upgrade-golden-path \
         --nixfied-url "$old_path_pin" >/dev/null \
         || fail "upgrade golden: path fixture install failed"
+      prepare_historical_project "$path_project"
       nix flake lock "$path_project" >/dev/null \
         || fail "upgrade golden: path fixture lock failed"
       nix run "$checkout#upgrade" -- \
@@ -897,6 +905,7 @@ rm -rf "$work"
         --root "$git_project" --project-id upgrade-golden-git --name upgrade-golden-git \
         --nixfied-url "$old_git_pin" >/dev/null \
         || fail "upgrade golden: Git fixture install failed"
+      prepare_historical_project "$git_project"
       nix flake lock "$git_project" >/dev/null \
         || fail "upgrade golden: Git fixture lock failed"
       before_flake=$(sha256sum "$git_project/flake.nix")
@@ -940,6 +949,7 @@ rm -rf "$work"
         --root "$unavailable_project" --project-id upgrade-golden-unavailable --name upgrade-golden-unavailable \
         --nixfied-url "path:$unavailable_source" >/dev/null \
         || fail "upgrade golden: unavailable fixture install failed"
+      prepare_historical_project "$unavailable_project"
       nix flake lock "$unavailable_project" >/dev/null \
         || fail "upgrade golden: unavailable fixture lock failed"
       jq '.nodes[.nodes[.root].inputs.nixfied].locked.narHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' \
@@ -957,7 +967,7 @@ rm -rf "$work"
         || fail "upgrade golden: unavailable source was not reported"
       ! grep -Fq -- 'NO CHECKED-IN DOCUMENTATION CHANGED' "$unavailable_project/stdout" \
         || fail "upgrade golden: unavailable source was reported as empty"
-      grep -Fq 'candidate verification: passed (model preflight)' "$unavailable_project/stderr" \
+      grep -Fq 'candidate verification: passed (manifest preflight)' "$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable source incorrectly failed candidate preflight"
       ! grep -Fq '  rev:' "$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable path identity fabricated a revision"
@@ -986,7 +996,7 @@ rm -rf "$work"
     empty_surface_apps=$(nix eval --no-write-lock-file --json "$path_project#apps.$current_system") \
       || fail "adoption: empty surface app metadata did not evaluate"
     printf '%s\n' "$empty_surface_apps" | jq -e '
-      (keys | sort) == ["clean", "docs", "down", "help", "model-check", "ps", "run"]
+      (keys | sort) == ["clean", "docs", "down", "help", "manifest-check", "ps", "run"]
     ' >/dev/null || fail "adoption: empty surface unexpectedly exported a task app"
     rm -rf "$path_project"
 
@@ -1018,7 +1028,7 @@ rm -rf "$work"
     scaffold_apps=$(nix eval --no-write-lock-file --json "$project#apps.$current_system") \
       || fail "adoption: untouched scaffold app metadata did not evaluate"
     printf '%s\n' "$scaffold_apps" | jq -e '
-      (keys | sort) == ["clean", "docs", "down", "help", "model-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "docs", "down", "help", "manifest-check", "ps", "run", "smoke"]
       and all(.[];
         (.program | type == "string" and length > 0)
         and (.meta.description | type == "string" and length > 0)
@@ -1049,7 +1059,7 @@ rm -rf "$work"
     surface_apps=$(nix eval --json "$project#apps.$current_system") \
       || fail "adoption: leaf/composite surface app metadata did not evaluate"
     printf '%s\n' "$surface_apps" | jq -e '
-      (keys | sort) == ["clean", "composite-smoke", "docs", "down", "help", "model-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "composite-smoke", "docs", "down", "help", "manifest-check", "ps", "run", "smoke"]
       and .smoke.meta.description == "Run the starter smoke test"
       and .["composite-smoke"].meta.description == "Run the composite smoke test"
     ' >/dev/null || fail "adoption: leaf/composite app descriptions were not copied exactly"
@@ -1077,12 +1087,12 @@ rm -rf "$work"
       and has("docs")
       and .merged.meta.description == "Merged adopter app"
     ' >/dev/null || fail "adoption: generated apps lack discoverable descriptions"
-    model_dir="$(nix build --no-link --print-out-paths "$project#model")"
-    model="$model_dir/model.json"
-    if jq -e 'tostring | (contains("Run the starter smoke test") or contains("Run the composite smoke test") or contains("Overridden adopter verb"))' "$model" >/dev/null; then
-      fail "adoption: surface descriptions entered model.json"
+    manifest_dir="$(nix build --no-link --print-out-paths "$project#manifest")"
+    manifest="$manifest_dir/manifest.json"
+    if jq -e 'tostring | (contains("Run the starter smoke test") or contains("Run the composite smoke test") or contains("Overridden adopter verb"))' "$manifest" >/dev/null; then
+      fail "adoption: surface descriptions entered manifest.json"
     fi
-    if grep -Eq "Run the starter smoke test|Run the composite smoke test|Overridden adopter verb" "$model_dir/views/docs.md"; then
+    if grep -Eq "Run the starter smoke test|Run the composite smoke test|Overridden adopter verb" "$manifest_dir/views/docs.md"; then
       fail "adoption: surface descriptions entered views/docs.md"
     fi
     st=$(mktemp -d)
@@ -1124,10 +1134,10 @@ rm -rf "$work"
     fi
     printf '%s\n' "$unresolved_context_error" | grep -Fq "help: could not resolve the current flake source" \
       || fail "adoption: non-flake context failed for the wrong reason"
-    for app in run model-check ps down clean smoke; do
+    for app in run manifest-check ps down clean smoke; do
       case "$app" in
         run) help_flag=--help; usage='nix run .#run' ;;
-        model-check) help_flag=-h; usage='nix run .#model-check' ;;
+        manifest-check) help_flag=-h; usage='nix run .#manifest-check' ;;
         ps) help_flag=--help; usage='nix run .#ps' ;;
         down) help_flag=-h; usage='nix run .#down' ;;
         clean) help_flag=--help; usage='nix run .#clean' ;;
@@ -1144,11 +1154,11 @@ rm -rf "$work"
       || fail "adoption: generated app help modified the project lock file"
     direct_default_stdout="$st/direct-default.stdout"
     direct_default_stderr="$st/direct-default.stderr"
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --manifest "$manifest" --task smoke --timeout-ms 60000 ) \
       >"$direct_default_stdout" 2>"$direct_default_stderr" || fail "adoption: scaffolded run failed"
     # The generated control surface must work against the same state.
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#model-check" ) \
-      >/dev/null || fail "adoption: scaffolded model-check failed"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#manifest-check" ) \
+      >/dev/null || fail "adoption: scaffolded manifest-check failed"
     smoke_stdout="$st/smoke.stdout"
     smoke_stderr="$st/smoke.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 ) \

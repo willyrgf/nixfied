@@ -244,9 +244,9 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" options 'nixfied.services.<name>.stateRefs' > exact.txt
     test "$(cat exact.txt)" = 'nixfied.services.<name>.stateRefs'
     "$docs" api function > functions.txt
-    printf '%s\n' library/compileModel library/projectApps library/seq > expected.txt
+    printf '%s\n' library/compileManifest library/projectApps library/seq > expected.txt
     diff -u expected.txt functions.txt
-    "$docs" api app project/docs | grep -F 'no model admission' > /dev/null
+    "$docs" api app project/docs | grep -F 'no manifest admission' > /dev/null
     "$docs" api app root/regenerate | grep -F 'nix run .#regenerate' > /dev/null
     "$docs" api package check/rust-workspace | grep -F 'Clippy' > /dev/null
     "$docs" api error > errors.txt
@@ -256,7 +256,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" api record local/RegistryIdentityDiagnostic | grep -F 'signed' > /dev/null
     "$docs" api record output-schema/run-task | grep -F 'IgnoreUnknown' > /dev/null
     "$docs" api command run > run-command.txt
-    grep -Fq -- '--allow-non-store-model' run-command.txt
+    grep -Fq -- '--allow-non-store-manifest' run-command.txt
     grep -Fq 'Initial value: 5000' run-command.txt
     grep -Fq 'Help visibility: Hidden' run-command.txt
     "$docs" api command upgrade | grep -F 'inverse update_lock' > /dev/null
@@ -314,7 +314,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       'development': ('app', 'root/regenerate'),
       'discovery': ('app', 'project/docs'),
       'errors': ('error', 'SECRET_UNAVAILABLE'),
-      'model': ('function', 'library/compileModel'),
+      'manifest': ('function', 'library/compileManifest'),
       'outputs': ('record', 'output-schema/run-summary-json'),
       'placeholders': ('error', 'PORT_CONFLICT'),
       'recovery': ('command', 'upgrade'),
@@ -330,7 +330,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       members = {(entry['kind'], entry['id']) for entry in topic['members']}
       assert required in members, (name, required)
       # Development tooling must not enter other topics; runtime APIs must not
-      # enter development simply because it links to the model topic.
+      # enter development simply because it links to the manifest topic.
       excluded = ('command', 'run') if name == 'development' else ('app', 'root/regenerate')
       assert excluded not in members, (name, excluded)
       output = subprocess.check_output([sys.argv[1], 'topic', name], text=True)
@@ -418,8 +418,8 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
   assert ('app', 'project/run') in refs(('command', 'run'), 'backlinks')
   assert ('record', 'output-schema/run-json') in refs(('command', 'run'), 'references')
   assert ('command', 'run') in refs(('record', 'output-schema/run-json'), 'backlinks')
-  assert ('record', 'primitive/TaskSpec') in refs(('record', 'primitive/Model'), 'references')
-  assert ('record', 'primitive/Model') in refs(('record', 'primitive/TaskSpec'), 'backlinks')
+  assert ('record', 'primitive/TaskSpec') in refs(('record', 'primitive/Manifest'), 'references')
+  assert ('record', 'primitive/Manifest') in refs(('record', 'primitive/TaskSpec'), 'backlinks')
   target = entries[('option', 'nixfied.target.system')]
   assert ('topic', 'context') in refs(('option', target['id']), 'references')
   assert 'docs topic state' not in target['text']
@@ -482,9 +482,9 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     reject topic missing
     reject topic state extra
     reject api missing
-    reject api function root/compileModel
+    reject api function root/compileManifest
     reject api app project/regenerate
-    reject api function library/compileModel extra
+    reject api function library/compileManifest extra
     reject source extra
     reject --help extra
     reject unknown

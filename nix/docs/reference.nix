@@ -533,7 +533,7 @@ let
         docs option 'nixfied.services.<name>.stateRefs'
         docs topic state
         docs topic placeholders
-        docs api function library/compileModel"
+        docs api function library/compileManifest"
       }
       fail() {
         printf 'docs: %s; use docs --help for query usage.\n' "$1" >&2

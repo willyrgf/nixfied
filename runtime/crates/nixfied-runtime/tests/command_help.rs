@@ -5,9 +5,9 @@ use std::process::Command;
 use common::{TempDir, runtime_binary};
 
 #[test]
-fn existing_commands_print_help_without_touching_the_model_or_state() {
+fn existing_commands_print_help_without_touching_the_manifest_or_state() {
     let temp = TempDir::new();
-    let missing_model = temp.path.join("missing-model.json");
+    let missing_manifest = temp.path.join("missing-manifest.json");
     let state_base = temp.path.join("state");
     for (command, expected) in [
         ("check", include_str!("fixtures/help/check.txt")),
@@ -24,8 +24,8 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
             for help in ["-h", "--help"] {
                 let output = Command::new(runtime_binary())
                     .arg(command)
-                    .arg("--model")
-                    .arg(&missing_model)
+                    .arg("--manifest")
+                    .arg(&missing_manifest)
                     .args(&args)
                     .arg(help)
                     .env("NIXFIED_STATE_DIR", &state_base)
@@ -50,7 +50,7 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
         }
         for help in ["-h", "--help"] {
             let output = Command::new(runtime_binary())
-                .args([command, "--unknown", "--model", help])
+                .args([command, "--unknown", "--manifest", help])
                 .output()
                 .expect("help should precede option validation");
             assert!(output.status.success(), "{command} {help} precedence");
@@ -62,7 +62,10 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
             assert!(output.stderr.is_empty(), "{command} {help} precedence");
         }
     }
-    assert!(!missing_model.exists(), "help must not materialise a model");
+    assert!(
+        !missing_manifest.exists(),
+        "help must not materialise a manifest"
+    );
     assert!(!state_base.exists(), "help must not materialise state");
 }
 
@@ -70,7 +73,7 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
 fn entry_encoding_precedes_admission() {
     let no_args = Command::new(runtime_binary()).output().unwrap();
     assert!(!no_args.status.success());
-    assert!(String::from_utf8_lossy(&no_args.stderr).contains("missing --model path"));
+    assert!(String::from_utf8_lossy(&no_args.stderr).contains("missing --manifest path"));
     let unknown = Command::new(runtime_binary())
         .args(["unknown", "--help"])
         .output()

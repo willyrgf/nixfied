@@ -373,6 +373,39 @@ fn rejects_previous_service_status_schema_without_migration() {
 }
 
 #[test]
+fn rejects_previous_model_columns_without_rewriting_history() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 6;
+             CREATE TABLE events (seq INTEGER PRIMARY KEY, computed_model_hash TEXT);
+             INSERT INTO events VALUES (1, 'historical-hash');",
+        )
+        .unwrap();
+    }
+    let error = match Registry::open_or_create(&path, &identity()) {
+        Ok(_) => panic!("the previous schema must not be migrated"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let hash: String = conn
+        .query_row(
+            "SELECT computed_model_hash FROM events WHERE seq = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 6);
+    assert_eq!(hash, "historical-hash");
+}
+
+#[test]
 fn rejects_existing_v1_registry_missing_required_shape() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
@@ -388,7 +421,7 @@ fn rejects_existing_v1_registry_missing_required_shape() {
               run_id TEXT,
               service_instance_id TEXT,
               process_key TEXT,
-              computed_model_hash TEXT,
+              computed_manifest_hash TEXT,
               payload_json TEXT NOT NULL
             );
             ",
@@ -430,10 +463,10 @@ fn insert_run_for_heartbeat(registry: &Registry, run_id: &str) {
         .execute(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
+              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
-            ) VALUES (?1, 'dev', 0, 'service-starting', '/nix/store/model.json',
+            ) VALUES (?1, 'dev', 0, 'service-starting', '/nix/store/manifest.json',
                       'hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1',
                       '{}', '{}', '{}', NULL)
             ",

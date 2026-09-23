@@ -7,11 +7,11 @@ pub mod target;
 
 use std::path::PathBuf;
 
-use nixfied_model::Model;
+use nixfied_manifest::Manifest;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecutionModel, lower, prove_all_plans_feasible};
-use crate::model_loader::LoadedModel;
+use crate::execution::{ExecutionManifest, lower, prove_all_plans_feasible};
+use crate::manifest_loader::LoadedManifest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreOriginPolicy {
@@ -38,8 +38,8 @@ impl AdmissionContext {
 
 #[derive(Debug, Clone)]
 pub struct Admission {
-    pub model_path: PathBuf,
-    pub computed_model_hash: String,
+    pub manifest_path: PathBuf,
+    pub computed_manifest_hash: String,
     pub raw_len: usize,
     pub project_id: String,
     pub runtime_abi: String,
@@ -47,15 +47,15 @@ pub struct Admission {
     pub target_system: String,
     /// The resolved source root. Present for run admission; `None` for control
     /// admission (`ps`/`down`/`clean`), which must operate on a slot from the store
-    /// model and registry alone and so does not resolve source from the caller.
+    /// manifest and registry alone and so does not resolve source from the caller.
     pub source: Option<source::AdmittedSource>,
     /// Provenance serialized once at admission for the run record, so the executor
-    /// records it without reading the raw `Model`.
+    /// records it without reading the raw `Manifest`.
     pub generator_json: String,
     pub target_json: String,
-    /// The lowered, executable view of the model. Admission proves a concrete plan
+    /// The lowered, executable view of the manifest. Admission proves a concrete plan
     /// exists for every slot/selection; the executor consumes only this.
-    pub execution_model: ExecutionModel,
+    pub execution_manifest: ExecutionManifest,
     /// Secret material resolved once during run/check admission. Control admission
     /// only proves references and leaves this empty because ps/down/clean never
     /// spawn children.
@@ -63,66 +63,69 @@ pub struct Admission {
 }
 
 impl Admission {
-    /// Run admission: admit and lower the model, and resolve the declared source
+    /// Run admission: admit and lower the manifest, and resolve the declared source
     /// root so the executor can spawn execs from it.
-    pub fn check(loaded: &LoadedModel, context: &AdmissionContext) -> RuntimeResult<Self> {
+    pub fn check(loaded: &LoadedManifest, context: &AdmissionContext) -> RuntimeResult<Self> {
         Self::admit(loaded, context, true)
     }
 
     /// Control admission for recovery commands (`ps`/`down`/`clean`). Admits and
-    /// lowers the model but does NOT resolve the live workspace: control must
-    /// reconcile, stop, and clean a slot from the store model and registry alone,
+    /// lowers the manifest but does NOT resolve the live workspace: control must
+    /// reconcile, stop, and clean a slot from the store manifest and registry alone,
     /// so it cannot fail because the caller is outside the project root or the
     /// workspace has moved or been deleted while services stay registered.
     pub fn check_for_control(
-        loaded: &LoadedModel,
+        loaded: &LoadedManifest,
         context: &AdmissionContext,
     ) -> RuntimeResult<Self> {
         Self::admit(loaded, context, false)
     }
 
     fn admit(
-        loaded: &LoadedModel,
+        loaded: &LoadedManifest,
         context: &AdmissionContext,
         resolve_source: bool,
     ) -> RuntimeResult<Self> {
-        // Attach model provenance to every admission failure, including lowering
+        // Attach manifest provenance to every admission failure, including lowering
         // and plan-feasibility errors which propagate raw. The bytes were already
-        // read and hashed, so a `null` modelPath/computedModelHash on an invalid
-        // model would be an inconsistent, weaker diagnostic than parse/origin/abi/
+        // read and hashed, so a `null` manifestPath/computedManifestHash on an invalid
+        // manifest would be an inconsistent, weaker diagnostic than parse/origin/abi/
         // closure errors carry.
         Self::admit_checks(loaded, context, resolve_source).map_err(|error| {
-            error.with_model_if_missing(loaded.path.clone(), loaded.computed_model_hash.clone())
+            error.with_manifest_if_missing(
+                loaded.path.clone(),
+                loaded.computed_manifest_hash.clone(),
+            )
         })
     }
 
     fn admit_checks(
-        loaded: &LoadedModel,
+        loaded: &LoadedManifest,
         context: &AdmissionContext,
         resolve_source: bool,
     ) -> RuntimeResult<Self> {
         origin::check_store_origin(loaded, context)?;
-        abi::check_abi(&loaded.model, loaded)?;
-        target::check_target(&loaded.model, loaded, context)?;
+        abi::check_abi(&loaded.manifest, loaded)?;
+        target::check_target(&loaded.manifest, loaded, context)?;
         let source = if resolve_source {
-            Some(source::check_source(&loaded.model, loaded, context)?)
+            Some(source::check_source(&loaded.manifest, loaded, context)?)
         } else {
             None
         };
         let secrets = if resolve_source {
-            secrets::resolve_secrets(&loaded.model)?
+            secrets::resolve_secrets(&loaded.manifest)?
         } else {
-            secrets::check_secret_references(&loaded.model)?;
+            secrets::check_secret_references(&loaded.manifest)?;
             secrets::ResolvedSecrets::empty()
         };
-        closures::check_closures(&loaded.model, loaded, context)?;
-        let execution_model = lower(&loaded.model)?;
-        prove_all_plans_feasible(&execution_model)?;
+        closures::check_closures(&loaded.manifest, loaded, context)?;
+        let execution_manifest = lower(&loaded.manifest)?;
+        prove_all_plans_feasible(&execution_manifest)?;
         Ok(from_loaded(
-            &loaded.model,
+            &loaded.manifest,
             loaded,
             source,
-            execution_model,
+            execution_manifest,
             secrets,
         ))
     }
@@ -141,24 +144,24 @@ impl Admission {
 }
 
 fn from_loaded(
-    model: &Model,
-    loaded: &LoadedModel,
+    manifest: &Manifest,
+    loaded: &LoadedManifest,
     source: Option<source::AdmittedSource>,
-    execution_model: ExecutionModel,
+    execution_manifest: ExecutionManifest,
     secrets: secrets::ResolvedSecrets,
 ) -> Admission {
     Admission {
-        model_path: loaded.path.clone(),
-        computed_model_hash: loaded.computed_model_hash.clone(),
+        manifest_path: loaded.path.clone(),
+        computed_manifest_hash: loaded.computed_manifest_hash.clone(),
         raw_len: loaded.raw_len,
-        project_id: model.project.project_id.clone(),
-        runtime_abi: model.runtime_abi.clone(),
-        toolchain_id: model.toolchain_id.clone(),
-        target_system: model.target.system.clone(),
+        project_id: manifest.project.project_id.clone(),
+        runtime_abi: manifest.runtime_abi.clone(),
+        toolchain_id: manifest.toolchain_id.clone(),
+        target_system: manifest.target.system.clone(),
         source,
-        generator_json: serde_json::to_string(&model.generator).unwrap_or_default(),
-        target_json: serde_json::to_string(&model.target).unwrap_or_default(),
-        execution_model,
+        generator_json: serde_json::to_string(&manifest.generator).unwrap_or_default(),
+        target_json: serde_json::to_string(&manifest.target).unwrap_or_default(),
+        execution_manifest,
         secrets,
     }
 }

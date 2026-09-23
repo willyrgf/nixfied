@@ -1,11 +1,11 @@
 # Nixfied
 
 Nixfied lets a project describe its services, tasks, and exported workflows
-once in typed Nix. Nix evaluates and builds that declaration into one canonical
-`model.json`; a generic, Nix-free Rust runtime then owns process execution,
-ports, state, reconciliation, and cleanup.
+once in typed Nix. Nix evaluates and builds those declarations into a canonical
+project manifest, `manifest.json`; a generic, Nix-free Rust runtime then owns
+process execution, ports, state, reconciliation, and cleanup.
 
-The model has two kinds:
+The manifest has two kinds:
 
 - a **task** is a bounded invocation or a static composite DAG;
 - a **service** is a runtime-owned long-lived process with lifecycle and
@@ -37,7 +37,7 @@ nix run github:willyrgf/nixfied#install -- \
 
 The installer creates:
 
-- `flake.nix`, which declares Nixfied and exposes the compiled model and
+- `flake.nix`, which declares Nixfied and exposes the compiled manifest and
   generated apps;
 - `nixfied.nix`, which the project owns and edits.
 
@@ -51,13 +51,13 @@ nix flake lock                 # pin the declared inputs
 git add flake.lock             # Git worktrees only: include the pin in the commit
 nix run .#help              # list every runnable command and its purpose
 nix run .#docs              # read the reference at this project's Nixfied revision
-nix build .#model           # evaluate, validate, and compile the model
-nix run .#model-check       # admit it without executing a task
+nix build .#manifest        # evaluate, validate, and compile the manifest
+nix run .#manifest-check    # admit it without executing a task
 nix run .#smoke             # run the starter's exported task
 ```
 
 Replace the starter declarations with your services and workflows. Existing
-flakes are supported through the same `compileModel` and `projectApps` calls;
+flakes are supported through the same `compileManifest` and `projectApps` calls;
 the installer refuses to edit an existing `flake.nix` and prints the merge
 fragment instead.
 
@@ -75,11 +75,11 @@ upgrades.
 
 - **Nix** is the public integration and correctness layer. Typed modules reject
   invalid intent and realise every executable closure.
-- **Rust** is the hidden impure runtime. It admits the compiled model, starts and
+- **Rust** is the hidden impure runtime. It admits the compiled manifest, starts and
   reconciles process groups, verifies endpoint ownership, and safely cleans
   runtime-owned state. It never invokes Nix.
-- **`model.json`** is the only semantic seam. Its `views/docs.md` file is a
-  disposable, model-derived human reference.
+- **`manifest.json`** is the only semantic seam. Its `views/docs.md` file is a
+  disposable, manifest-derived human reference.
 
 ### Ownership in practice
 
@@ -103,11 +103,11 @@ not own their:
 - cold/warm modes;
 - operator history.
 
-Build the model to inspect the exact tasks, services, slots, port windows, and
+Build the manifest to inspect the exact tasks, services, slots, port windows, and
 state policy of an adopted project:
 
 ```sh
-nix build .#model
+nix build .#manifest
 less result/views/docs.md
 ```
 
@@ -119,7 +119,7 @@ less result/views/docs.md
   defaults, and descriptions.
 - [Adapter guide](docs/ADAPTERS.md) — adapter authoring and endpoint
   conventions.
-- [Contract](docs/CONTRACT.md) — normative model, lifecycle, state, and output
+- [Contract](docs/CONTRACT.md) — normative manifest, lifecycle, state, and output
   behavior.
 - [Architecture](docs/ARCHITECTURE.md) — rationale and product boundaries.
 - [Development guide](docs/DEVELOPMENT.md) — repository layout, checks, gates,
@@ -142,7 +142,7 @@ less result/views/docs.md
 For example:
 
 ```sh
-nix build --no-write-lock-file ./examples/downstream#model
+nix build --no-write-lock-file ./examples/downstream#manifest
 ```
 
 ## Developing Nixfied

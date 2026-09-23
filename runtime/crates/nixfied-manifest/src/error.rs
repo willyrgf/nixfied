@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("expected modelVersion {expected}, got {actual}")]
-    ModelVersion { expected: u32, actual: u32 },
+    #[error("expected manifestVersion {expected}, got {actual}")]
+    ManifestVersion { expected: u32, actual: u32 },
 
     #[error("expected toolchainId {expected}, got {actual}")]
     ToolchainId {
@@ -32,8 +32,8 @@ pub enum ValidationError {
 }
 
 #[derive(Debug, Error)]
-pub enum ModelValidationError {
-    #[error("model JSON is invalid: {0}")]
+pub enum ManifestValidationError {
+    #[error("manifest JSON is invalid: {0}")]
     Json(#[from] serde_json::Error),
 
     #[error("{0}")]

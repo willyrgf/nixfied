@@ -1,4 +1,4 @@
-use nixfied_model::FixtureTaskSpec;
+use nixfied_manifest::FixtureTaskSpec;
 
 // The added field has an actual native use, not only a decoder membership test.
 fn select(task: &FixtureTaskSpec) -> bool {

@@ -1,6 +1,6 @@
 //! Marker upgrade semantics: a slot is owned by project/environment/slot, not
-//! by one model build. These tests drive `prepare_slot_state` through the
-//! second-run / changed-model / changed-epoch / interrupted-run matrix that
+//! by one manifest build. These tests drive `prepare_slot_state` through the
+//! second-run / changed-manifest / changed-epoch / interrupted-run matrix that
 //! first surfaced in MFM's v2 adoption.
 
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{CleanupPolicy, Model};
+use nixfied_manifest::{CleanupPolicy, Manifest};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
@@ -21,7 +21,7 @@ mod common;
 use common::*;
 
 #[test]
-fn second_run_same_model_adopts_marker() {
+fn second_run_same_manifest_adopts_marker() {
     let fixture = UpgradeFixture::new();
     let identity = fixture.identity("hash-a");
     let first = fixture
@@ -31,17 +31,17 @@ fn second_run_same_model_adopts_marker() {
 
     let second = fixture
         .prepare("run-2", &identity)
-        .expect("second run of the same model should adopt the slot");
+        .expect("second run of the same manifest should adopt the slot");
 
     assert!(!first.upgraded);
     assert!(!second.upgraded);
     assert!(sentinel.exists(), "adopted state root must be preserved");
-    assert_eq!(fixture.marker().computed_model_hash, "hash-a");
+    assert_eq!(fixture.marker().computed_manifest_hash, "hash-a");
     assert_eq!(fixture.upgrade_event_count(), 0);
 }
 
 #[test]
-fn changed_model_hash_same_epoch_upgrades_and_preserves_state_root() {
+fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
     let fixture = UpgradeFixture::new();
     fixture
         .prepare("run-1", &fixture.identity("hash-a"))
@@ -50,22 +50,22 @@ fn changed_model_hash_same_epoch_upgrades_and_preserves_state_root() {
 
     let report = fixture
         .prepare("run-2", &fixture.identity("hash-b"))
-        .expect("a changed model hash should upgrade, not refuse");
+        .expect("a changed manifest hash should upgrade, not refuse");
 
     assert!(report.upgraded);
     assert!(!report.cleaned);
-    assert_eq!(report.from_model_hash.as_deref(), Some("hash-a"));
+    assert_eq!(report.from_manifest_hash.as_deref(), Some("hash-a"));
     assert!(
         sentinel.exists(),
         "same-epoch upgrade must preserve the state root"
     );
     let marker = fixture.marker();
-    assert_eq!(marker.computed_model_hash, "hash-b");
+    assert_eq!(marker.computed_manifest_hash, "hash-b");
     assert_eq!(marker.state_epoch, "1");
     assert_eq!(fixture.upgrade_event_count(), 1);
     let payload = fixture.last_upgrade_event_payload();
-    assert_eq!(payload["fromModelHash"], "hash-a");
-    assert_eq!(payload["toModelHash"], "hash-b");
+    assert_eq!(payload["fromManifestHash"], "hash-a");
+    assert_eq!(payload["toManifestHash"], "hash-b");
     assert_eq!(payload["cleaned"], false);
 }
 
@@ -77,12 +77,12 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
         .expect("first run should prepare a fresh slot");
     let sentinel = fixture.plant_sentinel();
 
-    let mut epoch2_value = fixture_model();
+    let mut epoch2_value = fixture_manifest();
     epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
-    let epoch2_model: Model =
-        serde_json::from_value(epoch2_value).expect("epoch-2 model should parse");
-    let epoch2_admission = admission(&epoch2_model, &fixture.tmp.path, "hash-b");
-    let epoch2_identity = StateIdentity::from_model(&epoch2_model, &epoch2_admission);
+    let epoch2_manifest: Manifest =
+        serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
+    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, "hash-b");
+    let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
 
     let report = fixture
         .prepare("run-2", &epoch2_identity)
@@ -100,7 +100,7 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
     );
     let marker = fixture.marker();
     assert_eq!(marker.state_epoch, "2");
-    assert_eq!(marker.computed_model_hash, "hash-b");
+    assert_eq!(marker.computed_manifest_hash, "hash-b");
     let payload = fixture.last_upgrade_event_payload();
     assert_eq!(payload["fromEpoch"], "1");
     assert_eq!(payload["toEpoch"], "2");
@@ -136,7 +136,7 @@ fn pre_existing_empty_state_root_is_fresh() {
         .expect("an empty state root has no state to adopt and is a fresh slot");
 
     assert!(!report.upgraded);
-    assert_eq!(fixture.marker().computed_model_hash, "hash-a");
+    assert_eq!(fixture.marker().computed_manifest_hash, "hash-a");
 }
 
 #[test]
@@ -184,12 +184,12 @@ fn epoch_change_on_protected_state_refuses_upgrade_clean() {
     marker.cleanup_policy = CleanupPolicy::Protected;
     fixture.rewrite_marker(&marker);
 
-    let mut epoch2_value = fixture_model();
+    let mut epoch2_value = fixture_manifest();
     epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
-    let epoch2_model: Model =
-        serde_json::from_value(epoch2_value).expect("epoch-2 model should parse");
-    let epoch2_admission = admission(&epoch2_model, &fixture.tmp.path, "hash-b");
-    let epoch2_identity = StateIdentity::from_model(&epoch2_model, &epoch2_admission);
+    let epoch2_manifest: Manifest =
+        serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
+    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, "hash-b");
+    let epoch2_identity = StateIdentity::from_manifest(&epoch2_manifest, &epoch2_admission);
 
     let error = fixture
         .prepare("run-2", &epoch2_identity)
@@ -203,38 +203,39 @@ fn epoch_change_on_protected_state_refuses_upgrade_clean() {
 }
 
 #[test]
-fn live_old_model_service_is_torn_down_on_upgrade() {
+fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let tmp = TempDir::new();
-    let model: Model = serde_json::from_value(synthetic_model("/bin/sleep", &["30"], 23980, 23990))
-        .expect("model should parse");
-    let admission_a = admission(&model, &tmp.path, "hash-a");
-    let placement = derive_host_placement(&model, "run-a", &tmp.path).expect("layout derives");
+    let manifest: Manifest =
+        serde_json::from_value(synthetic_manifest("/bin/sleep", &["30"], 23980, 23990))
+            .expect("manifest should parse");
+    let admission_a = admission(&manifest, &tmp.path, "hash-a");
+    let placement = derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
     materialize_run_roots(&placement).expect("roots should materialize");
-    let identity_a = StateIdentity::from_model(&model, &admission_a);
+    let identity_a = StateIdentity::from_manifest(&manifest, &admission_a);
     commit_slot_marker(&placement, &identity_a).expect("marker should be written");
-    let mut registry = open_registry(&placement, &model);
+    let mut registry = open_registry(&placement, &manifest);
     let service = start_synthetic_service(
-        &model,
+        &manifest,
         &admission_a,
         &placement,
         &mut registry,
         "run-a",
         23980,
     )
-    .expect("old-model service should start");
+    .expect("old-manifest service should start");
     let pgid = service.pgid;
     let process_key = service.process_key.clone();
 
-    let admission_b = admission(&model, &tmp.path, "hash-b");
-    let identity_b = StateIdentity::from_model(&model, &admission_b);
-    let placement_b = derive_host_placement(&model, "run-b", &tmp.path).expect("layout derives");
+    let admission_b = admission(&manifest, &tmp.path, "hash-b");
+    let identity_b = StateIdentity::from_manifest(&manifest, &admission_b);
+    let placement_b = derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
     let report = prepare_slot_state(&placement_b, &identity_b, &mut registry, 5000)
-        .expect("upgrade should tear down the old model's live service");
+        .expect("upgrade should tear down the old manifest's live service");
 
     assert!(report.upgraded);
     assert!(
         wait_for_group_exit(pgid, 5000),
-        "the old model's process group must be empty after the upgrade"
+        "the old manifest's process group must be empty after the upgrade"
     );
     let process_status: String = registry
         .connection()
@@ -261,12 +262,12 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
+              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
               'run-interrupted', 'dev', 0, 'service-starting',
-              '/nix/store/model-a/model.json', 'hash-a', 'nixfied-runtime-abi:1',
+              '/nix/store/manifest-a/manifest.json', 'hash-a', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             ",
@@ -307,7 +308,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         )
         .expect("process status should query");
     assert_eq!(process_status, "stale");
-    assert_eq!(fixture.marker().computed_model_hash, "hash-b");
+    assert_eq!(fixture.marker().computed_manifest_hash, "hash-b");
 }
 
 fn wait_for_group_exit(pgid: i32, timeout_ms: u64) -> bool {
@@ -349,24 +350,24 @@ fn process_group_has_non_zombie_member(pgid: i32) -> bool {
 
 struct UpgradeFixture {
     tmp: TempDir,
-    model: Model,
+    manifest: Manifest,
 }
 
 impl UpgradeFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
-        let model: Model =
-            serde_json::from_value(fixture_model()).expect("fixture model should parse");
-        Self { tmp, model }
+        let manifest: Manifest =
+            serde_json::from_value(fixture_manifest()).expect("fixture manifest should parse");
+        Self { tmp, manifest }
     }
 
     fn identity(&self, hash: &str) -> StateIdentity {
-        let admission = admission(&self.model, &self.tmp.path, hash);
-        StateIdentity::from_model(&self.model, &admission)
+        let admission = admission(&self.manifest, &self.tmp.path, hash);
+        StateIdentity::from_manifest(&self.manifest, &admission)
     }
 
     fn placement(&self, run_id: &str) -> HostPlacement {
-        derive_host_placement(&self.model, run_id, &self.tmp.path).expect("layout should derive")
+        derive_host_placement(&self.manifest, run_id, &self.tmp.path).expect("layout should derive")
     }
 
     fn prepare(
@@ -376,14 +377,14 @@ impl UpgradeFixture {
     ) -> Result<nixfied_runtime::state::UpgradeReport, nixfied_runtime::RuntimeError> {
         let placement = self.placement(run_id);
         materialize_registry_root(&placement)?;
-        let mut registry = open_registry(&placement, &self.model);
+        let mut registry = open_registry(&placement, &self.manifest);
         prepare_slot_state(&placement, identity, &mut registry, 1000)
     }
 
     fn registry(&self) -> Registry {
         let placement = self.placement("control");
         materialize_registry_root(&placement).expect("registry root should materialize");
-        open_registry(&placement, &self.model)
+        open_registry(&placement, &self.manifest)
     }
 
     fn state_root(&self) -> PathBuf {
@@ -437,26 +438,26 @@ impl UpgradeFixture {
     }
 }
 
-fn open_registry(placement: &HostPlacement, model: &Model) -> Registry {
+fn open_registry(placement: &HostPlacement, manifest: &Manifest) -> Registry {
     Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::default_slot(
-            &model.project.project_id,
-            &model.runtime_abi,
-            &model.toolchain_id,
+            &manifest.project.project_id,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
         ),
     )
     .expect("registry should open")
 }
 
-fn admission(model: &Model, source_root: &Path, hash: &str) -> Admission {
+fn admission(manifest: &Manifest, source_root: &Path, hash: &str) -> Admission {
     Admission {
-        model_path: PathBuf::from(format!("/nix/store/model-{hash}/model.json")),
-        computed_model_hash: hash.to_string(),
-        ..common::synthetic_admission(model, source_root)
+        manifest_path: PathBuf::from(format!("/nix/store/manifest-{hash}/manifest.json")),
+        computed_manifest_hash: hash.to_string(),
+        ..common::synthetic_admission(manifest, source_root)
     }
 }
 
-fn fixture_model() -> Value {
-    common::synthetic_model_default(23880, 23890)
+fn fixture_manifest() -> Value {
+    common::synthetic_manifest_default(23880, 23890)
 }

@@ -1,9 +1,9 @@
-//! The execution layer: the executor's own input type (`ExecutionModel`) and the
-//! total lowering from `nixfied_model::Model` that produces it.
+//! The execution layer: the executor's own input type (`ExecutionManifest`) and the
+//! total lowering from `nixfied_manifest::Manifest` that produces it.
 //!
-//! The seam: the schema (`Model`) defines what is *expressible*; the
-//! `ExecutionModel` defines what is *executable*. `lower` is the only bridge, and
-//! it destructures every `Model` field with no `..`, so a new schema field is a
+//! The seam: the schema (`Manifest`) defines what is *expressible*; the
+//! `ExecutionManifest` defines what is *executable*. `lower` is the only bridge, and
+//! it destructures every `Manifest` field with no `..`, so a new schema field is a
 //! compile error until the lowering consciously maps or refuses it.
 
 mod lower;

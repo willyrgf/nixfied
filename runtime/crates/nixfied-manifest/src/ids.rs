@@ -1,4 +1,4 @@
-//! Typed identifiers for the model's cross-references. Each is a `#[serde(transparent)]`
+//! Typed identifiers for the manifest's cross-references. Each is a `#[serde(transparent)]`
 //! newtype over `String`, so the wire shape is unchanged (still a JSON string),
 //! but a reference can no longer be confused with an unrelated string or with a
 //! reference of a different namespace. The runtime's lowering resolves each
@@ -63,19 +63,19 @@ macro_rules! id_newtype {
 }
 
 id_newtype!(
-    /// A realised closure's id (`Model.closures` key).
+    /// A realised closure's id (`Manifest.closures` key).
     ClosureId
 );
 id_newtype!(
-    /// A source codebase's id (`Model.codebases[].codebaseId`).
+    /// A source codebase's id (`Manifest.codebases[].codebaseId`).
     CodebaseId
 );
 id_newtype!(
-    /// A service's id (`Model.services` key).
+    /// A service's id (`Manifest.services` key).
     ServiceId
 );
 id_newtype!(
-    /// A task's id (`Model.tasks` key).
+    /// A task's id (`Manifest.tasks` key).
     TaskId
 );
 id_newtype!(
@@ -83,7 +83,7 @@ id_newtype!(
     NodeId
 );
 id_newtype!(
-    /// A lifecycle/task operation id, globally unique across the model.
+    /// A lifecycle/task operation id, globally unique across the manifest.
     OperationId
 );
 

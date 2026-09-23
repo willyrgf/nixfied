@@ -1,4 +1,4 @@
-use nixfied_model::StdinPolicy;
+use nixfied_manifest::StdinPolicy;
 
 #[test]
 fn changed_inventory_is_the_decoder_and_encoder_domain() {

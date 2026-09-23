@@ -2,7 +2,7 @@
 let
   structure = import ./default.nix { inherit lib; };
   inventory = import ./inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
   publications = import ../project-publications.nix { };
   checked = import ./syntax.nix { inherit lib; } {

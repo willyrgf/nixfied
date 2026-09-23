@@ -1,18 +1,18 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use nixfied_model::Model;
+use nixfied_manifest::Manifest;
 
 use crate::admission::AdmissionContext;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::model_loader::LoadedModel;
+use crate::manifest_loader::LoadedManifest;
 
 pub fn check_closures(
-    model: &Model,
-    loaded: &LoadedModel,
+    manifest: &Manifest,
+    loaded: &LoadedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<()> {
-    for (closure_id, closure) in &model.closures {
+    for (closure_id, closure) in &manifest.closures {
         let store_path =
             require_store_path("closure.storePath", &closure.store_path, loaded, context)?;
         let executable =
@@ -22,10 +22,10 @@ pub fn check_closures(
                 ErrorCode::ClosureMissing,
                 format!("closure storePath does not exist: {}", store_path.display()),
             )
-            .with_model(&loaded.path, &loaded.computed_model_hash));
+            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
         }
         // Containment is asserted on the DECLARED paths: the executable the
-        // model names must live under the storePath the model names. The
+        // manifest names must live under the storePath the manifest names. The
         // canonicalized form is used only for existence/exec-bit checks —
         // buildEnv-style packages (e.g. a Rust toolchain) legitimately
         // symlink `bin/<tool>` into a different store path inside the same
@@ -38,17 +38,17 @@ pub fn check_closures(
                     closure.executable, closure.store_path
                 ),
             )
-            .with_model(&loaded.path, &loaded.computed_model_hash));
+            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
         }
-        if closure.target_system != model.target.closure_system {
+        if closure.target_system != manifest.target.closure_system {
             return Err(RuntimeError::new(
                 ErrorCode::ClosureMissing,
                 format!(
                     "closure {} targetSystem {} does not match closureSystem {}",
-                    closure_id, closure.target_system, model.target.closure_system
+                    closure_id, closure.target_system, manifest.target.closure_system
                 ),
             )
-            .with_model(&loaded.path, &loaded.computed_model_hash));
+            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
         }
         if !executable.exists() {
             return Err(RuntimeError::new(
@@ -58,14 +58,14 @@ pub fn check_closures(
                     executable.display()
                 ),
             )
-            .with_model(&loaded.path, &loaded.computed_model_hash));
+            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
         }
         // A closure invoked by any invocation is later run via `Command::new`, so
         // it must carry the executable bit no matter what `requiresExecutable`
         // declares. Enforce it at admission (CLOSURE_MISSING) instead of trusting
         // the Nix default and letting a non-executable invoked closure surface as
-        // a ProcEscape after the model has already been admitted.
-        let invoked = invocation_tool_ids(model).any(|tool| tool == closure_id.as_str());
+        // a ProcEscape after the manifest has already been admitted.
+        let invoked = invocation_tool_ids(manifest).any(|tool| tool == closure_id.as_str());
         if closure.requires_executable || invoked {
             let metadata = executable.metadata().map_err(|error| {
                 RuntimeError::new(
@@ -75,7 +75,7 @@ pub fn check_closures(
                         executable.display()
                     ),
                 )
-                .with_model(&loaded.path, &loaded.computed_model_hash)
+                .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
             })?;
             if metadata.permissions().mode() & 0o111 == 0 {
                 return Err(RuntimeError::new(
@@ -85,21 +85,21 @@ pub fn check_closures(
                         executable.display()
                     ),
                 )
-                .with_model(&loaded.path, &loaded.computed_model_hash));
+                .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
             }
         }
     }
     Ok(())
 }
 
-/// Every closure id referenced as a tool by any invocation in the model.
-fn invocation_tool_ids(model: &Model) -> impl Iterator<Item = &str> {
-    let task_tools = model
+/// Every closure id referenced as a tool by any invocation in the manifest.
+fn invocation_tool_ids(manifest: &Manifest) -> impl Iterator<Item = &str> {
+    let task_tools = manifest
         .tasks
         .values()
         .flat_map(|task| task.invocation.iter())
         .flat_map(|invocation| invocation.tools.iter());
-    let lifecycle_tools = model.services.values().flat_map(|service| {
+    let lifecycle_tools = manifest.services.values().flat_map(|service| {
         let lifecycle = &service.lifecycle;
         std::iter::once(&lifecycle.start.invocation)
             .chain(lifecycle.ready.probe.invocation.iter())
@@ -112,7 +112,7 @@ fn invocation_tool_ids(model: &Model) -> impl Iterator<Item = &str> {
 fn require_store_path(
     field: &'static str,
     value: &str,
-    loaded: &LoadedModel,
+    loaded: &LoadedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<std::path::PathBuf> {
     let path = Path::new(value);
@@ -121,14 +121,14 @@ fn require_store_path(
             ErrorCode::ClosureMissing,
             format!("{field} is not absolute: {value}"),
         )
-        .with_model(&loaded.path, &loaded.computed_model_hash));
+        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
     }
     let Ok(canonical) = path.canonicalize() else {
         return Err(RuntimeError::new(
             ErrorCode::ClosureMissing,
             format!("{field} does not exist: {value}"),
         )
-        .with_model(&loaded.path, &loaded.computed_model_hash));
+        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
     };
     let Ok(canonical_store) = context.store_root.canonicalize() else {
         return Err(RuntimeError::new(
@@ -138,7 +138,7 @@ fn require_store_path(
                 context.store_root.display()
             ),
         )
-        .with_model(&loaded.path, &loaded.computed_model_hash));
+        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
     };
     if canonical.starts_with(&canonical_store) {
         Ok(canonical)
@@ -150,6 +150,6 @@ fn require_store_path(
                 context.store_root.display()
             ),
         )
-        .with_model(&loaded.path, &loaded.computed_model_hash))
+        .with_manifest(&loaded.path, &loaded.computed_manifest_hash))
     }
 }

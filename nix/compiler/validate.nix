@@ -2,7 +2,7 @@
 
 config:
 let
-  fail = message: throw "nixfied model validation failed: ${message}";
+  fail = message: throw "nixfied manifest validation failed: ${message}";
   expect = condition: message: if condition then null else fail message;
   slotPolicy = config.nixfied.slotPolicy;
   portPolicy = config.nixfied.placement.ports;
@@ -36,7 +36,7 @@ let
       target == start || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
     ) (services.${current}.connectsTo or [ ]);
   connectsToAcyclic = lib.all (name: !(reaches name name [ ])) (builtins.attrNames services);
-  # Mirror the runtime's `LoopbackHost` wire type so a model that the runtime
+  # Mirror the runtime's `LoopbackHost` wire type so a manifest that the runtime
   # cannot even parse fails at evaluation instead of admission. The runtime
   # accepts any loopback IP literal; this check admits the canonical forms
   # (127.x.x.x and ::1), which is strictly narrower — fail-closed.
@@ -54,12 +54,12 @@ let
   );
   # Task kind/field coherence, composite graph validity, and step-path id
   # discipline: invalid composition must fail at evaluation, not compile into
-  # a model the runtime only rejects at admission.
+  # a manifest the runtime only rejects at admission.
   tasks = config.nixfied.tasks;
   surfaceVerbs = config.nixfied.surface.verbs;
   surfaceVerbIds = builtins.attrNames surfaceVerbs;
   # `attrsOf` values are lazy. Force every description here so malformed or
-  # throwing descriptions fail model evaluation even when no app projection is
+  # throwing descriptions fail manifest evaluation even when no app projection is
   # requested later.
   surfaceDescriptionsForced = builtins.deepSeq (map (verb: surfaceVerbs.${verb}) surfaceVerbIds) true;
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
@@ -310,7 +310,7 @@ let
     (expect windowsDoNotOverlap "per-slot candidate port windows must not overlap")
     (expect immutableSourceIsStoreRoot "immutable codebase sourceIdentity must be a Nix store path")
     (expect liveRejectAllowed "dirtyPolicy=reject is only valid for immutable source modes")
-    # A model with no services is valid as long as it declares something to
+    # A manifest with no services is valid as long as it declares something to
     # run: the runtime supports service-less task selections.
     (expect (
       config.nixfied.services != { } || config.nixfied.tasks != { }

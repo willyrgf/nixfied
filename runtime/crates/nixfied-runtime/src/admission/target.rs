@@ -1,33 +1,33 @@
-use nixfied_model::Model;
+use nixfied_manifest::Manifest;
 
 use crate::admission::AdmissionContext;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::model_loader::LoadedModel;
+use crate::manifest_loader::LoadedManifest;
 
 pub fn check_target(
-    model: &Model,
-    loaded: &LoadedModel,
+    manifest: &Manifest,
+    loaded: &LoadedManifest,
     context: &AdmissionContext,
 ) -> RuntimeResult<()> {
-    if model.target.system != context.host_system
-        || model.target.closure_system != context.host_system
-        || model.target.os != host_os()
-        || model.target.arch != host_arch()
+    if manifest.target.system != context.host_system
+        || manifest.target.closure_system != context.host_system
+        || manifest.target.os != host_os()
+        || manifest.target.arch != host_arch()
     {
         return Err(RuntimeError::new(
             ErrorCode::PlatformUnsupported,
             format!(
-                "model target system={} os={} arch={} closureSystem={} does not match host system={} os={} arch={}",
-                model.target.system,
-                model.target.os,
-                model.target.arch,
-                model.target.closure_system,
+                "manifest target system={} os={} arch={} closureSystem={} does not match host system={} os={} arch={}",
+                manifest.target.system,
+                manifest.target.os,
+                manifest.target.arch,
+                manifest.target.closure_system,
                 context.host_system,
                 host_os(),
                 host_arch()
             ),
         )
-        .with_model(&loaded.path, &loaded.computed_model_hash));
+        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
     }
     Ok(())
 }

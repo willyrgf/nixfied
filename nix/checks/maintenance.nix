@@ -3,11 +3,11 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
-  model = import ../meta/model.nix { inherit lib; };
+  manifest = import ../meta/manifest.nix { inherit lib; };
   outputs = import ../meta/outputs.nix { inherit lib; };
   task = lib.findFirst (
     record: record.rust.name == "TaskSpec"
-  ) (throw "TaskSpec fixture owner missing") model.records;
+  ) (throw "TaskSpec fixture owner missing") manifest.records;
   fixtureTask = task // {
     identity = {
       kind = "Local";
@@ -36,13 +36,13 @@ let
     ];
   };
   inventory = import ../meta/inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
   topics = builtins.attrNames (import ../docs/topics.nix);
   structure = import ../meta/structure.nix { inherit lib; } {
     inherit inventory;
-    records = model.records ++ outputs.records ++ [ fixtureTask ];
-    vocabularies = model.vocabularies ++ outputs.vocabularies;
+    records = manifest.records ++ outputs.records ++ [ fixtureTask ];
+    vocabularies = manifest.vocabularies ++ outputs.vocabularies;
     contextTopics = topics;
   };
   syntax = import ../meta/syntax.nix { inherit lib; } {
@@ -126,11 +126,11 @@ import ./cargo-fixture.nix { inherit pkgs; } {
     grep -Fq -- '--budget-ms <operation-budget-milliseconds>' command-reference.txt
     grep -Fq 'Domain: Unsigned64' command-reference.txt
     grep -Fq 'Fixture operation budget' command-reference.txt
-    cp ${generated}/crates/nixfied-model/src/generated/types.rs crates/nixfied-model/src/generated/types.rs
-    cp ${./maintenance-wire.rs} crates/nixfied-model/tests/maintenance_wire.rs
+    cp ${generated}/crates/nixfied-manifest/src/generated/types.rs crates/nixfied-manifest/src/generated/types.rs
+    cp ${./maintenance-wire.rs} crates/nixfied-manifest/tests/maintenance_wire.rs
     cp ${generated}/crates/nixfied-runtime/src/generated/commands.rs crates/nixfied-runtime/src/generated/maintenance_commands.rs
     cat ${./maintenance-native.rs} >> crates/nixfied-runtime/src/main_tests.rs
-    cargo test --offline --locked -p nixfied-model --test maintenance_wire
+    cargo test --offline --locked -p nixfied-manifest --test maintenance_wire
     cargo test --offline --locked -p nixfied-runtime --bin nixfied-runtime maintenance_
   '';
 }

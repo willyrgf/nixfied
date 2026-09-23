@@ -61,8 +61,8 @@ in
 import ./cargo-fixture.nix { inherit pkgs; } {
   name = "nixfied-structure-projection-check";
   script = ''
-    install -m 644 ${generated}/fixture.rs crates/nixfied-model/tests/structure_projection.rs
-    cat ${./structure-projection.rs} >> crates/nixfied-model/tests/structure_projection.rs
-    cargo test --offline --locked -p nixfied-model --test structure_projection
+    install -m 644 ${generated}/fixture.rs crates/nixfied-manifest/tests/structure_projection.rs
+    cat ${./structure-projection.rs} >> crates/nixfied-manifest/tests/structure_projection.rs
+    cargo test --offline --locked -p nixfied-manifest --test structure_projection
   '';
 }

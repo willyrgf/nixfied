@@ -1,6 +1,6 @@
 # Polyglot example: two services written in different languages (Python and
 # Perl) plus a dependent task per service, composed entirely through the generic
-# model primitives. No new runtime capability is used.
+# manifest primitives. No new runtime capability is used.
 { pkgs, ... }:
 let
   pythonService = pkgs.writeTextFile {

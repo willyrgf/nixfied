@@ -1,20 +1,20 @@
-//! Test-only model fixtures, behind the `test-fixtures` feature. The single
-//! source of truth for the synthetic model shape consumers test against; keeping
+//! Test-only manifest fixtures, behind the `test-fixtures` feature. The single
+//! source of truth for the synthetic manifest shape consumers test against; keeping
 //! it next to the types means a contract change updates the fixture in the same
 //! crate that broke it.
 
 use serde_json::{Value, json};
 
-use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
+use crate::constants::{MANIFEST_VERSION, TOOLCHAIN_ID, runtime_abi};
 
 /// The synthetic-service executable the default fixture binds.
 pub const SYNTHETIC_EXECUTABLE: &str = "/nix/store/test-synthetic-helper/bin/synthetic-helper";
 /// The synthetic service's start arguments.
 pub const SYNTHETIC_START_ARGS: &[&str] = &["service", "--host", "127.0.0.1", "--port", "${port}"];
 
-/// Knobs for [`synthetic_model`]. `..Default::default()` gives the canonical
+/// Knobs for [`synthetic_manifest`]. `..Default::default()` gives the canonical
 /// fixture: the synthetic helper on the host system, slot 0, ports 42000-42063.
-pub struct SyntheticModelOptions {
+pub struct SyntheticManifestOptions {
     pub executable: String,
     pub start_args: Vec<String>,
     pub port_start: u16,
@@ -26,7 +26,7 @@ pub struct SyntheticModelOptions {
     pub arch: String,
 }
 
-impl Default for SyntheticModelOptions {
+impl Default for SyntheticManifestOptions {
     fn default() -> Self {
         Self {
             executable: SYNTHETIC_EXECUTABLE.to_string(),
@@ -43,10 +43,10 @@ impl Default for SyntheticModelOptions {
 }
 
 /// The canonical admission fixture — a `synthetic` foreground service plus a
-/// `smoke` task in slot 0 over the given candidate port window. A valid model
-/// by construction: it deserializes into [`crate::Model`] and passes
+/// `smoke` task in slot 0 over the given candidate port window. A valid manifest
+/// by construction: it deserializes into [`crate::Manifest`] and passes
 /// [`crate::Validate`].
-pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
+pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
     // The fixture binds one closure; its store path is the executable's
     // grandparent (…/store-path/bin/exe), matching what Nix emits.
     let store_path = std::path::Path::new(&options.executable)
@@ -67,13 +67,13 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
             .map(|s| s.to_string()),
     );
     json!({
-        "modelVersion": MODEL_VERSION,
+        "manifestVersion": MANIFEST_VERSION,
         "toolchainId": TOOLCHAIN_ID,
         "runtimeAbi": runtime_abi(),
         "generator": {
             "name": "nixfied",
             "version": "1",
-            "emitter": "nix/compiler/emit-model.nix"
+            "emitter": "nix/compiler/emit-manifest.nix"
         },
         "project": {
             "projectId": options.project_id,
@@ -225,11 +225,12 @@ mod tests {
     use crate::validation::Validate;
 
     /// The fixture is valid by construction: it round-trips through the typed
-    /// contract and passes the model's own validation.
+    /// contract and passes the manifest's own validation.
     #[test]
-    fn default_fixture_is_a_valid_model() {
-        let value = synthetic_model(&SyntheticModelOptions::default());
-        let model: crate::Model = serde_json::from_value(value).expect("fixture deserializes");
-        model.validate().expect("fixture validates");
+    fn default_fixture_is_a_valid_manifest() {
+        let value = synthetic_manifest(&SyntheticManifestOptions::default());
+        let manifest: crate::Manifest =
+            serde_json::from_value(value).expect("fixture deserializes");
+        manifest.validate().expect("fixture validates");
     }
 }

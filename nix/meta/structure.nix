@@ -1,4 +1,4 @@
-# One checked structural representation for model and native output boundaries.
+# One checked structural representation for manifest and native output boundaries.
 { lib }:
 {
   inventory,

@@ -100,7 +100,7 @@ one of “executable”, “helper”
 
 
 Optional narrowing gate: the operation ids this closure may be
-dispatched against\. The model carries the *derived* bindings (from
+dispatched against\. The manifest carries the *derived* bindings (from
 the invocation graph); declaring a list additionally requires the
 derived set to be a subset of it\.
 
@@ -338,7 +338,7 @@ string matching the pattern \[A-Za-z0-9]\[A-Za-z0-9\._-]\*
 
 
 
-Secret descriptors keyed by secret id\. Values are resolved by the runtime, never embedded in the model\.
+Secret descriptors keyed by secret id\. Values are resolved by the runtime, never embedded in the manifest\.
 
 
 
@@ -359,7 +359,7 @@ attribute set of (submodule)
 
 
 
-Runtime secret resolver descriptor\. The model carries this reference, never the value\.
+Runtime secret resolver descriptor\. The manifest carries this reference, never the value\.
 
 
 
@@ -393,7 +393,7 @@ null
 
 
 
-Runtime resolver used to obtain the secret without embedding its value in the model\.
+Runtime resolver used to obtain the secret without embedding its value in the manifest\.
 
 
 
@@ -1805,7 +1805,7 @@ positive integer, meaning >0
 
 
 
-Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity\.
+Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity\.
 
 
 
@@ -1853,8 +1853,8 @@ Descriptive state labels, defaulting to ` [ "slot" ] `; any strings are
 accepted, not an enum of storage backends or selectable roots\.
 Execution lowering discards these labels: changing them does not select
 a state directory or change service reuse identity\. They remain in
-model\.json and its generated view, so changing them changes the raw
-model hash\. ${stateDir} names the runtime-owned slot root; state
+manifest\.json and its generated view, so changing them changes the raw
+manifest hash\. ${stateDir} names the runtime-owned slot root; state
 policy controls its compatibility and cleanup\.
 
 
@@ -2044,7 +2044,7 @@ attribute set of non-empty string
 
 
 
-Target system shared by the compiled model, runtime, and every declared closure\.
+Target system shared by the compiled manifest, runtime, and every declared closure\.
 
 
 
@@ -2086,7 +2086,7 @@ attribute set of (submodule)
 
 
 
-Descriptive artifact labels retained in the model and generated view, then discarded by execution lowering; they do not create, collect or place artifacts\.
+Descriptive artifact labels retained in the manifest and generated view, then discarded by execution lowering; they do not create, collect or place artifacts\.
 
 
 
@@ -2349,7 +2349,7 @@ one of “leaf”, “composite”
 
 
 
-Descriptive log labels retained in the model and generated view, then discarded by execution lowering; they do not select evidence paths\.
+Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select evidence paths\.
 
 
 
@@ -2493,7 +2493,7 @@ non-empty string
 
 
 
-Descriptive summary labels retained in the model and generated view, then discarded by execution lowering; they do not select summary paths\.
+Descriptive summary labels retained in the manifest and generated view, then discarded by execution lowering; they do not select summary paths\.
 
 
 

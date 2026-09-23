@@ -120,11 +120,11 @@ in
 {
   records = [
     (record (local "CheckOutput") "CheckOutput" main "private" [ "Debug" ] "Owned" "NoDecoder"
-      "Successful native model admission, without executing the declared task."
+      "Successful native manifest admission, without executing the declared task."
       [
-        (required "modelPath" path "Admitted model file path.")
-        (required "computedModelHash" text "Digest computed from the actual admitted model bytes.")
-        (required "rawLen" usize "Number of bytes in the raw model document.")
+        (required "manifestPath" path "Admitted manifest file path.")
+        (required "computedManifestHash" text "Digest computed from the actual admitted manifest bytes.")
+        (required "rawLen" usize "Number of bytes in the raw manifest document.")
         (required "projectId" text "Admitted project identity.")
         (required "runtimeAbi" text "Admitted exact runtime ABI.")
         (required "toolchainId" text "Admitted toolchain identity.")
@@ -161,8 +161,8 @@ in
       "Native run JSON, converted to Value, redacted and formatted at the existing output boundary."
       [
         (required "runId" text "Native run evidence identity.")
-        (required "modelPath" path "Admitted model file path.")
-        (required "computedModelHash" text "Digest of admitted bytes.")
+        (required "manifestPath" path "Admitted manifest file path.")
+        (required "computedManifestHash" text "Digest of admitted bytes.")
         (required "durationMs" u64 "Observed run duration in milliseconds.")
         (required "services" (list (
           ref (output "run-service")
@@ -263,8 +263,8 @@ in
               ref (output "runtime-error-cause")
             )) "Native ordered non-recursive causes; empty list omitted."
           ))
-          (optional "modelPath" path "Associated model path or explicit null.")
-          (optional "computedModelHash" text "Associated computed hash or explicit null.")
+          (optional "manifestPath" path "Associated manifest path or explicit null.")
+          (optional "computedManifestHash" text "Associated computed hash or explicit null.")
         ]
       )
     )
@@ -352,13 +352,13 @@ in
       )
       // {
         annotations = {
-          MODEL_NOT_STORE_OUTPUT = annotation "Model input is not an allowed realised store output." "model";
-          MODEL_INVALID = annotation "Raw model bytes or structural values are invalid." "model";
-          MODEL_ADMISSION = annotation "Native pre-execution model admission rejected a contract." "model";
-          RUNTIME_ABI_MISMATCH = annotation "The model and runtime have different exact capability identities." "recovery";
+          MANIFEST_NOT_STORE_OUTPUT = annotation "Manifest input is not an allowed realised store output." "manifest";
+          MANIFEST_INVALID = annotation "Raw manifest bytes or structural values are invalid." "manifest";
+          MANIFEST_ADMISSION = annotation "Native pre-execution manifest admission rejected a contract." "manifest";
+          RUNTIME_ABI_MISMATCH = annotation "The manifest and runtime have different exact capability identities." "recovery";
           SOURCE_MISMATCH = annotation "Native source identity or fingerprint policy rejected the observed workspace." "context";
           PLATFORM_UNSUPPORTED = annotation "Required platform or containment capability is unavailable." "recovery";
-          CLOSURE_MISSING = annotation "A required realised executable closure is unavailable." "model";
+          CLOSURE_MISSING = annotation "A required realised executable closure is unavailable." "manifest";
           REGISTRY_CORRUPT = annotation "Registry schema, identity, status or transactional evidence cannot be trusted." "state";
           STATE_UNWRITABLE = annotation "Native state or evidence I/O could not complete." "state";
           STATE_UNOWNED = annotation "Required state ownership proof is absent or inconsistent." "state";

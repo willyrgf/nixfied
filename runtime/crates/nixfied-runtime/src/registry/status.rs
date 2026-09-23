@@ -1,6 +1,6 @@
 //! Typed registry status domains.
 //!
-//! Every status column in the registry is a closed set of strings. Modeling each
+//! Every status column in the registry is a closed set of strings. Manifesting each
 //! as an enum gives one source of truth for the wire strings, a total parse on
 //! read, an exhaustive match on classification (active vs terminal), and SQL
 //! `IN (...)` lists derived from the same variants — so a mistyped or missed

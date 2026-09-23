@@ -1,9 +1,9 @@
 //! In-place slot state upgrade: the bridge between the marker decision and a
 //! runnable state root. A slot is owned by a project/environment/slot identity,
-//! not by one model build — when the marker shows the slot was last used by a
-//! different build of the same model, the run upgrades the slot instead of
+//! not by one manifest build — when the marker shows the slot was last used by a
+//! different build of the same manifest, the run upgrades the slot instead of
 //! refusing it: live services of the old build are torn down through the
-//! registry, the state root is cleaned when the model's declared state epoch
+//! registry, the state root is cleaned when the manifest's declared state epoch
 //! changed, and the marker is rewritten with the new provenance. The upgrade is
 //! recorded as a registry event, so the marker file itself never grows history.
 
@@ -25,7 +25,7 @@ pub struct UpgradeReport {
     pub upgraded: bool,
     pub cleaned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_model_hash: Option<String>,
+    pub from_manifest_hash: Option<String>,
 }
 
 impl UpgradeReport {
@@ -33,7 +33,7 @@ impl UpgradeReport {
         Self {
             upgraded: false,
             cleaned: false,
-            from_model_hash: None,
+            from_manifest_hash: None,
         }
     }
 }
@@ -64,17 +64,17 @@ pub fn prepare_slot_state(
             clean_state,
             existing,
         } => {
-            // Stop everything a different model build left running on this
+            // Stop everything a different manifest build left running on this
             // slot before touching its state. Same-hash processes are left
-            // alone: a concurrent run of the same model is the service start
+            // alone: a concurrent run of the same manifest is the service start
             // conflict gate's problem, not an upgrade.
             down_processes(
                 registry,
                 timeout_ms,
-                ProcessFilter::ModelHashNot(&identity.computed_model_hash),
+                ProcessFilter::ManifestHashNot(&identity.computed_manifest_hash),
             )?;
             if clean_state {
-                // The epoch changed: the model declares the old state
+                // The epoch changed: the manifest declares the old state
                 // incompatible. The marker-gated clean enforces the cleanup
                 // policy, so protected/persistent state refuses here instead
                 // of being deleted by an upgrade.
@@ -92,7 +92,7 @@ pub fn prepare_slot_state(
             UpgradeReport {
                 upgraded: true,
                 cleaned: clean_state,
-                from_model_hash: Some(existing.computed_model_hash),
+                from_manifest_hash: Some(existing.computed_manifest_hash),
             }
         }
     };
@@ -106,17 +106,17 @@ fn record_upgrade_event(
     cleaned: bool,
 ) -> RuntimeResult<()> {
     let payload = serde_json::json!({
-        "fromModelHash": existing.computed_model_hash,
-        "toModelHash": identity.computed_model_hash,
-        "fromModelPath": existing.model_path,
-        "toModelPath": identity.model_path,
+        "fromManifestHash": existing.computed_manifest_hash,
+        "toManifestHash": identity.computed_manifest_hash,
+        "fromManifestPath": existing.manifest_path,
+        "toManifestPath": identity.manifest_path,
         "fromEpoch": existing.state_epoch,
         "toEpoch": identity.state_epoch,
         "cleaned": cleaned,
     })
     .to_string();
     let mut event = EventInsert::new("state.upgraded", payload);
-    event.computed_model_hash = Some(identity.computed_model_hash.clone());
+    event.computed_manifest_hash = Some(identity.computed_manifest_hash.clone());
     registry.append_event(&event)?;
     Ok(())
 }

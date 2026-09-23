@@ -1,15 +1,15 @@
 # Developing Nixfied
 
 This guide owns repository layout, test placement, and verification commands.
-Read [`CONTRACT.md`](CONTRACT.md) before changing the model/runtime boundary and
+Read [`CONTRACT.md`](CONTRACT.md) before changing the manifest/runtime boundary and
 [`ARCHITECTURE.md`](ARCHITECTURE.md) for the rationale behind it.
 
 ## Repository map
 
 ```text
 nix/modules/                   typed adopter declaration surface
-nix/compiler/                  resolve -> validate -> derive -> emit model/docs
-nix/spec/                      Nix-side model and ABI constants
+nix/compiler/                  resolve -> validate -> derive -> emit manifest/docs
+nix/spec/                      Nix-side manifest and ABI constants
 nix/adapters/                  Nix-side domain adapters
 nix/install/                   install and upgrade programs
 nix/lib/                       pure Nix helpers
@@ -23,15 +23,15 @@ nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
 nix/gate-nix.nix               Nix compiler/install integration gate
 nix/gate.nix                   thin gate coordinator
 nix/dev.nix                    local check, test, and ci app definitions
-runtime/crates/nixfied-model/   serde contract, validation, capability descriptor
+runtime/crates/nixfied-manifest/   serde contract, validation, capability descriptor
 runtime/crates/nixfied-runtime/ admission and impure runtime behavior
 runtime/crates/nixfied-cli/     install CLI
 runtime/crates/nixfied-test-child/ private process/socket test fixture
 runtime/locks/                  package-specific Cargo locks for light products
-examples/                       downstream-shaped example models
+examples/                       downstream-shaped example manifests
 ```
 
-There is no root-level `tests/` directory. Rust model/runtime behavior lives in
+There is no root-level `tests/` directory. Rust manifest/runtime behavior lives in
 `runtime/crates/*/tests` and crate-local unit tests. Pure Nix derivation vectors
 live in `nix/checks`; Nix compiler/install integration cases live in
 `nix/gate-nix.nix`; adopter-shaped runtime integration lives in
@@ -47,13 +47,13 @@ nix run .#ci
 
 It is fail-fast and runs these local stages:
 
-1. `.#check` — `nix flake check`, then admission of a realised example model.
+1. `.#check` — `nix flake check`, then admission of a realised example manifest.
 2. `.#test` — the white-box Cargo workspace floor under the pinned toolchain.
 3. `.#gate` — the runtime-shaped gate followed by the Nix-layer gate.
 
-Use `.#test` for the complete Cargo floor. It injects the realised Postgres model
+Use `.#test` for the complete Cargo floor. It injects the realised Postgres manifest
 required by `interrupt_and_recover_adopts_orphaned_postgres`; a raw
-`cargo test --workspace` without `NIXFIED_TEST_POSTGRES_MODEL` intentionally
+`cargo test --workspace` without `NIXFIED_TEST_POSTGRES_MANIFEST` intentionally
 skips that case.
 
 Rust integration tests that exercise spawned process and socket behavior use a
@@ -66,7 +66,7 @@ For a targeted Rust iteration inside the pinned development environment:
 ```sh
 nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
 nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets -- -D warnings'
-nix develop --command bash -c 'cd runtime && cargo test -p nixfied-model'
+nix develop --command bash -c 'cd runtime && cargo test -p nixfied-manifest'
 nix develop --command bash -c 'cd runtime && cargo test -p nixfied-runtime --test admission'
 nix build .#nixfied-cli --no-link
 nix build .#nixfied-runtime --no-link
@@ -77,7 +77,7 @@ nix build .#install --no-link
 derivation first proves that [`OPTIONS.md`](OPTIONS.md) matches the typed Nix
 modules, checks product-specific generated Rust freshness and structural policy
 vectors, then runs rustfmt and Clippy with `-D warnings`; Clippy type-checks all
-targets. The flake checks also build the debug runtime and minimal example model,
+targets. The flake checks also build the debug runtime and minimal example manifest,
 and run the Nix derivation golden vectors. The process- and port-using Cargo tests
 run outside the Nix sandbox through `.#test`.
 
@@ -85,22 +85,22 @@ The installer wraps only the CLI; generated adopter apps use the release
 runtime. The debug runtime and
 `nixfied-test-child` are private transitive inputs of checks, gates, the dev
 shell, and the fixture-backed test wrapper. `runtime-source.nix` creates a real
-Cargo workspace root for each product, so CLI, runtime/model, and test-child
+Cargo workspace root for each product, so CLI, runtime/manifest, and test-child
 source changes do not invalidate unrelated product derivations. The Cargo lock
 and vendor derivation are package-specific for the dependency-free CLI and the
-libc-only test child. The runtime/model product intentionally retains the
+libc-only test child. The runtime/manifest product intentionally retains the
 canonical full-workspace lock because it owns the complete runtime dependency
 closure. Rust toolchain and workspace-metadata changes can still invalidate
 multiple products; package-specific lock changes are now isolated to the product
 that owns them. The filtered roots carry the lock selected by their package map,
 and `cargo metadata --locked --offline` validates that no transient lock
 generation is needed.
-The source-isolation matrix in `nix/gate-nix.nix` varies CLI, runtime, model,
-generated-model and test-child sources independently and compares filtered-source
+The source-isolation matrix in `nix/gate-nix.nix` varies CLI, runtime, manifest,
+generated-manifest and test-child sources independently and compares filtered-source
 and product derivation identities. Reference and declaration-only variations keep
 generated bytes fixed and must leave every Rust product identity unchanged.
 
-Model wire declarations live in `nix/meta/model.nix`; public runtime records and
+Manifest wire declarations live in `nix/meta/manifest.nix`; public runtime records and
 error/status vocabularies live in `nix/meta/outputs.nix`. Their structural checker,
 Nix constructors, Rust renderer and static reference share the same normalized
 records; closed enum members come from `capability.txt`. Native identifier,
@@ -138,7 +138,7 @@ cp "$generated" docs/OPTIONS.md
 ```
 
 The generator reuses the compiler's module evaluator. `OPTIONS.md` is a checked
-repository reference, not a flake app/output or an additional model authority.
+repository reference, not a flake app/output or an additional manifest authority.
 The Git flake URL deliberately excludes ignored build artifacts from the source
 snapshot while retaining changes to tracked module files.
 
@@ -193,7 +193,7 @@ Presentation data comes from native option normalization, checked metadata,
 authored prose and the supplying source identity. The
 serialized presentation boundary discards string context; native values and
 executable bindings retain it. Static docs do not import an adopter module or
-realise model/runtime products. `docs/OPTIONS.md` retains its checked snapshot
+realise manifest/runtime products. `docs/OPTIONS.md` retains its checked snapshot
 and upgrade-report role; the full API reference is a disposable build artifact.
 The upgrade documentation report still compares source README/docs files; it
 does not compare built references or metadata source files. Replace removed manual
@@ -227,8 +227,8 @@ but do not change service reuse identity.
 
 `nix/gate.nix` is a thin sequential coordinator:
 
-- `gate-runtime` is a first-class Nixfied model. It exercises example runs, the
-  emitted model/docs contract, concurrent slot isolation, runtime-layer refusal
+- `gate-runtime` is a first-class Nixfied manifest. It exercises example runs, the
+  emitted manifest/docs contract, concurrent slot isolation, runtime-layer refusal
   cases, endpoint coordination, and the state/service lifecycle matrix.
 - `gate-nix` exercises the Nix compiler and install tooling: final-app
   discovery, evaluation negatives, immutable-source admission, and real
@@ -245,7 +245,9 @@ The upgrade adoption cases use the pinned source fixtures in
 constructing ad hoc documentation trees at test time. `manifest.json`
 records the historical source commits, deterministic archive checksums, NAR
 hashes, archive normalization, and the checksum of `expected.diff`. The old
-archive is installed with its historical `#install`; the current checkout's
+archive is installed with its historical `#install`. Disposable adopter flakes
+expose that historical compiler output as `manifest` for current preflight; the
+archives and recorded documentation remain unchanged. The current checkout's
 `#upgrade` then resolves the new archive and must reproduce `expected.diff`
 byte-for-byte on both `--plan` and apply. The same fixed trees are reused for
 Git and path identity checks, while tarball and unavailable-source cases retain
@@ -263,7 +265,7 @@ regenerate `scope.expected.diff` if the deterministic scope overlays change,
 and update `scope-old.patch`, `scope-new.patch`, `expectedDiffSha256`, and
 `scopeExpectedDiffSha256` together with the fixture. Verify that the historical
 installer still produces the list-form declaration used by the rejection case,
-that the compatible case still passes model preflight, and that plan/apply
+that the compatible case still passes manifest preflight, and that plan/apply
 stdout remains identical. The fixture freezes source versions and report
 bytes; it does not make the nested Nix dependency closure offline.
 
@@ -301,7 +303,7 @@ nix build .#nixfied-runtime --no-link
 
 The local check/gate path uses the debug runtime to keep iteration fast. The
 release package is what install and generated adopter apps ship. Because the
-hosted Linux Cargo step is raw, it currently lacks the realised model fixture and
+hosted Linux Cargo step is raw, it currently lacks the realised manifest fixture and
 skips the interrupt-and-recover test described above; `.#test` remains the full
 fixture-backed local floor.
 
@@ -312,14 +314,14 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Change | Minimum focused proof |
 | --- | --- |
 | Rust formatting/lint only | rustfmt + Clippy commands above |
-| `nixfied-model` shape/validation | model crate tests + `.#check` |
+| `nixfied-manifest` shape/validation | manifest crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
 | Task-output replay/projection | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/build change | CLI/runtime/install builds |
 | Static docs, selectors or reference relationships | focused metadata/reference checks + `.#gate -- --dirty` for downstream/source isolation |
-| Generated model docs or public output | affected model build + `.#gate` |
-| Adapter or example | build the affected model + `.#gate` |
+| Generated manifest docs or public output | affected manifest build + `.#gate` |
+| Adapter or example | build the affected manifest + `.#gate` |
 | Contract or cross-layer change | `.#ci`; use `--dirty` when the generated project must consume the working tree |
 
 Report any platform, release, or integration coverage that was not run.
@@ -347,7 +349,7 @@ and CLI command tests exercise native parsing and encoding. The source check
 also runs `nix/checks/upgrade-syntax.nix` against the packaged shell parser;
 existing adoption and upgrade goldens cover its continuation. The gate's
 source-isolation matrix in `nix/gate-nix.nix` varies CLI-generated sources as well
-as model, runtime-generated, native crate and reference/declaration inputs. It requires
+as manifest, runtime-generated, native crate and reference/declaration inputs. It requires
 changes only in the owning Rust product's filtered source and derivation.
 
 ## Adopter API maintenance
@@ -398,7 +400,7 @@ emission policies. Neither boundary reconstructs or defaults a child record.
 Record identities are either `Inventory(coordinate)` or `Local(name)`. Local
 identities cannot evade existing inventory coverage. References and generated
 names must resolve without collisions; recursive structural record graphs are
-unsupported. Model decoders reject unknown fields; output records have no
+unsupported. Manifest decoders reject unknown fields; output records have no
 decoder unless an actual consumer needs one, with its explicit unknown-field
 policy retained.
 

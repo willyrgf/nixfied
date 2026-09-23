@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
+use crate::constants::{MANIFEST_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
 use crate::ids::{OperationId, ServiceId};
 use crate::types::*;
@@ -9,7 +9,7 @@ pub trait Validate {
     fn validate(&self) -> Result<(), ValidationError>;
 }
 
-impl Validate for Model {
+impl Validate for Manifest {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_exact_identities(self)?;
         validate_required_strings(self)?;
@@ -31,54 +31,54 @@ impl Validate for Model {
     }
 }
 
-fn validate_exact_identities(model: &Model) -> Result<(), ValidationError> {
-    if model.model_version != MODEL_VERSION {
-        return Err(ValidationError::ModelVersion {
-            expected: MODEL_VERSION,
-            actual: model.model_version,
+fn validate_exact_identities(manifest: &Manifest) -> Result<(), ValidationError> {
+    if manifest.manifest_version != MANIFEST_VERSION {
+        return Err(ValidationError::ManifestVersion {
+            expected: MANIFEST_VERSION,
+            actual: manifest.manifest_version,
         });
     }
-    if model.toolchain_id != TOOLCHAIN_ID {
+    if manifest.toolchain_id != TOOLCHAIN_ID {
         return Err(ValidationError::ToolchainId {
             expected: TOOLCHAIN_ID,
-            actual: model.toolchain_id.clone(),
+            actual: manifest.toolchain_id.clone(),
         });
     }
-    if model.runtime_abi != runtime_abi() {
+    if manifest.runtime_abi != runtime_abi() {
         return Err(ValidationError::RuntimeAbi {
             expected: runtime_abi(),
-            actual: model.runtime_abi.clone(),
+            actual: manifest.runtime_abi.clone(),
         });
     }
     Ok(())
 }
 
-fn validate_required_strings(model: &Model) -> Result<(), ValidationError> {
-    require_non_empty("generator.name", &model.generator.name)?;
-    require_non_empty("generator.version", &model.generator.version)?;
-    require_non_empty("generator.emitter", &model.generator.emitter)?;
-    require_non_empty("project.projectId", &model.project.project_id)?;
-    require_non_empty("project.name", &model.project.name)?;
-    require_non_empty("target.system", &model.target.system)?;
-    require_non_empty("target.os", &model.target.os)?;
-    require_non_empty("target.arch", &model.target.arch)?;
-    require_non_empty("target.closureSystem", &model.target.closure_system)?;
-    require_non_empty("state.markerIdentity", &model.state.marker_identity)?;
-    require_non_empty("state.stateEpoch", &model.state.state_epoch)?;
+fn validate_required_strings(manifest: &Manifest) -> Result<(), ValidationError> {
+    require_non_empty("generator.name", &manifest.generator.name)?;
+    require_non_empty("generator.version", &manifest.generator.version)?;
+    require_non_empty("generator.emitter", &manifest.generator.emitter)?;
+    require_non_empty("project.projectId", &manifest.project.project_id)?;
+    require_non_empty("project.name", &manifest.project.name)?;
+    require_non_empty("target.system", &manifest.target.system)?;
+    require_non_empty("target.os", &manifest.target.os)?;
+    require_non_empty("target.arch", &manifest.target.arch)?;
+    require_non_empty("target.closureSystem", &manifest.target.closure_system)?;
+    require_non_empty("state.markerIdentity", &manifest.state.marker_identity)?;
+    require_non_empty("state.stateEpoch", &manifest.state.state_epoch)?;
     Ok(())
 }
 
 /// Closure/service/task ids name filesystem artifacts (log files, registry
 /// keys), so they must be path-safe: no separators, no traversal, no leading
 /// dot. Same shape the installer enforces on project ids.
-fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
-    for id in model.closures.keys() {
+fn validate_unit_ids(manifest: &Manifest) -> Result<(), ValidationError> {
+    for id in manifest.closures.keys() {
         require_path_safe_id("closures", id)?;
     }
-    for id in model.services.keys() {
+    for id in manifest.services.keys() {
         require_step_safe_id("services", id)?;
     }
-    for id in model.tasks.keys() {
+    for id in manifest.tasks.keys() {
         require_step_safe_id("tasks", id)?;
     }
     Ok(())
@@ -111,11 +111,11 @@ fn require_non_empty(field: &'static str, value: &str) -> Result<(), ValidationE
 
 /// A single codebase named `main`. Multi-codebase source identity is a later
 /// milestone; the runtime admission layer still resolves one root.
-fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
-    if model.codebases.len() != 1 {
+fn validate_codebases(manifest: &Manifest) -> Result<(), ValidationError> {
+    if manifest.codebases.len() != 1 {
         return Err(ValidationError::ExpectedOne { field: "codebases" });
     }
-    let codebase = &model.codebases[0];
+    let codebase = &manifest.codebases[0];
     expect_string(
         "codebases[0].codebaseId",
         "main",
@@ -128,14 +128,14 @@ fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
 
 /// The contract admits exactly one `dev` isolation namespace. Membership does
 /// not exist: a run's services derive from its selected task.
-fn validate_environments(model: &Model) -> Result<(), ValidationError> {
-    if model.environments.len() != 1
-        || model.environments.iter().next().map(String::as_str) != Some("dev")
+fn validate_environments(manifest: &Manifest) -> Result<(), ValidationError> {
+    if manifest.environments.len() != 1
+        || manifest.environments.iter().next().map(String::as_str) != Some("dev")
     {
         return Err(ValidationError::UnsupportedValue {
             field: "environments",
             expected: "[\"dev\"]",
-            actual: format!("{:?}", model.environments.as_slice()),
+            actual: format!("{:?}", manifest.environments.as_slice()),
         });
     }
     Ok(())
@@ -167,10 +167,10 @@ fn expected_slots(slot_policy: &SlotPolicy) -> Result<Vec<u32>, ValidationError>
     Ok((slot_policy.min..=slot_policy.max).collect())
 }
 
-fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
-    let slots = expected_slots(&model.slot_policy)?;
+fn validate_slot_placements(manifest: &Manifest) -> Result<(), ValidationError> {
+    let slots = expected_slots(&manifest.slot_policy)?;
     let expected_keys = slots.iter().map(u32::to_string).collect::<BTreeSet<_>>();
-    let actual_keys = model
+    let actual_keys = manifest
         .placement
         .slot_placements
         .keys()
@@ -187,13 +187,15 @@ fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
     let mut windows = Vec::new();
     for slot in slots {
         let key = slot.to_string();
-        let placement = model.placement.slot_placements.get(&key).ok_or_else(|| {
-            ValidationError::UnsupportedValue {
+        let placement = manifest
+            .placement
+            .slot_placements
+            .get(&key)
+            .ok_or_else(|| ValidationError::UnsupportedValue {
                 field: "placement.slotPlacements",
                 expected: "slotPolicy range",
                 actual: format!("missing slot {slot}"),
-            }
-        })?;
+            })?;
         if placement.slot != slot {
             return Err(ValidationError::UnsupportedValue {
                 field: "placement.slotPlacements.slot",
@@ -243,13 +245,13 @@ fn validate_candidate_port_window(
 /// Every inline invocation carries a non-empty argv, a resolved executable,
 /// and a confined cwd. Tool/closure reference resolution and the run[0]
 /// resolution rule are proven by the runtime's `lower` step.
-fn validate_invocations(model: &Model) -> Result<(), ValidationError> {
-    for task in model.tasks.values() {
+fn validate_invocations(manifest: &Manifest) -> Result<(), ValidationError> {
+    for task in manifest.tasks.values() {
         if let Some(invocation) = &task.invocation {
             validate_invocation(invocation)?;
         }
     }
-    for service in model.services.values() {
+    for service in manifest.services.values() {
         for invocation in lifecycle_invocations(&service.lifecycle) {
             validate_invocation(invocation)?;
         }
@@ -288,8 +290,8 @@ fn validate_invocation(invocation: &InvocationSpec) -> Result<(), ValidationErro
 /// At least one realised closure; each closure id is unique and non-empty.
 /// Target compatibility and operation-binding resolution are checked in
 /// `validate_references`.
-fn validate_closures(model: &Model) -> Result<(), ValidationError> {
-    if model.closures.is_empty() {
+fn validate_closures(manifest: &Manifest) -> Result<(), ValidationError> {
+    if manifest.closures.is_empty() {
         return Err(ValidationError::UnsupportedValue {
             field: "closures",
             expected: "at least one closure",
@@ -297,7 +299,7 @@ fn validate_closures(model: &Model) -> Result<(), ValidationError> {
         });
     }
     // Closure ids are unique by construction (map keys).
-    for closure in model.closures.values() {
+    for closure in manifest.closures.values() {
         require_non_empty("closures.executable", &closure.executable)?;
         require_non_empty("closures.storePath", &closure.store_path)?;
     }
@@ -305,24 +307,24 @@ fn validate_closures(model: &Model) -> Result<(), ValidationError> {
 }
 
 /// At least one runnable unit: services may be empty as long as bounded tasks
-/// exist (the compiler admits task-only models). Each declared service carries
+/// exist (the compiler admits task-only manifests). Each declared service carries
 /// the full generic lifecycle contract.
-fn validate_services(model: &Model) -> Result<(), ValidationError> {
-    if model.services.is_empty() && model.tasks.is_empty() {
+fn validate_services(manifest: &Manifest) -> Result<(), ValidationError> {
+    if manifest.services.is_empty() && manifest.tasks.is_empty() {
         return Err(ValidationError::UnsupportedValue {
             field: "services",
             expected: "at least one service or task",
             actual: "{}".to_string(),
         });
     }
-    for (name, service) in &model.services {
+    for (name, service) in &manifest.services {
         match service.containment {
             ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
         }
         validate_service_endpoints(name, service)?;
         validate_service_lifecycle(service)?;
     }
-    validate_connects_to(model)?;
+    validate_connects_to(manifest)?;
     Ok(())
 }
 
@@ -376,10 +378,10 @@ fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), V
 /// `connectsTo` targets must be declared services and the wiring graph must be
 /// acyclic; the same checks the Nix compiler enforces, repeated fail-closed at
 /// the admission boundary.
-fn validate_connects_to(model: &Model) -> Result<(), ValidationError> {
-    for (name, service) in &model.services {
+fn validate_connects_to(manifest: &Manifest) -> Result<(), ValidationError> {
+    for (name, service) in &manifest.services {
         for target in service.connects_to.iter() {
-            if !model.services.contains_key(target.as_str()) {
+            if !manifest.services.contains_key(target.as_str()) {
                 return Err(ValidationError::UnsupportedValue {
                     field: "services.connectsTo",
                     expected: "a declared service",
@@ -388,9 +390,9 @@ fn validate_connects_to(model: &Model) -> Result<(), ValidationError> {
             }
         }
     }
-    for start in model.services.keys() {
+    for start in manifest.services.keys() {
         let mut seen = Vec::new();
-        if connects_to_reaches(model, start, start, &mut seen) {
+        if connects_to_reaches(manifest, start, start, &mut seen) {
             return Err(ValidationError::UnsupportedValue {
                 field: "services.connectsTo",
                 expected: "an acyclic wiring graph",
@@ -402,19 +404,19 @@ fn validate_connects_to(model: &Model) -> Result<(), ValidationError> {
 }
 
 fn connects_to_reaches<'a>(
-    model: &'a Model,
+    manifest: &'a Manifest,
     start: &str,
     current: &str,
     seen: &mut Vec<&'a ServiceId>,
 ) -> bool {
-    let Some(service) = model.services.get(current) else {
+    let Some(service) = manifest.services.get(current) else {
         return false;
     };
     service.connects_to.iter().any(|target| {
         target.as_str() == start
             || (!seen.contains(&target) && {
                 seen.push(target);
-                connects_to_reaches(model, start, target.as_str(), seen)
+                connects_to_reaches(manifest, start, target.as_str(), seen)
             })
     })
 }
@@ -448,8 +450,8 @@ fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 
 /// operation id, an invocation, and an exit policy and no steps; a composite
 /// carries non-empty steps and none of the leaf machinery. Step names are
 /// evidence path segments, so they exclude `.`.
-fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
-    for (id, task) in &model.tasks {
+fn validate_tasks(manifest: &Manifest) -> Result<(), ValidationError> {
+    for (id, task) in &manifest.tasks {
         match task.kind {
             TaskKind::Leaf => {
                 let operation_id =

@@ -18,18 +18,18 @@ generation does not by itself prove that a declared effect occurs at runtime.
 The intended invariant is that supported inputs have the documented effects,
 constraints, defaults, and rejection phases across the framework/runtime
 boundary. Intentional differences must be explicit: Nix-only app metadata need
-not reach the model, and a serialized field need not affect execution or identity.
+not reach the manifest, and a serialized field need not affect execution or identity.
 Parity does not require identical Nix and Rust representations.
 
 ### Existing protections and their limits
 
-- The authored [capability inventory](../runtime/crates/nixfied-model/capability.txt)
+- The authored [capability inventory](../runtime/crates/nixfied-manifest/capability.txt)
   derives the exact runtime ABI. It records contract changes; it cannot detect
   every semantic change that was not recorded in its bytes.
 - [Capability coverage](../runtime/crates/nixfied-runtime/tests/capability_coverage.rs)
   checks fixture field names against inventory tokens. This does not establish
   that runtime behavior honors those fields' documented meaning.
-- Typed decoding, model validation, and
+- Typed decoding, manifest validation, and
   [execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
   reject invalid input. Exhaustive destructuring requires a field-handling
   decision, but that decision can explicitly discard a field.
@@ -43,10 +43,10 @@ Parity does not require identical Nix and Rust representations.
 The former `stateRefs` description incorrectly claimed participation in service
 identity. [primitives.nix](../nix/modules/primitives.nix) and the
 [state guide](GUIDE.md#services-slots-and-state) now explain its actual role:
-execution lowering discards it, while it remains serialized model data.
-The `descriptive_refs_change_model_bytes_but_not_service_reuse_identity` test in
+execution lowering discards it, while it remains serialized manifest data.
+The `descriptive_refs_change_manifest_bytes_but_not_service_reuse_identity` test in
 [execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
-independently proves changed model bytes with unchanged service reuse identity.
+independently proves changed manifest bytes with unchanged service reuse identity.
 
 That specific documentation defect is resolved. It illustrates why shared
 structural declarations alone cannot establish complete behavioral parity.
@@ -55,8 +55,8 @@ distinct decisions.
 
 ### Ownership and follow-up evidence
 
-Nix declarations and lowering own the authoring-to-model boundary. The shared
-model types and Rust admission, lowering, and execution own their respective
+Nix declarations and lowering own the authoring-to-manifest boundary. The shared
+manifest types and Rust admission, lowering, and execution own their respective
 runtime boundaries. A future parity effort should identify the relevant owner
 and rejection phase for each covered promise, then establish:
 
@@ -65,7 +65,7 @@ and rejection phase for each covered promise, then establish:
 - Explicit treatment of fields affecting execution, identity, or output, and
   an explanation for intentional omission at a boundary.
 - Independent behavioral tests showing promised effects and non-effects. For
-  `stateRefs`, distinguish raw model hash changes from service reuse identity.
+  `stateRefs`, distinguish raw manifest hash changes from service reuse identity.
 - Preservation of phase-specific rejection and existing independent graph
   derivation checks.
 
@@ -77,7 +77,7 @@ evidence. Any stronger enforcement mechanism needs a separately scoped design;
 this gap does not prescribe a runtime interpreter or per-field tracking system.
 
 Correct inaccurate explanations independently of that broader work. Changes to
-model fields, identity, or runtime behavior follow the existing atomic contract
+manifest fields, identity, or runtime behavior follow the existing atomic contract
 procedure and verification guidance in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Separately scoped review candidates
@@ -86,7 +86,7 @@ These were explicitly outside the completed reference delivery. They are not
 merge blockers or approved implementation assignments:
 
 - **Descriptive refs:** consider removing service `stateRefs`/`logRefs` and task
-  `artifactRefs`/`logRefs`/`summaryRefs`. They remain model/ABI data despite their
+  `artifactRefs`/`logRefs`/`summaryRefs`. They remain manifest/ABI data despite their
   execution non-effects; removal requires an atomic contract change.
 - **State policies:** review possible consolidation of `cleanupPolicy` and
   `persistence`. Similar cleanup permissions do not establish equivalent service

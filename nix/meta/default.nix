@@ -2,7 +2,7 @@
 { lib }:
 let
   bundles = map (file: import file { inherit lib; }) [
-    ./model.nix
+    ./manifest.nix
     ./outputs.nix
   ];
 in
@@ -11,6 +11,6 @@ import ./structure.nix { inherit lib; } {
   vocabularies = lib.concatMap (bundle: bundle.vocabularies) bundles;
   contextTopics = builtins.attrNames (import ../docs/topics.nix);
   inventory = import ./inventory.nix { inherit lib; } (
-    builtins.readFile ../../runtime/crates/nixfied-model/capability.txt
+    builtins.readFile ../../runtime/crates/nixfied-manifest/capability.txt
   );
 }
