@@ -65,7 +65,8 @@ pub(crate) use process::{
 };
 pub(crate) use registry::{
     ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
-    mark_task_finished, release_unresolved_escape_ports, service_lifetime_as_str,
+    mark_task_finished, parse_service_lifetime, release_unresolved_escape_ports,
+    service_lifetime_as_str,
 };
 
 #[cfg(test)]

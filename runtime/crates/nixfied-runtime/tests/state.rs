@@ -867,7 +867,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
             ) VALUES (
-              'endpoint-stale-port', 'dev', 0, 'service-stale-port', '127.0.0.1', 23191,
+              'service-stale-port:endpoint', 'dev', 0, 'service-stale-port', '127.0.0.1', 23191,
               'active', 'process-stale-port'
             );
             ",
@@ -885,7 +885,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     let port_status: String = registry
         .connection()
         .query_row(
-            "SELECT status FROM ports WHERE endpoint_key = 'endpoint-stale-port'",
+            "SELECT status FROM ports WHERE endpoint_key = 'service-stale-port:endpoint'",
             [],
             |row| row.get(0),
         )

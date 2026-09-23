@@ -1828,8 +1828,7 @@ fn refuse_nonreusable_local_service(
             ),
         ));
     }
-    let stored_endpoints =
-        open_endpoints_from_snapshot(&snapshot, requested_record.service_instance_id)?;
+    let stored_endpoints = open_endpoints_from_snapshot(&snapshot);
     if stored_endpoints.is_empty() {
         return Err(port_unverifiable_error(
             requested_endpoints.values().next(),
@@ -1898,32 +1897,19 @@ fn open_service_lease_error(service_instance_id: &str, run_id: &str) -> RuntimeE
 
 fn open_endpoints_from_snapshot(
     snapshot: &crate::service::registry::ServiceSnapshot,
-    service_instance_id: &str,
-) -> RuntimeResult<BTreeMap<String, SelectedEndpoint>> {
-    let prefix = format!("{service_instance_id}:");
+) -> BTreeMap<String, SelectedEndpoint> {
     snapshot
         .endpoints
         .iter()
         .map(|endpoint| {
-            let endpoint_id = endpoint.endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    format!(
-                        "endpoint key {} does not belong to service {service_instance_id}",
-                        endpoint.endpoint_key
-                    ),
-                )
-            })?;
-            let host = LoopbackHost::parse(&endpoint.address)
-                .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
-            Ok((
-                endpoint_id.to_string(),
+            (
+                endpoint.endpoint_id.clone(),
                 SelectedEndpoint {
-                    endpoint_id: endpoint_id.to_string(),
-                    host,
+                    endpoint_id: endpoint.endpoint_id.clone(),
+                    host: endpoint.host,
                     port: endpoint.port,
                 },
-            ))
+            )
         })
         .collect()
 }
@@ -1955,10 +1941,9 @@ fn borrow_reusable_service(
     }
     if !stored_endpoints_match_selection(
         &snapshot.endpoints,
-        request.service_record.service_instance_id,
         &process_row.process_key,
         request.selected_endpoints,
-    )? {
+    ) {
         return Ok(None);
     }
     match observe_ownership(
@@ -2029,42 +2014,30 @@ fn borrow_reusable_service(
 
 fn stored_endpoints_match_selection(
     stored: &[crate::service::registry::StoredServiceEndpoint],
-    service_instance_id: &str,
     process_key: &str,
     selected: &BTreeMap<String, SelectedEndpoint>,
-) -> RuntimeResult<bool> {
+) -> bool {
     if stored.len() != selected.len() {
-        return Ok(false);
+        return false;
     }
-    let prefix = format!("{service_instance_id}:");
     for endpoint in stored {
         if endpoint.status != PortStatus::Active
             || endpoint.owner_process_key.as_deref() != Some(process_key)
         {
-            return Ok(false);
+            return false;
         }
-        let endpoint_id = endpoint.endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "endpoint key {} does not belong to service {service_instance_id}",
-                    endpoint.endpoint_key
-                ),
-            )
-        })?;
-        let host = LoopbackHost::parse(&endpoint.address)
-            .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
+        let endpoint_id = endpoint.endpoint_id.as_str();
         let Some(selected) = selected.get(endpoint_id) else {
-            return Ok(false);
+            return false;
         };
         if selected.endpoint_id != endpoint_id
-            || selected.host != host
+            || selected.host != endpoint.host
             || selected.port != endpoint.port
         {
-            return Ok(false);
+            return false;
         }
     }
-    Ok(true)
+    true
 }
 
 /// Clean every declared service of the slot, then clean the marker-owned slot
