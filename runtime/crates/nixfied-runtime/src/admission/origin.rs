@@ -1,15 +1,18 @@
-use crate::admission::{AdmissionContext, StoreOriginPolicy};
+use std::path::{Path, PathBuf};
+
+use crate::admission::StoreOriginPolicy;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::manifest_loader::RawManifest;
 
 pub fn check_raw_store_origin(
     raw_manifest: &RawManifest,
-    context: &AdmissionContext,
+    policy: StoreOriginPolicy,
+    store: &StoreRoot<'_>,
 ) -> RuntimeResult<()> {
-    if context.policy == StoreOriginPolicy::AllowNonStoreForTests {
+    if policy == StoreOriginPolicy::AllowNonStoreForTests {
         return Ok(());
     }
-    if canonical_under_store(&raw_manifest.path, &context.store_root).is_some() {
+    if store.canonical_under(&raw_manifest.path).is_some() {
         Ok(())
     } else {
         Err(RuntimeError::new(
@@ -17,20 +20,32 @@ pub fn check_raw_store_origin(
             format!(
                 "manifest path {} is not under {}",
                 raw_manifest.path.display(),
-                context.store_root.display()
+                store.declared.display()
             ),
         )
         .with_manifest(&raw_manifest.path, &raw_manifest.computed_manifest_hash))
     }
 }
 
-pub fn canonical_under_store(
-    path: &std::path::Path,
-    store_root: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let canonical_path = path.canonicalize().ok()?;
-    let canonical_store = store_root.canonicalize().ok()?;
-    canonical_path
-        .starts_with(canonical_store)
-        .then_some(canonical_path)
+/// One local observation shared by this admission's confinement checks.
+/// Failure is reported by the first applicable phase, preserving its diagnostic.
+pub(super) struct StoreRoot<'a> {
+    pub declared: &'a Path,
+    pub canonical: Option<PathBuf>,
+}
+
+impl<'a> StoreRoot<'a> {
+    pub fn observe(declared: &'a Path) -> Self {
+        Self {
+            declared,
+            canonical: declared.canonicalize().ok(),
+        }
+    }
+
+    pub fn canonical_under(&self, path: &Path) -> Option<PathBuf> {
+        let canonical_path = path.canonicalize().ok()?;
+        canonical_path
+            .starts_with(self.canonical.as_ref()?)
+            .then_some(canonical_path)
+    }
 }

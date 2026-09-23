@@ -7,6 +7,7 @@ mod target;
 use std::path::{Path, PathBuf};
 
 use nixfied_manifest::Manifest;
+use origin::StoreRoot;
 
 use crate::error::RuntimeResult;
 use crate::execution::{ExecutionManifest, lower};
@@ -117,11 +118,11 @@ impl RunAdmission {
 
 /// Run/check admission owns the bytes and every prerequisite for child execution.
 pub fn admit_run(path: &Path, context: &AdmissionContext) -> RuntimeResult<RunAdmission> {
-    let loaded = load_for_admission(path, context)?;
+    let (loaded, store) = load_for_admission(path, context)?;
     let (source, secrets, execution_manifest) = (|| {
-        let source = source::check_source(loaded.manifest(), context)?;
+        let source = source::check_source(loaded.manifest(), &context.invocation_root, &store)?;
         let secrets = secrets::resolve_secrets(loaded.manifest())?;
-        let execution_manifest = finish_admission(&loaded, context)?;
+        let execution_manifest = finish_admission(&loaded, &store)?;
         Ok((source, secrets, execution_manifest))
     })()
     .map_err(|error: crate::error::RuntimeError| {
@@ -139,10 +140,10 @@ pub fn admit_run(path: &Path, context: &AdmissionContext) -> RuntimeResult<RunAd
 
 /// Recovery admits source-independent facts without fetching source or secret values.
 pub fn admit_control(path: &Path, context: &AdmissionContext) -> RuntimeResult<ControlAdmission> {
-    let loaded = load_for_admission(path, context)?;
+    let (loaded, store) = load_for_admission(path, context)?;
     let execution_manifest = (|| {
         secrets::check_secret_references(loaded.manifest())?;
-        finish_admission(&loaded, context)
+        finish_admission(&loaded, &store)
     })()
     .map_err(|error| {
         error.with_manifest_if_missing(
@@ -153,9 +154,13 @@ pub fn admit_control(path: &Path, context: &AdmissionContext) -> RuntimeResult<C
     Ok(ControlAdmission::new(loaded, execution_manifest))
 }
 
-fn load_for_admission(path: &Path, context: &AdmissionContext) -> RuntimeResult<LoadedManifest> {
+fn load_for_admission<'a>(
+    path: &Path,
+    context: &'a AdmissionContext,
+) -> RuntimeResult<(LoadedManifest, StoreRoot<'a>)> {
     let raw = read_raw_manifest(path)?;
-    origin::check_raw_store_origin(&raw, context)?;
+    let store = StoreRoot::observe(&context.store_root);
+    origin::check_raw_store_origin(&raw, context.policy, &store)?;
     let loaded = parse_loaded_manifest(raw)?;
     target::check_target(loaded.manifest(), context).map_err(|error| {
         error.with_manifest_if_missing(
@@ -163,14 +168,14 @@ fn load_for_admission(path: &Path, context: &AdmissionContext) -> RuntimeResult<
             loaded.computed_manifest_hash().to_owned(),
         )
     })?;
-    Ok(loaded)
+    Ok((loaded, store))
 }
 
 fn finish_admission(
     loaded: &LoadedManifest,
-    context: &AdmissionContext,
+    store: &StoreRoot<'_>,
 ) -> RuntimeResult<ExecutionManifest> {
-    closures::check_closures(loaded.manifest(), context)?;
+    closures::check_closures(loaded.manifest(), store)?;
     lower(loaded.manifest())
 }
 

@@ -4,17 +4,17 @@ use std::path::Path;
 
 use nixfied_manifest::Manifest;
 
-use crate::admission::AdmissionContext;
+use super::origin::StoreRoot;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
-pub fn check_closures(manifest: &Manifest, context: &AdmissionContext) -> RuntimeResult<()> {
+pub fn check_closures(manifest: &Manifest, store: &StoreRoot<'_>) -> RuntimeResult<()> {
     let invoked_tools = super::invocations(manifest)
         .flat_map(|invocation| invocation.tools.iter())
         .map(|tool| tool.as_str())
         .collect::<BTreeSet<_>>();
     for (closure_id, closure) in &manifest.closures {
-        let store_path = require_store_path("closure.storePath", &closure.store_path, context)?;
-        let executable = require_store_path("closure.executable", &closure.executable, context)?;
+        let store_path = require_store_path("closure.storePath", &closure.store_path, store)?;
+        let executable = require_store_path("closure.executable", &closure.executable, store)?;
         if !store_path.exists() {
             return Err(RuntimeError::new(
                 ErrorCode::ClosureMissing,
@@ -87,7 +87,7 @@ pub fn check_closures(manifest: &Manifest, context: &AdmissionContext) -> Runtim
 fn require_store_path(
     field: &'static str,
     value: &str,
-    context: &AdmissionContext,
+    store: &StoreRoot<'_>,
 ) -> RuntimeResult<std::path::PathBuf> {
     let path = Path::new(value);
     if !path.is_absolute() {
@@ -102,24 +102,18 @@ fn require_store_path(
             format!("{field} does not exist: {value}"),
         ));
     };
-    let Ok(canonical_store) = context.store_root.canonicalize() else {
+    let Some(canonical_store) = &store.canonical else {
         return Err(RuntimeError::new(
             ErrorCode::ClosureMissing,
-            format!(
-                "store root does not exist: {}",
-                context.store_root.display()
-            ),
+            format!("store root does not exist: {}", store.declared.display()),
         ));
     };
-    if canonical.starts_with(&canonical_store) {
+    if canonical.starts_with(canonical_store) {
         Ok(canonical)
     } else {
         Err(RuntimeError::new(
             ErrorCode::ClosureMissing,
-            format!(
-                "{field} is not under {}: {value}",
-                context.store_root.display()
-            ),
+            format!("{field} is not under {}: {value}", store.declared.display()),
         ))
     }
 }

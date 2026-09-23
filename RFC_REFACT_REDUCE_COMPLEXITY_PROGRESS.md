@@ -148,7 +148,12 @@ removed state owners, coordinated change sites, and capture correctness addition
    context tests and Clippy passed; `.#test` passed before the task-context
    follow-up, then 32 admission/71 service tests and Clippy passed after it.
    Logs: `/tmp/nixfied-private-admission-floor.log`, `/tmp/nixfied-run-context.log`.
-   Remaining in this step: one store-root observation per admission.
+   Step 6 complete: one local store-root observation now serves origin, immutable
+   source, and closure checks. Declared-path containment remains separate from
+   canonical store confinement. A missing-store multi-fault test preserves source,
+   secret, then closure error precedence and raw provenance. All 33 admission
+   tests and Clippy pass; the complete fixture-backed `.#test` floor passes on the
+   final admission tree (`/tmp/nixfied-admission-complete-floor.log`).
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.
