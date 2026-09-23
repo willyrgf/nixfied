@@ -167,6 +167,11 @@ impl RedactedLogRelays {
         }
     }
 
+    /// Transfer live service relays to persistent operation without waiting for EOF.
+    pub(crate) fn detach_for_persistent(self) {
+        drop(self.handles);
+    }
+
     pub fn join(self) -> RuntimeResult<()> {
         for handle in self.handles {
             match handle.join() {

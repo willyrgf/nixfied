@@ -273,6 +273,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   and state-root metadata; process readiness comes from the primary process and
   active ports, while standing and borrowing derive from owner/borrower leases.
   `ps` projects those facts without a separately persisted service status.
+- **Local service handles encode ownership.** Acquisition returns a borrowed
+  lease handle or an owned starting handle. Only the starting handle owns startup
+  guards; committed readiness consumes it into a ready owner. Session services
+  are ready owners or borrowers, and borrowers carry no child resources.
+  Failure settlement consumes ownership, while successful standing explicitly
+  stops monitoring, detaches output relays, and releases the live child handle.
 - **Leases split three ways** — `run-scoped`, `until-idle`, `persistent-until-down`
   — because no daemon is guaranteed; reference counts derive from live borrower
   leases, never an independently mutated counter. `until-idle` services are

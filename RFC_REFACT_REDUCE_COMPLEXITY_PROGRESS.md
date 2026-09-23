@@ -221,7 +221,29 @@ removed state owners, coordinated change sites, and capture correctness addition
    the complete fixture-backed Cargo floor including recovery, all 22 runtime
    gate cases, and Nix compiler/install/upgrade integration. Linux proof is current;
    macOS and separately requested final release/CLI/install builds remain unverified.
-8. Owned/borrowed service resources: pending.
+8. Owned/borrowed service resources: complete.
+   Acquisition is `Borrowed(BorrowedService)` or `Owned(StartingService)`;
+   sessions accept only borrowed handles or ready owners. Borrowers retain only
+   immutable evidence, with no child, monitor, guard, probe, source, or secret
+   resources. Consuming readiness retains starting ownership on failure and
+   releases guards only after the ready commit; failure cleanup and best-effort
+   Drop remain inside guard ownership. Initial health failure snapshots service
+   output before consuming ready ownership. Stop/cancel/stand consume handles;
+   standing commit failure explicitly contains and settles, while success names
+   monitor shutdown, relay detachment, and live child-handle release.
+   Architect review found no correctness defect. Independent proofs cover
+   competing startup before/after failed-ready settlement, failed standing with
+   successful/failed settlement, failed health cleanup precedence, and real CLI
+   health failure summary/evidence after committed readiness. The impossible
+   pre-ready task dependency test is replaced by temporal registry revalidation
+   after a real ready transition. All 73 service tests and workspace/all-target
+   Clippy pass on Linux (`/tmp/nixfied-ownership-final-focused.log`). Contract,
+   architecture, native descriptor coverage, and ABI snapshot updated together:
+   `nixfied-runtime-abi:1-37edfe301f32`. Full current-tree `.#ci -- --dirty`
+   passed (session `21135`, exit 0, `/tmp/nixfied-ownership-ci.log`), including
+   source checks, fixture-backed Cargo, all 22 runtime cases, and Nix compiler/
+   install/upgrade integration. macOS remains unverified. Bounded relay shutdown
+   remains steps 9–10.
 9. Bounded capture and child completion ABI cutover: pending.
 10. Terminal/persistent capture integration: pending.
 11. Borrowed plans, node runner, and occurrence evidence ABI cutover: pending.

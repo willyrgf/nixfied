@@ -14,8 +14,8 @@ use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    PrepareRunner, PrepareTaskError, RunContext, ServiceSelection, ServiceStartError,
-    SlotEndpoints, StartedService, TaskExecution, compute_service_identity, record_run_created,
+    AcquiredService, PrepareRunner, PrepareTaskError, RunContext, ServiceSelection,
+    ServiceStartError, SlotEndpoints, TaskExecution, compute_service_identity, record_run_created,
     run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
     start_service_for_slot,
 };
@@ -45,13 +45,13 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     )
     .expect("foreground service should start");
 
-    assert_eq!(service.pid as i32, service.pgid);
+    assert_eq!(service.info().pid as i32, service.info().pgid);
     let process_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process row should exist");
@@ -60,7 +60,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .connection()
         .query_row(
             "SELECT service_name FROM services WHERE service_instance_id = ?1",
-            [&service.service_instance_id],
+            [&service.info().service_instance_id],
             |row| row.get(0),
         )
         .expect("service row should exist");
@@ -96,7 +96,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .connection()
         .query_row(
             "SELECT command_json FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| {
                 let payload: String = row.get(0)?;
                 Ok(serde_json::from_str(&payload).expect("command JSON should parse"))
@@ -188,7 +188,7 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -198,15 +198,15 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     )
     .expect("foreground service should start");
 
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owned listener should satisfy readiness");
     let process_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("service status should query");
@@ -215,7 +215,7 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         .connection()
         .query_row(
             "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("port status should query");
@@ -251,7 +251,7 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
 fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
     let port = available_port_window(2);
     let mut fixture = test_child_listener_fixture(port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -260,7 +260,7 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
         port,
     )
     .expect("service should start before ready activation");
-    let unexpected_key = format!("{}:unexpected", service.service_instance_id);
+    let unexpected_key = format!("{}:unexpected", service.info().service_instance_id);
     fixture
         .registry
         .connection_mut()
@@ -275,13 +275,14 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
             FROM ports
             WHERE service_instance_id = ?2
             ",
-            rusqlite::params![unexpected_key, service.service_instance_id],
+            rusqlite::params![unexpected_key, service.info().service_instance_id],
         )
         .expect("test should inject an unexpected open endpoint row");
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("ready activation must reject the complete mismatched open set");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("ready activation must reject the complete mismatched open set")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     let state: (String, i64) = fixture
@@ -293,20 +294,53 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
               (SELECT status FROM processes WHERE process_key = ?2),
               (SELECT count(*) FROM ports WHERE service_instance_id = ?1 AND status = 'active')
             ",
-            rusqlite::params![service.service_instance_id, service.process_key],
+            rusqlite::params![
+                service.info().service_instance_id,
+                service.info().process_key
+            ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("failed ready transaction should remain inspectable");
     assert_eq!(state, ("running".into(), 1));
+    let mut contender = test_child_listener_fixture(port);
+    let conflict = match start_synthetic_service(
+        &contender.manifest,
+        &contender.admission,
+        &contender.placement,
+        &mut contender.registry,
+        "run-contender-before-settlement",
+        port,
+    ) {
+        Ok(service) => {
+            let _ = service.stop(&mut contender.registry, 1000);
+            panic!("failed readiness must retain the startup guard until settlement");
+        }
+        Err(error) => error,
+    };
+    assert_eq!(conflict.code, ErrorCode::PortConflict);
+    assert_eq!(
+        conflict.details["portConflict"]["reason"],
+        json!("startup-lock-contended")
+    );
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    let replacement = start_synthetic_service(
+        &contender.manifest,
+        &contender.admission,
+        &contender.placement,
+        &mut contender.registry,
+        "run-contender-after-settlement",
+        port,
+    )
+    .expect("settlement must release the startup guard and terminate the owner");
+    replacement.stop(&mut contender.registry, 1000).unwrap();
 }
 
 #[test]
 fn ready_activation_rejects_raced_port_owner_atomically() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -320,13 +354,14 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
         .connection_mut()
         .execute(
             "UPDATE ports SET owner_process_key = 'process-racer' WHERE service_instance_id = ?1",
-            [&service.service_instance_id],
+            [&service.info().service_instance_id],
         )
         .expect("test should race the reserved owner evidence");
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("ready activation must not accept a mismatched owner");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("ready activation must not accept a mismatched owner")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     let raced: (String, String) = fixture
@@ -340,7 +375,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
             JOIN ports o ON o.service_instance_id = s.service_instance_id
             WHERE p.process_key = ?1
             ",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("raced ready evidence should query");
@@ -350,7 +385,10 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
         .connection_mut()
         .execute(
             "UPDATE ports SET owner_process_key = ?2 WHERE service_instance_id = ?1",
-            rusqlite::params![service.service_instance_id, service.process_key],
+            rusqlite::params![
+                service.info().service_instance_id,
+                service.info().process_key
+            ],
         )
         .expect("test should restore ownership for failure settlement");
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
@@ -361,7 +399,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
 fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     let port = 45000 + (unique_suffix() % 1000) as u16;
     let mut fixture = test_child_listener_fixture(port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -371,8 +409,8 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     )
     .expect("foreground service should start");
 
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let mut service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("service should become ready");
     service
         .check_health(&mut fixture.registry)
@@ -478,7 +516,7 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let mut owner = start_synthetic_service(
+    let owner = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -487,8 +525,8 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         port,
     )
     .expect("owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owner should prove its listener");
 
     // A second address with the same exact service contract creates a distinct
@@ -552,13 +590,13 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
                 "slot": 0,
                 "runId": "run-owner-attribution",
                 "serviceId": "synthetic",
-                "serviceInstanceId": owner.service_instance_id.clone(),
-                "processKey": owner.process_key.clone()
+                "serviceInstanceId": owner.info().service_instance_id.clone(),
+                "processKey": owner.info().process_key.clone()
             }
         })
     );
     assert!(
-        process_group_has_non_zombie_member(owner.pgid),
+        process_group_has_non_zombie_member(owner.info().pgid),
         "collision handling must not terminate an unrelated service instance"
     );
     owner
@@ -572,7 +610,7 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_wildcard_listener_fixture(port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -582,12 +620,13 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
     )
     .expect("foreground service should start");
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("wildcard listener must not satisfy declared loopback endpoint");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("wildcard listener must not satisfy declared loopback endpoint")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    let process_key = service.process_key.clone();
+    let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
     let ready_events: i64 = fixture
@@ -683,8 +722,8 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         slot1.service.selected_endpoint().expect("endpoint").port
     );
     assert_ne!(
-        slot0.service.service_instance_id,
-        slot1.service.service_instance_id
+        slot0.service.info().service_instance_id,
+        slot1.service.info().service_instance_id
     );
 
     let slot0_ps = ps(&mut slot0.registry).expect("slot 0 ps should reconcile");
@@ -774,7 +813,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     let mut fixture = test_child_listener_fixture(port);
     set_smoke_args(&mut fixture.manifest, &["output", "literal", "task-ok", ""]);
     fixture.readmit();
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -783,8 +822,8 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         port,
     )
     .expect("foreground service should start");
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owned listener should become ready");
 
     let task = run_dependent_task(
@@ -792,9 +831,9 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         &mut fixture.registry,
         RunContext::new(
             &fixture.admission,
-            &service.run_id,
+            &service.info().run_id,
             &fixture.placement.state_root,
-            &service.redactor,
+            &Redactor::from_secrets(fixture.admission.secrets()),
         ),
         &[&service],
         fixture
@@ -863,26 +902,38 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 }
 
 #[test]
-fn dependent_task_refuses_to_run_before_service_ready() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23186);
+fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
+    let port = available_port_window(1);
+    let mut fixture = test_child_listener_fixture(port);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-task-not-ready",
-        23186,
+        port,
     )
     .expect("foreground service should start");
 
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .unwrap();
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE processes SET status = 'running' WHERE process_key = ?1",
+            [&service.info().process_key],
+        )
+        .unwrap();
     let error = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
         RunContext::new(
             &fixture.admission,
-            &service.run_id,
+            &service.info().run_id,
             &fixture.placement.state_root,
-            &service.redactor,
+            &Redactor::from_secrets(fixture.admission.secrets()),
         ),
         &[&service],
         fixture
@@ -916,7 +967,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -926,12 +977,13 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     )
     .expect("service should initially start");
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("readiness should time out and clean up");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("readiness should time out and clean up")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    let process_key = service.process_key.clone();
+    let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
     let process_status: String = fixture
@@ -1029,7 +1081,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         60,
     );
     let mut fixture = ServiceFixture::from_value(value);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1059,8 +1111,8 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         fs::write(ready_ack, b"ready").expect("test should acknowledge readiness");
     });
 
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("exec probe should succeed once the flag appears");
     acknowledge
         .join()
@@ -1071,7 +1123,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process status should query");
@@ -1096,7 +1148,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
     drop(listener);
     let value = exec_probe_fixture_value(&test_sleep(), &["30"], port, json!(["-c", "exit 7"]), 3);
     let mut fixture = ServiceFixture::from_value(value);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1106,9 +1158,10 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
     )
     .expect("service should initially start");
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("a failing exec probe should time out and clean up");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("a failing exec probe should time out and clean up")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
     assert!(
@@ -1116,7 +1169,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         "failure should carry the last attempt's exit code: {}",
         error.message
     );
-    let process_key = service.process_key.clone();
+    let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
     let process_status: String = fixture
@@ -1154,7 +1207,7 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
         value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["timeoutMs"] =
             json!(if acknowledge { 1 } else { 30000 });
         let mut fixture = ServiceFixture::from_value(value);
-        let mut service = start_synthetic_service(
+        let service = start_synthetic_service(
             &fixture.manifest,
             &fixture.admission,
             &fixture.placement,
@@ -1171,13 +1224,16 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
                 fs::write(root.join("ack"), b"ready").unwrap();
             })
         });
-        let result = service.wait_for_probe_ready(&mut fixture.registry);
+        let result = service.ready(&mut fixture.registry, &CancellationToken::new());
         if let Some(acknowledger) = acknowledger {
             acknowledger.join().unwrap();
-            result.expect("the invocation's 1ms timeout must not truncate the probe attempt");
+            let service =
+                result.expect("the invocation's 1ms timeout must not truncate the probe attempt");
             service.stop(&mut fixture.registry, 1000).unwrap();
         } else {
-            let error = result.expect_err("the probe deadline must terminate a blocked attempt");
+            let (service, error) = result
+                .expect_err("the probe deadline must terminate a blocked attempt")
+                .into_parts();
             assert!(
                 error.message.contains("timed out after 50ms"),
                 "{}",
@@ -1190,60 +1246,95 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
 
 #[test]
 fn exec_health_probe_failure_records_failed() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    // The service is ready (tcp) but never healthy: the failed run must leave
-    // service.failed evidence, not a clean stopped/completed registry state.
-    let mut value = test_child_listener_value(port);
-    add_probe_shell_closure(&mut value, "service.synthetic.health");
-    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
-        "kind": "exec",
-        "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
-        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2
-    });
-    let mut fixture = ServiceFixture::from_value(value);
-    let mut service = start_synthetic_service(
-        &fixture.manifest,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-exec-health-fail",
-        port,
-    )
-    .expect("service should start");
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect("service should become ready");
-
-    let error = service
-        .check_health(&mut fixture.registry)
-        .expect_err("a failing health probe should fail the service");
-
-    assert_ne!(error.code, ErrorCode::Canceled);
-    let process_key = service.process_key.clone();
-    let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
-    assert_ne!(error.code, ErrorCode::Canceled);
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&process_key],
-            |row| row.get(0),
+    for reject_settlement in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        // The service is ready (tcp) but never healthy: the failed run must leave
+        // service.failed evidence, not a clean stopped/completed registry state.
+        let mut value = test_child_listener_value(port);
+        add_probe_shell_closure(&mut value, "service.synthetic.health");
+        value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
+            "kind": "exec",
+            "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
+            "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2
+        });
+        let mut fixture = ServiceFixture::from_value(value);
+        let service = start_synthetic_service(
+            &fixture.manifest,
+            &fixture.admission,
+            &fixture.placement,
+            &mut fixture.registry,
+            "run-exec-health-fail",
+            port,
         )
-        .expect("process status should query");
-    assert_eq!(process_status, "failed");
-    let run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = 'run-exec-health-fail'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("run status should query");
-    assert_eq!(run_status, "service-failed");
+        .expect("service should start");
+        let mut service = service
+            .ready(&mut fixture.registry, &CancellationToken::new())
+            .expect("service should become ready");
+
+        let error = service
+            .check_health(&mut fixture.registry)
+            .expect_err("a failing health probe should fail the service");
+
+        assert_ne!(error.code, ErrorCode::Canceled);
+        let process_key = service.info().process_key.clone();
+        let pgid = service.info().pgid;
+        let health_error_code = error.code;
+        if reject_settlement {
+            fixture
+                .registry
+                .connection()
+                .execute_batch(
+                    "CREATE TRIGGER reject_health_settlement BEFORE INSERT ON events
+             WHEN NEW.event_type = 'service.failed'
+             BEGIN SELECT RAISE(ABORT, 'health-settlement-denied'); END;",
+                )
+                .unwrap();
+        }
+        let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
+        assert_ne!(error.code, ErrorCode::Canceled);
+        let process_status: String = fixture
+            .registry
+            .connection()
+            .query_row(
+                "SELECT status FROM processes WHERE process_key = ?1",
+                [&process_key],
+                |row| row.get(0),
+            )
+            .expect("process status should query");
+        assert_eq!(
+            process_status,
+            if reject_settlement { "ready" } else { "failed" }
+        );
+        assert!(!process_group_has_non_zombie_member(pgid));
+        if reject_settlement {
+            assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+            assert!(error.message.contains("health-settlement-denied"));
+            assert_eq!(error.causes.len(), 1);
+            assert_eq!(error.causes[0].code, health_error_code);
+        } else {
+            assert_eq!(error.code, health_error_code);
+            assert!(error.causes.is_empty());
+        }
+        let run_status: String = fixture
+            .registry
+            .connection()
+            .query_row(
+                "SELECT status FROM runs WHERE run_id = 'run-exec-health-fail'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("run status should query");
+        assert_eq!(
+            run_status,
+            if reject_settlement {
+                "service-starting"
+            } else {
+                "service-failed"
+            }
+        );
+    }
 }
 
 #[test]
@@ -1259,7 +1350,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         &["term-tree", &started_arg, &marker_arg],
         port,
     ));
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1268,7 +1359,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         port,
     )
     .expect("service should initially start");
-    let pgid = service.pgid;
+    let pgid = service.info().pgid;
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
     let handle = thread::spawn(move || {
@@ -1279,9 +1370,12 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         canceler.cancel();
     });
 
-    let error = service
-        .wait_for_probe_ready_cancellable(&mut fixture.registry, &cancellation)
-        .expect_err("readiness should be canceled");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &cancellation)
+        .expect_err("readiness should be canceled")
+        .into_parts();
+    let process_key = service.info().process_key.clone();
+    let run_id = service.info().run_id.clone();
     handle.join().expect("canceler should join");
     service
         .cancel(&mut fixture.registry, 200, "test readiness cancellation")
@@ -1291,14 +1385,14 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let observed = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == process_key)
         .expect("service process should be reported");
     let lease_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -1344,7 +1438,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &["term-tree", &started_arg, &marker_arg],
     );
     fixture.readmit();
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1353,8 +1447,8 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         port,
     )
     .expect("foreground service should start");
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owned listener should become ready");
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
@@ -1371,9 +1465,9 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &mut fixture.registry,
         RunContext::new(
             &fixture.admission,
-            &service.run_id,
+            &service.info().run_id,
             &fixture.placement.state_root,
-            &service.redactor,
+            &Redactor::from_secrets(fixture.admission.secrets()),
         ),
         &[&service],
         "smoke",
@@ -1414,7 +1508,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -1487,7 +1581,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &["term-tree", &started_arg, &marker_arg],
     );
     fixture.readmit();
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1496,8 +1590,8 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         port,
     )
     .expect("foreground service should start");
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owned listener should become ready");
 
     let result = run_dependent_task(
@@ -1505,9 +1599,9 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &mut fixture.registry,
         RunContext::new(
             &fixture.admission,
-            &service.run_id,
+            &service.info().run_id,
             &fixture.placement.state_root,
-            &service.redactor,
+            &Redactor::from_secrets(fixture.admission.secrets()),
         ),
         &[&service],
         fixture
@@ -1544,7 +1638,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -1827,7 +1921,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         "timeoutMs": 1000, "retryIntervalMs": 20, "maxAttempts": 1
     });
     let mut fixture = ServiceFixture::from_value(value);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -1846,9 +1940,10 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         "no detached child before the exec probe"
     );
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("readiness should report the monitored escape");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("readiness should report the monitored escape")
+        .into_parts();
 
     assert!(
         request.exists(),
@@ -2061,7 +2156,7 @@ fn readiness_refuses_monitored_setsid_escape() {
         ],
         port,
     ));
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2074,9 +2169,10 @@ fn readiness_refuses_monitored_setsid_escape() {
     fs::write(&request, []).expect("escape request should be written");
     assert!(wait_for_path(&detached, Duration::from_secs(3)));
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("readiness should refuse monitored escape");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("readiness should refuse monitored escape")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
@@ -2119,7 +2215,7 @@ fn readiness_records_foreground_exit_as_escape() {
         &["prepare", &started_arg, &exit_request_arg],
         port,
     ));
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2130,11 +2226,12 @@ fn readiness_records_foreground_exit_as_escape() {
     .expect("service should initially pass handoff");
     assert!(wait_for_path(&started, Duration::from_secs(3)));
     fs::write(&exit_request, []).expect("foreground exit should be requested");
-    wait_for_process_exit(service.pid);
+    wait_for_process_exit(service.info().pid);
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("readiness should record foreground exit as escape");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("readiness should record foreground exit as escape")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
@@ -2192,7 +2289,7 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
         .expect("fixture has service")
         .containment = ContainmentRequirement::ProcessTree;
     fixture.readmit();
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2204,11 +2301,12 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
     assert!(wait_for_path(&bound, Duration::from_secs(3)));
     fs::write(&exit_request, []).expect("primary exit should be requested");
     assert!(wait_for_path(&exiting, Duration::from_secs(3)));
-    wait_for_process_exit(service.pid);
+    wait_for_process_exit(service.info().pid);
 
-    let error = service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("a listener retained by the tracked child is still a process escape");
+    let (service, error) = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect_err("a listener retained by the tracked child is still a process escape")
+        .into_parts();
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
@@ -2261,7 +2359,7 @@ fn duplicate_active_service_start_is_refused() {
         .expect("process count should query");
     assert_eq!(running_processes, 1);
     assert!(
-        process_group_has_non_zombie_member(service.pgid),
+        process_group_has_non_zombie_member(service.info().pgid),
         "startup-lock contention must block without signaling"
     );
     let unchanged: (String, String, String) = fixture
@@ -2276,7 +2374,7 @@ fn duplicate_active_service_start_is_refused() {
             JOIN run_leases l ON l.service_instance_id = s.service_instance_id
             WHERE p.process_key = ?1 AND l.run_id = 'run-first'
             ",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("blocked finite owner evidence should remain unchanged");
@@ -2296,7 +2394,7 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let mut owner = start_synthetic_service(
+    let owner = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2305,11 +2403,11 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
         port,
     )
     .expect("owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owner should become ready before reuse");
-    let owner_process_key = owner.process_key.clone();
-    let owner_pgid = owner.pgid;
+    let owner_process_key = owner.info().process_key.clone();
+    let owner_pgid = owner.info().pgid;
 
     let borrower = start_synthetic_service(
         &fixture.manifest,
@@ -2322,8 +2420,8 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     .expect("exact matching run should borrow the ready service");
 
     assert!(borrower.is_borrowed());
-    assert_eq!(borrower.process_key, owner_process_key);
-    assert_eq!(borrower.pgid, owner_pgid);
+    assert_eq!(borrower.info().process_key, owner_process_key);
+    assert_eq!(borrower.info().pgid, owner_pgid);
     let concurrent_borrower = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2334,13 +2432,13 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
     )
     .expect("a ready owner remains reusable for a guarded concurrent borrower");
     assert!(concurrent_borrower.is_borrowed());
-    assert_eq!(concurrent_borrower.process_key, owner_process_key);
+    assert_eq!(concurrent_borrower.info().process_key, owner_process_key);
     let active_leases: i64 = fixture
         .registry
         .connection()
         .query_row(
             "SELECT count(*) FROM run_leases WHERE service_instance_id = ?1 AND status = 'active'",
-            [&owner.service_instance_id],
+            [&owner.info().service_instance_id],
             |row| row.get(0),
         )
         .expect("active lease count should query");
@@ -2397,7 +2495,7 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
     let port_a = available_port_window(2);
     let port_b = port_a + 1;
     let mut fixture = test_child_listener_fixture(port_a);
-    let mut owner = start_synthetic_service(
+    let owner = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2406,8 +2504,8 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
         port_a,
     )
     .expect("owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owner should become ready before mismatch attempt");
 
     let error = match start_synthetic_service(
@@ -2442,12 +2540,103 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
 }
 
 #[test]
+fn failed_standing_commit_consumes_owner_and_preserves_settlement_precedence() {
+    for reject_settlement in [false, true] {
+        let port = available_port_window(1);
+        let mut fixture = test_child_listener_fixture(port);
+        let owner = start_synthetic_service_with_lifetime(
+            &fixture.manifest,
+            &fixture.admission,
+            &fixture.placement,
+            &mut fixture.registry,
+            "run-standing-failure",
+            port,
+            ServiceLifetime::PersistentUntilDown,
+        )
+        .expect("persistent owner should start")
+        .ready(&mut fixture.registry, &CancellationToken::new())
+        .expect("persistent owner should become ready");
+        let pgid = owner.info().pgid;
+        fixture
+            .registry
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_standing BEFORE INSERT ON events
+             WHEN NEW.event_type = 'service.standing'
+             BEGIN SELECT RAISE(ABORT, 'standing-denied'); END;",
+            )
+            .unwrap();
+        if reject_settlement {
+            fixture
+                .registry
+                .connection()
+                .execute_batch(
+                    "CREATE TRIGGER reject_failed BEFORE INSERT ON events
+                 WHEN NEW.event_type = 'service.failed'
+                 BEGIN SELECT RAISE(ABORT, 'settlement-denied'); END;",
+                )
+                .unwrap();
+        }
+
+        let error = owner
+            .stand(&mut fixture.registry, 1000)
+            .expect_err("failed standing commit must clean up instead of transferring ownership");
+        assert!(!process_group_has_non_zombie_member(pgid));
+        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+        let expected_message = if reject_settlement {
+            "settlement-denied"
+        } else {
+            "standing-denied"
+        };
+        assert!(error.message.contains(expected_message), "{error:?}");
+        if reject_settlement {
+            assert_eq!(error.causes.len(), 1);
+            assert_eq!(error.causes[0].code, ErrorCode::RegistryCorrupt);
+        } else {
+            assert!(error.causes.is_empty());
+        }
+        let (process_status, lease_status): (String, String) = fixture
+            .registry
+            .connection()
+            .query_row(
+                "SELECT p.status, l.status FROM processes p JOIN run_leases l
+                        ON p.run_id = l.run_id WHERE p.run_id = 'run-standing-failure'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            process_status,
+            if reject_settlement { "ready" } else { "failed" }
+        );
+        assert_eq!(
+            lease_status,
+            if reject_settlement {
+                "active"
+            } else {
+                "failed"
+            }
+        );
+        let standing_events: i64 = fixture
+            .registry
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_type = 'service.standing'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(standing_events, 0);
+    }
+}
+
+#[test]
 fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let mut owner = start_synthetic_service_with_lifetime(
+    let owner = start_synthetic_service_with_lifetime(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2457,14 +2646,14 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
         ServiceLifetime::PersistentUntilDown,
     )
     .expect("persistent owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("persistent service should become ready");
-    let service_instance_id = owner.service_instance_id.clone();
-    let owner_process_key = owner.process_key.clone();
-    let owner_pgid = owner.pgid;
+    let service_instance_id = owner.info().service_instance_id.clone();
+    let owner_process_key = owner.info().process_key.clone();
+    let owner_pgid = owner.info().pgid;
     owner
-        .stand(&mut fixture.registry)
+        .stand(&mut fixture.registry, 1000)
         .expect("persistent service should stand");
 
     let standing = ps(&mut fixture.registry).expect("ps should report standing service");
@@ -2536,7 +2725,7 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
 fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
-    let mut owner = start_synthetic_service_with_lifetime(
+    let owner = start_synthetic_service_with_lifetime(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2546,12 +2735,12 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
         ServiceLifetime::PersistentUntilDown,
     )
     .expect("persistent owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("persistent owner should become ready");
-    let owner_pgid = owner.pgid;
+    let owner_pgid = owner.info().pgid;
     owner
-        .stand(&mut fixture.registry)
+        .stand(&mut fixture.registry, 1000)
         .expect("persistent owner should stand");
     let borrower = start_synthetic_service(
         &fixture.manifest,
@@ -2568,7 +2757,7 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
         .connection_mut()
         .execute(
             "UPDATE run_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE run_id = ?1",
-            [&borrower.run_id],
+            [&borrower.info().run_id],
         )
         .expect("borrower lease should expire");
 
@@ -2579,7 +2768,7 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
         .connection()
         .query_row(
             "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&borrower.process_key],
+            [&borrower.info().process_key],
             |row| row.get(0),
         )
         .expect("persistent owner port should remain recorded");
@@ -2600,7 +2789,7 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut fixture = test_child_listener_fixture(port);
-    let mut owner = start_synthetic_service_with_lifetime(
+    let owner = start_synthetic_service_with_lifetime(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2610,11 +2799,11 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
         ServiceLifetime::UntilIdle,
     )
     .expect("until-idle owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("until-idle service should become ready");
-    let service_instance_id = owner.service_instance_id.clone();
-    let owner_pgid = owner.pgid;
+    let service_instance_id = owner.info().service_instance_id.clone();
+    let owner_pgid = owner.info().pgid;
     let borrower = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2626,7 +2815,7 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
     .expect("borrower should reuse until-idle service");
     assert!(borrower.is_borrowed());
     owner
-        .stand(&mut fixture.registry)
+        .stand(&mut fixture.registry, 1000)
         .expect("until-idle service should stand while borrower is active");
     fixture
         .registry
@@ -2676,7 +2865,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
-    let mut owner = start_synthetic_service_with_lifetime(
+    let owner = start_synthetic_service_with_lifetime(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2686,11 +2875,11 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
         ServiceLifetime::UntilIdle,
     )
     .expect("until-idle owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
+    let owner = owner
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("until-idle service should become ready");
     owner
-        .stand(&mut fixture.registry)
+        .stand(&mut fixture.registry, 1000)
         .expect("until-idle service should stand");
     let borrower = start_synthetic_service(
         &fixture.manifest,
@@ -2746,7 +2935,7 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
     let observed = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("process should be reported");
     assert!(!observed.live);
     assert_eq!(observed.reconciled_status, "stale");
@@ -2755,7 +2944,7 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process status should query");
@@ -2795,12 +2984,12 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
     )
     .expect("foreground service should start");
     assert!(
-        process_group_has_non_zombie_member(service.pgid),
+        process_group_has_non_zombie_member(service.info().pgid),
         "test service process group should be live before identity mutation"
     );
     let mismatched_identity = json!({
-        "pid": service.pid,
-        "pgid": service.pgid,
+        "pid": service.info().pid,
+        "pgid": service.info().pgid,
         "platformStart": "not-the-recorded-process-start",
         "observedAtNanos": unique_suffix(),
     })
@@ -2810,7 +2999,7 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
         .connection()
         .execute(
             "UPDATE processes SET start_identity = ?2 WHERE process_key = ?1",
-            (&service.process_key, &mismatched_identity),
+            (&service.info().process_key, &mismatched_identity),
         )
         .expect("test should corrupt start identity");
 
@@ -2819,14 +3008,14 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
     let observed = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("process should be reported");
     let process_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process status should query");
@@ -2845,7 +3034,7 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
     assert_eq!(process_status, "stale");
     assert_eq!(stale_ports, 1);
     assert!(
-        process_group_has_non_zombie_member(service.pgid),
+        process_group_has_non_zombie_member(service.info().pgid),
         "OS process group should still be live; stale status must come from identity mismatch"
     );
 }
@@ -2866,7 +3055,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         ],
         port,
     ));
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -2875,8 +3064,8 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         port,
     )
     .expect("service should start");
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("service should first prove its listener");
     fs::write(
         fixture.placement.state_root.join("listener-close"),
@@ -2895,7 +3084,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
     let process = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("service process should be reported");
     assert!(process.live);
     assert_eq!(process.reconciled_status, "running");
@@ -2909,7 +3098,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
             JOIN services s ON s.service_instance_id = p.service_instance_id
             WHERE p.process_key = ?1
             ",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("registry status should query");
@@ -2932,7 +3121,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
     )
     .expect("foreground service should start");
     unsafe {
-        libc::kill(-service.pgid, libc::SIGKILL);
+        libc::kill(-service.info().pgid, libc::SIGKILL);
     }
     thread::sleep(Duration::from_millis(100));
     fixture
@@ -2944,7 +3133,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
             SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')
             WHERE run_id = ?1
             ",
-            [&service.run_id],
+            [&service.info().run_id],
         )
         .expect("test should expire lease");
 
@@ -2952,14 +3141,14 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
     let observed = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("service process should be reported");
     let lease_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -2968,7 +3157,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
         .connection()
         .query_row(
             "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("run status should query");
@@ -3036,7 +3225,7 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
         .connection()
         .execute(
             "UPDATE processes SET status = 'stopped' WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
         )
         .expect("test should terminalize process row");
     fixture
@@ -3044,10 +3233,10 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
         .connection()
         .execute(
             "UPDATE ports SET status = 'released' WHERE service_instance_id = ?1",
-            [&service.service_instance_id],
+            [&service.info().service_instance_id],
         )
         .expect("test should release port row");
-    let service_instance_id = service.service_instance_id.clone();
+    let service_instance_id = service.info().service_instance_id.clone();
     drop(service);
 
     let error = match start_synthetic_service(
@@ -3093,13 +3282,13 @@ fn down_stops_verified_owned_process_group_only() {
     let report =
         down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
 
-    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    assert_eq!(report.stopped, vec![service.info().process_key.clone()]);
     let process_status: String = fixture
         .registry
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process status should query");
@@ -3131,11 +3320,12 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
         port,
     )
     .expect("service should start");
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
+    let start_identity =
+        stored_process_start_identity(&fixture.registry, &service.info().process_key);
     mark_started_service_escape(
         &mut fixture.registry,
-        &service,
-        service.pid,
+        service.info(),
+        service.info().pid,
         &start_identity,
         r#"{"reason":"test-unconfirmable-termination"}"#,
     );
@@ -3154,7 +3344,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     let escaped = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("escaped process should remain visible");
     assert!(escaped.live);
     assert_eq!(escaped.reconciled_status, "escaped");
@@ -3174,7 +3364,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
         .expect("down should remain available without endpoint observation");
-    assert_eq!(down.stopped, vec![service.process_key.clone()]);
+    assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     let terminal: (String, String) = fixture
         .registry
         .connection()
@@ -3186,7 +3376,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
             JOIN ports o ON o.owner_process_key = p.process_key
             WHERE p.process_key = ?1
             ",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("terminal escaped evidence should remain");
@@ -3219,19 +3409,20 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
     .expect("service with a group child should start");
     assert!(wait_for_path(&started, Duration::from_secs(3)));
     let child_pid = wait_for_pid_file(&child_pid_path);
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
+    let start_identity =
+        stored_process_start_identity(&fixture.registry, &service.info().process_key);
     mark_started_service_escape(
         &mut fixture.registry,
-        &service,
-        service.pid,
+        service.info(),
+        service.info().pid,
         &start_identity,
         r#"{"reason":"test-primary-exit-with-live-group-child"}"#,
     );
     assert_eq!(
-        unsafe { libc::kill(service.pid as libc::pid_t, libc::SIGKILL) },
+        unsafe { libc::kill(service.info().pid as libc::pid_t, libc::SIGKILL) },
         0
     );
-    wait_for_process_exit(service.pid);
+    wait_for_process_exit(service.info().pid);
     assert!(
         process_is_non_zombie(child_pid),
         "the descendant should still hold the recorded containment"
@@ -3242,7 +3433,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
     let escaped = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("escaped process evidence should remain visible");
     assert!(escaped.live);
     let open_ports: i64 = fixture
@@ -3258,7 +3449,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
         .expect("down should terminate the surviving group containment");
-    assert_eq!(down.stopped, vec![service.process_key.clone()]);
+    assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
     let _ = fs::remove_file(started);
     let _ = fs::remove_file(survivor);
@@ -3303,7 +3494,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
     let child_start = platform_start_for_test(child_pid).expect("child should have start identity");
     let mut start_identity: Value = serde_json::from_str(&stored_process_start_identity(
         &fixture.registry,
-        &service.process_key,
+        &service.info().process_key,
     ))
     .expect("stored start identity should parse");
     start_identity["trackedProcesses"] = json!([{
@@ -3312,16 +3503,16 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
     }]);
     mark_started_service_escape(
         &mut fixture.registry,
-        &service,
-        service.pid,
+        service.info(),
+        service.info().pid,
         &start_identity.to_string(),
         r#"{"reason":"test-primary-exit-with-reparented-tree-child"}"#,
     );
     assert_eq!(
-        unsafe { libc::kill(service.pid as libc::pid_t, libc::SIGKILL) },
+        unsafe { libc::kill(service.info().pid as libc::pid_t, libc::SIGKILL) },
         0
     );
-    wait_for_process_exit(service.pid);
+    wait_for_process_exit(service.info().pid);
     assert!(process_is_non_zombie(child_pid));
 
     let report = ps(&mut fixture.registry)
@@ -3329,7 +3520,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
     let escaped = report
         .processes
         .iter()
-        .find(|process| process.process_key == service.process_key)
+        .find(|process| process.process_key == service.info().process_key)
         .expect("escaped tree evidence should remain visible");
     assert!(escaped.live);
     let port_status: String = fixture
@@ -3337,7 +3528,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         .connection()
         .query_row(
             "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("tree escape port should query");
@@ -3345,7 +3536,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
         .expect("down should terminate the identity-tracked reparented child");
-    assert_eq!(down.stopped, vec![service.process_key.clone()]);
+    assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
     let _ = fs::remove_file(detached);
     drop(service);
@@ -3355,7 +3546,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
 fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
-    let mut escaped = start_synthetic_service(
+    let escaped = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
         &fixture.placement,
@@ -3364,8 +3555,8 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         port,
     )
     .expect("fixture service should start");
-    escaped
-        .wait_for_probe_ready(&mut fixture.registry)
+    let escaped = escaped
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("fixture service should prove exact ownership");
     let borrower = start_synthetic_service(
         &fixture.manifest,
@@ -3377,13 +3568,14 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     )
     .expect("fixture borrower should reuse the exact listener");
     assert!(borrower.is_borrowed());
-    let escaped_process_key = escaped.process_key.clone();
-    let escaped_pgid = escaped.pgid;
-    let start_identity = stored_process_start_identity(&fixture.registry, &escaped.process_key);
+    let escaped_process_key = escaped.info().process_key.clone();
+    let escaped_pgid = escaped.info().pgid;
+    let start_identity =
+        stored_process_start_identity(&fixture.registry, &escaped.info().process_key);
     mark_started_service_escape(
         &mut fixture.registry,
-        &escaped,
-        escaped.pid,
+        escaped.info(),
+        escaped.info().pid,
         &start_identity,
         r#"{"reason":"test-failed-termination"}"#,
     );
@@ -3440,7 +3632,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     )
     .expect("a new owner should start only after explicit down");
 
-    assert_ne!(replacement.process_key, escaped_process_key);
+    assert_ne!(replacement.info().process_key, escaped_process_key);
     replacement
         .stop(&mut fixture.registry, 1000)
         .expect("replacement should stop");
@@ -3464,7 +3656,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .connection()
         .execute(
             "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
         )
         .expect("test should mark run canceling");
     fixture
@@ -3472,7 +3664,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .connection()
         .execute(
             "UPDATE run_leases SET status = 'canceling' WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
         )
         .expect("test should mark lease canceling");
     commit_slot_marker(
@@ -3488,7 +3680,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -3497,7 +3689,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("run status should query");
@@ -3506,7 +3698,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("process status should query");
@@ -3528,7 +3720,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
     )
     .expect("canceled lease should not block cleanup");
 
-    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    assert_eq!(report.stopped, vec![service.info().process_key.clone()]);
     assert_eq!(lease_status, "canceled");
     assert_eq!(run_status, "canceled");
     assert_eq!(process_status, "canceled");
@@ -3568,7 +3760,7 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                  ) SELECT ?1, environment, slot, 2147483647, 2147483647, start_identity,
                           command_json, ?2, NULL, ?3
                    FROM processes WHERE process_key = ?4",
-                    rusqlite::params![key, run_id, status, service.process_key],
+                    rusqlite::params![key, run_id, status, service.info().process_key],
                 )
                 .unwrap();
         }
@@ -3581,7 +3773,7 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
             .expect_err("all process rows must decode before reconciliation or teardown");
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
         assert!(
-            process_is_non_zombie(service.pid),
+            process_is_non_zombie(service.info().pid),
             "valid service must not be signaled"
         );
         let (dead_status, events_after): (String, i64) = fixture
@@ -3636,7 +3828,9 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     assert!(task_pgid > 0, "task process group should exist");
     let task_process_key = format!(
         "process-{}-task-smoke-{}-{}",
-        service.run_id, task_pid, task_pgid
+        service.info().run_id,
+        task_pid,
+        task_pgid
     );
     let task_start_identity = json!({
         "pid": task_pid,
@@ -3669,7 +3863,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
                 task_pgid,
                 task_start_identity,
                 task_command_json,
-                service.run_id,
+                service.info().run_id,
             ],
         )
         .expect("task process fixture should be recorded");
@@ -3678,7 +3872,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .connection()
         .execute(
             "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
         )
         .expect("test should mark run canceling");
     fixture
@@ -3686,7 +3880,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .connection()
         .execute(
             "UPDATE run_leases SET status = 'canceling' WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
         )
         .expect("test should mark lease canceling");
     commit_slot_marker(
@@ -3703,7 +3897,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("lease status should query");
@@ -3712,7 +3906,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.run_id],
+            [&service.info().run_id],
             |row| row.get(0),
         )
         .expect("run status should query");
@@ -3721,7 +3915,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         .connection()
         .query_row(
             "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.process_key],
+            [&service.info().process_key],
             |row| row.get(0),
         )
         .expect("service process status should query");
@@ -3763,7 +3957,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
 
     assert_eq!(
         report.stopped,
-        vec![service.process_key.clone(), task_process_key.clone()]
+        vec![service.info().process_key.clone(), task_process_key.clone()]
     );
     assert_eq!(lease_status, "canceled");
     assert_eq!(run_status, "canceled");
@@ -3772,7 +3966,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     assert_eq!(service_canceled_events, 1);
     assert_eq!(task_canceled_events, 1);
     assert!(
-        !process_group_has_non_zombie_member(service.pgid),
+        !process_group_has_non_zombie_member(service.info().pgid),
         "down should empty service process group"
     );
     assert!(
@@ -3819,7 +4013,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
         .expect("down should escalate and stop the process group");
     thread::sleep(Duration::from_millis(2300));
 
-    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    assert_eq!(report.stopped, vec![service.info().process_key.clone()]);
     assert!(
         !marker.exists(),
         "child that ignored TERM should have been killed before touching marker"
@@ -4092,11 +4286,11 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
     // probe answering, and PORT-1 has no claim left to verify (scoped to
     // declared endpoints).
     let mut fixture = endpoint_less_fixture();
-    let mut service = start_endpoint_less_service(&mut fixture, "run-endpoint-less")
+    let service = start_endpoint_less_service(&mut fixture, "run-endpoint-less")
         .expect("endpoint-less service should start");
     assert!(service.selected_endpoint().is_none());
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
+    let service = service
+        .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("invocation probe readiness should succeed with no ownership claim");
     service
         .stop(&mut fixture.registry, 1000)
@@ -4141,7 +4335,7 @@ fn endpoint_less_fixture() -> ServiceFixture {
 fn start_endpoint_less_service(
     fixture: &mut ServiceFixture,
     run_id: &str,
-) -> nixfied_runtime::RuntimeResult<nixfied_runtime::service::StartedService> {
+) -> nixfied_runtime::RuntimeResult<AcquiredService> {
     record_run_created(
         &mut fixture.registry,
         run_id,
@@ -4332,7 +4526,7 @@ impl<'a> StartedSlot<'a> {
             ),
         )
         .expect("slot registry should open");
-        let mut service = start_synthetic_service_for_slot(
+        let service = start_synthetic_service_for_slot(
             admission,
             &placement,
             &mut registry,
@@ -4341,8 +4535,8 @@ impl<'a> StartedSlot<'a> {
             selected_port,
         )
         .expect("slot service should start");
-        service
-            .wait_for_probe_ready(&mut registry)
+        let service = service
+            .ready(&mut registry, &CancellationToken::new())
             .expect("slot service should become ready");
         Self {
             selected,
@@ -4496,8 +4690,8 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
         port,
     )
     .expect("fixture service should start");
-    let service_instance_id = service.service_instance_id.clone();
-    let process_key = service.process_key.clone();
+    let service_instance_id = service.info().service_instance_id.clone();
+    let process_key = service.info().process_key.clone();
     service
         .stop(&mut fixture.registry, 1000)
         .expect("fixture service should stop cleanly");
@@ -5590,61 +5784,99 @@ fn failed_composite_run_writes_failure_summary() {
 
 #[test]
 fn service_failure_before_any_node_writes_failed_summary() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    // The service dies before ever listening, so the run fails on the ready
-    // probe with zero node results — the summary must still record failure.
-    let mut value = test_child_fixture_value(&["exit", "1"], port);
-    value["tasks"]["wf"] = json!({
-        "kind": "composite",
-        "serviceLifetime": "run-scoped",
-        "servicesRequired": ["synthetic"],
-        "steps": {
-            "never-runs": { "task": "smoke" }
+    for fail_health in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        // The service dies before ever listening, so the run fails on the ready
+        // probe with zero node results — the summary must still record failure.
+        let mut value = if fail_health {
+            let mut value = test_child_listener_value(port);
+            add_probe_shell_closure(&mut value, "service.synthetic.health");
+            value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
+                "kind": "exec",
+                "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
+                "timeoutMs": 1000, "retryIntervalMs": 10, "maxAttempts": 1
+            });
+            value
+        } else {
+            test_child_fixture_value(&["exit", "1"], port)
+        };
+        value["tasks"]["wf"] = json!({
+            "kind": "composite",
+            "serviceLifetime": "run-scoped",
+            "servicesRequired": ["synthetic"],
+            "steps": {
+                "never-runs": { "task": "smoke" }
+            }
+        });
+        let manifest: Manifest =
+            serde_json::from_value(value).expect("failure fixture manifest should parse");
+        let tmp = TempDir::new();
+        let manifest_path = tmp.path.join("manifest.json");
+        let state_base = tmp.path.join("state");
+        fs::create_dir_all(&state_base).expect("state base should be created");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let output = Command::new(runtime_binary())
+            .arg("run")
+            .arg("--task")
+            .arg("wf")
+            .arg("--allow-non-store-manifest")
+            .arg("--manifest")
+            .arg(&manifest_path)
+            .arg("--state-base")
+            .arg(&state_base)
+            .args(["--output", "json"])
+            .current_dir(&tmp.path)
+            .output()
+            .expect("runtime run should execute");
+
+        assert!(!output.status.success(), "the run must fail");
+        let error: Value = stderr_json(&output.stderr);
+        let summary_path = error["details"]["runSummaryPath"]
+            .as_str()
+            .expect("error must link the run summary");
+        let summary: Value =
+            serde_json::from_slice(&fs::read(summary_path).expect("run summary should exist"))
+                .expect("run summary should parse");
+        assert_eq!(
+            summary["success"],
+            json!(false),
+            "a run that failed before any node must not summarize as success"
+        );
+        assert!(summary["durationMs"].as_u64().is_some());
+        assert_eq!(summary["nodes"].as_array().map(Vec::len), Some(0));
+        assert_eq!(error["details"]["failedService"], json!("synthetic"));
+        if fail_health {
+            assert_eq!(error["code"], json!("READINESS_TIMEOUT"));
+            let services = summary["services"].as_array().expect("service evidence");
+            assert_eq!(services.len(), 1);
+            assert_eq!(services[0]["serviceId"], json!("synthetic"));
+            assert_eq!(services[0]["selectedEndpoint"]["port"], json!(port));
+            let connection =
+                rusqlite::Connection::open(error["details"]["registryPath"].as_str().unwrap())
+                    .unwrap();
+            let (ready_events, failed_events, process_status): (i64, i64, String) = connection
+                .query_row(
+                    "SELECT (SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'),
+                    (SELECT count(*) FROM events WHERE event_type = 'service.failed'),
+                    (SELECT status FROM processes WHERE process_key = ?1)",
+                    [services[0]["processKey"].as_str().unwrap()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                (ready_events, failed_events, process_status),
+                (1, 1, "failed".into())
+            );
+            assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
         }
-    });
-    let manifest: Manifest =
-        serde_json::from_value(value).expect("failure fixture manifest should parse");
-    let tmp = TempDir::new();
-    let manifest_path = tmp.path.join("manifest.json");
-    let state_base = tmp.path.join("state");
-    fs::create_dir_all(&state_base).expect("state base should be created");
-    fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
-
-    let output = Command::new(runtime_binary())
-        .arg("run")
-        .arg("--task")
-        .arg("wf")
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--state-base")
-        .arg(&state_base)
-        .args(["--output", "json"])
-        .current_dir(&tmp.path)
-        .output()
-        .expect("runtime run should execute");
-
-    assert!(!output.status.success(), "the run must fail");
-    let error: Value = stderr_json(&output.stderr);
-    let summary_path = error["details"]["runSummaryPath"]
-        .as_str()
-        .expect("error must link the run summary");
-    let summary: Value =
-        serde_json::from_slice(&fs::read(summary_path).expect("run summary should exist"))
-            .expect("run summary should parse");
-    assert_eq!(
-        summary["success"],
-        json!(false),
-        "a run that failed before any node must not summarize as success"
-    );
-    assert!(summary["durationMs"].as_u64().is_some());
-    assert_eq!(summary["nodes"].as_array().map(Vec::len), Some(0));
+    }
 }
 
 #[test]
@@ -6009,7 +6241,7 @@ fn stored_process_start_identity(registry: &Registry, process_key: &str) -> Stri
 
 fn mark_started_service_escape(
     registry: &mut Registry,
-    service: &StartedService,
+    service: &nixfied_runtime::service::ServiceInfo,
     pid: u32,
     start_identity: &str,
     payload_json: &str,

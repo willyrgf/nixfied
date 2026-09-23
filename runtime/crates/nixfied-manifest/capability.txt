@@ -91,6 +91,7 @@ endpoint-reuse: exact-listener process-identity containment complete-active-endp
 lease-authority: open-lease-blocks-replacement exact-reuse-adds-borrower expired-processless-reservation-reconciled
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence
+service-ownership: guarded-ready-rollback initial-health-failed-start-settlement failed-standing-owned-cleanup settlement-error-retains-lifecycle-cause committed-standing-transfer borrower-lease-only
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation
 escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 

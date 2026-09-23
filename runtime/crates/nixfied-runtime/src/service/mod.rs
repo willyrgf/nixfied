@@ -24,8 +24,9 @@ pub(crate) struct StoredProcessIdentity {
 
 pub use identity::{compute_service_identity, service_address_hash, service_instance_id};
 pub use process::{
-    PrepareRunner, SelectedEndpoint, ServiceSelection, ServiceStart, ServiceStartError,
-    SlotEndpoints, StartedService, run_slot_clean, start_service_for_slot,
+    AcquiredService, BorrowedService, PrepareRunner, ReadinessFailure, ReadyService,
+    SelectedEndpoint, ServiceInfo, ServiceSelection, ServiceStart, ServiceStartError,
+    SlotEndpoints, StartedService, StartingService, run_slot_clean, start_service_for_slot,
 };
 pub use registry::{mark_run_completed, mark_run_failed, record_run_created};
 pub use task::{
