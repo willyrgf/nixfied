@@ -100,9 +100,15 @@ removed state owners, coordinated change sites, and capture correctness addition
    canonicalize twice. Secret and closure admission share one raw invocation
    traversal, and invoked-tool membership is collected once per closure pass.
    The follow-up passes all 31 admission tests, both secret unit tests, and Clippy.
+   Secret descriptors now convert once into borrowed `EnvVar`/`File` alternatives
+   before reference checking and value reads; resolution no longer reinterprets
+   optional wire fields or uses presence `expect`s. Declaration membership uses
+   the existing map. Eight malformed-source cases prove exact diagnostics and
+   descriptor-before-reference/value precedence. All 31 admission tests, three
+   context tests, three secret unit tests, and Clippy pass on Linux.
    Remaining in this step: private run/control admissions owning the loaded
    document; removal of fabricated admission fixtures; one origin entry point and
-   one store-root observation per admission; correlated secret-source alternatives.
+   one store-root observation per admission.
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.
