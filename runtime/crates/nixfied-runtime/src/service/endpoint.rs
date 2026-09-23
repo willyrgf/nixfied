@@ -4,8 +4,6 @@
 //! public runtime surface. Lock files are inert rendezvous inodes; kernel locks
 //! serialize startup and kernel listener records are the steady-state truth.
 
-#[cfg(test)]
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::io;
@@ -42,11 +40,6 @@ const STABLE_SNAPSHOT_ATTEMPTS: usize = 3;
 fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
     let end = offset.checked_add(N)?;
     bytes.get(offset..end)?.try_into().ok()
-}
-
-#[cfg(test)]
-thread_local! {
-    static TEST_LOCK_ROOT_FD: Cell<Option<RawFd>> = const { Cell::new(None) };
 }
 
 fn address_family(address: IpAddr) -> &'static str {
@@ -173,8 +166,40 @@ impl EndpointLockGuards {
     }
 }
 
+pub(super) enum LockRoot<'a> {
+    Fixed,
+    // Fault tests supply a concrete directory without changing the production root.
+    #[cfg_attr(not(test), expect(dead_code))]
+    Opened(&'a ValidatedLockRoot),
+}
+
+pub(super) struct ValidatedLockRoot(OwnedFd);
+
+impl ValidatedLockRoot {
+    #[cfg(test)]
+    fn new(fd: OwnedFd) -> Result<Self, EndpointFailure> {
+        validate_directory(
+            fd.as_raw_fd(),
+            unsafe { libc::geteuid() },
+            DirectoryMode::OwnerOnly,
+            "endpoint lock root",
+        )?;
+        Ok(Self(fd))
+    }
+
+    fn directory(&self) -> Result<ValidatedLockDirectory, EndpointFailure> {
+        create_owned_directory(self.0.as_raw_fd(), c"endpoint-locks", unsafe {
+            libc::geteuid()
+        })
+        .map(ValidatedLockDirectory)
+    }
+}
+
+struct ValidatedLockDirectory(OwnedFd);
+
 pub(crate) fn acquire_startup_locks<'a>(
     endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
+    root: LockRoot<'_>,
 ) -> Result<EndpointLockGuards, EndpointFailure> {
     let mut endpoints = endpoints.into_iter().peekable();
     if endpoints.peek().is_none() {
@@ -187,10 +212,24 @@ pub(crate) fn acquire_startup_locks<'a>(
         .map(|endpoint| EndpointKey::derive(endpoint, &scope))
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| left.filename.cmp(&right.filename));
-    let lock_dir = open_lock_directory()?;
+    let fixed;
+    let root = match root {
+        LockRoot::Fixed => {
+            fixed = open_lock_root()?;
+            &fixed
+        }
+        LockRoot::Opened(root) => root,
+    };
+    acquire_keys(&root.directory()?, keys)
+}
+
+fn acquire_keys(
+    lock_dir: &ValidatedLockDirectory,
+    keys: Vec<EndpointKey>,
+) -> Result<EndpointLockGuards, EndpointFailure> {
     let mut guards = Vec::with_capacity(keys.len());
     for key in keys {
-        let fd = open_lock_file(lock_dir.as_raw_fd(), &key)?;
+        let fd = open_lock_file(lock_dir.0.as_raw_fd(), &key)?;
         let result = unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result != 0 {
             let error = io::Error::last_os_error();
@@ -212,25 +251,13 @@ pub(crate) fn acquire_startup_locks<'a>(
     Ok(EndpointLockGuards { _guards: guards })
 }
 
-fn open_lock_directory() -> Result<OwnedFd, EndpointFailure> {
-    #[cfg(test)]
-    if let Some(root) = duplicate_test_lock_root()? {
-        let euid = unsafe { libc::geteuid() };
-        validate_directory(
-            root.as_raw_fd(),
-            euid,
-            Some(0o700),
-            "injected endpoint lock root",
-        )?;
-        return create_owned_directory(root.as_raw_fd(), c"endpoint-locks", euid);
-    }
-
+fn open_lock_root() -> Result<ValidatedLockRoot, EndpointFailure> {
     #[cfg(target_os = "linux")]
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"tmp"];
     #[cfg(target_os = "macos")]
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"private", c"tmp"];
     let root = open_path(c"/", libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)?;
-    validate_directory(root.as_raw_fd(), 0, None, "filesystem root")?;
+    validate_directory(root.as_raw_fd(), 0, DirectoryMode::Any, "filesystem root")?;
     let mut current = root;
     for (index, component) in SYSTEM_COMPONENTS.iter().enumerate() {
         let next = open_at(
@@ -243,7 +270,11 @@ fn open_lock_directory() -> Result<OwnedFd, EndpointFailure> {
         validate_directory(
             next.as_raw_fd(),
             0,
-            is_tmp.then_some(libc::S_ISVTX as libc::mode_t),
+            if is_tmp {
+                DirectoryMode::Sticky
+            } else {
+                DirectoryMode::Any
+            },
             if is_tmp {
                 "system temporary directory"
             } else {
@@ -258,41 +289,8 @@ fn open_lock_directory() -> Result<OwnedFd, EndpointFailure> {
         EndpointFailure::unverifiable(None, format!("invalid endpoint lock directory: {error}"))
     })?;
     current = create_owned_directory(current.as_raw_fd(), &user_component, euid)?;
-    create_owned_directory(current.as_raw_fd(), c"endpoint-locks", euid)
-}
-
-#[cfg(test)]
-fn duplicate_test_lock_root() -> Result<Option<OwnedFd>, EndpointFailure> {
-    TEST_LOCK_ROOT_FD.with(|slot| {
-        let Some(fd) = slot.get() else {
-            return Ok(None);
-        };
-        let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-        if duplicate < 0 {
-            return Err(EndpointFailure::unverifiable(
-                None,
-                format!(
-                    "failed to duplicate injected endpoint lock root: {}",
-                    io::Error::last_os_error()
-                ),
-            ));
-        }
-        // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor owned by this scope.
-        Ok(Some(unsafe { OwnedFd::from_raw_fd(duplicate) }))
-    })
-}
-
-#[cfg(test)]
-fn with_test_lock_root<T>(root: RawFd, operation: impl FnOnce() -> T) -> T {
-    struct Reset(Option<RawFd>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            TEST_LOCK_ROOT_FD.with(|slot| slot.set(self.0));
-        }
-    }
-    let previous = TEST_LOCK_ROOT_FD.with(|slot| slot.replace(Some(root)));
-    let _reset = Reset(previous);
-    operation()
+    // create_owned_directory already checked this descriptor's owner and mode.
+    Ok(ValidatedLockRoot(current))
 }
 
 fn create_owned_directory(
@@ -316,7 +314,12 @@ fn create_owned_directory(
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
         0,
     )?;
-    validate_directory(fd.as_raw_fd(), euid, Some(0o700), "endpoint lock directory")?;
+    validate_directory(
+        fd.as_raw_fd(),
+        euid,
+        DirectoryMode::OwnerOnly,
+        "endpoint lock directory",
+    )?;
     Ok(fd)
 }
 
@@ -421,10 +424,16 @@ fn stat_fd(fd: RawFd) -> Result<libc::stat, String> {
     Ok(unsafe { stat.assume_init() })
 }
 
+enum DirectoryMode {
+    Any,
+    Sticky,
+    OwnerOnly,
+}
+
 fn validate_directory(
     fd: RawFd,
     expected_uid: libc::uid_t,
-    expected_mode_or_flag: Option<libc::mode_t>,
+    permissions: DirectoryMode,
     label: &str,
 ) -> Result<(), EndpointFailure> {
     let stat = stat_fd(fd).map_err(|message| EndpointFailure::unverifiable(None, message))?;
@@ -434,19 +443,17 @@ fn validate_directory(
             format!("{label} must be a directory owned by uid {expected_uid}"),
         ));
     }
-    if let Some(expected) = expected_mode_or_flag {
-        let mode = stat.st_mode & 0o7777;
-        let valid = if expected == libc::S_ISVTX as libc::mode_t {
-            mode & expected != 0
-        } else {
-            mode == expected
-        };
-        if !valid {
-            return Err(EndpointFailure::unverifiable(
-                None,
-                format!("{label} has unsafe permissions {mode:o}"),
-            ));
-        }
+    let mode = stat.st_mode & 0o7777;
+    let valid = match permissions {
+        DirectoryMode::Any => true,
+        DirectoryMode::Sticky => mode & libc::S_ISVTX as libc::mode_t != 0,
+        DirectoryMode::OwnerOnly => mode == 0o700,
+    };
+    if !valid {
+        return Err(EndpointFailure::unverifiable(
+            None,
+            format!("{label} has unsafe permissions {mode:o}"),
+        ));
     }
     Ok(())
 }
@@ -1002,9 +1009,9 @@ mod tests {
         }
     }
 
-    fn with_root<T>(root: &TestRoot, operation: impl FnOnce() -> T) -> T {
-        let fd = root.open();
-        with_test_lock_root(fd.as_raw_fd(), operation)
+    fn with_root<T>(root: &TestRoot, operation: impl FnOnce(&ValidatedLockRoot) -> T) -> T {
+        let root = ValidatedLockRoot::new(root.open().into()).unwrap();
+        operation(&root)
     }
 
     fn assert_unverifiable(result: Result<EndpointLockGuards, EndpointFailure>) {
@@ -1199,15 +1206,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let endpoint = endpoint("127.0.0.1", port);
-        let first = acquire_startup_locks(std::slice::from_ref(&endpoint)).unwrap();
+        let first =
+            acquire_startup_locks(std::slice::from_ref(&endpoint), LockRoot::Fixed).unwrap();
         assert_eq!(first.len(), 1);
         assert!(matches!(
-            acquire_startup_locks(std::slice::from_ref(&endpoint)),
+            acquire_startup_locks(std::slice::from_ref(&endpoint), LockRoot::Fixed),
             Err(EndpointFailure::LockContended { .. })
         ));
         drop(first);
         assert_eq!(
-            acquire_startup_locks(std::slice::from_ref(&endpoint))
+            acquire_startup_locks(std::slice::from_ref(&endpoint), LockRoot::Fixed)
                 .unwrap()
                 .len(),
             1
@@ -1339,16 +1347,29 @@ mod tests {
         let target = symlink_root.0.join("target");
         std::fs::create_dir(&target).unwrap();
         symlink(&target, symlink_root.locks()).unwrap();
-        with_root(&symlink_root, || {
-            assert_unverifiable(acquire_startup_locks(std::slice::from_ref(&planned)));
+        with_root(&symlink_root, |lock_root| {
+            // Endpoint-less services must not inspect even an unsafe lock child.
+            assert_eq!(
+                acquire_startup_locks(std::iter::empty(), LockRoot::Opened(lock_root))
+                    .unwrap()
+                    .len(),
+                0
+            );
+            assert_unverifiable(acquire_startup_locks(
+                std::slice::from_ref(&planned),
+                LockRoot::Opened(lock_root),
+            ));
         });
 
         let mode_root = TestRoot::new();
         std::fs::create_dir(mode_root.locks()).unwrap();
         std::fs::set_permissions(mode_root.locks(), std::fs::Permissions::from_mode(0o755))
             .unwrap();
-        with_root(&mode_root, || {
-            assert_unverifiable(acquire_startup_locks(std::slice::from_ref(&planned)));
+        with_root(&mode_root, |lock_root| {
+            assert_unverifiable(acquire_startup_locks(
+                std::slice::from_ref(&planned),
+                LockRoot::Opened(lock_root),
+            ));
         });
 
         let target_root = TestRoot::new();
@@ -1357,25 +1378,35 @@ mod tests {
             .unwrap();
         let key = EndpointKey::derive(&planned, &NetworkScope::production().unwrap());
         std::fs::create_dir(target_root.locks().join(key.filename)).unwrap();
-        with_root(&target_root, || {
-            assert_unverifiable(acquire_startup_locks(std::slice::from_ref(&planned)));
+        with_root(&target_root, |lock_root| {
+            assert_unverifiable(acquire_startup_locks(
+                std::slice::from_ref(&planned),
+                LockRoot::Opened(lock_root),
+            ));
         });
     }
 
     #[test]
     fn multi_lock_failure_releases_the_partial_set_and_fds_are_cloexec() {
         let root = TestRoot::new();
-        with_root(&root, || {
+        with_root(&root, |lock_root| {
             let scope = NetworkScope::production().unwrap();
             let mut endpoints = [endpoint("127.0.0.1", 23111), endpoint("127.0.0.1", 23112)];
             endpoints.sort_by_key(|endpoint| EndpointKey::derive(endpoint, &scope).filename);
-            let contended = acquire_startup_locks(std::slice::from_ref(&endpoints[1])).unwrap();
+            let contended = acquire_startup_locks(
+                std::slice::from_ref(&endpoints[1]),
+                LockRoot::Opened(lock_root),
+            )
+            .unwrap();
             assert!(matches!(
-                acquire_startup_locks(&endpoints),
+                acquire_startup_locks(&endpoints, LockRoot::Opened(lock_root)),
                 Err(EndpointFailure::LockContended { .. })
             ));
-            let partial_was_released =
-                acquire_startup_locks(std::slice::from_ref(&endpoints[0])).unwrap();
+            let partial_was_released = acquire_startup_locks(
+                std::slice::from_ref(&endpoints[0]),
+                LockRoot::Opened(lock_root),
+            )
+            .unwrap();
             for guard in &partial_was_released._guards {
                 let flags = unsafe { libc::fcntl(guard.as_raw_fd(), libc::F_GETFD) };
                 assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
@@ -1391,8 +1422,10 @@ mod tests {
         let root = TestRoot::new();
         let planned = endpoint("127.0.0.1", 23121);
         let key = EndpointKey::derive(&planned, &NetworkScope::production().unwrap());
-        with_root(&root, || {
-            let guard = acquire_startup_locks(std::slice::from_ref(&planned)).unwrap();
+        with_root(&root, |lock_root| {
+            let guard =
+                acquire_startup_locks(std::slice::from_ref(&planned), LockRoot::Opened(lock_root))
+                    .unwrap();
             let path = root.locks().join(&key.filename);
             let first = std::fs::metadata(&path).unwrap();
             assert_eq!(first.len(), 0);
@@ -1407,7 +1440,9 @@ mod tests {
             assert!(path.exists());
             let second = std::fs::metadata(&path).unwrap();
             assert_eq!(first.ino(), second.ino());
-            let again = acquire_startup_locks(std::slice::from_ref(&planned)).unwrap();
+            let again =
+                acquire_startup_locks(std::slice::from_ref(&planned), LockRoot::Opened(lock_root))
+                    .unwrap();
             drop(again);
             assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
         });
@@ -1417,9 +1452,10 @@ mod tests {
     fn injected_root_itself_must_be_exact_mode() {
         let root = TestRoot::new();
         std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o755)).unwrap();
-        with_root(&root, || {
-            assert_unverifiable(acquire_startup_locks(&[endpoint("127.0.0.1", 23131)]));
-        });
+        assert!(matches!(
+            ValidatedLockRoot::new(root.open().into()),
+            Err(EndpointFailure::Unverifiable { .. })
+        ));
     }
 
     #[test]
@@ -1436,8 +1472,11 @@ mod tests {
             .mode(0o644)
             .open(&path)
             .unwrap();
-        with_root(&root, || {
-            assert_unverifiable(acquire_startup_locks(std::slice::from_ref(&planned)));
+        with_root(&root, |lock_root| {
+            assert_unverifiable(acquire_startup_locks(
+                std::slice::from_ref(&planned),
+                LockRoot::Opened(lock_root),
+            ));
         });
         assert!(Path::new(&path).exists());
     }
@@ -1448,7 +1487,7 @@ mod tests {
         use crate::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
         use crate::cancellation::CancellationToken;
         use crate::registry::{Registry, RegistryIdentity};
-        use crate::service::process::{ServiceSelection, start_service_for_slot};
+        use crate::service::process::{ServiceSelection, start_service_with_lock_root};
         use crate::service::record_run_created;
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
@@ -1512,34 +1551,33 @@ mod tests {
         let endpoint_ports =
             std::collections::BTreeMap::from([("synthetic-tcp".to_string(), port)]);
         let mut prepare_ran = false;
-        let injected = unsafe_root.open();
-        let error = with_test_lock_root(injected.as_raw_fd(), || {
-            match start_service_for_slot(
-                &admission,
-                &placement,
-                &mut registry,
-                "run-unsafe-lock-root",
-                &selected,
-                ServiceSelection {
-                    service_name: "synthetic",
-                    service_lifetime: ServiceLifetime::RunScoped,
-                    endpoint_ports: &endpoint_ports,
-                    slot_endpoints: &std::collections::BTreeMap::new(),
-                    run_timeout_ms: 5000,
-                    cancellation: &CancellationToken::new(),
-                    prepare_runner: Some(Box::new(|_| {
-                        prepare_ran = true;
-                        Ok(())
-                    })),
-                },
-            ) {
-                Ok(service) => {
-                    let _ = service.stop(&mut registry, 1000);
-                    panic!("unsafe lock target must fail before prepare");
-                }
-                Err(error) => error,
+        let injected = ValidatedLockRoot::new(unsafe_root.open().into()).unwrap();
+        let error = match start_service_with_lock_root(
+            &admission,
+            &placement,
+            &mut registry,
+            "run-unsafe-lock-root",
+            &selected,
+            ServiceSelection {
+                service_name: "synthetic",
+                service_lifetime: ServiceLifetime::RunScoped,
+                endpoint_ports: &endpoint_ports,
+                slot_endpoints: &std::collections::BTreeMap::new(),
+                run_timeout_ms: 5000,
+                cancellation: &CancellationToken::new(),
+                prepare_runner: Some(Box::new(|_| {
+                    prepare_ran = true;
+                    Ok(())
+                })),
+            },
+            LockRoot::Opened(&injected),
+        ) {
+            Ok(service) => {
+                let _ = service.stop(&mut registry, 1000);
+                panic!("unsafe lock target must fail before prepare");
             }
-        });
+            Err(error) => error,
+        };
 
         assert_eq!(error.code, ErrorCode::PortUnverifiable);
         assert!(!prepare_ran);

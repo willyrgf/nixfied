@@ -28,7 +28,7 @@ use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::endpoint::{
     EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
-    OwnershipObservation, acquire_startup_locks, observe_ownership,
+    LockRoot, OwnershipObservation, acquire_startup_locks, observe_ownership,
     observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
 use crate::service::identity::{service_address_hash, service_instance_id};
@@ -1371,7 +1371,27 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
+    selection: ServiceSelection<'_>,
+) -> RuntimeResult<AcquiredService> {
+    start_service_with_lock_root(
+        admission,
+        placement,
+        registry,
+        run_id,
+        selected_slot,
+        selection,
+        LockRoot::Fixed,
+    )
+}
+
+pub(super) fn start_service_with_lock_root(
+    admission: &RunAdmission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
     mut selection: ServiceSelection<'_>,
+    lock_root: LockRoot<'_>,
 ) -> RuntimeResult<AcquiredService> {
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
@@ -1487,7 +1507,7 @@ pub fn start_service_for_slot(
         return Ok(AcquiredService::Borrowed(started));
     }
     cancellation.check()?;
-    let startup_guards = match acquire_startup_locks(own_endpoints.values()) {
+    let startup_guards = match acquire_startup_locks(own_endpoints.values(), lock_root) {
         Ok(guards) => guards,
         Err(failure) => return Err(endpoint_failure_error(registry, service, failure)),
     };
