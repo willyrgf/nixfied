@@ -66,6 +66,7 @@ pub(crate) fn exec_probe_attempt(
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,
             redactor,
+            log_file_mode: crate::redaction::LogFileMode::Replace,
             label: &format!("lifecycle operation {}", probe.label),
         },
         cancellation,

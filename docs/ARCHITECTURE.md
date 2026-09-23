@@ -394,8 +394,14 @@ retained.
 The run session is the single finalization owner. It replays before service
 teardown, lease release, aggregate summary, footer, and final error projection,
 then runs every remaining cleanup stage even when an earlier stage fails.
-Typed task evidence crosses task, prepare, registry, summary, and error
-boundaries without being reconstructed from serialized JSON. Compound errors
+One node runner executes prepare and root occurrences, appending completed task
+records directly to the session's canonical evidence vector. Root and selected
+projections retain private indices; finalization derives owned output records
+once. A separate monotonic attempt counter allocates exclusive log and summary
+paths, so repeated task IDs and step paths cannot overwrite prior evidence.
+Before-terminal failures append no record; after-terminal failures retain one.
+Typed evidence crosses registry, summary, and error boundaries without being
+reconstructed from serialized JSON. Compound errors
 retain non-recursive causes, with safety/registry/lease failures first,
 projection failures second, and task outcomes third. Captured child
 stdout/stderr otherwise stays in redacted log files, and no `logs` command is

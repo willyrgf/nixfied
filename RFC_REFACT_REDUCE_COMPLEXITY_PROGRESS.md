@@ -295,7 +295,29 @@ removed state owners, coordinated change sites, and capture correctness addition
    behavior has a worker proof; existing persistent survival/borrow/release/down,
    until-idle, cancellation, identity/lease race, and escape service tests pass.
    macOS execution remains unverified; final acceptance must report that gap.
-11. Borrowed plans, node runner, and occurrence evidence ABI cutover: pending.
+11. Node runner and occurrence evidence ABI cutover: implemented; full proof running.
+   One concrete runner resolves authored dependencies and executes borrowed prepare
+   and root plan nodes. The session owns one terminal TaskRun vector; root and
+   selected projections retain private indices, with output constructed once at
+   finalization. Prepare callbacks append directly and return unit results.
+   Deleted PrepareTaskError, ServiceStart/ServiceStartError evidence shuttles,
+   duplicate node result branches, and the test-only dependent-task wrapper.
+   A separate monotonic attempted-occurrence allocator starts at zero and permits
+   gaps before terminal evidence. Task logs and summaries use exclusive numeric
+   occurrence filenames; probes retain their existing replaceable retry files.
+   Summary collisions remain after-terminal and retain evidence/replay.
+   Independent repeated-prepare/root overlap tests use distinct child output for
+   all occurrences, including later prepare and root failures. Collision tests
+   prove both stream errors with/without secrets, no child before successful log
+   creation, preserved prior bytes, allocator gaps, and retained terminal records
+   on summary failure. Architect review found no correctness defect.
+   Clippy, 22 output tests, 74 service tests, and the collision/gap binary test
+   pass (`/tmp/nixfied-evidence-suites.log`). The complete fixture-backed floor
+   passed (session `63610`, `/tmp/nixfied-evidence-floor.log`). Contract, architecture,
+   descriptor routing, and ABI snapshot updated together to
+   `nixfied-runtime-abi:1-b0becb63c23d`. Full CI is live (session `30118`,
+   `/tmp/nixfied-evidence-ci.log`); source checks, fixture floor, and all 22 runtime
+   gate cases passed; downstream Nix/install/upgrade fixtures are running.
 12. Registry decoding/event context: pending.
 13. Shared redaction scanner/safe projections: pending.
 14. Fixture consolidation and audit proof mapping: pending.

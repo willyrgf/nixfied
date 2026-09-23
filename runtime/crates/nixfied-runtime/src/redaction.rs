@@ -285,6 +285,12 @@ pub struct RedactedChildOutput {
     pub relays: RedactedLogRelays,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum LogFileMode {
+    New,
+    Replace,
+}
+
 /// Long-lived services without secrets preserve direct-file output across
 /// runtime interruption. Bounded task/probe evidence never uses this path.
 pub(crate) fn direct_service_output(
@@ -292,29 +298,31 @@ pub(crate) fn direct_service_output(
     stderr_path: &Path,
 ) -> RuntimeResult<(Stdio, Stdio)> {
     Ok((
-        Stdio::from(create_log_file(stdout_path, false)?),
-        Stdio::from(create_log_file(stderr_path, false)?),
+        Stdio::from(create_log_file(stdout_path, false, LogFileMode::Replace)?),
+        Stdio::from(create_log_file(stderr_path, false, LogFileMode::Replace)?),
     ))
 }
 
-pub fn child_output(
+pub(crate) fn child_output(
     stdout_path: &Path,
     stderr_path: &Path,
     redactor: &Redactor,
+    mode: LogFileMode,
 ) -> RuntimeResult<RedactedChildOutput> {
-    let (stdout, stdout_relay) = redacted_stdio(stdout_path, redactor, CapturedStream::Stdout)?;
-    let (stderr, stderr_relay) = match redacted_stdio(stderr_path, redactor, CapturedStream::Stderr)
-    {
-        Ok(output) => output,
-        Err(error) => {
-            drop(stdout);
-            stdout_relay.shutdown_at(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
-            return Err(match stdout_relay.join() {
-                Ok(()) => error,
-                Err(capture) => capture.with_cause(error),
-            });
-        }
-    };
+    let (stdout, stdout_relay) =
+        redacted_stdio(stdout_path, redactor, CapturedStream::Stdout, mode)?;
+    let (stderr, stderr_relay) =
+        match redacted_stdio(stderr_path, redactor, CapturedStream::Stderr, mode) {
+            Ok(output) => output,
+            Err(error) => {
+                drop(stdout);
+                stdout_relay.shutdown_at(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+                return Err(match stdout_relay.join() {
+                    Ok(()) => error,
+                    Err(capture) => capture.with_cause(error),
+                });
+            }
+        };
     Ok(RedactedChildOutput {
         stdout,
         stderr,
@@ -329,6 +337,7 @@ fn redacted_stdio(
     path: &Path,
     redactor: &Redactor,
     stream: CapturedStream,
+    mode: LogFileMode,
 ) -> RuntimeResult<(Stdio, CaptureWorker)> {
     let mut fds = [0; 2];
     #[cfg(target_os = "linux")]
@@ -361,7 +370,7 @@ fn redacted_stdio(
     {
         return Err(leak_blocked("failed to set capture pipe nonblocking"));
     }
-    let writer = create_log_file(path, !redactor.is_empty())?;
+    let writer = create_log_file(path, !redactor.is_empty(), mode)?;
     let redactor = redactor.clone();
     let (control, receiver) = mpsc::channel();
     let handle = thread::Builder::new()
@@ -465,8 +474,12 @@ fn redact_stream(
     Ok(completion)
 }
 
-fn create_log_file(path: &Path, redacted: bool) -> RuntimeResult<File> {
-    File::create(path).map_err(|error| {
+fn create_log_file(path: &Path, redacted: bool, mode: LogFileMode) -> RuntimeResult<File> {
+    match mode {
+        LogFileMode::New => File::create_new(path),
+        LogFileMode::Replace => File::create(path),
+    }
+    .map_err(|error| {
         let message = format!("failed to create log file {}: {error}", path.display());
         if redacted {
             leak_blocked(message)
@@ -607,7 +620,9 @@ mod tests {
             } else {
                 Redactor::empty()
             };
-            let error = child_output(&stdout, &fixture.0, &redactor).err().unwrap();
+            let error = child_output(&stdout, &fixture.0, &redactor, LogFileMode::Replace)
+                .err()
+                .unwrap();
             assert_eq!(
                 error.code,
                 if secret {

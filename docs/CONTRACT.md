@@ -263,6 +263,17 @@ when the manifest/runtime contract changes.
   defaults are rejected before state or child side effects. There is no
   `--json`, `--both`, `--summary`, or `--task-output` alias and no `logs`
   control command.
+- Every attempted task node, including service prepares, receives a run-local
+  occurrence number starting at zero before execution. Completed evidence is
+  retained once per occurrence, preserving task identity, `stepPath`, and order;
+  attempts without terminal evidence may leave gaps. Logs are named
+  `task.<occurrence>.stdout.log` and `task.<occurrence>.stderr.log`; task summaries
+  are named `summary.<occurrence>.json`. Each file uses exclusive creation without
+  overwriting or retrying a conflicting name. Log creation failure rejects before
+  spawn with the existing redacted/unredacted creation error. Summary creation
+  failure reports `STATE_UNWRITABLE` after completion and retains completed task
+  evidence and any selected replay ticket. Repeated prepares and prepare/root
+  overlap retain separate files even when their task IDs and step paths match.
 - Task-output replay happens only after capture and redaction complete, with
   both evidence files opened before terminal registry transitions or cleanup.
   The two streams replay concurrently with bounded buffers, preserving each

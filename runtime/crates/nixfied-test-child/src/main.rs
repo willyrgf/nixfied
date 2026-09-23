@@ -76,6 +76,23 @@ fn listen(args: &[String]) -> Result<(), String> {
 
 fn output(args: &[String]) -> Result<(), String> {
     match args {
+        [mode, counter, fail_on] if mode == "occurrence" => {
+            let previous = match fs::read_to_string(counter) {
+                Ok(value) => value.parse::<u32>().map_err(|error| error.to_string())?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(error.to_string()),
+            };
+            let occurrence = previous + 1;
+            fs::write(counter, occurrence.to_string()).map_err(|error| error.to_string())?;
+            writeln!(io::stdout().lock(), "stdout occurrence {occurrence}")
+                .map_err(|error| error.to_string())?;
+            writeln!(io::stderr().lock(), "stderr occurrence {occurrence}")
+                .map_err(|error| error.to_string())?;
+            if occurrence == fail_on.parse::<u32>().map_err(|error| error.to_string())? {
+                std::process::exit(7);
+            }
+            Ok(())
+        }
         [mode, activity, pid_path, acknowledgement, stdout, stderr] if mode == "escaped-writer" => {
             if !matches!(activity.as_str(), "idle" | "continuous") {
                 return Err("escaped-writer activity must be idle or continuous".into());

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -8,7 +9,7 @@ use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::ExecTask;
 use crate::output::{EvidenceMode, ReplayTicket};
-use crate::redaction::Redactor;
+use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
     BoundedExec, BoundedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService,
@@ -88,28 +89,6 @@ impl TaskExecutionError {
     }
 }
 
-/// Typed evidence retained when a service prepare task fails. The service
-/// lifecycle owns the reservation failure, while the run driver owns the
-/// completed task evidence for summaries and public error details.
-#[derive(Debug)]
-pub struct PrepareTaskError {
-    error: Box<RuntimeError>,
-    task_runs: Vec<TaskRun>,
-}
-
-impl PrepareTaskError {
-    pub fn new(error: RuntimeError, task_runs: Vec<TaskRun>) -> Self {
-        Self {
-            error: Box::new(error),
-            task_runs,
-        }
-    }
-
-    pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
-        (*self.error, self.task_runs)
-    }
-}
-
 /// The run-level context a task executes in, independent of any service: the run
 /// identity, the codebase root it runs in, and the slot state root. A task may
 /// depend on zero services (e.g. a lint/test task) or many (e.g. an e2e test) — a
@@ -139,26 +118,6 @@ impl<'a> RunContext<'a> {
     }
 }
 
-pub fn run_dependent_task(
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_context: RunContext<'_>,
-    dependencies: &[&StartedService],
-    task: &ExecTask,
-) -> Result<TaskExecution, TaskExecutionError> {
-    // A directly selected leaf's step path is the task id.
-    run_dependent_task_cancellable(
-        placement,
-        registry,
-        run_context,
-        dependencies,
-        task.task_id.as_str(),
-        task,
-        &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
-    )
-}
-
 /// Run a bounded task gated on the readiness of every service it declares in
 /// `dependsOnServicesReady` (which may be empty). The run-level context comes from
 /// `run_context`; the first dependency, if any, is the primary that provides
@@ -170,6 +129,7 @@ pub fn run_dependent_task_cancellable(
     run_context: RunContext<'_>,
     dependencies: &[&StartedService],
     node_id: &str,
+    occurrence: u64,
     task: &ExecTask,
     cancellation: &CancellationToken,
     evidence: EvidenceMode,
@@ -206,15 +166,12 @@ pub fn run_dependent_task_cancellable(
         secrets: run_context.admission.secrets(),
     };
     let exec = &task.exec;
-    // Key logs by step path, not task id: a composite may run the same leaf in
-    // more than one step, and task-id-keyed paths would overwrite each other's
-    // logs.
     let stdout_path = placement
         .logs_dir
-        .join(format!("task.{node_id}.stdout.log"));
+        .join(format!("task.{occurrence}.stdout.log"));
     let stderr_path = placement
         .logs_dir
-        .join(format!("task.{node_id}.stderr.log"));
+        .join(format!("task.{occurrence}.stderr.log"));
     let args = substitution
         .args(&exec.args)
         .map_err(TaskExecutionError::before)?;
@@ -250,6 +207,7 @@ pub fn run_dependent_task_cancellable(
         stdout_path: &stdout_path,
         stderr_path: &stderr_path,
         redactor: run_context.redactor,
+        log_file_mode: LogFileMode::New,
         label: "task process",
     })
     .map_err(TaskExecutionError::before)?;
@@ -316,12 +274,10 @@ pub fn run_dependent_task_cancellable(
         duration_ms,
         stdout_path,
         stderr_path,
-        // Key the summary by step path like the logs: a run's nodes share
-        // the run dir, and a single run-level summary.json would be
-        // overwritten by each node, losing per-node evidence.
+        // Repeated prepares may share a step path; each attempt owns its summary.
         summary_path: placement
             .summary_path
-            .with_file_name(format!("summary.{node_id}.json")),
+            .with_file_name(format!("summary.{occurrence}.json")),
     };
     let evidence = match evidence {
         EvidenceMode::CaptureOnly => CompletedEvidence::Captured(run),
@@ -504,15 +460,17 @@ fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
     redactor.redact_value(&mut summary);
     let summary = serde_json::to_vec_pretty(&summary)
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
-    std::fs::write(&run.summary_path, summary).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!(
-                "failed to write task summary {}: {error}",
-                run.summary_path.display()
-            ),
-        )
-    })
+    std::fs::File::create_new(&run.summary_path)
+        .and_then(|mut file| file.write_all(&summary))
+        .map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                format!(
+                    "failed to write task summary {}: {error}",
+                    run.summary_path.display()
+                ),
+            )
+        })
 }
 
 #[derive(Serialize)]
@@ -562,6 +520,7 @@ mod tests {
             stdout_path: &root.join("stdout"),
             stderr_path: &root.join("stderr"),
             redactor: &Redactor::empty(),
+            log_file_mode: LogFileMode::New,
             label: "task process",
         })
         .unwrap();

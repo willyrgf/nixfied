@@ -364,3 +364,140 @@ fn failure_merge_preserves_priority_and_flattened_cause_order() {
         }
     }
 }
+
+#[test]
+fn occurrence_collisions_preserve_files_and_terminal_evidence() {
+    use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
+    use serde_json::json;
+    for (collision, secret) in [
+        ("stdout", false),
+        ("stderr", false),
+        ("stdout", true),
+        ("stderr", true),
+        ("summary", false),
+    ] {
+        let tmp = common::TempDir::new();
+        let mut value = common::test_child_manifest(20000, 20000);
+        value["tasks"]["smoke"]["requires"] = json!([]);
+        value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+        let program = value["tasks"]["smoke"]["invocation"]["run"][0].clone();
+        let counter = tmp.path.join("child-counter");
+        value["tasks"]["smoke"]["invocation"]["run"] =
+            json!([program, "output", "occurrence", counter, "0"]);
+        if secret {
+            value["secrets"]["token"] = json!({"secretId": "token", "source": {"kind": "env-var", "envVar": "NIXFIED_TEST_CHILD"}});
+            value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
+        }
+        let manifest: nixfied_manifest::Manifest = serde_json::from_value(value).unwrap();
+        let admission = common::fixture_admission(&manifest, &tmp.path);
+        let placement = derive_host_placement(&manifest, "evidence-test", &tmp.path).unwrap();
+        materialize_run_roots(&placement).unwrap();
+        let mut registry = Registry::open_or_create(
+            placement.registry_path(),
+            &RegistryIdentity::default_slot(
+                &manifest.project.project_id,
+                &manifest.runtime_abi,
+                &manifest.toolchain_id,
+            ),
+        )
+        .unwrap();
+        record_run_created(&mut registry, "evidence-test", &admission, &placement).unwrap();
+        let redactor = Redactor::from_secrets(admission.secrets());
+        let cancellation = CancellationToken::new();
+        let context = NodeContext {
+            placement: &placement,
+            run: RunContext::new(
+                &admission,
+                "evidence-test",
+                &placement.state_root,
+                &redactor,
+            ),
+            cancellation: &cancellation,
+            output_mode: RunOutputMode::TaskOutput,
+        };
+        let node = PlanNode {
+            node_id: nixfied_manifest::NodeId::new("smoke"),
+            task: admission
+                .common()
+                .execution_manifest()
+                .leaf("smoke")
+                .unwrap(),
+        };
+        let conflicting = if collision == "summary" {
+            placement.summary_path.with_file_name("summary.0.json")
+        } else {
+            placement.logs_dir.join(format!("task.0.{collision}.log"))
+        };
+        std::fs::write(&conflicting, b"prior evidence").unwrap();
+        let mut evidence = RunEvidence::default();
+        let mut diagnostics = Vec::new();
+        let error = execute_node(
+            &context,
+            &mut registry,
+            &mut evidence,
+            &[],
+            &mut diagnostics,
+            &node,
+            NodeRole::Root {
+                direct_selected: true,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            if secret {
+                nixfied_runtime::ErrorCode::SecretLeakBlocked
+            } else {
+                nixfied_runtime::ErrorCode::StateUnwritable
+            }
+        );
+        assert_eq!(std::fs::read(&conflicting).unwrap(), b"prior evidence");
+        assert_eq!(evidence.next_occurrence, 1);
+        if collision == "summary" {
+            assert_eq!(evidence.tasks.len(), 1);
+            assert_eq!(evidence.nodes().len(), 1);
+            assert!(evidence.replay.is_some());
+            assert_eq!(std::fs::read_to_string(&counter).unwrap(), "1");
+            assert_eq!(
+                error.details["taskRun"]["stdoutPath"],
+                json!(placement.logs_dir.join("task.0.stdout.log"))
+            );
+        } else {
+            assert!(evidence.tasks.is_empty());
+            assert!(evidence.root_nodes.is_empty());
+            assert!(evidence.selected_task.is_none());
+            assert!(evidence.replay.is_none());
+            assert!(
+                !counter.exists(),
+                "log collision must prevent child execution"
+            );
+        }
+        // A failed attempt consumes its filename occurrence even without a terminal record.
+        execute_node(
+            &context,
+            &mut registry,
+            &mut evidence,
+            &[],
+            &mut diagnostics,
+            &node,
+            NodeRole::Root {
+                direct_selected: true,
+            },
+        )
+        .unwrap();
+        let task = evidence.tasks.last().unwrap();
+        assert_eq!(
+            task.stdout_path,
+            placement.logs_dir.join("task.1.stdout.log")
+        );
+        assert_eq!(
+            task.summary_path,
+            placement.summary_path.with_file_name("summary.1.json")
+        );
+        assert_eq!(
+            evidence.tasks.len(),
+            if collision == "summary" { 2 } else { 1 }
+        );
+        assert_eq!(std::fs::read(&conflicting).unwrap(), b"prior evidence");
+    }
+}

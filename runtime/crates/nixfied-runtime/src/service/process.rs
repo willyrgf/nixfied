@@ -21,7 +21,8 @@ use crate::execution::{
     ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
 };
 use crate::redaction::{
-    CAPTURE_SHUTDOWN_TIMEOUT, RedactedLogRelays, Redactor, child_output, direct_service_output,
+    CAPTURE_SHUTDOWN_TIMEOUT, LogFileMode, RedactedLogRelays, Redactor, child_output,
+    direct_service_output,
 };
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
@@ -45,7 +46,6 @@ use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, cl
 use crate::template::{EndpointSelector, Piece, Template};
 
 use super::TrackedProcessIdentity;
-use super::task::{PrepareTaskError, TaskRun};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
@@ -1359,40 +1359,7 @@ pub struct ServiceSelection<'a> {
 }
 
 /// The prepare-task executor a run driver supplies.
-pub type PrepareRunner<'a> =
-    Box<dyn FnMut(&mut Registry) -> Result<Vec<TaskRun>, PrepareTaskError> + 'a>;
-
-/// Completed prepare evidence belongs to the start attempt, not the service lifetime.
-pub struct ServiceStart {
-    pub service: AcquiredService,
-    pub prepare_runs: Vec<TaskRun>,
-}
-
-/// Owned result of a service start attempt. Prepare tasks run before a service
-/// process exists, so their completed evidence belongs to the start attempt and
-/// must survive both success and failure without an optional side channel.
-#[derive(Debug)]
-pub struct ServiceStartError {
-    error: Box<RuntimeError>,
-    prepare_runs: Vec<TaskRun>,
-}
-
-impl ServiceStartError {
-    fn new(error: RuntimeError, prepare_runs: Vec<TaskRun>) -> Self {
-        Self {
-            error: Box::new(error),
-            prepare_runs,
-        }
-    }
-
-    pub fn error(&self) -> &RuntimeError {
-        self.error.as_ref()
-    }
-
-    pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
-        (*self.error, self.prepare_runs)
-    }
-}
+pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> + 'a>;
 
 /// Start a declared foreground service from the lowered manifest: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
@@ -1404,35 +1371,7 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
-    selection: ServiceSelection<'_>,
-) -> Result<ServiceStart, ServiceStartError> {
-    let mut prepare_runs = Vec::new();
-    let result = start_service_for_slot_inner(
-        admission,
-        placement,
-        registry,
-        run_id,
-        selected_slot,
-        selection,
-        &mut prepare_runs,
-    );
-    match result {
-        Ok(service) => Ok(ServiceStart {
-            service,
-            prepare_runs,
-        }),
-        Err(error) => Err(ServiceStartError::new(error, prepare_runs)),
-    }
-}
-
-fn start_service_for_slot_inner(
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_slot: &SelectedSlot<'_>,
     mut selection: ServiceSelection<'_>,
-    prepare_runs: &mut Vec<TaskRun>,
 ) -> RuntimeResult<AcquiredService> {
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
@@ -1607,17 +1546,7 @@ fn start_service_for_slot_inner(
                 owner_token.clone(),
             );
             let prepare_result = match selection.prepare_runner {
-                Some(ref mut runner) => match runner(registry) {
-                    Ok(task_runs) => {
-                        prepare_runs.extend(task_runs);
-                        Ok(())
-                    }
-                    Err(failure) => {
-                        let (error, task_runs) = failure.into_parts();
-                        prepare_runs.extend(task_runs);
-                        Err(error)
-                    }
-                },
+                Some(ref mut runner) => runner(registry),
                 None => Err(RuntimeError::new(
                     ErrorCode::LifecycleFailed,
                     format!(
@@ -1665,7 +1594,7 @@ fn start_service_for_slot_inner(
                     let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
                     (stdout, stderr, None)
                 } else {
-                    let output = child_output(&stdout_path, &stderr_path, &redactor)?;
+                    let output = child_output(&stdout_path, &stderr_path, &redactor, LogFileMode::Replace)?;
                     (output.stdout, output.stderr, Some(output.relays))
                 }
             } else {
@@ -2416,6 +2345,7 @@ pub(crate) struct BoundedExec<'a> {
     pub stdout_path: &'a Path,
     pub stderr_path: &'a Path,
     pub redactor: &'a Redactor,
+    pub log_file_mode: LogFileMode,
     /// Names the operation in spawn/inspect failures.
     pub label: &'a str,
 }
@@ -2446,7 +2376,12 @@ pub(crate) struct BoundedFailure {
 }
 
 pub(crate) fn spawn_bounded_exec(spec: &BoundedExec<'_>) -> RuntimeResult<OwnedBoundedChild> {
-    let output = child_output(spec.stdout_path, spec.stderr_path, spec.redactor)?;
+    let output = child_output(
+        spec.stdout_path,
+        spec.stderr_path,
+        spec.redactor,
+        spec.log_file_mode,
+    )?;
     let mut command =
         configured_command(spec.executable, spec.args, spec.env, spec.cwd, spec.stdin);
     command.stdout(output.stdout).stderr(output.stderr);
@@ -3557,6 +3492,7 @@ mod tests {
                 stdout_path: &stdout,
                 stderr_path: &stderr,
                 redactor: &redactor,
+                log_file_mode: LogFileMode::Replace,
                 label: "pipe-holder",
             },
             &CancellationToken::new(),
@@ -3598,6 +3534,7 @@ mod tests {
             stdout_path: &stdout,
             stderr_path: &stderr,
             redactor: &Redactor::empty(),
+            log_file_mode: LogFileMode::Replace,
             label: "task process",
         };
         let error = spawn_bounded_exec(&spec).err().unwrap();
