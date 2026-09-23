@@ -379,10 +379,22 @@ fn redacted_stdio(
 }
 
 fn redact_stream(
+    reader: File,
+    writer: File,
+    redactor: Redactor,
+    control: Receiver<CaptureControl>,
+) -> RuntimeResult<CaptureCompletion> {
+    redact_stream_with_poll(reader, writer, redactor, control, |fd, timeout| unsafe {
+        libc::poll(fd, 1, timeout)
+    })
+}
+
+fn redact_stream_with_poll(
     mut reader: File,
     mut writer: File,
     redactor: Redactor,
     control: Receiver<CaptureControl>,
+    mut poll: impl FnMut(&mut libc::pollfd, i32) -> i32,
 ) -> RuntimeResult<CaptureCompletion> {
     let mut pending = Vec::new();
     let mut buf = [0; 8192];
@@ -406,7 +418,7 @@ fn redact_stream(
             events: libc::POLLIN,
             revents: 0,
         };
-        let polled = unsafe { libc::poll(&mut pollfd, 1, wait.as_millis() as i32) };
+        let polled = poll(&mut pollfd, wait.as_millis() as i32);
         if polled == -1 {
             let error = std::io::Error::last_os_error();
             if error.kind() == std::io::ErrorKind::Interrupted {
@@ -570,33 +582,34 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_arriving_during_poll_is_observed_before_eof() {
-        let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+    fn shutdown_at_poll_boundary_rejects_readable_eof() {
+        let fixture = CaptureFixture::new();
+        let path = fixture.0.join("stdout");
+        let (reader, peer) = std::os::unix::net::UnixStream::pair().unwrap();
         reader.set_nonblocking(true).unwrap();
+        let reader = File::from(std::os::fd::OwnedFd::from(reader));
         let (sender, receiver) = mpsc::channel();
-        let (polling, enter_poll) = mpsc::channel();
-        let (finished, done) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let mut mode = CaptureMode::Owned;
-            assert!(!mode.aborted(&receiver));
-            polling.send(()).unwrap();
-            let mut fd = libc::pollfd {
-                fd: reader.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            assert_eq!(unsafe { libc::poll(&mut fd, 1, 1000) }, 1);
-            // EOF follows an expired shutdown message. The post-poll boundary
-            // must observe that message before accepting the readable EOF.
-            finished.send(mode.aborted(&receiver)).unwrap();
-        });
-        enter_poll.recv_timeout(Duration::from_secs(2)).unwrap();
-        sender
-            .send(CaptureControl::Shutdown(Instant::now()))
-            .unwrap();
-        drop(writer);
-        assert!(done.recv_timeout(Duration::from_secs(2)).unwrap());
-        worker.join().unwrap();
+        let mut peer = Some(peer);
+        let completion = redact_stream_with_poll(
+            reader,
+            File::create(&path).unwrap(),
+            Redactor::empty(),
+            receiver,
+            |fd, timeout| {
+                // Queue expiry after the loop's initial control check and make
+                // real EOF readable. The production post-poll check must win.
+                sender
+                    .send(CaptureControl::Shutdown(Instant::now()))
+                    .unwrap();
+                drop(peer.take().expect("capture must stop after the first poll"));
+                let ready = unsafe { libc::poll(fd, 1, timeout) };
+                assert_eq!(ready, 1);
+                ready
+            },
+        )
+        .unwrap();
+        assert!(matches!(completion, CaptureCompletion::Incomplete));
+        assert!(std::fs::read(path).unwrap().is_empty());
     }
 
     #[test]
