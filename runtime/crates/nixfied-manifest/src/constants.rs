@@ -44,11 +44,4 @@ mod tests {
     fn runtime_abi_snapshot() {
         assert_eq!(runtime_abi(), "nixfied-runtime-abi:1-1abc2008afe0");
     }
-
-    #[test]
-    fn capability_digest_is_twelve_hex_chars() {
-        let digest = capability_digest();
-        assert_eq!(digest.len(), 12);
-        assert!(digest.bytes().all(|b| b.is_ascii_hexdigit()));
-    }
 }

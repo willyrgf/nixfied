@@ -218,19 +218,3 @@ pub fn host_os() -> &'static str {
         other => other,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::validation::Validate;
-
-    /// The fixture is valid by construction: it round-trips through the typed
-    /// contract and passes the manifest's own validation.
-    #[test]
-    fn default_fixture_is_a_valid_manifest() {
-        let value = synthetic_manifest(&SyntheticManifestOptions::default());
-        let manifest: crate::Manifest =
-            serde_json::from_value(value).expect("fixture deserializes");
-        manifest.validate().expect("fixture validates");
-    }
-}

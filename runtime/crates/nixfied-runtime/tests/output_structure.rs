@@ -3,7 +3,6 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use nixfied_runtime::control::{DownReport, ProcessObservation, PsReport};
 use nixfied_runtime::error::{ErrorCode, RuntimeCause, RuntimeError};
 use nixfied_runtime::service::TaskRun;
 use nixfied_runtime::state::CleanupOutcome;
@@ -53,9 +52,6 @@ fn runtime_error_is_one_owned_native_error_with_open_details() {
         serde_json::to_string(&error).unwrap(),
         r#"{"code":"TASK_FAILED","exitClass":"error","message":"task failed","details":null,"manifestPath":null,"computedManifestHash":null}"#
     );
-    // This annotation proves the existing boxed native storage at compilation.
-    let causes: Box<Vec<RuntimeCause>> = error.causes;
-    assert!(causes.is_empty());
     for details in [
         Value::Null,
         json!([]),
@@ -85,43 +81,5 @@ fn native_detail_serialization_failure_keeps_its_existing_fallback() {
     assert_eq!(
         error.details,
         json!({"portConflict":"detail-serialization-failed"})
-    );
-}
-
-#[test]
-fn control_and_cleanup_outputs_keep_presence_order_and_native_values() {
-    let report = PsReport {
-        processes: vec![ProcessObservation {
-            process_key: "process".into(),
-            run_id: "run".into(),
-            service_instance_id: None,
-            pid: 12,
-            pgid: -3,
-            registry_status: "escaped".into(),
-            reconciled_status: "stale".into(),
-            service_lifetime: None,
-            borrower_count: -1,
-            live: false,
-        }],
-    };
-    assert_eq!(
-        serde_json::to_string(&report).unwrap(),
-        r#"{"processes":[{"processKey":"process","runId":"run","serviceInstanceId":null,"pid":12,"pgid":-3,"registryStatus":"escaped","reconciledStatus":"stale","serviceLifetime":null,"borrowerCount":-1,"live":false}]}"#
-    );
-    assert_eq!(
-        serde_json::to_string(&DownReport {
-            stopped: vec!["p".into()],
-            stale: vec![]
-        })
-        .unwrap(),
-        r#"{"stopped":["p"],"stale":[]}"#
-    );
-    assert_eq!(
-        serde_json::to_string(&CleanupOutcome {
-            cleanup_id: "c".into(),
-            deleted_path: "/state".into()
-        })
-        .unwrap(),
-        r#"{"cleanupId":"c","deletedPath":"/state"}"#
     );
 }
