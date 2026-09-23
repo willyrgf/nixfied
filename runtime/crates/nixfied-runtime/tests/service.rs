@@ -39,33 +39,18 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .expect("foreground service should start");
 
     assert_eq!(service.info().pid as i32, service.info().pgid);
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process row should exist");
-    let service_name: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT service_name FROM services WHERE service_instance_id = ?1",
-            [&service.info().service_instance_id],
-            |row| row.get(0),
-        )
-        .expect("service row should exist");
-    let probe_ready_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let service_name: String = fixture.query(
+        "SELECT service_name FROM services WHERE service_instance_id = ?1",
+        [&service.info().service_instance_id],
+    );
+    let probe_ready_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+        [],
+    );
 
     assert_eq!(process_status, "running");
     assert_eq!(service_name, "synthetic");
@@ -104,37 +89,22 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
-    let stopped_process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE run_id = 'run-service'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("stopped process row should exist");
-    let stored_service_rows: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM services WHERE service_name = 'synthetic'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("stopped service row should exist");
+    let stopped_process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE run_id = 'run-service'",
+        [],
+    );
+    let stored_service_rows: i64 = fixture.query(
+        "SELECT count(*) FROM services WHERE service_name = 'synthetic'",
+        [],
+    );
     assert_eq!(stopped_process_status, "stopped");
     assert_eq!(stored_service_rows, 1);
     // Shutdown records the actual signal mechanism, not a fabricated exec terminal.
-    let stop_signal: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT json_extract(payload_json, '$.signal') FROM events
+    let stop_signal: String = fixture.query(
+        "SELECT json_extract(payload_json, '$.signal') FROM events
              WHERE event_type = 'service.stop.signaled'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("stop should record a signal event");
+        [],
+    );
     assert_eq!(stop_signal, "TERM");
 }
 
@@ -167,9 +137,7 @@ fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
 
 #[test]
 fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let service = fixture
         .start("run-ready", port, ServiceLifetime::RunScoped)
@@ -178,33 +146,18 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     let service = service
         .ready(&mut fixture.registry, &CancellationToken::new())
         .expect("owned listener should satisfy readiness");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("service status should query");
-    let port_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
-    let verified_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let port_status: String = fixture.query(
+        "SELECT status FROM ports WHERE owner_process_key = ?1",
+        [&service.info().process_key],
+    );
+    let verified_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified'",
+        [],
+    );
 
     assert_eq!(process_status, "ready");
     assert_eq!(port_status, "active");
@@ -212,15 +165,8 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
-    let released_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status = 'released'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
+    let released_ports: i64 =
+        fixture.query("SELECT count(*) FROM ports WHERE status = 'released'", []);
     assert_eq!(released_ports, 1);
 }
 
@@ -471,9 +417,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
 
 #[test]
 fn same_registry_proven_listener_reports_complete_nixfied_owner() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let owner = fixture
         .start("run-owner-attribution", port, ServiceLifetime::RunScoped)
@@ -559,9 +503,7 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
 
 #[test]
 fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_wildcard_listener_fixture(port);
     let service = fixture
         .start("run-wildcard-listener", port, ServiceLifetime::RunScoped)
@@ -576,24 +518,14 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
     let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    let ready_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let ready_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+        [],
+    );
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&process_key],
+    );
     assert_eq!(ready_events, 0);
     assert_eq!(process_status, "failed");
 }
@@ -744,9 +676,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
 
 #[test]
 fn dependent_task_runs_after_owned_service_is_ready() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     set_task_run_args(&mut value, &["output", "literal", "task-ok", ""]);
     let mut fixture = ServiceFixture::from_value(value);
@@ -800,33 +730,15 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         summary["durationMs"].as_u64().is_some(),
         "task summary should carry durationMs: {summary}"
     );
-    let task_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type IN ('task.running','task.succeeded')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&task.process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = 'run-task'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("run status should query");
+    let task_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type IN ('task.running','task.succeeded')",
+        [],
+    );
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&task.process_key],
+    );
+    let run_status: String = fixture.query("SELECT status FROM runs WHERE run_id = 'run-task'", []);
 
     assert_eq!(task_events, 2);
     assert_eq!(process_status, "succeeded");
@@ -879,15 +791,10 @@ fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
     .expect_err("task should wait for probe-ready service");
 
     assert_eq!(error.error().code, ErrorCode::DependencyUnavailable);
-    let task_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type LIKE 'task.%'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let task_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type LIKE 'task.%'",
+        [],
+    );
     assert_eq!(task_events, 0);
     service
         .stop(&mut fixture.registry, 1000)
@@ -896,9 +803,7 @@ fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
 
 #[test]
 fn readiness_timeout_stops_started_service_and_records_failed() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
         .start("run-readiness-timeout", port, ServiceLifetime::RunScoped)
@@ -913,24 +818,14 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let failure_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&process_key],
+    );
+    let failure_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
+        [],
+    );
     assert_eq!(process_status, "failed");
     assert_eq!(failure_events, 1);
 }
@@ -984,9 +879,7 @@ fn probe_shell_invocation(run: Value) -> Value {
 
 #[test]
 fn exec_ready_probe_gates_on_flag_and_marks_ready() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     // The service binds its endpoint immediately but signals readiness only via
     // a marker acknowledgement — exactly what a tcp probe cannot see.
     let child = test_child();
@@ -1039,15 +932,10 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         .join()
         .expect("readiness acknowledger should join");
 
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
     assert_eq!(process_status, "ready");
     assert!(
         fixture
@@ -1064,9 +952,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
 
 #[test]
 fn exec_ready_probe_failure_times_out_and_records_failed() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let value = exec_probe_fixture_value(&test_sleep(), &["30"], port, json!(["-c", "exit 7"]), 3);
     let mut fixture = ServiceFixture::from_value(value);
     let service = fixture
@@ -1087,15 +973,10 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
     let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&process_key],
+    );
     assert_eq!(process_status, "failed");
 }
 
@@ -1156,9 +1037,7 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
 #[test]
 fn exec_health_probe_failure_records_failed() {
     for reject_settlement in [false, true] {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-        let port = listener.local_addr().expect("local addr").port();
-        drop(listener);
+        let port = available_port_window(1);
         // The service is ready (tcp) but never healthy: the failed run must leave
         // service.failed evidence, not a clean stopped/completed registry state.
         let mut value = test_child_listener_value(port);
@@ -1197,15 +1076,10 @@ fn exec_health_probe_failure_records_failed() {
         }
         let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
         assert_ne!(error.code, ErrorCode::Canceled);
-        let process_status: String = fixture
-            .registry
-            .connection()
-            .query_row(
-                "SELECT status FROM processes WHERE process_key = ?1",
-                [&process_key],
-                |row| row.get(0),
-            )
-            .expect("process status should query");
+        let process_status: String = fixture.query(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&process_key],
+        );
         assert_eq!(
             process_status,
             if reject_settlement { "ready" } else { "failed" }
@@ -1220,15 +1094,10 @@ fn exec_health_probe_failure_records_failed() {
             assert_eq!(error.code, health_error_code);
             assert!(error.causes.is_empty());
         }
-        let run_status: String = fixture
-            .registry
-            .connection()
-            .query_row(
-                "SELECT status FROM runs WHERE run_id = 'run-exec-health-fail'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("run status should query");
+        let run_status: String = fixture.query(
+            "SELECT status FROM runs WHERE run_id = 'run-exec-health-fail'",
+            [],
+        );
         assert_eq!(
             run_status,
             if reject_settlement {
@@ -1246,9 +1115,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let started = temp_marker("nixfied-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &["term-tree", &started_arg, &marker_arg],
         port,
@@ -1284,24 +1151,12 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         .iter()
         .find(|process| process.process_key == process_key)
         .expect("service process should be reported");
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let cancel_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type IN ('service.canceling','service.canceled')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let lease_status: String =
+        fixture.query("SELECT status FROM run_leases WHERE run_id = ?1", [&run_id]);
+    let cancel_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type IN ('service.canceling','service.canceled')",
+        [],
+    );
 
     assert_eq!(error.code, ErrorCode::Canceled);
     assert!(!observed.live);
@@ -1326,9 +1181,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     let started = temp_marker("nixfied-cancel-task-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     set_task_run_args(&mut value, &["term-tree", &started_arg, &marker_arg]);
     let mut fixture = ServiceFixture::from_value(value);
@@ -1383,33 +1236,18 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE service_instance_id IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .expect("task status should query");
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let task_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let task_status: String = fixture.query(
+        "SELECT status FROM processes WHERE service_instance_id IS NULL",
+        [],
+    );
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let task_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
+        [],
+    );
     let summary: Value = serde_json::from_slice(
         &fs::read(
             fixture
@@ -1452,9 +1290,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     let started = temp_marker("nixfied-timeout-task-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["invocation"]["timeoutMs"] = json!(100);
     set_task_run_args(&mut value, &["term-tree", &started_arg, &marker_arg]);
@@ -1500,33 +1336,18 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE service_instance_id IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .expect("task status should query");
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let task_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.timed-out')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let task_status: String = fixture.query(
+        "SELECT status FROM processes WHERE service_instance_id IS NULL",
+        [],
+    );
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let task_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.timed-out')",
+        [],
+    );
     let summary: Value = serde_json::from_slice(
         &fs::read(
             fixture
@@ -1575,9 +1396,7 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     let started = temp_marker("nixfied-cli-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let value = test_child_fixture_value(&["term-tree", &started_arg, &marker_arg], port);
     let manifest: Manifest =
         serde_json::from_value(value).expect("CLI fixture manifest should parse");
@@ -1648,9 +1467,7 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     let stopping = temp_marker("nixfied-cli-shutdown-stopping");
     let started_arg = started.to_string_lossy().to_string();
     let stopping_arg = stopping.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_fixture_value(
         &[
             "term-block",
@@ -1729,9 +1546,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     let request_arg = request.to_string_lossy().to_string();
     let armed_arg = armed.to_string_lossy().to_string();
     let detached_arg = detached.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_fixture_value(
         &[
             "detached-sleeper",
@@ -1791,24 +1606,12 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let failure_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
+    let failure_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
+        [],
+    );
     assert_eq!(failed_processes, 1);
     assert_eq!(failure_events, 1);
     for marker in [request, armed, detached] {
@@ -1831,24 +1634,12 @@ fn daemonizing_service_is_terminated_and_recorded_failed() {
     };
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let open_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
+    let open_ports: i64 = fixture.query(
+        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        [],
+    );
 
     assert_eq!(failed_processes, 1);
     assert_eq!(open_ports, 0);
@@ -1871,24 +1662,12 @@ fn setsid_descendant_is_identity_killed_before_failed_settlement() {
     };
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let escaped_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'escaped'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("escaped process status should query");
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
+    let escaped_processes: i64 = fixture.query(
+        "SELECT count(*) FROM processes WHERE status = 'escaped'",
+        [],
+    );
     assert_eq!(failed_processes, 1);
     assert_eq!(escaped_processes, 0);
     assert!(detached.exists(), "setsid descendant should have started");
@@ -1925,24 +1704,12 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
         .expect_err("stop should refuse escaped descendants");
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let escaped_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'escaped'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
+    let escaped_processes: i64 = fixture.query(
+        "SELECT count(*) FROM processes WHERE status = 'escaped'",
+        [],
+    );
     assert_eq!(failed_processes, 1);
     assert_eq!(escaped_processes, 0);
     for marker in [request, armed, detached] {
@@ -1986,24 +1753,12 @@ fn readiness_refuses_monitored_setsid_escape() {
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let probe_ready_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let probe_ready_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+        [],
+    );
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
     assert_eq!(probe_ready_events, 0);
     assert_eq!(failed_processes, 1);
     for marker in [request, armed, detached] {
@@ -2039,24 +1794,12 @@ fn readiness_records_foreground_exit_as_escape() {
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    let failed_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let running_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'running'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
+    let failed_processes: i64 =
+        fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
+    let running_processes: i64 = fixture.query(
+        "SELECT count(*) FROM processes WHERE status = 'running'",
+        [],
+    );
     assert_eq!(failed_processes, 1);
     assert_eq!(running_processes, 0);
     let _ = fs::remove_file(started);
@@ -2131,15 +1874,10 @@ fn duplicate_active_service_start_is_refused() {
         error.details["portConflict"]["reason"],
         json!("startup-lock-contended")
     );
-    let running_processes: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE status = 'running'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("process count should query");
+    let running_processes: i64 = fixture.query(
+        "SELECT count(*) FROM processes WHERE status = 'running'",
+        [],
+    );
     assert_eq!(running_processes, 1);
     assert!(
         process_group_has_non_zombie_member(service.info().pgid),
@@ -2173,9 +1911,7 @@ fn duplicate_active_service_start_is_refused() {
 
 #[test]
 fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let owner = fixture
         .start("run-owner", port, ServiceLifetime::RunScoped)
@@ -2198,24 +1934,14 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
         .expect("a ready owner remains reusable for a guarded concurrent borrower");
     assert!(concurrent_borrower.is_borrowed());
     assert_eq!(concurrent_borrower.info().process_key, owner_process_key);
-    let active_leases: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM run_leases WHERE service_instance_id = ?1 AND status = 'active'",
-            [&owner.info().service_instance_id],
-            |row| row.get(0),
-        )
-        .expect("active lease count should query");
-    let borrowed_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("borrow event count should query");
+    let active_leases: i64 = fixture.query(
+        "SELECT count(*) FROM run_leases WHERE service_instance_id = ?1 AND status = 'active'",
+        [&owner.info().service_instance_id],
+    );
+    let borrowed_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
+        [],
+    );
     assert_eq!(active_leases, 3);
     assert_eq!(borrowed_events, 2);
 
@@ -2229,24 +1955,14 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
         process_group_has_non_zombie_member(owner_pgid),
         "borrower stop must not signal the owner process group"
     );
-    let borrower_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = 'run-borrower'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("borrower lease status should query");
-    let owner_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = 'run-owner'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("owner lease status should query");
+    let borrower_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = 'run-borrower'",
+        [],
+    );
+    let owner_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = 'run-owner'",
+        [],
+    );
     assert_eq!(borrower_status, "completed");
     assert_eq!(owner_status, "active");
 
@@ -2276,15 +1992,10 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
     };
 
     assert_eq!(error.code, ErrorCode::LeaseConflict);
-    let borrowed_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("borrow event count should query");
+    let borrowed_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
+        [],
+    );
     assert_eq!(borrowed_events, 0);
     owner
         .stop(&mut fixture.registry, 1000)
@@ -2381,9 +2092,7 @@ fn failed_standing_commit_consumes_owner_and_preserves_settlement_precedence() {
 
 #[test]
 fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let owner = fixture
         .start(
@@ -2505,15 +2214,10 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
 
     ps(&mut fixture.registry).expect("expired borrower should reconcile");
 
-    let port_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&borrower.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("persistent owner port should remain recorded");
+    let port_status: String = fixture.query(
+        "SELECT status FROM ports WHERE owner_process_key = ?1",
+        [&borrower.info().process_key],
+    );
     assert_eq!(port_status, "active");
     assert!(
         process_group_has_non_zombie_member(owner_pgid),
@@ -2527,9 +2231,7 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
 
 #[test]
 fn until_idle_service_stops_when_borrower_lease_goes_stale() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let owner = fixture
         .start("run-until-idle-owner", port, ServiceLifetime::UntilIdle)
@@ -2569,15 +2271,10 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
     assert_eq!(observed.registry_status, "stopped");
     assert_eq!(observed.reconciled_status, "stopped");
     assert!(!observed.live);
-    let borrower_lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = 'run-until-idle-borrower'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("borrower lease status should query");
+    let borrower_lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = 'run-until-idle-borrower'",
+        [],
+    );
     assert_eq!(borrower_lease_status, "stale");
     assert!(
         !process_group_has_non_zombie_member(owner_pgid),
@@ -2587,9 +2284,7 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
 
 #[test]
 fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let selected = select_slot(fixture.admission.common().manifest(), None)
         .expect("default slot should select");
@@ -2652,33 +2347,15 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
         .expect("process should be reported");
     assert!(!observed.live);
     assert_eq!(observed.reconciled_status, "stale");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let stale_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status = 'stale'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
-    let stale_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'process.stale'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let stale_ports: i64 = fixture.query("SELECT count(*) FROM ports WHERE status = 'stale'", []);
+    let stale_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'process.stale'",
+        [],
+    );
     assert_eq!(process_status, "stale");
     assert_eq!(stale_ports, 1);
     assert_eq!(stale_events, 1);
@@ -2717,24 +2394,11 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
         .iter()
         .find(|process| process.process_key == service.info().process_key)
         .expect("process should be reported");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let stale_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status = 'stale'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let stale_ports: i64 = fixture.query("SELECT count(*) FROM ports WHERE status = 'stale'", []);
 
     assert!(!observed.live);
     assert_eq!(observed.reconciled_status, "stale");
@@ -2748,9 +2412,7 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
 
 #[test]
 fn ps_keeps_live_process_ready_when_its_listener_disappears() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &[
             "listen",
@@ -2789,20 +2451,15 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         .expect("service process should be reported");
     assert!(process.live);
     assert_eq!(process.reconciled_status, "running");
-    let registry_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
+    let registry_status: String = fixture.query(
+        "
             SELECT p.status
             FROM processes p
             JOIN services s ON s.service_instance_id = p.service_instance_id
             WHERE p.process_key = ?1
             ",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("registry status should query");
+        [&service.info().process_key],
+    );
     assert_eq!(registry_status, "ready");
     service
         .stop(&mut fixture.registry, 1000)
@@ -2838,42 +2495,22 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
         .iter()
         .find(|process| process.process_key == service.info().process_key)
         .expect("service process should be reported");
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("run status should query");
-    let lease_stale_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'run.lease-stale'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("events should query");
-    let lease_stale_hash: Option<String> = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT computed_manifest_hash FROM events WHERE event_type = 'run.lease-stale'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("lease stale event hash should query");
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let run_status: String = fixture.query(
+        "SELECT status FROM runs WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let lease_stale_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'run.lease-stale'",
+        [],
+    );
+    let lease_stale_hash: Option<String> = fixture.query(
+        "SELECT computed_manifest_hash FROM events WHERE event_type = 'run.lease-stale'",
+        [],
+    );
 
     assert!(!observed.live);
     assert_eq!(observed.reconciled_status, "stale");
@@ -2930,15 +2567,10 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
     assert_eq!(error.code, ErrorCode::LeaseConflict);
     assert!(error.message.contains("run-active-lease"));
     assert!(error.message.contains("authoritative open lease"));
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE service_instance_id = ?1",
-            [&service_instance_id],
-            |row| row.get(0),
-        )
-        .expect("blocked lease should remain queryable");
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE service_instance_id = ?1",
+        [&service_instance_id],
+    );
     assert_eq!(lease_status, "active");
 }
 
@@ -2953,33 +2585,19 @@ fn down_stops_verified_owned_process_group_only() {
         down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
 
     assert_eq!(report.stopped, vec![service.info().process_key.clone()]);
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let released_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status = 'released'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let released_ports: i64 =
+        fixture.query("SELECT count(*) FROM ports WHERE status = 'released'", []);
     assert_eq!(process_status, "stopped");
     assert_eq!(released_ports, 1);
 }
 
 #[test]
 fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
         .start("run-unresolved-escape", port, ServiceLifetime::RunScoped)
@@ -2994,15 +2612,10 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
         r#"{"reason":"test-unconfirmable-termination"}"#,
     );
 
-    let open_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
+    let open_ports: i64 = fixture.query(
+        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        [],
+    );
     assert_eq!(open_ports, 1);
     let report = ps(&mut fixture.registry).expect("ps should reconcile escaped owner liveness");
     let escaped = report
@@ -3099,15 +2712,10 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
         .find(|process| process.process_key == service.info().process_key)
         .expect("escaped process evidence should remain visible");
     assert!(escaped.live);
-    let open_ports: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("open ports should query");
+    let open_ports: i64 = fixture.query(
+        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        [],
+    );
     assert_eq!(open_ports, 1);
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
@@ -3179,15 +2787,10 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         .find(|process| process.process_key == service.info().process_key)
         .expect("escaped tree evidence should remain visible");
     assert!(escaped.live);
-    let port_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM ports WHERE owner_process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("tree escape port should query");
+    let port_status: String = fixture.query(
+        "SELECT status FROM ports WHERE owner_process_key = ?1",
+        [&service.info().process_key],
+    );
     assert!(matches!(port_status.as_str(), "reserved" | "active"));
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
@@ -3320,42 +2923,22 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
 
     let report =
         down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("run status should query");
-    let process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("process status should query");
-    let canceled_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("event count should query");
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let run_status: String = fixture.query(
+        "SELECT status FROM runs WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let canceled_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
+        [],
+    );
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
@@ -3592,60 +3175,30 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let report = down_owned_process_groups(&mut fixture.registry, 1000)
         .expect("down should stop service and task");
     let _ = task_child.wait();
-    let lease_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("lease status should query");
-    let run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            [&service.info().run_id],
-            |row| row.get(0),
-        )
-        .expect("run status should query");
-    let service_process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&service.info().process_key],
-            |row| row.get(0),
-        )
-        .expect("service process status should query");
-    let task_process_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&task_process_key],
-            |row| row.get(0),
-        )
-        .expect("task process status should query");
-    let service_canceled_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("service event count should query");
-    let task_canceled_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'task.canceled'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("task event count should query");
+    let lease_status: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let run_status: String = fixture.query(
+        "SELECT status FROM runs WHERE run_id = ?1",
+        [&service.info().run_id],
+    );
+    let service_process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    let task_process_status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&task_process_key],
+    );
+    let service_canceled_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
+        [],
+    );
+    let task_canceled_events: i64 = fixture.query(
+        "SELECT count(*) FROM events WHERE event_type = 'task.canceled'",
+        [],
+    );
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
         &fixture.placement.state_root,
@@ -3957,6 +3510,15 @@ struct ServiceFixture {
 }
 
 impl ServiceFixture {
+    // Read durable evidence directly; callers own the SQL and expected result.
+    #[track_caller]
+    fn query<T: rusqlite::types::FromSql>(&self, sql: &str, params: impl rusqlite::Params) -> T {
+        self.registry
+            .connection()
+            .query_row(sql, params, |row| row.get(0))
+            .unwrap_or_else(|error| panic!("query {sql:?} failed: {error}"))
+    }
+
     fn start_endpoint_less(
         &mut self,
         run_id: &str,
@@ -4198,9 +3760,7 @@ impl<'a> StartedSlot<'a> {
 
 #[test]
 fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = &fixture.admission.common().execution_manifest().services()["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
@@ -4226,11 +3786,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::LeaseConflict);
-    let mutation_count: i64 = fixture
-        .registry
-        .connection()
-        .query_row("SELECT count(*) FROM processes", [], |row| row.get(0))
-        .expect("process count should query");
+    let mutation_count: i64 = fixture.query("SELECT count(*) FROM processes", []);
     assert_eq!(mutation_count, 0);
 
     fixture
@@ -4248,15 +3804,10 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
             ServiceLifetime::RunScoped,
         )
         .expect("expired process-less reservation should reconcile before retry");
-    let stale_lease: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = 'run-crashed-reservation'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("crashed lease status should query");
+    let stale_lease: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = 'run-crashed-reservation'",
+        [],
+    );
     assert_eq!(stale_lease, "stale");
     retry
         .stop(&mut fixture.registry, 1000)
@@ -4285,11 +3836,7 @@ fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::LeaseConflict);
-    let port_count: i64 = fixture
-        .registry
-        .connection()
-        .query_row("SELECT count(*) FROM ports", [], |row| row.get(0))
-        .expect("endpoint-less reservation port count should query");
+    let port_count: i64 = fixture.query("SELECT count(*) FROM ports", []);
     assert_eq!(port_count, 0);
 
     fixture
@@ -4303,15 +3850,10 @@ fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
     let retry = fixture
         .start_endpoint_less("run-after-endpoint-less-reservation-expiry")
         .expect("expired endpoint-less reservation should reconcile before retry");
-    let stale_lease: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = 'run-crashed-endpoint-less-reservation'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("endpoint-less crashed lease should query");
+    let stale_lease: String = fixture.query(
+        "SELECT status FROM run_leases WHERE run_id = 'run-crashed-endpoint-less-reservation'",
+        [],
+    );
     assert_eq!(stale_lease, "stale");
     retry
         .stop(&mut fixture.registry, 1000)
@@ -4534,9 +4076,7 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
 /// `PATH` cannot starve them - only a nix invocation would trip the sentinel.
 #[test]
 fn runtime_drives_full_lifecycle_without_invoking_nix() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
 
     let mut value = test_child_listener_value(port);
     set_task_run_args(&mut value, &["connect", "127.0.0.1", "${port}", "close"]);
@@ -4720,9 +4260,7 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 fn composite_run_keys_evidence_by_step_path() {
     // A composite referencing the same leaf twice runs it twice, with logs,
     // summaries, and registry rows keyed by the distinct step paths.
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
 
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
@@ -4815,9 +4353,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     let started = temp_marker("nixfied-nested-composite-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
@@ -5172,9 +4708,7 @@ fn composite_starts_full_service_union_before_first_node() {
 
 #[test]
 fn task_only_run_records_a_durable_runs_row() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
 
     let mut value = test_child_listener_value(port);
     // The environment starts no services and runs only the service-less task.
@@ -5242,9 +4776,7 @@ fn task_only_run_records_a_durable_runs_row() {
 fn inherit_stdin_reaches_a_task_process() {
     use std::io::Write;
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
 
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
@@ -5328,9 +4860,7 @@ fn wait_for_task_process_row(state_base: &Path, timeout: Duration) -> PathBuf {
 
 #[test]
 fn failed_composite_run_writes_failure_summary() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     // A 0-service composite whose single node fails: the run must leave the
     // same aggregate evidence a success does, linked from the error.
@@ -5474,9 +5004,7 @@ fn failed_composite_run_writes_failure_summary() {
 #[test]
 fn service_failure_before_any_node_writes_failed_summary() {
     for fail_health in [false, true] {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-        let port = listener.local_addr().expect("local addr").port();
-        drop(listener);
+        let port = available_port_window(1);
         // The service dies before ever listening, so the run fails on the ready
         // probe with zero node results — the summary must still record failure.
         let mut value = if fail_health {
