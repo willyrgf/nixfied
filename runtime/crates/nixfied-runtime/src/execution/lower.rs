@@ -85,24 +85,10 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
                 slot_placement.candidate_ports.start,
                 slot_placement.candidate_ports.end,
             )
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::ManifestAdmission,
-                    format!(
-                        "slot {} candidate window must have ports in 1..65535 with start <= end",
-                        slot_placement.slot
-                    ),
-                )
-            })?,
+            .expect("validated placement has a nonempty port window"),
         );
     }
 
-    if slot_windows.is_empty() {
-        return Err(RuntimeError::new(
-            ErrorCode::ManifestAdmission,
-            "no candidate port windows declared",
-        ));
-    }
     let program = Program {
         services: lowered_services,
         tasks: lowered_tasks,
@@ -289,27 +275,12 @@ fn lower_task(
     }
     let owner = || format!("task {task_id}");
     // Convert the structurally checked wire alternatives into the native leaf.
-    let Some(invocation) = invocation else {
-        return Err(Rejection::TaskKindIncoherent {
-            task_id: task_id.to_string(),
-            expected: "a leaf task carries an invocation",
-        }
-        .into());
-    };
-    let Some(exit_policy) = exit_policy else {
-        return Err(Rejection::TaskKindIncoherent {
-            task_id: task_id.to_string(),
-            expected: "a leaf task carries an exit policy",
-        }
-        .into());
-    };
-    if !steps.is_empty() {
-        return Err(Rejection::TaskKindIncoherent {
-            task_id: task_id.to_string(),
-            expected: "a leaf task carries no steps",
-        }
-        .into());
-    }
+    let invocation = invocation
+        .as_ref()
+        .expect("validated leaf has an invocation");
+    let exit_policy = exit_policy
+        .as_ref()
+        .expect("validated leaf has an exit policy");
     let operation_id = operation_id
         .as_ref()
         .expect("validated leaf has an operation id");
@@ -587,10 +558,6 @@ pub enum Rejection {
         owner: String,
         name: &'static str,
     },
-    TaskKindIncoherent {
-        task_id: String,
-        expected: &'static str,
-    },
     ProbeExecOnTcp {
         service: String,
         class: &'static str,
@@ -650,9 +617,6 @@ impl Rejection {
             ),
             Rejection::ReservedEnvVar { owner, name } => {
                 format!("{owner} declares runtime-owned environment variable {name}")
-            }
-            Rejection::TaskKindIncoherent { task_id, expected } => {
-                format!("task {task_id} is kind-incoherent: {expected}")
             }
             Rejection::ProbeExecOnTcp { service, class } => {
                 format!("service {service} {class} probe is tcp but carries an invocation")
@@ -1602,23 +1566,26 @@ mod tests {
     }
 
     #[test]
-    fn leaf_without_invocation_is_rejected() {
-        let mut value = manifest_value();
-        value["tasks"]["t"]
-            .as_object_mut()
-            .unwrap()
-            .remove("invocation");
-        // Keep derived bindings coherent so this tests the leaf boundary itself.
-        value["closures"]["ct"]["operationBindings"] = json!([]);
-        let error = ValidatedManifest::try_from(serde_json::from_value::<Manifest>(value).unwrap())
-            .expect_err("the structural boundary rejects an invocation-less leaf");
-        assert!(matches!(
-            error,
-            nixfied_manifest::ValidationError::UnsupportedValue {
-                field: "tasks.invocation",
-                ..
-            }
-        ));
+    fn invalid_leaf_shapes_are_rejected_before_lowering() {
+        for (member, replacement, expected_field) in [
+            ("invocation", json!(null), "tasks.invocation"),
+            ("exitPolicy", json!(null), "tasks.exitPolicy"),
+            ("steps", json!({"child": {"task": "t"}}), "tasks.steps"),
+        ] {
+            let mut value = manifest_value();
+            value["tasks"]["t"][member] = replacement;
+            let error =
+                ValidatedManifest::try_from(serde_json::from_value::<Manifest>(value).unwrap())
+                    .expect_err("invalid leaf cannot reach lowering");
+            assert!(
+                matches!(
+                    error,
+                    nixfied_manifest::ValidationError::UnsupportedValue { field, .. }
+                        if field == expected_field
+                ),
+                "{member}: {error}"
+            );
+        }
     }
 
     #[test]
