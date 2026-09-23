@@ -3,8 +3,8 @@ use std::path::{Component, Path, PathBuf};
 use nixfied_manifest::{DirtyPolicy, SourceMode, ValidatedManifest};
 use serde::Serialize;
 
-use crate::admission::origin;
-use crate::admission::{AdmissionContext, InvocationRoot};
+use super::origin::StoreRoot;
+use crate::admission::InvocationRoot;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -21,7 +21,8 @@ pub struct AdmittedSource {
 
 pub(super) fn check_source(
     manifest: &ValidatedManifest,
-    context: &AdmissionContext,
+    invocation_root: &InvocationRoot,
+    store: &StoreRoot<'_>,
 ) -> RuntimeResult<AdmittedSource> {
     let codebase = &manifest.codebases[0]; // Structural construction proves one main codebase.
     let observed_root = match codebase.source_mode {
@@ -33,12 +34,12 @@ pub(super) fn check_source(
                     "runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
                 ))?,
             }
-            resolve_live_observed_root(&codebase.logical_root, &context.invocation_root)?
+            resolve_live_observed_root(&codebase.logical_root, invocation_root)?
         }
         SourceMode::Snapshot | SourceMode::FlakeInput => resolve_immutable_observed_root(
             &codebase.source_identity,
             &codebase.logical_root,
-            context,
+            store,
         )?,
     };
     Ok(AdmittedSource {
@@ -87,7 +88,7 @@ fn resolve_live_observed_root(
 fn resolve_immutable_observed_root(
     source_identity: &str,
     logical_root: &str,
-    context: &AdmissionContext,
+    store: &StoreRoot<'_>,
 ) -> RuntimeResult<PathBuf> {
     let source_root = Path::new(source_identity);
     if source_identity.is_empty() || !source_root.is_absolute() {
@@ -96,17 +97,16 @@ fn resolve_immutable_observed_root(
             format!("immutable sourceIdentity must be an absolute store path: {source_identity}"),
         ));
     }
-    let canonical_source_root = origin::canonical_under_store(source_root, &context.store_root)
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::SourceMismatch,
-                format!(
-                    "immutable sourceIdentity {} is not under {}",
-                    source_root.display(),
-                    context.store_root.display()
-                ),
-            )
-        })?;
+    let canonical_source_root = store.canonical_under(source_root).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!(
+                "immutable sourceIdentity {} is not under {}",
+                source_root.display(),
+                store.declared.display()
+            ),
+        )
+    })?;
     if !canonical_source_root.is_dir() {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,

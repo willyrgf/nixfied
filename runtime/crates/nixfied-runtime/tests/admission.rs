@@ -710,6 +710,51 @@ fn symlinked_closure_executable_outside_store_root_is_rejected() {
     );
 }
 
+#[test]
+fn unavailable_store_observation_preserves_admission_phase_errors() {
+    for (phase, expected) in [
+        ("source", ErrorCode::SourceMismatch),
+        ("secret", ErrorCode::SecretUnavailable),
+        ("closure", ErrorCode::ClosureMissing),
+    ] {
+        let (tmp, manifest_path, closure_root) = write_fixture_manifest(fixture_manifest(), true);
+        let mut value: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        match phase {
+            "source" => {
+                value["codebases"][0]["sourceMode"] = json!("snapshot");
+                value["codebases"][0]["sourceIdentity"] = json!(closure_root);
+            }
+            "secret" => {
+                value["secrets"]["missing"] = json!({
+                    "secretId": "missing",
+                    "source": { "kind": "env-var", "envVar": unique_env_name("NIXFIED_ABSENT") }
+                });
+            }
+            "closure" => {}
+            _ => unreachable!(),
+        }
+        let raw = serde_json::to_vec(&value).unwrap();
+        fs::write(&manifest_path, &raw).unwrap();
+        let mut context = admission_context(&closure_root);
+        context.store_root = tmp.path.join("absent-store");
+        let error = nixfied_runtime::admit_run(&manifest_path, &context).unwrap_err();
+        assert_eq!(error.code, expected, "{phase}: {error:?}");
+        assert_eq!(
+            error.computed_manifest_hash.as_deref(),
+            Some(sha256_hex(&raw).as_str())
+        );
+        if phase == "closure" {
+            assert_eq!(
+                error.message,
+                format!(
+                    "store root does not exist: {}",
+                    context.store_root.display()
+                )
+            );
+        }
+    }
+}
+
 fn admission_context(closure_root: &Path) -> AdmissionContext {
     AdmissionContext {
         invocation_root: nixfied_runtime::admission::InvocationRoot::CurrentDirectory,
