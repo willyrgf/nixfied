@@ -37,6 +37,21 @@ live in `nix/checks`; Nix compiler/install integration cases live in
 `nix/gate-nix.nix`; adopter-shaped runtime integration lives in
 `nix/gate-runtime/nixfied.nix`.
 
+Choose tests by the behavior they can disprove. Prefer a complete use case through
+the existing compiler, adapters, runtime commands, or registry API, with an
+independent expected result: returned child output, durable history, isolation,
+recovery, or rejection before effects. Reuse existing examples before adding
+hand-authored manifests or test builders. Do not add helpers that reproduce
+production derivation or validation to calculate the expected answer.
+
+Do not test field access, derived equality, enum round trips, or fixture validity
+in isolation when compilation and existing boundary tests already cover them.
+Keep focused deterministic algorithm proofs (graph derivation, redaction), wire
+rejection tests, and controlled OS/registry fault tests: a valid Rust value does
+not prove that untrusted bytes, concurrent processes, or damaged state are safe.
+Remove a test only after identifying the type guarantee or remaining behavioral
+proof that replaces it; fixture size alone is not evidence of redundancy.
+
 ## Canonical local checks
 
 Run the full local repository gate with:

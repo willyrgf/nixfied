@@ -86,24 +86,3 @@ id_newtype!(
     /// A lifecycle/task operation id, globally unique across the manifest.
     OperationId
 );
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn id_round_trips_as_a_plain_string() {
-        let id = ServiceId::new("postgres");
-        let json = serde_json::to_string(&id).expect("serialize");
-        assert_eq!(json, "\"postgres\"");
-        let back: ServiceId = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, id);
-        assert_eq!(back.as_str(), "postgres");
-    }
-
-    #[test]
-    fn id_deserializes_from_a_json_string() {
-        let id: ClosureId = serde_json::from_str("\"svc-closure\"").expect("deserialize");
-        assert_eq!(id.as_str(), "svc-closure");
-    }
-}

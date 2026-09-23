@@ -76,10 +76,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_distinct_elements() {
-        let parsed: UniqueVec<String> =
-            serde_json::from_str(r#"["a","b","c"]"#).expect("distinct elements parse");
-        assert_eq!(parsed.len(), 3);
+    fn declaration_order_survives_decoding_iteration_and_encoding() {
+        // The first authored dependency owns bare endpoint substitution. A set
+        // implementation that sorts this list would silently change that target.
+        let wire = r#"["worker","api","database"]"#;
+        let parsed: UniqueVec<String> = serde_json::from_str(wire).unwrap();
+        assert_eq!(
+            parsed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["worker", "api", "database"]
+        );
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
     }
 
     #[test]
@@ -87,16 +93,5 @@ mod tests {
         let error = serde_json::from_str::<UniqueVec<String>>(r#"["a","b","a"]"#)
             .expect_err("a duplicate must not deserialize");
         assert!(error.to_string().contains("duplicate element"));
-    }
-
-    #[test]
-    fn rejects_duplicate_integers() {
-        assert!(serde_json::from_str::<UniqueVec<i32>>("[0,1,0]").is_err());
-    }
-
-    #[test]
-    fn round_trips_to_a_plain_array() {
-        let parsed: UniqueVec<String> = serde_json::from_str(r#"["x","y"]"#).unwrap();
-        assert_eq!(serde_json::to_string(&parsed).unwrap(), r#"["x","y"]"#);
     }
 }

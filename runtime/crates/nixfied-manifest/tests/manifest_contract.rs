@@ -157,33 +157,6 @@ fn parses_and_validates_contract() {
     manifest
         .validate()
         .expect("valid manifest should pass structural validation");
-
-    // The lifecycle is a per-class record: every class is present by construction.
-    let lifecycle = &manifest.services["synthetic"].lifecycle;
-    assert_eq!(
-        lifecycle.start.operation_id.as_str(),
-        "service.synthetic.start"
-    );
-    assert_eq!(lifecycle.stop.signal, nixfied_manifest::StopSignal::Term);
-}
-
-#[test]
-fn task_default_output_round_trips_for_a_leaf() {
-    let mut value = valid_manifest_json();
-    value["tasks"]["smoke"]["defaultOutput"] = json!("task-output");
-    let manifest: Manifest = serde_json::from_value(value).expect("task default should parse");
-    manifest
-        .validate()
-        .expect("leaf task default should validate");
-    assert_eq!(
-        manifest.tasks["smoke"].default_output,
-        nixfied_manifest::TaskDefaultOutput::TaskOutput
-    );
-    let emitted = serde_json::to_value(manifest).expect("task default should serialize");
-    assert_eq!(
-        emitted["tasks"]["smoke"]["defaultOutput"],
-        json!("task-output")
-    );
 }
 
 #[test]
@@ -206,54 +179,6 @@ fn composite_task_default_output_is_rejected() {
 }
 
 #[test]
-fn secret_descriptors_round_trip_without_values() {
-    let mut value = valid_manifest_json();
-    value["secrets"] = json!({
-        "api-token": {
-            "secretId": "api-token",
-            "source": {
-                "kind": "env-var",
-                "envVar": "API_TOKEN"
-            }
-        },
-        "tls-key": {
-            "secretId": "tls-key",
-            "source": {
-                "kind": "file",
-                "path": "tls/key"
-            }
-        }
-    });
-    value["tasks"]["smoke"]["serviceLifetime"] = json!("until-idle");
-    value["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"] = json!("${secret:api-token}");
-
-    let manifest: Manifest =
-        serde_json::from_value(value).expect("secret descriptors should parse");
-    let api_token = &manifest.secrets["api-token"];
-    assert_eq!(api_token.secret_id.as_str(), "api-token");
-    assert_eq!(
-        api_token.source.kind,
-        nixfied_manifest::SecretSourceKind::EnvVar
-    );
-    assert_eq!(api_token.source.env_var.as_deref(), Some("API_TOKEN"));
-    assert_eq!(api_token.source.path, None);
-    assert_eq!(
-        manifest.tasks["smoke"].service_lifetime,
-        nixfied_manifest::ServiceLifetime::UntilIdle
-    );
-
-    let emitted = serde_json::to_value(&manifest).expect("manifest should serialize");
-    assert_eq!(
-        emitted["secrets"]["tls-key"]["source"]["kind"],
-        json!("file")
-    );
-    assert_eq!(
-        emitted["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"],
-        json!("${secret:api-token}")
-    );
-}
-
-#[test]
 fn cache_env_is_an_unknown_invocation_field() {
     let mut value = valid_manifest_json();
     value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
@@ -268,24 +193,6 @@ fn cache_env_is_an_unknown_invocation_field() {
     let error = serde_json::from_value::<Manifest>(value)
         .expect_err("removed cacheEnv field must fail deserialization");
     assert!(error.to_string().contains("unknown field `cacheEnv`"));
-}
-
-#[test]
-fn service_lifetime_variants_round_trip() {
-    for (wire, expected) in [
-        ("run-scoped", nixfied_manifest::ServiceLifetime::RunScoped),
-        ("until-idle", nixfied_manifest::ServiceLifetime::UntilIdle),
-        (
-            "persistent-until-down",
-            nixfied_manifest::ServiceLifetime::PersistentUntilDown,
-        ),
-    ] {
-        let mut value = valid_manifest_json();
-        value["tasks"]["smoke"]["serviceLifetime"] = json!(wire);
-        let manifest: Manifest =
-            serde_json::from_value(value).expect("service lifetime should parse");
-        assert_eq!(manifest.tasks["smoke"].service_lifetime, expected);
-    }
 }
 
 #[test]
@@ -508,29 +415,6 @@ fn probe_rejects_unknown_fields() {
     let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["httpPath"] = json!("/health");
     serde_json::from_value::<Manifest>(value).expect_err("an unknown probe field must not parse");
-}
-
-#[test]
-fn exec_probe_round_trips() {
-    let mut value = valid_manifest_json();
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec",
-        "invocation": helper_invocation(json!(["synthetic-helper", "ping", "-p", "${port}"])),
-        "timeoutMs": 2000, "retryIntervalMs": 200, "maxAttempts": 30
-    });
-    let manifest: Manifest = serde_json::from_value(value).expect("an exec probe should parse");
-    let probe = &manifest.services["synthetic"].lifecycle.ready.probe;
-    assert_eq!(probe.kind, nixfied_manifest::ProbeKind::Exec);
-    let emitted = serde_json::to_value(&manifest).expect("manifest should serialize");
-    assert_eq!(
-        emitted["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["run"][0],
-        json!("synthetic-helper")
-    );
-    // A tcp probe round-trips without invocation noise (serde skip rules the
-    // Nix emitter mirrors).
-    let health = &emitted["services"]["synthetic"]["lifecycle"]["health"]["probe"];
-    assert_eq!(health["kind"], json!("tcp"));
-    assert!(health.get("invocation").is_none());
 }
 
 #[test]
