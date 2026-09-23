@@ -42,7 +42,13 @@ removed state owners, coordinated change sites, and capture correctness addition
    The first CI attempt rejected the missing native inventory coverage entry;
    that entry is now included. Re-poll the current handle before deciding its
    outcome. macOS remains unverified.
-2. Impossible outcomes/dead ceremony: pending.
+2. Impossible outcomes/dead ceremony: endpoint refinement now returns errors
+   directly, deleting the fabricated success fallback. Cleanup terminal writes
+   accept only `Deleted` or `Failed { safe_reason }`, and prior cleanup evidence
+   stores a parsed status. All 24 state tests, 11 endpoint tests, six readiness
+   tests, and workspace/all-target Clippy pass on Linux. Remaining: explicit
+   lock-directory injection, applicable wrapper/ceremony subtractions, and the
+   conditional listener representation review.
 3. Placement characterization: pending.
 4. Atomic registry initialization: pending.
 5. Finalization error/cancellation ownership: pending.

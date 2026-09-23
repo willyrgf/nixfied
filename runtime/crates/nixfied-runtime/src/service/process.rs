@@ -184,12 +184,16 @@ impl StartedService {
         for attempt in 0..attempts {
             cancellation.check()?;
             if let Err(error) = self.ensure_start_process_live() {
-                return self.override_after_primary_exit_with_endpoint_evidence(registry, error);
+                return Err(
+                    self.override_after_primary_exit_with_endpoint_evidence(registry, error)
+                );
             }
             let probe_attempt = self.probe_attempt(probe, cancellation)?;
             cancellation.check()?;
             if let Err(error) = self.ensure_start_process_live() {
-                return self.override_after_primary_exit_with_endpoint_evidence(registry, error);
+                return Err(
+                    self.override_after_primary_exit_with_endpoint_evidence(registry, error)
+                );
             }
             let observation = self.observe_endpoint_ownership();
             match observation {
@@ -251,7 +255,7 @@ impl StartedService {
                 "readiness probe {label} did not reach probe-plus-ownership readiness: {last_pending}"
             ),
         );
-        self.override_with_endpoint_evidence(registry, timeout)
+        Err(self.override_with_endpoint_evidence(registry, timeout))
     }
 
     fn probe_attempt(
@@ -327,7 +331,7 @@ impl StartedService {
         &self,
         registry: &Registry,
         fallback: RuntimeError,
-    ) -> RuntimeResult<()> {
+    ) -> RuntimeError {
         self.override_with_observation(registry, fallback, self.observe_endpoint_ownership())
     }
 
@@ -335,7 +339,7 @@ impl StartedService {
         &self,
         registry: &Registry,
         fallback: RuntimeError,
-    ) -> RuntimeResult<()> {
+    ) -> RuntimeError {
         let tracked_processes = self
             .monitor
             .as_ref()
@@ -362,24 +366,27 @@ impl StartedService {
         registry: &Registry,
         fallback: RuntimeError,
         observation: OwnershipObservation<'_>,
-    ) -> RuntimeResult<()> {
+    ) -> RuntimeError {
         match observation {
             OwnershipObservation::Outside {
                 endpoint,
                 listeners,
-            } => Err(port_conflict_error(
-                PortConflictReason::ListenerOccupied,
-                self.computed_project_id(registry),
-                endpoint,
-                proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?.as_ref(),
-            )),
+            } => match proven_nixfied_owner(registry, endpoint, &listeners, &self.service) {
+                Ok(owner) => port_conflict_error(
+                    PortConflictReason::ListenerOccupied,
+                    self.computed_project_id(registry),
+                    endpoint,
+                    owner.as_ref(),
+                ),
+                Err(error) => error,
+            },
             OwnershipObservation::Unverifiable { endpoint, message } => {
-                Err(port_unverifiable_error(endpoint, message))
+                port_unverifiable_error(endpoint, message)
             }
             OwnershipObservation::ContainmentUnconfirmed { message } => {
-                Err(RuntimeError::new(ErrorCode::ProcEscape, message))
+                RuntimeError::new(ErrorCode::ProcEscape, message)
             }
-            OwnershipObservation::Complete(_) | OwnershipObservation::Missing(_) => Err(fallback),
+            OwnershipObservation::Complete(_) | OwnershipObservation::Missing(_) => fallback,
         }
     }
 
@@ -1068,28 +1075,28 @@ fn endpoint_failure_error(
     registry: &Registry,
     service: &ExecService,
     failure: EndpointFailure,
-) -> RuntimeResult<RuntimeError> {
+) -> RuntimeError {
     match failure {
-        EndpointFailure::LockContended { endpoint } => Ok(port_conflict_error(
+        EndpointFailure::LockContended { endpoint } => port_conflict_error(
             PortConflictReason::StartupLockContended,
             &registry.identity().project_id,
             &endpoint,
             None,
-        )),
+        ),
         EndpointFailure::ListenerOccupied {
             endpoint,
             listeners,
-        } => {
-            let owner = proven_nixfied_owner(registry, &endpoint, &listeners, service)?;
-            Ok(port_conflict_error(
+        } => match proven_nixfied_owner(registry, &endpoint, &listeners, service) {
+            Ok(owner) => port_conflict_error(
                 PortConflictReason::ListenerOccupied,
                 &registry.identity().project_id,
                 &endpoint,
                 owner.as_ref(),
-            ))
-        }
+            ),
+            Err(error) => error,
+        },
         EndpointFailure::Unverifiable { endpoint, message } => {
-            Ok(port_unverifiable_error(endpoint.as_ref(), message))
+            port_unverifiable_error(endpoint.as_ref(), message)
         }
     }
 }
@@ -1325,7 +1332,7 @@ fn start_service_for_slot_inner(
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(own_endpoints.values()) {
         Ok(guards) => guards,
-        Err(failure) => return Err(endpoint_failure_error(registry, service, failure)?),
+        Err(failure) => return Err(endpoint_failure_error(registry, service, failure)),
     };
     cancellation.check()?;
     reconcile_registry(registry)?;
@@ -1335,7 +1342,7 @@ fn start_service_for_slot_inner(
     }
     refuse_nonreusable_local_service(registry, &service_record, service, &own_endpoints)?;
     if let Err(failure) = preflight(own_endpoints.values()) {
-        return Err(endpoint_failure_error(registry, service, failure)?);
+        return Err(endpoint_failure_error(registry, service, failure));
     }
     // Reserve the service instance's active lease and every endpoint port under
     // the start conflict gates before running any state-mutating lifecycle work.
@@ -1576,14 +1583,7 @@ fn start_service_for_slot_inner(
         log_relays,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
-        let error =
-            match started.override_after_primary_exit_with_endpoint_evidence(registry, error) {
-                Ok(()) => RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    "endpoint failure classification unexpectedly returned success",
-                ),
-                Err(error) => error,
-            };
+        let error = started.override_after_primary_exit_with_endpoint_evidence(registry, error);
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
