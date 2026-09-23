@@ -1,3 +1,4 @@
+use crate::registry::sqlite::RegistryContext;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -7,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::admission::RunAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::registry::events::{BorrowedEvent, insert_event};
+use crate::registry::events::{EventInsert, append_event, insert_event};
 use crate::registry::leases::lease_ttl_modifier;
 use crate::registry::status::{
     self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
@@ -41,8 +42,6 @@ pub(crate) struct ProcessRecord<'a> {
     pub(crate) pgid: i32,
     pub(crate) start_identity: &'a str,
     pub(crate) command_json: &'a str,
-    pub(crate) run_id: &'a str,
-    pub(crate) service_instance_id: &'a str,
 }
 
 pub(crate) struct VerifiedEndpointActivation<'a> {
@@ -143,22 +142,24 @@ pub(crate) fn reserve_service_start(
     service_instance_id: &str,
     endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
     // The run heartbeat writes through a second connection once the first
     // service is ready. Acquire the writer slot before the conflict reads: a
     // deferred read transaction cannot safely upgrade after another writer has
     // changed the WAL snapshot, and SQLite may return BUSY without invoking the
     // configured busy handler.
-    let transaction = registry
-        .connection_mut()
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
+    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
     ensure_service_start_allowed_transaction(&transaction, service_instance_id, run_id)?;
     insert_active_lease(
         &transaction,
-        &identity,
+        identity,
         run_id,
         service_instance_id,
         owner_token,
@@ -192,9 +193,9 @@ pub(crate) fn reserve_service_start(
     }
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.reserved",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -258,9 +259,12 @@ pub fn record_run_created(
     placement: &HostPlacement,
 ) -> RuntimeResult<()> {
     let source_json = serde_json::to_string(&admission.source()).map_err(json_error)?;
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
@@ -288,9 +292,9 @@ pub fn record_run_created(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "run.created",
             run_id: Some(run_id),
             service_instance_id: None,
@@ -369,9 +373,12 @@ pub(crate) fn settle_service_reservation(
             "service.reservation-failed",
         ),
     };
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             &format!(
@@ -396,9 +403,9 @@ pub(crate) fn settle_service_reservation(
     release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -420,24 +427,20 @@ pub(crate) fn record_service_start(
     process: &ProcessRecord<'_>,
     endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
-    if process.run_id != run_id || process.service_instance_id != service.service_instance_id {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            "service process does not match its run and service transition context",
-        ));
-    }
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
     let process_command_json = redactor.redact_json_str(process.command_json)?;
-    let transaction = registry
-        .connection_mut()
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
+    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
     ensure_service_start_allowed_transaction(&transaction, service.service_instance_id, run_id)?;
     require_active_reservation(
         &transaction,
-        &identity,
+        identity,
         run_id,
         owner_token,
         service.service_instance_id,
@@ -495,8 +498,8 @@ pub(crate) fn record_service_start(
                 process.pgid,
                 process.start_identity,
                 process_command_json,
-                process.run_id,
-                process.service_instance_id,
+                run_id,
+                service.service_instance_id,
                 ProcessStatus::Running.as_str(),
             ],
         )
@@ -526,9 +529,9 @@ pub(crate) fn record_service_start(
     }
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "run.admitted",
             run_id: Some(run_id),
             service_instance_id: None,
@@ -539,9 +542,9 @@ pub(crate) fn record_service_start(
     )?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.starting",
             run_id: Some(run_id),
             service_instance_id: Some(service.service_instance_id),
@@ -561,20 +564,22 @@ pub(crate) fn record_service_borrow(
     computed_manifest_hash: &str,
     guard: &ServiceReuseGuard<'_>,
 ) -> RuntimeResult<bool> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, &identity, run_id, computed_manifest_hash)?;
+    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
     let snapshot = read_service_snapshot_conn(&transaction, guard.service.service_instance_id)?;
     if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
     }
     insert_active_lease(
         &transaction,
-        &identity,
+        identity,
         run_id,
         guard.service.service_instance_id,
         owner_token,
@@ -585,9 +590,9 @@ pub(crate) fn record_service_borrow(
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.borrowed",
             run_id: Some(run_id),
             service_instance_id: Some(guard.service.service_instance_id),
@@ -618,9 +623,12 @@ pub(crate) fn release_service_borrow(
     } else {
         "service.borrow-released"
     };
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             &format!(
@@ -659,9 +667,9 @@ pub(crate) fn release_service_borrow(
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -682,9 +690,12 @@ pub(crate) fn mark_service_standing(
     computed_manifest_hash: &str,
     service_lifetime: ServiceLifetime,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     let lease_status = match service_lifetime {
         ServiceLifetime::RunScoped => RunLeaseStatus::Completed,
         ServiceLifetime::UntilIdle => RunLeaseStatus::Completed,
@@ -737,9 +748,9 @@ pub(crate) fn mark_service_standing(
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.standing",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -762,10 +773,12 @@ pub(crate) fn activate_service_ready(
     lifecycle: (&str, &str, &str),
 ) -> RuntimeResult<()> {
     let (operation_id, operation_class, terminal_success) = lifecycle;
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let mut statement = transaction
@@ -857,9 +870,9 @@ pub(crate) fn activate_service_ready(
         }
         insert_event(
             &transaction,
-            &identity,
-            &redactor,
-            BorrowedEvent {
+            identity,
+            redactor,
+            EventInsert {
                 event_type: "port.owner-verified",
                 run_id: Some(run_id),
                 service_instance_id: Some(service_instance_id),
@@ -892,9 +905,9 @@ pub(crate) fn activate_service_ready(
     }
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.probe-ready",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -913,9 +926,9 @@ pub(crate) fn activate_service_ready(
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.lifecycle.terminal",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -959,10 +972,12 @@ fn settle_service_terminal(
     computed_manifest_hash: &str,
     terminal: ServiceTerminal<'_>,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let (process_status, run_status, lease_status, event_type, payload_json, guarded_run) =
@@ -1063,9 +1078,9 @@ fn settle_service_terminal(
     release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -1106,9 +1121,12 @@ fn record_canceling(
     event_type: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE runs SET status = ?2 WHERE run_id = ?1",
@@ -1134,9 +1152,9 @@ fn record_canceling(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: Some(run_id),
             service_instance_id,
@@ -1176,14 +1194,16 @@ pub(crate) fn record_service_lifecycle_event(
     computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    append_event(
+        connection,
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id,
             service_instance_id: Some(service_instance_id),
@@ -1192,7 +1212,6 @@ pub(crate) fn record_service_lifecycle_event(
             payload_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
     Ok(())
 }
 
@@ -1234,21 +1253,25 @@ pub(crate) fn mark_service_failed(
 
 pub(crate) fn mark_process_escape(
     registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
     process: &ProcessRecord<'_>,
     computed_manifest_hash: &str,
     platform_start: Option<&str>,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let service_rows: i64 = transaction
         .query_row(
             "SELECT count(*) FROM services WHERE service_instance_id = ?1",
-            params![process.service_instance_id],
+            params![service_instance_id],
             |row| row.get(0),
         )
         .map_err(sql_error)?;
@@ -1257,7 +1280,7 @@ pub(crate) fn mark_process_escape(
             ErrorCode::RegistryCorrupt,
             format!(
                 "escape settlement found {service_rows} service rows for {}, expected 1",
-                process.service_instance_id
+                service_instance_id
             ),
         ));
     }
@@ -1284,8 +1307,8 @@ pub(crate) fn mark_process_escape(
             ),
             params![
                 process.process_key,
-                process.run_id,
-                process.service_instance_id,
+                run_id,
+                service_instance_id,
                 process.pid,
                 process.pgid,
                 platform_start,
@@ -1326,7 +1349,7 @@ pub(crate) fn mark_process_escape(
                 status::sql_in_list(&run_pre_states)
             ),
             params![
-                process.run_id,
+                run_id,
                 computed_manifest_hash,
                 RunStatus::ProcEscaped.as_str()
             ],
@@ -1337,18 +1360,18 @@ pub(crate) fn mark_process_escape(
             ErrorCode::RegistryCorrupt,
             format!(
                 "escape settlement changed {changed_run} run rows for {}, expected 1",
-                process.run_id
+                run_id
             ),
         ));
     }
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.proc-escape",
-            run_id: Some(process.run_id),
-            service_instance_id: Some(process.service_instance_id),
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
             process_key: Some(process.process_key),
             computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
@@ -1368,10 +1391,12 @@ pub(crate) fn release_unresolved_escape_ports(
     service_instance_id: &str,
     computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let unresolved: i64 = transaction
@@ -1443,9 +1468,9 @@ pub(crate) fn release_unresolved_escape_ports(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "service.escape-reconciled",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -1484,10 +1509,13 @@ pub(crate) fn record_task_started(
     registry: &mut Registry,
     process: &TaskProcessRecord<'_>,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
     let command_json = redactor.redact_json_str(process.command_json)?;
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
@@ -1511,9 +1539,9 @@ pub(crate) fn record_task_started(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "task.running",
             run_id: Some(process.run_id),
             service_instance_id: None,
@@ -1560,9 +1588,12 @@ pub(crate) fn mark_task_finished(
             Some(RunLeaseStatus::Canceled),
         ),
     };
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
@@ -1592,9 +1623,9 @@ pub(crate) fn mark_task_finished(
     }
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: Some(run_id),
             service_instance_id: None,
@@ -2283,8 +2314,6 @@ mod tests {
             pgid: 123,
             start_identity: START_IDENTITY,
             command_json: "{}",
-            run_id: RUN_ID,
-            service_instance_id: SERVICE_ID,
         }
     }
 
@@ -2415,6 +2444,47 @@ mod tests {
                 .unwrap();
             assert_eq!(mutations, 0);
         }
+    }
+
+    #[test]
+    fn event_failure_rolls_back_service_process_ports_and_prior_event() {
+        let mut fixture = TestRegistry::new();
+        insert_run(&fixture.registry, RUN_ID);
+        reserve(&mut fixture.registry, RUN_ID, OWNER_TOKEN, true);
+        fixture
+            .registry
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER deny_start_event BEFORE INSERT ON events
+             WHEN NEW.event_type = 'service.starting'
+             BEGIN SELECT RAISE(ABORT, 'test event rejection'); END;",
+            )
+            .unwrap();
+        let identity = identity();
+        let error = record_service_start(
+            &mut fixture.registry,
+            RUN_ID,
+            OWNER_TOKEN,
+            MANIFEST_HASH,
+            &service_record(&identity),
+            &process_record(123),
+            &[endpoint()],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        let state: (i64, i64, i64, i64) = fixture.registry.connection().query_row(
+            "SELECT (SELECT count(*) FROM services), (SELECT count(*) FROM processes),
+                    (SELECT count(*) FROM ports WHERE status = 'reserved' AND owner_process_key IS NULL),
+                    (SELECT count(*) FROM events)", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        ).unwrap();
+        assert_eq!(state, (0, 0, 1, 1));
+        let event: String = fixture
+            .registry
+            .connection()
+            .query_row("SELECT event_type FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(event, "service.reserved");
     }
 
     #[test]
@@ -2581,6 +2651,8 @@ mod tests {
             });
             let error = mark_process_escape(
                 &mut fixture.registry,
+                RUN_ID,
+                SERVICE_ID,
                 &process,
                 MANIFEST_HASH,
                 None,

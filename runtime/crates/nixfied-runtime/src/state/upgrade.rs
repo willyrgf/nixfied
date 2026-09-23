@@ -115,8 +115,8 @@ fn record_upgrade_event(
         "cleaned": cleaned,
     })
     .to_string();
-    let mut event = EventInsert::new("state.upgraded", payload);
-    event.computed_manifest_hash = Some(identity.computed_manifest_hash.clone());
-    registry.append_event(&event)?;
+    let mut event = EventInsert::new("state.upgraded", &payload);
+    event.computed_manifest_hash = Some(&identity.computed_manifest_hash);
+    registry.append_event(event)?;
     Ok(())
 }

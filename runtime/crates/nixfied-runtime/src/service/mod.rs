@@ -22,6 +22,30 @@ pub(crate) struct StoredProcessIdentity {
     pub(crate) tracked_processes: Vec<TrackedProcessIdentity>,
 }
 
+impl StoredProcessIdentity {
+    pub(crate) fn encode(
+        pid: u32,
+        pgid: i32,
+        platform_start: Option<&str>,
+        tracked_processes: Option<&[TrackedProcessIdentity]>,
+    ) -> String {
+        let observed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let mut identity = serde_json::json!({
+            "pid": pid,
+            "pgid": pgid,
+            "platformStart": platform_start,
+            "observedAtNanos": observed_at,
+        });
+        if let Some(tracked) = tracked_processes {
+            identity["trackedProcesses"] = serde_json::json!(tracked);
+        }
+        identity.to_string()
+    }
+}
+
 pub use identity::{compute_service_identity, service_address_hash, service_instance_id};
 pub use process::{
     AcquiredService, BorrowedService, PrepareRunner, ReadinessFailure, ReadyService,
@@ -43,3 +67,35 @@ pub(crate) use registry::{
     ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
     mark_task_finished, release_unresolved_escape_ports, service_lifetime_as_str,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_identity_wire_preserves_task_omission_and_service_array() {
+        let tracked = [TrackedProcessIdentity {
+            pid: 11,
+            platform_start: Some("child".into()),
+        }];
+        for (tracking, suffix) in [
+            (None, ""),
+            (Some(&[][..]), ",\"trackedProcesses\":[]"),
+            (
+                Some(tracked.as_slice()),
+                ",\"trackedProcesses\":[{\"pid\":11,\"platformStart\":\"child\"}]",
+            ),
+        ] {
+            let encoded = StoredProcessIdentity::encode(7, 9, Some("native"), tracking);
+            let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+            let timestamp = value["observedAtNanos"].as_u64().unwrap();
+            assert!(timestamp > 0);
+            assert_eq!(
+                encoded,
+                format!(
+                    "{{\"observedAtNanos\":{timestamp},\"pgid\":9,\"pid\":7,\"platformStart\":\"native\"{suffix}}}"
+                )
+            );
+        }
+    }
+}

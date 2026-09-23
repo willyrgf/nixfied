@@ -1,3 +1,4 @@
+use crate::registry::sqlite::RegistryContext;
 use std::path::Path;
 
 use nixfied_manifest::ServiceLifetime;
@@ -5,7 +6,7 @@ use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
-use crate::registry::events::{BorrowedEvent, insert_event};
+use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::status::{
     self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
 };
@@ -292,11 +293,11 @@ fn settle_control_escape(
         pgid: row.pgid,
         start_identity,
         command_json: &row.command_json,
-        run_id: &row.run_id,
-        service_instance_id,
     };
     match mark_process_escape(
         registry,
+        &row.run_id,
+        service_instance_id,
         &process,
         &row.computed_manifest_hash,
         row.start_identity.platform_start.as_deref(),
@@ -402,9 +403,12 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
 }
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
@@ -436,9 +440,9 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "process.stale",
             run_id: Some(&row.run_id),
             service_instance_id: row.service_instance_id.as_deref(),
@@ -659,10 +663,12 @@ impl PortRow {
 }
 
 fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let changed = transaction
@@ -760,9 +766,9 @@ fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Run
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "run.lease-stale",
             run_id: Some(&lease.run_id),
             service_instance_id: Some(&lease.service_instance_id),
@@ -780,9 +786,12 @@ fn mark_port_stale(
     port: &PortRow,
     process: &ProcessRow,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             &format!(
@@ -807,9 +816,9 @@ fn mark_port_stale(
     .to_string();
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "port.stale",
             run_id: Some(&process.run_id),
             service_instance_id: Some(&port.service_instance_id),

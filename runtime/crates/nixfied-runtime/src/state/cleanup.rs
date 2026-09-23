@@ -1,3 +1,4 @@
+use crate::registry::sqlite::RegistryContext;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +7,7 @@ use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
-use crate::registry::events::{BorrowedEvent, insert_event};
+use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
@@ -347,9 +348,12 @@ fn record_cleanup_intent(
             format!("failed to serialize cleanup marker: {error}"),
         )
     })?;
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
@@ -371,9 +375,9 @@ fn record_cleanup_intent(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type: "cleanup.intent",
             run_id: None,
             service_instance_id: None,
@@ -404,9 +408,12 @@ fn record_cleanup_terminal(
             (CleanupStatus::Failed, Some(safe_reason), "cleanup.failed")
         }
     };
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context();
+    let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
@@ -419,9 +426,9 @@ fn record_cleanup_terminal(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        &identity,
-        &redactor,
-        BorrowedEvent {
+        identity,
+        redactor,
+        EventInsert {
             event_type,
             run_id: None,
             service_instance_id: None,

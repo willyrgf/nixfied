@@ -986,11 +986,11 @@ impl OwnedService {
             pgid: self.info.pgid,
             start_identity: &start_identity,
             command_json: "{}",
-            run_id: &self.info.run_id,
-            service_instance_id: &self.info.service_instance_id,
         };
         match mark_process_escape(
             registry,
+            &self.info.run_id,
+            &self.info.service_instance_id,
             &process,
             &self.info.computed_manifest_hash,
             self.info.platform_start_identity.as_deref(),
@@ -1642,7 +1642,8 @@ pub fn start_service_for_slot(
         }
     };
     let platform_start = platform_start_identity(pid);
-    let start_identity = process_start_identity(pid, pgid, platform_start.as_deref(), &[]);
+    let start_identity =
+        super::StoredProcessIdentity::encode(pid, pgid, platform_start.as_deref(), Some(&[]));
     let process_key = format!("process-{run_id}-{pid}-{pgid}");
     let started_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
@@ -1662,8 +1663,6 @@ pub fn start_service_for_slot(
             pgid,
             start_identity: &start_identity,
             command_json: &command_json,
-            run_id: &run_id,
-            service_instance_id: &service_instance_id,
         },
         &reservations,
     ) {
@@ -3147,7 +3146,7 @@ pub(crate) fn process_escape_start_identity(
     existing: &[TrackedProcessIdentity],
 ) -> String {
     let tracked = tracked_process_snapshot(pid, existing);
-    process_start_identity(pid, pgid, platform_start, &tracked)
+    super::StoredProcessIdentity::encode(pid, pgid, platform_start, Some(&tracked))
 }
 
 fn escaped_descendants(pid: u32, expected_pgid: i32) -> RuntimeResult<Vec<u32>> {
@@ -3228,26 +3227,6 @@ fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
         }
     }
     Ok(children)
-}
-
-fn process_start_identity(
-    pid: u32,
-    pgid: i32,
-    platform_start: Option<&str>,
-    tracked_processes: &[TrackedProcessIdentity],
-) -> String {
-    let observed_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    serde_json::json!({
-        "pid": pid,
-        "pgid": pgid,
-        "platformStart": platform_start,
-        "trackedProcesses": tracked_processes,
-        "observedAtNanos": observed_at,
-    })
-    .to_string()
 }
 
 #[cfg(target_os = "linux")]
