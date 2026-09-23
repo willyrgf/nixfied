@@ -57,26 +57,6 @@ pub struct ProjectionIssue {
 }
 
 impl ProjectionIssue {
-    pub fn stream(&self) -> OutputStream {
-        self.stream
-    }
-
-    pub fn operation(&self) -> ProjectionOperation {
-        self.operation
-    }
-
-    pub fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn bytes_written(&self) -> u64 {
-        self.bytes_written
-    }
-
     fn io(
         stream: OutputStream,
         operation: ProjectionOperation,
@@ -237,10 +217,6 @@ impl ReplayReport {
 
     pub fn issues(&self) -> &[ProjectionIssue] {
         &self.issues
-    }
-
-    pub fn into_issues(self) -> Vec<ProjectionIssue> {
-        self.issues
     }
 
     pub fn into_error(self) -> Option<crate::error::RuntimeError> {

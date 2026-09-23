@@ -85,10 +85,6 @@ impl Registry {
         self.redactor = redactor;
     }
 
-    pub fn redactor(&self) -> &Redactor {
-        &self.redactor
-    }
-
     pub fn append_event(&mut self, event: EventInsert<'_>) -> RuntimeResult<i64> {
         append_event(&mut self.conn, &self.identity, &self.redactor, event)
     }

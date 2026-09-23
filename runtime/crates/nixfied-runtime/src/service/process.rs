@@ -219,9 +219,6 @@ impl AcquiredService {
     pub fn is_borrowed(&self) -> bool {
         matches!(self, Self::Borrowed(_))
     }
-    pub fn service_name(&self) -> &str {
-        self.info().service_name()
-    }
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
@@ -253,18 +250,6 @@ impl AcquiredService {
             }
         }
     }
-    /// Abort acquisition before readiness without promoting it to a usable dependency.
-    pub fn cancel(
-        self,
-        registry: &mut Registry,
-        timeout_ms: u64,
-        reason: &str,
-    ) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => service.release(registry, true),
-            Self::Owned(service) => service.cancel(registry, timeout_ms, reason),
-        }
-    }
 }
 
 impl StartedService {
@@ -273,9 +258,6 @@ impl StartedService {
             Self::Borrowed(service) => service.info(),
             Self::Owned(service) => service.info(),
         }
-    }
-    pub fn is_borrowed(&self) -> bool {
-        matches!(self, Self::Borrowed(_))
     }
     pub fn service_name(&self) -> &str {
         self.info().service_name()

@@ -80,13 +80,6 @@ impl TaskExecutionError {
             Self::BeforeTerminal(error) | Self::AfterTerminal { error, .. } => error,
         }
     }
-
-    pub fn into_error_and_evidence(self) -> (RuntimeError, Option<CompletedEvidence>) {
-        match self {
-            Self::BeforeTerminal(error) => (*error, None),
-            Self::AfterTerminal { error, evidence } => (*error, Some(*evidence)),
-        }
-    }
 }
 
 /// The run-level context a task executes in, independent of any service: the run
