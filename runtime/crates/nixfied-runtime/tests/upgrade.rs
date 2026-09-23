@@ -205,9 +205,13 @@ fn epoch_change_on_protected_state_refuses_upgrade_clean() {
 #[test]
 fn live_old_manifest_service_is_torn_down_on_upgrade() {
     let tmp = TempDir::new();
-    let manifest: Manifest =
-        serde_json::from_value(synthetic_manifest("/bin/sleep", &["30"], 23980, 23990))
-            .expect("manifest should parse");
+    let manifest: Manifest = serde_json::from_value(synthetic_manifest(
+        &common::test_sleep(),
+        &["30"],
+        23980,
+        23990,
+    ))
+    .expect("manifest should parse");
     let admission_a = admission(&manifest, &tmp.path, "hash-a");
     let placement = derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
     materialize_run_roots(&placement).expect("roots should materialize");
@@ -459,5 +463,5 @@ fn admission(manifest: &Manifest, source_root: &Path, hash: &str) -> Admission {
 }
 
 fn fixture_manifest() -> Value {
-    common::synthetic_manifest_default(23880, 23890)
+    common::test_child_manifest(23880, 23890)
 }

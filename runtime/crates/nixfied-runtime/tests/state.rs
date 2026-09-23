@@ -1020,5 +1020,5 @@ fn manifest() -> Manifest {
 }
 
 fn fixture_manifest() -> Value {
-    common::synthetic_manifest_default(23080, 23090)
+    common::test_child_manifest(23080, 23090)
 }

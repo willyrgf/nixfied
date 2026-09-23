@@ -117,6 +117,11 @@ removed state owners, coordinated change sites, and capture correctness addition
    store root to `/` or add unchecked constructors to preserve those fixtures.
    Configure real declared executables before admission. Upgrade hash fixtures
    should use distinct valid raw JSON bytes and independently computed hashes.
+   Lifecycle fixtures now declare Nix-built sleep and shell programs supplied by
+   the dev shell and test wrapper; state/upgrade fixtures declare the realised
+   test child. Declared basenames are retained for multicall dispatch, and the
+   ready-file probe uses the shell builtin rather than an undeclared external
+   `test`. All 71 service, 26 state, 10 upgrade tests and Clippy pass on Linux.
    Remaining in this step: private run/control admissions owning the loaded
    document; removal of fabricated admission fixtures; one origin entry point and
    one store-root observation per admission.

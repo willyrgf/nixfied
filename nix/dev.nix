@@ -29,6 +29,8 @@ let
     ];
     text = ''
       NIXFIED_TEST_CHILD="${testChild}/bin/nixfied-test-child" \
+      NIXFIED_TEST_SLEEP="${pkgs.coreutils}/bin/sleep" \
+      NIXFIED_TEST_SHELL="${pkgs.bash}/bin/sh" \
       NIXFIED_TEST_POSTGRES_MANIFEST="${postgresTestManifest}" \
         cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';

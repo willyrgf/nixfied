@@ -34,7 +34,7 @@ use common::*;
 
 #[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23180);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -154,7 +154,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
 
 #[test]
 fn service_start_rejects_exec_cwd_escape() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23180);
     fixture
         .manifest
         .services
@@ -621,7 +621,7 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
 #[test]
 fn slot_one_service_uses_slot_placement_port_window() {
     let tmp = TempDir::new();
-    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let admission = synthetic_admission(&manifest, &tmp.path);
@@ -754,7 +754,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
 
 #[test]
 fn service_instance_identity_includes_selected_slot() {
-    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
     add_slot_one(&mut value, 23280, 23280);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let service = manifest
@@ -864,7 +864,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 
 #[test]
 fn dependent_task_refuses_to_run_before_service_ready() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23186);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23186);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -909,7 +909,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let mut service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -950,7 +950,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     assert_eq!(failure_events, 1);
 }
 
-/// The fixture manifest with an exec-based ready probe: a /bin/sh exec whose
+/// The fixture manifest with an exec-based ready probe: a Nix-built shell whose
 /// args are supplied per test. The probe's operation is bound on the closure,
 /// as admission requires.
 fn exec_probe_fixture_value(
@@ -971,11 +971,13 @@ fn exec_probe_fixture_value(
     value
 }
 
-/// A `/bin/sh` tool closure for invocation probes, bound to the given op.
+/// A realised shell closure for invocation probes, bound to the given op.
 fn add_probe_shell_closure(value: &mut Value, operation: &str) {
     let target = value["target"]["closureSystem"].clone();
+    let shell = test_shell();
+    let store_path = closure_root_for_store_executable(Path::new(&shell)).unwrap();
     value["closures"]["probe-shell"] = json!({
-        "kind": "executable", "storePath": "/bin", "executable": "/bin/sh",
+        "kind": "executable", "storePath": store_path, "executable": shell,
         "targetSystem": target,
         "operationBindings": [operation],
         "requiresExecutable": true, "effects": ["process"]
@@ -986,7 +988,7 @@ fn probe_shell_invocation(run: Value) -> Value {
     json!({
         "tools": ["probe-shell"],
         "run": run,
-        "executable": "/bin/sh",
+        "executable": test_shell(),
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
@@ -1017,12 +1019,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
             "${stateDir}/ready-flag",
         ],
         port,
-        json!([
-            "-c",
-            "exec test -e \"$1\"",
-            "probe",
-            "${stateDir}/ready-flag"
-        ]),
+        json!(["-c", "test -e \"$1\"", "probe", "${stateDir}/ready-flag"]),
         60,
     );
     let mut fixture = ServiceFixture::from_value(value);
@@ -1091,7 +1088,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let value = exec_probe_fixture_value("/bin/sleep", &["30"], port, json!(["-c", "exit 7"]), 3);
+    let value = exec_probe_fixture_value(&test_sleep(), &["30"], port, json!(["-c", "exit 7"]), 3);
     let mut fixture = ServiceFixture::from_value(value);
     let mut service = start_synthetic_service(
         &fixture.manifest,
@@ -2150,7 +2147,7 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
 
 #[test]
 fn duplicate_active_service_start_is_refused() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23184);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23184);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2658,7 +2655,7 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
 
 #[test]
 fn ps_reconciles_dead_owned_process_and_port_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 23187);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["1"], 23187);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2713,7 +2710,7 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
 
 #[test]
 fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23233);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23233);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2850,7 +2847,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
 
 #[test]
 fn ps_marks_expired_dead_run_lease_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23228);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23228);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -2947,7 +2944,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
 
 #[test]
 fn active_run_lease_refuses_new_service_start_after_terminal_process() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23229);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23229);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -3005,7 +3002,7 @@ fn active_run_lease_refuses_new_service_start_after_terminal_process() {
 
 #[test]
 fn down_stops_verified_owned_process_group_only() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23188);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23188);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -3047,7 +3044,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -3376,7 +3373,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
 
 #[test]
 fn down_completes_canceling_lease_and_unblocks_cleanup() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23231);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23231);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -3471,7 +3468,7 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
         ("running", "missing-run"),
     ] {
         let port = available_port_window(1);
-        let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+        let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
         let service = start_synthetic_service(
             &fixture.manifest,
             &fixture.admission,
@@ -3540,7 +3537,7 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
 
 #[test]
 fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23232);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23232);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -3550,7 +3547,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         23232,
     )
     .expect("foreground service should start");
-    let mut command = Command::new("/bin/sleep");
+    let mut command = Command::new(test_sleep());
     command
         .arg("30")
         .stdin(Stdio::null())
@@ -3573,7 +3570,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     })
     .to_string();
     let task_command_json = json!({
-        "executable": "/bin/sleep",
+        "executable": &test_sleep(),
         "args": ["30"],
         "cwd": fixture.admission.require_source().unwrap().observed_root.to_string_lossy(),
         "stdoutPath": fixture.placement.logs_dir.join("task.smoke.stdout.log").to_string_lossy(),
@@ -4013,7 +4010,7 @@ fn files_under(root: &Path) -> Vec<PathBuf> {
 fn endpoint_less_identity_is_deterministic_and_distinct() {
     // SVC-ID-1 over the empty endpoint set: hashing is deterministic, and an
     // endpoint-less contract has a different identity than a listening one.
-    let value = fixture_manifest("/bin/sleep", &["30"], 23180);
+    let value = fixture_manifest(&test_sleep(), &["30"], 23180);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let listening = manifest.services.get("synthetic").expect("service");
     let mut endpoint_less = listening.clone();
@@ -4045,7 +4042,7 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
 }
 
 fn endpoint_less_fixture() -> ServiceFixture {
-    let mut value = fixture_manifest("/bin/sleep", &["30"], 23180);
+    let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
     // Endpoint-less: no listener attestation either (effects coherence).
     value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
     value["services"]["synthetic"]["endpoints"] = json!(null);
@@ -4297,7 +4294,7 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = &fixture.admission.execution_manifest.services()["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
@@ -4425,7 +4422,7 @@ fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
 #[test]
 fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
     let port = available_port_window(1);
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = start_synthetic_service(
         &fixture.manifest,
         &fixture.admission,
@@ -4500,7 +4497,7 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
 #[test]
 fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
     let port = available_port_window(1);
-    let mut fixture = service_fixture_with_prepare("/bin/sleep", &["30"], port);
+    let mut fixture = service_fixture_with_prepare(&test_sleep(), &["30"], port);
     let cancellation = CancellationToken::new();
     let prepare_cancellation = cancellation.clone();
     let result = start_prepared_service(
@@ -4532,7 +4529,7 @@ fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
 #[test]
 fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
     let port = available_port_window(1);
-    let mut fixture = service_fixture_with_prepare("/bin/sleep", &["30"], port);
+    let mut fixture = service_fixture_with_prepare(&test_sleep(), &["30"], port);
     let cancellation = CancellationToken::new();
     let result = start_prepared_service(
         &mut fixture,
@@ -4565,7 +4562,7 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
 #[test]
 fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     let executable_dir = TempDir::new();
-    let executable = executable_dir.path.join("fixture-sleep");
+    let executable = executable_dir.path.join("sleep");
     restore_executable_fixture(&executable);
     let port = available_port_window(1);
     let mut fixture = service_fixture_with_prepare(
@@ -5820,7 +5817,7 @@ fn assert_pre_child_settlement(
 }
 
 fn restore_executable_fixture(path: &Path) {
-    fs::copy("/bin/sleep", path).expect("spawn fixture should copy");
+    fs::copy(test_sleep(), path).expect("spawn fixture should copy");
     let mut permissions = fs::metadata(path)
         .expect("spawn fixture metadata should read")
         .permissions();
