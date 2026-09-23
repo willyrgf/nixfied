@@ -358,6 +358,36 @@ fn flush_writer<W: Write>(
     }
 }
 
+/// Runtime summary/footer writes retain their narrower diagnostic kind mapping;
+/// replay separately reports read/open/flush failures and partial progress.
+pub fn output_projection_io_error(
+    stream: OutputStream,
+    operation: ProjectionOperation,
+    path: &str,
+    error: io::Error,
+) -> crate::error::RuntimeError {
+    let kind = match error.kind() {
+        io::ErrorKind::BrokenPipe => "broken-pipe",
+        io::ErrorKind::PermissionDenied => "permission-denied",
+        io::ErrorKind::Interrupted => "interrupted",
+        _ => "io",
+    };
+    crate::error::RuntimeError::new(
+        crate::error::ErrorCode::OutputProjectionFailed,
+        "runtime output projection failed",
+    )
+    .with_detail(
+        "projections",
+        vec![ProjectionDiagnostic {
+            stream: &stream,
+            operation: &operation,
+            kind,
+            path,
+            bytes_written: 0,
+        }],
+    )
+}
+
 fn io_kind(error: &io::Error) -> &'static str {
     match error.kind() {
         io::ErrorKind::BrokenPipe => "broken-pipe",
@@ -377,6 +407,38 @@ fn io_kind(error: &io::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_projection_preserves_safe_kind_policy() {
+        for (kind, summary_kind, replay_kind) in [
+            (io::ErrorKind::BrokenPipe, "broken-pipe", "broken-pipe"),
+            (
+                io::ErrorKind::PermissionDenied,
+                "permission-denied",
+                "permission-denied",
+            ),
+            (io::ErrorKind::Interrupted, "interrupted", "io"),
+            (io::ErrorKind::NotFound, "io", "not-found"),
+        ] {
+            let source = io::Error::new(kind, "private OS diagnostic must not escape");
+            assert_eq!(io_kind(&source), replay_kind);
+            let error = output_projection_io_error(
+                OutputStream::Stdout,
+                ProjectionOperation::Write,
+                "summary.json",
+                source,
+            );
+            assert_eq!(error.code, crate::error::ErrorCode::OutputProjectionFailed);
+            assert_eq!(error.message, "runtime output projection failed");
+            assert_eq!(
+                error.details,
+                json!({"projections":[{
+                    "stream":"stdout", "operation":"write", "kind":summary_kind,
+                    "path":"summary.json", "bytesWritten":0
+                }]})
+            );
+        }
+    }
 
     #[test]
     fn replay_diagnostic_keeps_intentional_lossy_path_and_safe_fields() {

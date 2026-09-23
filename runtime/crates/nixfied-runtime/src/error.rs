@@ -13,7 +13,7 @@ impl RuntimeCause {
             code: error.code,
             exit_class: error.exit_class,
             message: cause_message(&error),
-            details: cause_details(error.code, error.details),
+            details: cause_details(error.details),
         }
     }
 }
@@ -57,7 +57,7 @@ fn task_failure_cause_message(details: &Value) -> Option<String> {
     Some(format!("task {task_id} exited with code {exit_code}"))
 }
 
-fn error_code_wire(code: ErrorCode) -> String {
+pub fn error_code_wire(code: ErrorCode) -> String {
     serde_json::to_value(code)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
@@ -69,7 +69,7 @@ fn error_code_wire(code: ErrorCode) -> String {
 /// out; callers still receive the structured diagnostic fields that are safe and
 /// useful for the public projection (including task evidence and projection
 /// outcomes).
-fn cause_details(code: ErrorCode, details: Value) -> Value {
+fn cause_details(details: Value) -> Value {
     const SAFE_KEYS: &[&str] = &[
         "compositeSteps",
         "declaredTasks",
@@ -105,39 +105,6 @@ fn cause_details(code: ErrorCode, details: Value) -> Value {
         if let Some(value) = details.get(*key) {
             safe.insert((*key).to_string(), value.clone());
         }
-    }
-    // A projection error has one additional structured field; all other
-    // details are intentionally omitted from a cause unless they are explicitly
-    // listed above. Keep the match exhaustive at the code boundary so adding a
-    // new error class prompts a conscious public-cause decision.
-    match code {
-        ErrorCode::ManifestNotStoreOutput
-        | ErrorCode::ManifestInvalid
-        | ErrorCode::ManifestAdmission
-        | ErrorCode::RuntimeAbiMismatch
-        | ErrorCode::SourceMismatch
-        | ErrorCode::PlatformUnsupported
-        | ErrorCode::ClosureMissing
-        | ErrorCode::RegistryCorrupt
-        | ErrorCode::StateUnwritable
-        | ErrorCode::StateUnowned
-        | ErrorCode::CleanupRefused
-        | ErrorCode::PortConflict
-        | ErrorCode::PortUnverifiable
-        | ErrorCode::ProcEscape
-        | ErrorCode::ReadinessTimeout
-        | ErrorCode::Canceled
-        | ErrorCode::LeaseStale
-        | ErrorCode::LeaseConflict
-        | ErrorCode::TaskFailed
-        | ErrorCode::LifecycleFailed
-        | ErrorCode::DependencyUnavailable
-        | ErrorCode::SecretUnavailable
-        | ErrorCode::SecretLeakBlocked
-        | ErrorCode::OutputModeInvalid
-        | ErrorCode::OutputModeConflict
-        | ErrorCode::TaskSelectionInvalid
-        | ErrorCode::OutputProjectionFailed => {}
     }
     Value::Object(safe)
 }

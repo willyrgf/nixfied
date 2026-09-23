@@ -107,47 +107,38 @@ impl Redactor {
     }
 
     fn redact_bytes(&self, input: &[u8]) -> Vec<u8> {
-        if self.is_empty() {
-            return input.to_vec();
-        }
-        let mut out = Vec::with_capacity(input.len());
-        let mut index = 0;
-        while index < input.len() {
-            if let Some(pattern) = self
-                .patterns
-                .iter()
-                .find(|pattern| input[index..].starts_with(pattern.as_slice()))
-            {
-                out.extend_from_slice(REDACTION_TOKEN.as_bytes());
-                index += pattern.len();
-            } else {
-                out.push(input[index]);
-                index += 1;
-            }
-        }
-        out
+        self.scan(input, input.len()).0
     }
 
     fn redact_available(&self, pending: &mut Vec<u8>) -> Vec<u8> {
         let keep = self.max_pattern_len().saturating_sub(1);
-        let process_len = pending.len().saturating_sub(keep);
-        let mut out = Vec::with_capacity(process_len);
-        let mut index = 0;
-        while index < process_len {
+        let (out, consumed) = self.scan(pending, pending.len().saturating_sub(keep));
+        pending.drain(..consumed);
+        out
+    }
+
+    // The limit bounds match starts, not match ends. A longest-first match may
+    // consume the undecided tail when it starts in the safe input prefix.
+    fn scan(&self, input: &[u8], start_limit: usize) -> (Vec<u8>, usize) {
+        if self.is_empty() {
+            return (input[..start_limit].to_vec(), start_limit);
+        }
+        let mut out = Vec::with_capacity(start_limit);
+        let mut consumed = 0;
+        while consumed < start_limit {
             if let Some(pattern) = self
                 .patterns
                 .iter()
-                .find(|pattern| pending[index..].starts_with(pattern.as_slice()))
+                .find(|pattern| input[consumed..].starts_with(pattern.as_slice()))
             {
                 out.extend_from_slice(REDACTION_TOKEN.as_bytes());
-                index += pattern.len();
+                consumed += pattern.len();
             } else {
-                out.push(pending[index]);
-                index += 1;
+                out.push(input[consumed]);
+                consumed += 1;
             }
         }
-        pending.drain(..index);
-        out
+        (out, consumed)
     }
 
     fn max_pattern_len(&self) -> usize {
@@ -759,6 +750,34 @@ mod tests {
                 .unwrap(),
             r#"{"nested":["x[REDACTED]x"],"token":"[REDACTED]"}"#
         );
+    }
+
+    #[test]
+    fn longest_matches_preserve_literal_bytes_at_every_chunk_split() {
+        let redactor = Redactor {
+            patterns: vec![b"abcde".to_vec(), b"abc".to_vec()],
+        };
+        let input = b"\xffabcdeabc\0abxabcde";
+        let expected = b"\xff[REDACTED][REDACTED]\0abx[REDACTED]";
+        assert_eq!(redactor.redact_bytes(input), expected);
+        for first in 0..=input.len() {
+            for second in first..=input.len() {
+                let mut pending = Vec::new();
+                let mut actual = Vec::new();
+                for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                    pending.extend_from_slice(chunk);
+                    actual.extend(redactor.redact_available(&mut pending));
+                }
+                actual.extend(redactor.redact_bytes(&pending));
+                assert_eq!(actual, expected, "splits {first}, {second}");
+            }
+        }
+        assert!(redactor.redact_bytes(b"").is_empty());
+        let empty = Redactor::empty();
+        assert_eq!(empty.redact_bytes(input), input);
+        let mut pending = input.to_vec();
+        assert_eq!(empty.redact_available(&mut pending), input);
+        assert!(pending.is_empty());
     }
 
     #[test]
