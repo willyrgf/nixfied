@@ -354,7 +354,20 @@ removed state owners, coordinated change sites, and capture correctness addition
    `/tmp/nixfied-registry-relational-tests.log`). Full fixture-backed floor passed
    (session `71543`, `/tmp/nixfied-registry-owner-floor.log`). Final architect
    review found no correctness gaps; cross-layer CI remains required.
-13. Shared redaction scanner/safe projections: pending.
+13. Shared redaction scanner/safe projections: implemented.
+   Whole-buffer and streaming redaction share one private scanner with an eligible
+   match-start limit and actual consumed count. Longest-first matching, binary
+   bytes, EOF-only tail flushing, and bounded capture shutdown remain unchanged.
+   Literal overlapping-pattern output is checked at every pair of chunk splits,
+   including empty chunks and an empty redactor. Summary/footer diagnostics now
+   use the output owner's narrow constructor; exact safe-field tests retain its
+   distinct interrupted/not-found mapping from replay. Native error spelling has
+   one owner; the all-variants no-op cause match is deleted. Replay's partial-write,
+   per-stream, and native/lossy-path policies remain intact.
+   Clippy, 22 output tests, all 131 runtime unit tests, and the full fixture-backed
+   floor passed (`/tmp/nixfied-redaction-sharing-tests.log`,
+   `/tmp/nixfied-redaction-unit-tests.log`, `/tmp/nixfied-redaction-floor.log`).
+   Architect review found no defects. Final cross-layer CI remains required.
 14. Fixture consolidation and audit proof mapping: pending.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed

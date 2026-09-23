@@ -5,11 +5,11 @@ use std::time::Instant;
 
 use nixfied_manifest::{ServiceLifetime, TaskDefaultOutput};
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
-use nixfied_runtime::error::RuntimeCause;
+use nixfied_runtime::error::{RuntimeCause, error_code_wire};
 use nixfied_runtime::execution::{PlanNode, plan};
 use nixfied_runtime::output::{
-    EvidenceMode, OutputStream, ProjectionDiagnostic, ProjectionOperation, ReplaySinks,
-    ReplayTicket,
+    EvidenceMode, OutputStream, ProjectionOperation, ReplaySinks, ReplayTicket,
+    output_projection_io_error,
 };
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
@@ -350,13 +350,13 @@ fn print_json_error(error: &RuntimeError) -> Result<(), RuntimeError> {
 fn print_human_error(error: &RuntimeError) -> Result<(), RuntimeError> {
     write_stderr_line(format!(
         "error: {}: {}",
-        error_code_wire(error),
+        error_code_wire(error.code),
         error.message
     ))?;
     for cause in error.causes.iter() {
         write_stderr_line(format!(
             "  cause: {}: {}",
-            error_code_wire_value(cause.code),
+            error_code_wire(cause.code),
             cause.message
         ))?;
     }
@@ -935,34 +935,6 @@ fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
             error,
         )
     })
-}
-
-fn output_projection_io_error(
-    stream: OutputStream,
-    operation: ProjectionOperation,
-    path: &str,
-    error: io::Error,
-) -> RuntimeError {
-    let kind = match error.kind() {
-        io::ErrorKind::BrokenPipe => "broken-pipe",
-        io::ErrorKind::PermissionDenied => "permission-denied",
-        io::ErrorKind::Interrupted => "interrupted",
-        _ => "io",
-    };
-    RuntimeError::new(
-        nixfied_runtime::ErrorCode::OutputProjectionFailed,
-        "runtime output projection failed",
-    )
-    .with_detail(
-        "projections",
-        vec![ProjectionDiagnostic {
-            stream: &stream,
-            operation: &operation,
-            kind,
-            path,
-            bytes_written: 0,
-        }],
-    )
 }
 
 #[derive(Clone, Copy)]
@@ -1738,17 +1710,6 @@ fn host_ephemeral_port_range() -> Option<(u32, u32)> {
 
 fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
     print_json_redacted(value, &Redactor::empty())
-}
-
-fn error_code_wire(error: &RuntimeError) -> String {
-    error_code_wire_value(error.code)
-}
-
-fn error_code_wire_value(code: nixfied_runtime::ErrorCode) -> String {
-    serde_json::to_value(code)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{code:?}"))
 }
 
 fn print_json_redacted(value: &impl Serialize, redactor: &Redactor) -> Result<(), RuntimeError> {
