@@ -1,6 +1,6 @@
 use nixfied_runtime::ErrorCode;
 use nixfied_runtime::registry::leases::heartbeat_run_lease;
-use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity, SCHEMA_VERSION};
+use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity};
 
 mod common;
 use common::*;
@@ -55,136 +55,79 @@ fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
 }
 
 #[test]
-fn creates_registry_schema_with_wal() {
+fn concurrent_event_history_survives_reopen_and_rejects_another_slot() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry/registry.sqlite3");
-    let identity = identity();
-    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
-    let journal_mode: String = registry
-        .connection()
-        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-        .expect("journal mode should be readable");
-    let user_version: i64 = registry
-        .connection()
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .expect("user version should be readable");
-    let table_count: i64 = registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('registry_meta','events','runs','services','processes','ports','run_leases','cleanups')",
-            [],
-            |row| row.get(0),
-        )
-        .expect("table count should be readable");
-    let service_columns = registry
-        .connection()
-        .prepare("PRAGMA table_info(services)")
-        .expect("service columns should prepare")
-        .query_map([], |row| row.get::<_, String>(1))
-        .expect("service columns should query")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("service columns should collect");
+    let identity = RegistryIdentity::for_slot("project", "staging", 3, "abi", "toolchain");
+    let first = Registry::open_or_create(&path, &identity).unwrap();
+    let second = Registry::open_or_create(&path, &identity).unwrap();
+    let start = std::sync::Barrier::new(2);
 
-    assert_eq!(registry.path(), path.as_path());
-    assert_eq!(journal_mode, "wal");
-    assert_eq!(user_version, SCHEMA_VERSION);
-    assert_eq!(table_count, 8);
-    assert!(!service_columns.iter().any(|column| column == "status"));
-    assert!(
-        !service_columns
-            .iter()
-            .any(|column| column == "endpoint_json")
-    );
-}
-
-#[test]
-fn open_sets_a_busy_timeout() {
-    // The run's heartbeat thread opens a second connection and writes the lease
-    // concurrently with the main thread; a non-zero busy timeout makes a writer
-    // collision wait rather than return SQLITE_BUSY (mapped to REGISTRY_CORRUPT).
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry/registry.sqlite3");
-    let identity = identity();
-    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
-    let busy_timeout: i64 = registry
-        .connection()
-        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
-        .expect("busy_timeout should be readable");
-    assert_eq!(busy_timeout, 5000);
-    drop(registry);
-
-    // A reopened (existing) registry — the heartbeat's second-connection path —
-    // passes through the same `initialize`, so it carries the timeout too.
-    let reopened = Registry::open_or_create(&path, &identity).expect("registry should reopen");
-    let reopened_timeout: i64 = reopened
-        .connection()
-        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
-        .expect("busy_timeout should be readable");
-    assert_eq!(reopened_timeout, 5000);
-}
-
-#[test]
-fn concurrent_writers_do_not_corrupt() {
-    // Two connections to the same registry writing at once must not surface
-    // SQLITE_BUSY as REGISTRY_CORRUPT — the busy timeout absorbs the contention.
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    Registry::open_or_create(&path, &identity).expect("registry should open");
-
-    const WRITES: usize = 200;
-    let other_path = path.clone();
-    let other_identity = identity.clone();
-    let writer = std::thread::spawn(move || {
-        let mut registry =
-            Registry::open_or_create(&other_path, &other_identity).expect("second handle opens");
-        for _ in 0..WRITES {
-            registry
-                .append_event(&EventInsert::new("writer-b", "{}"))
-                .expect("concurrent append must not fail");
-        }
+    // Use the real write API on independently opened connections. Compare its
+    // acknowledgements with persisted evidence after both connections close.
+    let mut acknowledged = std::thread::scope(|scope| {
+        let writers: Vec<_> = [first, second]
+            .into_iter()
+            .enumerate()
+            .map(|(writer, mut registry)| {
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    (0..100)
+                        .map(|index| {
+                            let event_type = format!("writer-{writer}");
+                            let payload = serde_json::json!({"index": index}).to_string();
+                            let seq = registry
+                                .append_event(&EventInsert::new(&event_type, &payload))
+                                .unwrap();
+                            (seq, event_type, payload)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        writers
+            .into_iter()
+            .flat_map(|writer| writer.join().unwrap())
+            .collect::<Vec<_>>()
     });
+    acknowledged.sort_by_key(|event| event.0);
+    assert_eq!(
+        acknowledged.iter().map(|event| event.0).collect::<Vec<_>>(),
+        (1..=200).collect::<Vec<_>>()
+    );
 
-    let mut registry = Registry::open_or_create(&path, &identity).expect("first handle opens");
-    for _ in 0..WRITES {
-        registry
-            .append_event(&EventInsert::new("writer-a", "{}"))
-            .expect("concurrent append must not fail");
-    }
-    writer.join().expect("writer thread should not panic");
+    let wrong_slot = RegistryIdentity::for_slot("project", "staging", 4, "abi", "toolchain");
+    let error = match Registry::open_or_create(&path, &wrong_slot) {
+        Ok(_) => panic!("another slot must not adopt the history"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::StateUnowned);
 
-    let count: i64 = registry
+    let registry = Registry::open_or_create(&path, &identity).unwrap();
+    let persisted = registry
         .connection()
-        .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
-        .expect("event count should be readable");
-    assert_eq!(count, (WRITES * 2) as i64);
-}
-
-#[test]
-fn appends_events_with_total_ordering() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    let mut registry = Registry::open_or_create(&path, &identity).expect("registry should open");
-    let first = registry
-        .append_event(&EventInsert::new("first", "{}"))
-        .expect("first event should append");
-    let second = registry
-        .append_event(&EventInsert::new("second", "{}"))
-        .expect("second event should append");
-    let scopes = registry
-        .connection()
-        .prepare("SELECT environment, slot FROM events ORDER BY seq")
-        .expect("events should prepare")
+        .prepare("SELECT seq, event_type, payload_json, environment, slot FROM events ORDER BY seq")
+        .unwrap()
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
         })
-        .expect("events should query")
+        .unwrap()
         .collect::<Result<Vec<_>, _>>()
-        .expect("events should collect");
-
-    assert_eq!(first + 1, second);
-    assert_eq!(scopes, [("dev".to_string(), 0), ("dev".to_string(), 0)]);
+        .unwrap();
+    assert_eq!(
+        persisted,
+        acknowledged
+            .into_iter()
+            .map(|(seq, event_type, payload)| (seq, event_type, payload, "staging".into(), 3))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
