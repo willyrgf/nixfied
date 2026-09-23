@@ -14,4 +14,4 @@ pub use error::{ManifestValidationError, ValidationError};
 pub use ids::{ClosureId, CodebaseId, NodeId, OperationId, ServiceId, TaskId};
 pub use types::*;
 pub use unique_vec::UniqueVec;
-pub use validation::Validate;
+pub use validation::ValidatedManifest;

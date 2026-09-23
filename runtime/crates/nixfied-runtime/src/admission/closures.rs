@@ -22,7 +22,7 @@ pub fn check_closures(
                 ErrorCode::ClosureMissing,
                 format!("closure storePath does not exist: {}", store_path.display()),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
         }
         // Containment is asserted on the DECLARED paths: the executable the
         // manifest names must live under the storePath the manifest names. The
@@ -38,7 +38,7 @@ pub fn check_closures(
                     closure.executable, closure.store_path
                 ),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
         }
         if closure.target_system != manifest.target.closure_system {
             return Err(RuntimeError::new(
@@ -48,7 +48,7 @@ pub fn check_closures(
                     closure_id, closure.target_system, manifest.target.closure_system
                 ),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
         }
         if !executable.exists() {
             return Err(RuntimeError::new(
@@ -58,7 +58,7 @@ pub fn check_closures(
                     executable.display()
                 ),
             )
-            .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+            .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
         }
         // A closure invoked by any invocation is later run via `Command::new`, so
         // it must carry the executable bit no matter what `requiresExecutable`
@@ -75,7 +75,7 @@ pub fn check_closures(
                         executable.display()
                     ),
                 )
-                .with_manifest(&loaded.path, &loaded.computed_manifest_hash)
+                .with_manifest(loaded.path(), loaded.computed_manifest_hash())
             })?;
             if metadata.permissions().mode() & 0o111 == 0 {
                 return Err(RuntimeError::new(
@@ -85,7 +85,7 @@ pub fn check_closures(
                         executable.display()
                     ),
                 )
-                .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+                .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
             }
         }
     }
@@ -121,14 +121,14 @@ fn require_store_path(
             ErrorCode::ClosureMissing,
             format!("{field} is not absolute: {value}"),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     let Ok(canonical) = path.canonicalize() else {
         return Err(RuntimeError::new(
             ErrorCode::ClosureMissing,
             format!("{field} does not exist: {value}"),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     };
     let Ok(canonical_store) = context.store_root.canonicalize() else {
         return Err(RuntimeError::new(
@@ -138,7 +138,7 @@ fn require_store_path(
                 context.store_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     };
     if canonical.starts_with(&canonical_store) {
         Ok(canonical)
@@ -150,6 +150,6 @@ fn require_store_path(
                 context.store_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash))
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()))
     }
 }

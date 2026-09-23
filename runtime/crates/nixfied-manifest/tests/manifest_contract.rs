@@ -1,5 +1,5 @@
 use nixfied_manifest::{
-    MANIFEST_VERSION, Manifest, TOOLCHAIN_ID, Validate, ValidationError, runtime_abi,
+    MANIFEST_VERSION, Manifest, TOOLCHAIN_ID, ValidatedManifest, ValidationError, runtime_abi,
 };
 use serde_json::{Value, json};
 
@@ -154,8 +154,7 @@ fn add_worker_service(value: &mut Value) {
 #[test]
 fn parses_and_validates_contract() {
     let manifest = parse_valid_manifest();
-    manifest
-        .validate()
+    ValidatedManifest::try_from(manifest)
         .expect("valid manifest should pass structural validation");
 }
 
@@ -170,7 +169,7 @@ fn composite_task_default_output_is_rejected() {
     });
     let manifest: Manifest = serde_json::from_value(value).expect("composite should deserialize");
     assert!(matches!(
-        manifest.validate(),
+        ValidatedManifest::try_from(manifest),
         Err(ValidationError::UnsupportedValue {
             field: "tasks.defaultOutput",
             ..
@@ -206,8 +205,7 @@ fn accepts_immutable_source_modes() {
         let manifest: Manifest =
             serde_json::from_value(value).expect("manifest JSON should deserialize");
 
-        manifest
-            .validate()
+        ValidatedManifest::try_from(manifest)
             .expect("immutable source mode should pass structural validation");
     }
 }
@@ -220,9 +218,7 @@ fn accepts_arbitrary_service_names() {
     add_worker_service(&mut value);
 
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest
-        .validate()
-        .expect("multi-service manifests are valid");
+    ValidatedManifest::try_from(manifest).expect("multi-service manifests are valid");
 }
 
 #[test]
@@ -234,9 +230,7 @@ fn rejects_path_hostile_unit_ids() {
         value["tasks"][hostile] = value["tasks"]["smoke"].clone();
         let manifest: Manifest =
             serde_json::from_value(value).expect("manifest should deserialize");
-        manifest
-            .validate()
-            .expect_err("path-hostile ids must be rejected");
+        ValidatedManifest::try_from(manifest).expect_err("path-hostile ids must be rejected");
     }
 }
 
@@ -250,7 +244,7 @@ fn accepts_task_only_manifests() {
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
 
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest.validate().expect("task-only manifests are valid");
+    ValidatedManifest::try_from(manifest).expect("task-only manifests are valid");
 }
 
 #[test]
@@ -260,8 +254,7 @@ fn rejects_manifests_with_nothing_to_run() {
     value["tasks"] = json!({});
 
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest
-        .validate()
+    ValidatedManifest::try_from(manifest)
         .expect_err("a manifest with no services and no tasks has nothing to run");
 }
 
@@ -271,7 +264,7 @@ fn prepare_may_bind_a_task_reference() {
     let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest.validate().expect("prepare may reference a task");
+    ValidatedManifest::try_from(manifest).expect("prepare may reference a task");
 }
 
 #[test]
@@ -285,8 +278,7 @@ fn validates_explicit_slot_placement_range() {
     value["placement"]["slotPlacements"]["1"] = slot_one;
 
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest
-        .validate()
+    ValidatedManifest::try_from(manifest)
         .expect("explicit slot placements should cover the slot range");
 }
 
@@ -352,7 +344,7 @@ fn abi_mismatch_is_contract_error() {
     manifest.runtime_abi = "nixfied-runtime-abi:legacy".to_string();
 
     assert_eq!(
-        manifest.validate().expect_err("ABI mismatch should fail"),
+        ValidatedManifest::try_from(manifest).expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
             expected: runtime_abi(),
             actual: "nixfied-runtime-abi:legacy".to_string(),
@@ -372,9 +364,7 @@ fn accepts_a_bounded_acyclic_composite() {
         }
     });
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest
-        .validate()
-        .expect("a bounded acyclic composite is valid");
+    ValidatedManifest::try_from(manifest).expect("a bounded acyclic composite is valid");
 }
 
 #[test]
@@ -433,9 +423,7 @@ fn connects_to_undeclared_service_is_rejected() {
     let mut value = valid_manifest_json();
     value["services"]["synthetic"]["connectsTo"] = json!(["missing"]);
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    let error = manifest
-        .validate()
-        .expect_err("undeclared target must fail");
+    let error = ValidatedManifest::try_from(manifest).expect_err("undeclared target must fail");
     assert!(error.to_string().contains("connectsTo"));
 }
 
@@ -446,7 +434,7 @@ fn connects_to_cycle_is_rejected() {
     value["services"]["synthetic"]["connectsTo"] = json!(["worker"]);
     value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    let error = manifest.validate().expect_err("cycle must fail");
+    let error = ValidatedManifest::try_from(manifest).expect_err("cycle must fail");
     assert!(error.to_string().contains("acyclic"));
 }
 
@@ -456,5 +444,5 @@ fn connects_to_chain_is_accepted() {
     add_worker_service(&mut value);
     value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    manifest.validate().expect("acyclic wiring should validate");
+    ValidatedManifest::try_from(manifest).expect("acyclic wiring should validate");
 }

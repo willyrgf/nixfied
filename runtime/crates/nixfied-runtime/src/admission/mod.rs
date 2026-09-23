@@ -1,4 +1,3 @@
-pub mod abi;
 pub mod closures;
 pub mod origin;
 pub mod secrets;
@@ -93,8 +92,8 @@ impl Admission {
         // closure errors carry.
         Self::admit_checks(loaded, context, resolve_source).map_err(|error| {
             error.with_manifest_if_missing(
-                loaded.path.clone(),
-                loaded.computed_manifest_hash.clone(),
+                loaded.path().to_path_buf(),
+                loaded.computed_manifest_hash().to_owned(),
             )
         })
     }
@@ -105,23 +104,22 @@ impl Admission {
         resolve_source: bool,
     ) -> RuntimeResult<Self> {
         origin::check_store_origin(loaded, context)?;
-        abi::check_abi(&loaded.manifest, loaded)?;
-        target::check_target(&loaded.manifest, loaded, context)?;
+        target::check_target(loaded.manifest(), loaded, context)?;
         let source = if resolve_source {
-            Some(source::check_source(&loaded.manifest, loaded, context)?)
+            Some(source::check_source(loaded.manifest(), loaded, context)?)
         } else {
             None
         };
         let secrets = if resolve_source {
-            secrets::resolve_secrets(&loaded.manifest)?
+            secrets::resolve_secrets(loaded.manifest())?
         } else {
-            secrets::check_secret_references(&loaded.manifest)?;
+            secrets::check_secret_references(loaded.manifest())?;
             secrets::ResolvedSecrets::empty()
         };
-        closures::check_closures(&loaded.manifest, loaded, context)?;
-        let execution_manifest = lower(&loaded.manifest)?;
+        closures::check_closures(loaded.manifest(), loaded, context)?;
+        let execution_manifest = lower(loaded.manifest())?;
         Ok(from_loaded(
-            &loaded.manifest,
+            loaded.manifest(),
             loaded,
             source,
             execution_manifest,
@@ -150,9 +148,9 @@ fn from_loaded(
     secrets: secrets::ResolvedSecrets,
 ) -> Admission {
     Admission {
-        manifest_path: loaded.path.clone(),
-        computed_manifest_hash: loaded.computed_manifest_hash.clone(),
-        raw_len: loaded.raw_len,
+        manifest_path: loaded.path().to_path_buf(),
+        computed_manifest_hash: loaded.computed_manifest_hash().to_owned(),
+        raw_len: loaded.raw_len(),
         project_id: manifest.project.project_id.clone(),
         runtime_abi: manifest.runtime_abi.clone(),
         toolchain_id: manifest.toolchain_id.clone(),

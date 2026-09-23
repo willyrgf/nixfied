@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{ContainmentRequirement, Manifest, ServiceLifetime, Validate};
+use nixfied_manifest::{ContainmentRequirement, Manifest, ServiceLifetime, ValidatedManifest};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
@@ -503,8 +503,11 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     let task = other_manifest.tasks.get_mut("smoke").unwrap();
     task.requires = serde_json::from_value(json!(["other"])).unwrap();
     task.services_required = task.requires.clone();
-    fixture.admission.execution_manifest = nixfied_runtime::execution::lower(&other_manifest)
-        .expect("alternate service address lowers");
+    fixture.admission.execution_manifest = nixfied_runtime::execution::lower(
+        &nixfied_manifest::ValidatedManifest::try_from(other_manifest.clone())
+            .expect("fixture must validate"),
+    )
+    .expect("alternate service address lowers");
     let selected = select_slot(&fixture.manifest, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     record_fixture_run(
@@ -4151,8 +4154,11 @@ impl ServiceFixture {
     /// edit `self.manifest` after construction must call this so the executor, which
     /// reads the lowered manifest, sees the change.
     fn relower(&mut self) {
-        self.admission.execution_manifest = nixfied_runtime::execution::lower(&self.manifest)
-            .expect("mutated manifest should lower");
+        self.admission.execution_manifest = nixfied_runtime::execution::lower(
+            &nixfied_manifest::ValidatedManifest::try_from(self.manifest.clone())
+                .expect("fixture must validate"),
+        )
+        .expect("mutated manifest should lower");
     }
 }
 
@@ -5704,9 +5710,7 @@ fn service_fixture_with_prepare(
 
     let manifest: Manifest =
         serde_json::from_value(value).expect("prepare fixture should deserialize");
-    manifest
-        .validate()
-        .expect("prepare fixture should validate");
+    ValidatedManifest::try_from(manifest.clone()).expect("prepare fixture should validate");
     ServiceFixture::from_manifest(manifest)
 }
 

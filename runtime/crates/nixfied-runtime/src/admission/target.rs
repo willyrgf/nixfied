@@ -27,7 +27,7 @@ pub fn check_target(
                 host_arch()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash));
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()));
     }
     Ok(())
 }

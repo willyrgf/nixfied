@@ -1,16 +1,31 @@
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::{Manifest, Validate};
+use nixfied_manifest::{Manifest, ValidatedManifest};
 use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone)]
 pub struct LoadedManifest {
-    pub path: PathBuf,
-    pub raw_len: usize,
-    pub computed_manifest_hash: String,
-    pub manifest: Manifest,
+    path: PathBuf,
+    raw_len: usize,
+    computed_manifest_hash: String,
+    manifest: ValidatedManifest,
+}
+
+impl LoadedManifest {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn raw_len(&self) -> usize {
+        self.raw_len
+    }
+    pub fn computed_manifest_hash(&self) -> &str {
+        &self.computed_manifest_hash
+    }
+    pub fn manifest(&self) -> &ValidatedManifest {
+        &self.manifest
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +66,7 @@ pub fn parse_loaded_manifest(raw_manifest: RawManifest) -> RuntimeResult<LoadedM
         )
         .with_manifest(&raw_manifest.path, &raw_manifest.computed_manifest_hash)
     })?;
-    manifest.validate().map_err(|error| {
+    let manifest = ValidatedManifest::try_from(manifest).map_err(|error| {
         let message = format!("manifest contract validation failed: {error}");
         let runtime_error = match &error {
             nixfied_manifest::ValidationError::RuntimeAbi { .. }

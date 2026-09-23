@@ -1453,7 +1453,9 @@ mod tests {
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
         use crate::{Admission, AdmittedSource, ErrorCode};
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
-        use nixfied_manifest::{DirtyPolicy, Manifest, ServiceLifetime, SourceMode, Validate};
+        use nixfied_manifest::{
+            DirtyPolicy, Manifest, ServiceLifetime, SourceMode, ValidatedManifest,
+        };
         use serde_json::json;
 
         let unsafe_root = TestRoot::new();
@@ -1477,7 +1479,7 @@ mod tests {
         value["tasks"]["smoke"]["servicesRequired"] = json!([]);
         value["tasks"]["smoke"]["invocation"]["run"] = json!(["sleep", "0"]);
         let manifest: Manifest = serde_json::from_value(value).unwrap();
-        manifest.validate().unwrap();
+        ValidatedManifest::try_from(manifest.clone()).unwrap();
         let selected = select_slot(&manifest, None).unwrap();
         let placement = derive_host_placement_for_slot(
             &manifest,
@@ -1517,7 +1519,11 @@ mod tests {
             }),
             generator_json: serde_json::to_string(&manifest.generator).unwrap(),
             target_json: serde_json::to_string(&manifest.target).unwrap(),
-            execution_manifest: crate::execution::lower(&manifest).unwrap(),
+            execution_manifest: crate::execution::lower(
+                &nixfied_manifest::ValidatedManifest::try_from(manifest.clone())
+                    .expect("fixture must validate"),
+            )
+            .unwrap(),
             secrets: ResolvedSecrets::empty(),
         };
         record_run_created(

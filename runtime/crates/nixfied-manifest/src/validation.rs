@@ -5,30 +5,45 @@ use crate::error::ValidationError;
 use crate::ids::{OperationId, ServiceId};
 use crate::types::*;
 
-pub trait Validate {
-    fn validate(&self) -> Result<(), ValidationError>;
+/// An owned manifest whose structural and exact-identity checks have passed.
+/// It deliberately exposes no mutable access or unchecked deserializer.
+#[derive(Debug, Clone)]
+pub struct ValidatedManifest(Manifest);
+
+impl std::ops::Deref for ValidatedManifest {
+    type Target = Manifest;
+    fn deref(&self) -> &Manifest {
+        &self.0
+    }
 }
 
-impl Validate for Manifest {
-    fn validate(&self) -> Result<(), ValidationError> {
-        validate_exact_identities(self)?;
-        validate_required_strings(self)?;
-        validate_unit_ids(self)?;
-        validate_codebases(self)?;
-        validate_environments(self)?;
-        validate_slot_policy(&self.slot_policy)?;
-        validate_slot_placements(self)?;
-        validate_invocations(self)?;
-        validate_closures(self)?;
-        validate_services(self)?;
-        validate_tasks(self)?;
-        // Cross-reference resolution (tools/closures/operations/steps) is
-        // proven by the runtime's `lower` step, which builds the executor
-        // input only from references that exist. `validate` covers the
-        // identity, value, and structural contract a single document must hold on
-        // its own; admission then lowers it.
-        Ok(())
+impl TryFrom<Manifest> for ValidatedManifest {
+    type Error = ValidationError;
+
+    fn try_from(manifest: Manifest) -> Result<Self, ValidationError> {
+        validate(&manifest)?;
+        Ok(Self(manifest))
     }
+}
+
+fn validate(manifest: &Manifest) -> Result<(), ValidationError> {
+    validate_exact_identities(manifest)?;
+    validate_required_strings(manifest)?;
+    validate_unit_ids(manifest)?;
+    validate_codebases(manifest)?;
+    validate_environments(manifest)?;
+    validate_slot_policy(&manifest.slot_policy)?;
+    validate_slot_placements(manifest)?;
+    validate_invocations(manifest)?;
+    validate_closures(manifest)?;
+    validate_services(manifest)?;
+    validate_tasks(manifest)?;
+    // Cross-reference resolution (tools/closures/operations/steps) is
+    // proven by the runtime's `lower` step, which builds the executor
+    // input only from references that exist. `validate` covers the
+    // identity, value, and structural contract a single document must hold on
+    // its own; admission then lowers it.
+    Ok(())
 }
 
 fn validate_exact_identities(manifest: &Manifest) -> Result<(), ValidationError> {

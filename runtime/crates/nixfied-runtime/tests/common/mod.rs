@@ -143,8 +143,11 @@ pub fn synthetic_admission(manifest: &Manifest, source_root: &Path) -> Admission
         }),
         generator_json: serde_json::to_string(&manifest.generator).unwrap(),
         target_json: serde_json::to_string(&manifest.target).unwrap(),
-        execution_manifest: nixfied_runtime::execution::lower(manifest)
-            .expect("manifest should lower"),
+        execution_manifest: nixfied_runtime::execution::lower(
+            &nixfied_manifest::ValidatedManifest::try_from(manifest.clone())
+                .expect("fixture must validate"),
+        )
+        .expect("manifest should lower"),
         secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
     }
 }

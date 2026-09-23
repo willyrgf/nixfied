@@ -501,7 +501,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         )
     })?;
     let (loaded, admission) = load_admitted_manifest(manifest_path, allow_non_store)?;
-    let selected_slot = select_slot(&loaded.manifest, slot).map_err(post_admission_error)?;
+    let selected_slot = select_slot(loaded.manifest(), slot).map_err(post_admission_error)?;
     let output = CheckOutput {
         manifest_path: admission.manifest_path,
         computed_manifest_hash: admission.computed_manifest_hash,
@@ -534,7 +534,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         parsed_options.allow_non_store,
     )?;
     let output_mode = resolve_run_output_mode(
-        &loaded.manifest,
+        loaded.manifest(),
         parsed_options.output_mode,
         parsed_options.task.as_deref(),
     );
@@ -548,7 +548,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let manifest_path = admission.manifest_path.clone();
     let computed_manifest_hash = admission.computed_manifest_hash.clone();
     let output = run_m0_admitted(
-        &loaded.manifest,
+        loaded.manifest(),
         &admission,
         &redactor,
         &options,
@@ -1509,7 +1509,7 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
         load_admitted_manifest_for_control(options.manifest_path.clone(), options.allow_non_store)?;
     let manifest_path = admission.manifest_path.clone();
     let computed_manifest_hash = admission.computed_manifest_hash.clone();
-    run_control_admitted(command, &loaded.manifest, &admission, &options)
+    run_control_admitted(command, loaded.manifest(), &admission, &options)
         .map_err(|error| error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
 }
 
@@ -1832,7 +1832,7 @@ fn load_manifest_admitted(
     } else {
         Admission::check_for_control(&loaded, &context)?
     };
-    warn_on_ephemeral_port_overlap(&loaded.manifest)?;
+    warn_on_ephemeral_port_overlap(loaded.manifest())?;
     Ok((loaded, admission))
 }
 

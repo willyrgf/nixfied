@@ -31,18 +31,18 @@ pub fn check_store_origin(
     if context.policy == StoreOriginPolicy::AllowNonStoreForTests {
         return Ok(());
     }
-    if canonical_is_under_store(&loaded.path, &context.store_root) {
+    if canonical_is_under_store(loaded.path(), &context.store_root) {
         Ok(())
     } else {
         Err(RuntimeError::new(
             ErrorCode::ManifestNotStoreOutput,
             format!(
                 "manifest path {} is not under {}",
-                loaded.path.display(),
+                loaded.path().display(),
                 context.store_root.display()
             ),
         )
-        .with_manifest(&loaded.path, &loaded.computed_manifest_hash))
+        .with_manifest(loaded.path(), loaded.computed_manifest_hash()))
     }
 }
 

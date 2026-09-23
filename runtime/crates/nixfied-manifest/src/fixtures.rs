@@ -45,7 +45,7 @@ impl Default for SyntheticManifestOptions {
 /// The canonical admission fixture — a `synthetic` foreground service plus a
 /// `smoke` task in slot 0 over the given candidate port window. A valid manifest
 /// by construction: it deserializes into [`crate::Manifest`] and passes
-/// [`crate::Validate`].
+/// [`crate::ValidatedManifest`].
 pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
     // The fixture binds one closure; its store path is the executable's
     // grandparent (…/store-path/bin/exe), matching what Nix emits.

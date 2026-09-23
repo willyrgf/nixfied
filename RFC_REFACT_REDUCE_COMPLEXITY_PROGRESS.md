@@ -81,10 +81,20 @@ removed state owners, coordinated change sites, and capture correctness addition
    restoring it passed. Contract, descriptor, native coverage, and independent
    ABI snapshot updated atomically. All 19 output tests, seven binary tests,
    32 manifest tests, Clippy, and formatting pass on Linux. Cross-layer `.#check`
-   is running as session `77914`, log `/tmp/nixfied-complexity-finalization-check.log`;
-   poll that handle before deciding its outcome. The full current-tree
+   passed (session `77914`, log `/tmp/nixfied-complexity-finalization-check.log`). The full current-tree
    fixture floor and downstream gate remain required for final acceptance.
-6. Closed loaded/admitted construction: pending.
+6. Closed loaded/admitted construction: first coherent boundary cutover complete.
+   `ValidatedManifest` owns the DTO, has private construction and immutable access,
+   replaces the single-implementation `Validate` trait, and is required by `lower`.
+   `LoadedManifest` fields are private and parsing moves the checked document into
+   it. Deleted the duplicate post-load ABI checker. Lowering fixtures use current
+   identity; invalid leaf/window fixtures now exercise structural construction,
+   while capacity rejection still exercises lowering. All 32 manifest tests,
+   110 runtime unit tests, 31 admission tests, 71 service tests, and workspace
+   Clippy pass on Linux. No public diagnostic or rejection-order change.
+   Remaining in this step: private run/control admissions owning the loaded
+   document; removal of fabricated admission fixtures; unified origin/provenance
+   handling and confined source resolution; correlated secret-source alternatives.
 7. Graph, invocation, template, and placement ABI cutover: pending.
 8. Owned/borrowed service resources: pending.
 9. Bounded capture and child completion ABI cutover: pending.
