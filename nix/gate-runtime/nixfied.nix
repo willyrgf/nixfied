@@ -53,10 +53,15 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-minimal.json"
-          jq -e '.durationMs >= 0 and .task.durationMs >= 0 and .tasks[0].durationMs >= 0 and .nodes[0].durationMs >= 0' \
-            "''${stateDir}/gate-artifacts/example-minimal.json" >/dev/null
-          jq -e '.durationMs >= 0' \
-            "$(jq -r .runSummaryPath "''${stateDir}/gate-artifacts/example-minimal.json")" >/dev/null
+          result="''${stateDir}/gate-artifacts/example-minimal.json"
+          jq -e '.task.success and .task.exitCode == 0 and
+            [.services[].serviceId] == ["synthetic"] and
+            [.nodes[].nodeId] == ["smoke"]' "$result" >/dev/null
+          [ "$(cat "$(jq -r .task.stdoutPath "$result")")" = ok ]
+          jq -e --slurpfile result "$result" '
+            .success and .runId == $result[0].runId and
+            .tasks == $result[0].tasks and .nodes == $result[0].nodes
+          ' "$(jq -r .runSummaryPath "$result")" >/dev/null
           jq -e '.project.projectId == "minimal" and (has("docs") | not)' \
             "$MINIMAL_MANIFEST/manifest.json" >/dev/null
           test -f "$MINIMAL_MANIFEST/views/docs.md"
@@ -83,6 +88,7 @@
       tools = [
         pkgs.bash
         "rt"
+        "jq"
         "coreutils"
       ];
       run = [
@@ -94,8 +100,20 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime run --manifest "$POSTGRES_MANIFEST/manifest.json" --task smoke-query --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-postgres.json"
+          result="''${stateDir}/gate-artifacts/example-postgres.json"
+          [ "$(cat "$(jq -r .task.stdoutPath "$result")")" = 1 ]
+          root="''${stateDir}/example-postgres-inner/postgres-example/dev/0"
+          # A second invocation must adopt the initialized cluster, run the query,
+          # and preserve user state rather than initializing over it.
+          touch "$root/pgdata/adoption-sentinel"
+          NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
+            nixfied-runtime run --manifest "$POSTGRES_MANIFEST/manifest.json" --task smoke-query --timeout-ms 60000 --output task-output \
+            > "''${stateDir}/gate-artifacts/example-postgres-repeat.stdout"
+          [ "$(cat "''${stateDir}/gate-artifacts/example-postgres-repeat.stdout")" = 1 ]
+          test -f "$root/pgdata/adoption-sentinel"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime clean --manifest "$POSTGRES_MANIFEST/manifest.json"
+          test ! -e "$root"
         ''
       ];
     };
@@ -106,6 +124,7 @@
       tools = [
         pkgs.bash
         "rt"
+        "jq"
         "coreutils"
       ];
       run = [
@@ -117,6 +136,22 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
             nixfied-runtime run --manifest "$COMPOSITE_MANIFEST/manifest.json" --task pipeline --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-composite.json"
+          result="''${stateDir}/gate-artifacts/example-composite.json"
+          jq -e '
+            [.tasks[].stepPath] == ["pipeline.probe", "pipeline.verify"] and
+            [.tasks[].taskId] == ["smoke", "smoke"] and
+            (all(.tasks[]; .success and .exitCode == 0)) and
+            ([.tasks[].processKey] | unique | length) == 2 and
+            ([.tasks[].stdoutPath] | unique | length) == 2 and
+            ([.tasks[].summaryPath] | unique | length) == 2 and
+            [.services[].serviceId] == ["synthetic"]
+          ' "$result" >/dev/null
+          while IFS= read -r output; do
+            [ "$(cat "$output")" = ok ]
+          done < <(jq -r '.tasks[].stdoutPath' "$result")
+          jq -e --slurpfile result "$result" '
+            .success and .tasks == $result[0].tasks and .nodes == $result[0].nodes
+          ' "$(jq -r .runSummaryPath "$result")" >/dev/null
           docs=$(<"$COMPOSITE_MANIFEST/views/docs.md")
           [[ "$docs" == *'### `pipeline`'* ]]
           [[ "$docs" == *'- kind: `composite`'* ]]
