@@ -20,7 +20,9 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
     ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
 };
-use crate::redaction::{RedactedLogRelays, Redactor, child_output};
+use crate::redaction::{
+    CAPTURE_SHUTDOWN_TIMEOUT, RedactedLogRelays, Redactor, child_output, direct_service_output,
+};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::endpoint::{
@@ -715,15 +717,26 @@ impl OwnedService {
         timeout_ms: u64,
         error: RuntimeError,
     ) -> RuntimeError {
-        if let Err(termination_error) = self.terminate_after_failure(timeout_ms) {
-            let escape = self.settle_escape(registry, &error, &termination_error);
-            return escape;
+        let containment = self.terminate_after_failure(timeout_ms);
+        let (containment, capture) = self.finish_terminal_capture(containment);
+        self.settle_failure_after_cleanup(registry, containment, capture, error)
+    }
+
+    fn settle_failure_after_cleanup(
+        &mut self,
+        registry: &mut Registry,
+        containment: RuntimeResult<()>,
+        capture: RuntimeResult<()>,
+        error: RuntimeError,
+    ) -> RuntimeError {
+        if let Err(termination_error) = containment {
+            let escape = self.settle_escape(registry, Some(&error), termination_error);
+            return completion_error(Err(escape), capture, Some(error))
+                .expect("escape remains a failure");
         }
-        if let Some(child) = &mut self.child {
-            let _ = wait_for_child_exit(child, 1000);
-        }
-        self.monitor.stop();
-        let _ = self.join_log_relays();
+        let canceled = error.code == ErrorCode::Canceled;
+        let error =
+            completion_error(Ok(()), capture, Some(error)).expect("lifecycle failure is retained");
         let payload = serde_json::json!({
             "pid": self.info.pid,
             "pgid": self.info.pgid,
@@ -731,7 +744,7 @@ impl OwnedService {
             "message": error.message.as_str(),
         })
         .to_string();
-        let settlement = if error.code == ErrorCode::Canceled {
+        let settlement = if canceled {
             mark_service_canceled(
                 registry,
                 &self.info.run_id,
@@ -750,10 +763,11 @@ impl OwnedService {
                 &payload,
             )
         };
-        self.child = None;
         match settlement {
             Ok(()) => error,
-            Err(settlement_error) => settlement_error.with_cause(error),
+            Err(settlement_error) => {
+                completion_error(Err(settlement_error), Ok(()), Some(error)).unwrap()
+            }
         }
     }
 
@@ -763,35 +777,40 @@ impl OwnedService {
         timeout_ms: u64,
         reason: &str,
     ) -> RuntimeResult<()> {
-        let payload = serde_json::json!({
-            "pid": self.info.pid,
-            "pgid": self.info.pgid,
-            "reason": reason,
-        })
-        .to_string();
-        record_service_canceling(
+        let payload =
+            serde_json::json!({ "pid": self.info.pid, "pgid": self.info.pgid, "reason": reason })
+                .to_string();
+        let intent = record_service_canceling(
             registry,
             &self.info.run_id,
             &self.info.service_instance_id,
             &self.info.process_key,
             &self.info.computed_manifest_hash,
             &payload,
-        )?;
-        if let Err(termination_error) = self.terminate_owned(timeout_ms) {
-            let cancellation = RuntimeError::new(ErrorCode::Canceled, reason);
-            return Err(self.settle_escape(registry, &cancellation, &termination_error));
+        );
+        let containment = self.terminate_owned(timeout_ms);
+        let (containment, capture) = self.finish_terminal_capture(containment);
+        if let Err(termination) = containment {
+            let canceled = RuntimeError::new(ErrorCode::Canceled, reason);
+            let operation = intent.as_ref().err().unwrap_or(&canceled);
+            let escape = self.settle_escape(registry, Some(operation), termination);
+            let error = completion_error(Err(escape), capture, intent.err()).unwrap();
+            return Err(error.with_cause(canceled));
         }
-        let _ = wait_for_child_exit(self.child_mut(), 1000)?;
-        self.monitor.stop();
-        self.join_log_relays()?;
-        mark_service_canceled(
+        let error = completion_error(Ok(()), capture, intent.err())
+            .map(|error| error.with_cause(RuntimeError::new(ErrorCode::Canceled, reason)));
+        let settlement = mark_service_canceled(
             registry,
             &self.info.run_id,
             &self.info.service_instance_id,
             &self.info.process_key,
             &self.info.computed_manifest_hash,
             &payload,
-        )
+        );
+        match completion_error(settlement, Ok(()), error) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn transfer_to_persistent(mut self) {
@@ -821,13 +840,23 @@ impl OwnedService {
             self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
             return Err(canceled_error());
         }
-        record_lifecycle_started(registry, &context, &stop_record)?;
-        if let Some(status) = self.child_mut().try_wait().map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to inspect foreground service child: {error}"),
-            )
-        })? {
+        if let Err(error) = record_lifecycle_started(registry, &context, &stop_record) {
+            return Err(self.settle_failed_service(registry, timeout_ms, error));
+        }
+        let observed = match self.child_mut().try_wait() {
+            Ok(observed) => observed,
+            Err(error) => {
+                return Err(self.settle_failed_service(
+                    registry,
+                    timeout_ms,
+                    RuntimeError::new(
+                        ErrorCode::ProcEscape,
+                        format!("failed to inspect foreground service child: {error}"),
+                    ),
+                ));
+            }
+        };
+        if let Some(status) = observed {
             let message = format!("foreground service exited before stop: {status}");
             let error = RuntimeError::new(ErrorCode::ProcEscape, message);
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
@@ -841,17 +870,25 @@ impl OwnedService {
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
         let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
-        let escalated =
-            match self.stop_owned(stop_signal_number(self.service.stop.signal), stop_timeout) {
-                Ok(escalated) => escalated,
-                Err(error) => {
-                    let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-                    return Err(self.settle_escape(registry, &error, &error));
-                }
-            };
-        self.record_stop_signaled(registry, escalated, stop_timeout);
-        let _ = wait_for_child_exit(self.child_mut(), 1000)?;
-        self.join_log_relays()?;
+        let stopped = self.stop_owned(stop_signal_number(self.service.stop.signal), stop_timeout);
+        let containment = match stopped {
+            Ok(escalated) => {
+                self.record_stop_signaled(registry, escalated, stop_timeout);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
+                Err(error)
+            }
+        };
+        let (containment, capture) = self.finish_terminal_capture(containment);
+        if let Err(error) = containment {
+            let escape = self.settle_escape(registry, None, error);
+            return Err(completion_error(Err(escape), capture, None).unwrap());
+        }
+        if let Err(error) = capture {
+            return Err(self.settle_failure_after_cleanup(registry, Ok(()), Ok(()), error));
+        }
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
         {
@@ -930,9 +967,10 @@ impl OwnedService {
     fn settle_escape(
         &mut self,
         registry: &mut Registry,
-        operation_error: &RuntimeError,
-        termination_error: &RuntimeError,
+        operation_error: Option<&RuntimeError>,
+        mut termination_error: RuntimeError,
     ) -> RuntimeError {
+        let operation_error = operation_error.unwrap_or(&termination_error);
         let start_identity = self.escape_start_identity();
         let payload = serde_json::json!({
             "pid": self.info.pid,
@@ -958,14 +996,19 @@ impl OwnedService {
             self.info.platform_start_identity.as_deref(),
             &payload,
         ) {
-            Ok(()) => RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
+            Ok(()) => {
+                termination_error.message = format!(
                     "failed to prove termination of service process tree rooted at {}: {}",
-                    self.info.pid, termination_error.message
-                ),
-            ),
-            Err(settlement_error) => settlement_error,
+                    self.info.pid, termination_error.message,
+                );
+                termination_error
+            }
+            Err(mut settlement_error) => {
+                settlement_error
+                    .causes
+                    .extend(termination_error.causes.drain(..));
+                settlement_error.with_cause(termination_error)
+            }
         }
     }
 
@@ -1047,11 +1090,27 @@ impl OwnedService {
         self.info.selected_endpoint()
     }
 
-    fn join_log_relays(&mut self) -> RuntimeResult<()> {
-        match self.log_relays.take() {
-            Some(relays) => relays.join(),
+    /// Always attempt reap and capture shutdown, including containment failure.
+    /// Keep unresolved process ownership available for escape settlement/Drop.
+    fn finish_terminal_capture(
+        &mut self,
+        containment: RuntimeResult<()>,
+    ) -> (RuntimeResult<()>, RuntimeResult<()>) {
+        let reaped = match self.child.as_mut() {
+            Some(child) => reap_owned_child(child),
             None => Ok(()),
-        }
+        };
+        let containment = match (containment, reaped) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(error), Err(reap)) => Err(error.with_cause(reap)),
+        };
+        self.monitor.stop();
+        let capture = self.shutdown_capture();
+        (containment, capture)
+    }
+
+    fn shutdown_capture(&mut self) -> RuntimeResult<()> {
+        shutdown_service_capture(self.log_relays.take())
     }
 
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
@@ -1270,7 +1329,14 @@ impl Drop for OwnedService {
             }
         }
         self.monitor.stop();
-        let _ = self.join_log_relays();
+        let _ = self.shutdown_capture();
+    }
+}
+
+fn shutdown_service_capture(capture: Option<RedactedLogRelays>) -> RuntimeResult<()> {
+    match capture {
+        Some(capture) => capture.shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT),
+        None => Ok(()),
     }
 }
 
@@ -1595,40 +1661,30 @@ fn start_service_for_slot_inner(
         let redactor = Redactor::from_secrets(admission.secrets());
         let (stdout, stderr, log_relays) =
             if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
-                let output = child_output(&stdout_path, &stderr_path, &redactor)?;
-                (output.stdout, output.stderr, Some(output.relays))
+                if redactor.is_empty() {
+                    let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
+                    (stdout, stderr, None)
+                } else {
+                    let output = child_output(&stdout_path, &stderr_path, &redactor)?;
+                    (output.stdout, output.stderr, Some(output.relays))
+                }
             } else {
                 (Stdio::null(), Stdio::null(), None)
             };
-        let mut command = Command::new(&exec.executable);
-        // Hermetic child environment: declared env + runtime-owned variables only
-        // (PATH from the tool roots); nothing inherited from the runtime's own
-        // environment.
-        command
-            .env_clear()
-            .args(&args)
-            .current_dir(&command_cwd)
-            .envs(&env)
-            .stdin(stdin_for(exec.stdin))
-            .stdout(stdout)
-            .stderr(stderr);
-        command.process_group(0);
-        if let Err(error) = cancellation.check() {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
-            return Err(error);
-        }
-        let child = match command.spawn() {
+        let mut command = configured_command(&exec.executable, &args, &env, &command_cwd, exec.stdin);
+        command.stdout(stdout).stderr(stderr);
+        let spawned = cancellation.check().and_then(|()| command.spawn().map_err(|error| {
+            RuntimeError::new(ErrorCode::ProcEscape, format!("failed to spawn service {service_name}: {error}"))
+        }));
+        drop(command);
+        let child = match spawned {
             Ok(child) => child,
             Err(error) => {
-                let error = RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to spawn service {service_name}: {error}"),
-                );
+                let error = completion_error(Ok(()), shutdown_service_capture(log_relays), Some(error)).unwrap();
                 let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
                 return Err(error);
             }
         };
-        drop(command); // Release configured pipe writers before any failure-path relay join.
         Ok((child, command_json, redactor, log_relays))
     })()
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
@@ -1637,19 +1693,16 @@ fn start_service_for_slot_inner(
         Ok(pgid) => pgid,
         Err(error) => {
             let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
-            if let Err(termination_error) =
-                terminate_unrecorded_child(&mut child, None, service, run_timeout_ms)
-            {
-                return Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!(
-                        "failed to prove termination of unrecorded service process {pid}: {}",
-                        termination_error.message
-                    ),
-                ));
-            }
-            if let Some(relays) = log_relays.take() {
-                let _ = relays.join();
+            let containment = terminate_unrecorded_child(&mut child, None, service, run_timeout_ms);
+            let contained = containment.is_ok();
+            let error = completion_error(
+                containment,
+                shutdown_service_capture(log_relays.take()),
+                Some(error),
+            )
+            .unwrap();
+            if !contained {
+                return Err(error);
             }
             return Err(settle_reserved_failure(
                 registry,
@@ -1686,19 +1739,17 @@ fn start_service_for_slot_inner(
         &reservations,
     ) {
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
-        if let Err(termination_error) =
-            terminate_unrecorded_child(&mut child, Some(pgid), service, run_timeout_ms)
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
-                    "failed to prove termination of unrecorded service process group {pgid}: {}",
-                    termination_error.message
-                ),
-            ));
-        }
-        if let Some(relays) = log_relays.take() {
-            let _ = relays.join();
+        let containment =
+            terminate_unrecorded_child(&mut child, Some(pgid), service, run_timeout_ms);
+        let contained = containment.is_ok();
+        let error = completion_error(
+            containment,
+            shutdown_service_capture(log_relays.take()),
+            Some(error),
+        )
+        .unwrap();
+        if !contained {
+            return Err(error);
         }
         return Err(settle_reserved_failure(
             registry,
@@ -2196,19 +2247,15 @@ fn terminate_unrecorded_child(
     })?);
     let timeout_ms =
         (service.stop.timeout.as_millis().min(u128::from(u64::MAX)) as u64).min(run_timeout_ms);
-    match service.containment {
-        ContainmentRequirement::ProcessGroup => terminate_process_group(pgid, timeout_ms)?,
-        ContainmentRequirement::ProcessTree => {
-            terminate_process_tree(pid, pgid, timeout_ms)?;
-        }
+    let containment = match service.containment {
+        ContainmentRequirement::ProcessGroup => terminate_process_group(pgid, timeout_ms),
+        ContainmentRequirement::ProcessTree => terminate_process_tree(pid, pgid, timeout_ms),
+    };
+    let reaped = reap_owned_child(child);
+    match (containment, reaped) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(error), Err(reap)) => Err(error.with_cause(reap)),
     }
-    if !wait_for_child_exit(child, 1000)? {
-        return Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("spawned service child {pid} did not become waitable after termination"),
-        ));
-    }
-    Ok(())
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
@@ -2379,95 +2426,211 @@ pub(crate) enum BoundedExecOutcome {
     Canceled,
 }
 
-/// Spawn the bounded exec in its own process group, wait for exit or deadline
-/// (killing the group on timeout or cancellation), and report how it ended.
-/// Exit-status policy is the caller's: a lifecycle exec treats non-zero as
-/// failure, a probe attempt treats it as retry.
+/// A task records its process between spawn and consuming completion. Probes
+/// proceed directly to completion. This owner has no registry dependency.
+pub(crate) struct OwnedBoundedChild {
+    child: Child,
+    capture: Option<RedactedLogRelays>,
+    timeout: Duration,
+    label: String,
+}
+
+pub(crate) enum TerminationReason {
+    Canceled,
+    TimedOut,
+}
+
+pub(crate) struct BoundedFailure {
+    pub error: Box<RuntimeError>,
+    pub outcome: Option<BoundedExecOutcome>,
+}
+
+pub(crate) fn spawn_bounded_exec(spec: &BoundedExec<'_>) -> RuntimeResult<OwnedBoundedChild> {
+    let output = child_output(spec.stdout_path, spec.stderr_path, spec.redactor)?;
+    let mut command =
+        configured_command(spec.executable, spec.args, spec.env, spec.cwd, spec.stdin);
+    command.stdout(output.stdout).stderr(output.stderr);
+    let spawned = command.spawn();
+    // Command retains pipe writers even after spawn failure.
+    drop(command);
+    match spawned {
+        Ok(child) => Ok(OwnedBoundedChild {
+            child,
+            capture: Some(output.relays),
+            timeout: spec.timeout,
+            label: spec.label.to_owned(),
+        }),
+        Err(error) => {
+            let error = RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to spawn {}: {error}", spec.label),
+            );
+            let capture = output
+                .relays
+                .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+            Err(completion_error(Ok(()), capture, Some(error)).expect("spawn failure is retained"))
+        }
+    }
+}
+
+fn configured_command(
+    executable: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    stdin: StdinPolicy,
+) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .args(args)
+        .envs(env)
+        .current_dir(cwd)
+        .stdin(stdin_for(stdin));
+    command.process_group(0);
+    command
+}
+
+impl OwnedBoundedChild {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub fn complete(
+        mut self,
+        cancellation: &CancellationToken,
+        mut before_termination: impl FnMut(TerminationReason) -> RuntimeResult<()>,
+    ) -> Result<BoundedExecOutcome, BoundedFailure> {
+        let deadline = Instant::now() + self.timeout;
+        let observed = loop {
+            if cancellation.is_canceled() {
+                break Ok(BoundedExecOutcome::Canceled);
+            }
+            match self.child.try_wait() {
+                Ok(Some(status)) => break Ok(BoundedExecOutcome::Exited(status)),
+                Ok(None) => {}
+                Err(error) => {
+                    break Err(RuntimeError::new(
+                        ErrorCode::ProcEscape,
+                        format!("failed to inspect {}: {error}", self.label),
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                break Ok(BoundedExecOutcome::TimedOut);
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        // Intent is synchronous and precedes every signal, even if recording fails.
+        let intent = match &observed {
+            Ok(BoundedExecOutcome::Canceled) => before_termination(TerminationReason::Canceled),
+            Ok(BoundedExecOutcome::TimedOut) => before_termination(TerminationReason::TimedOut),
+            _ => Ok(()),
+        };
+        let (outcome, operation) = match observed {
+            Ok(outcome) => (Some(outcome), intent.err()),
+            Err(error) => (None, Some(error)),
+        };
+        match self.finish(operation) {
+            Some(error) => Err(BoundedFailure {
+                error: Box::new(error),
+                outcome,
+            }),
+            None => Ok(outcome.expect("successful observation supplies an outcome")),
+        }
+    }
+
+    pub fn abort(mut self, error: RuntimeError) -> RuntimeError {
+        self.finish(Some(error))
+            .expect("abort retains its original failure")
+    }
+
+    fn finish(&mut self, operation: Option<RuntimeError>) -> Option<RuntimeError> {
+        let pgid = self.pid() as i32;
+        let containment = terminate_and_reap(&mut self.child, pgid);
+        let capture = self
+            .capture
+            .take()
+            .expect("completion consumes capture once")
+            .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+        completion_error(containment, capture, operation)
+    }
+}
+
+impl Drop for OwnedBoundedChild {
+    fn drop(&mut self) {
+        if self.capture.is_some() {
+            let _ = self.finish(None);
+        }
+    }
+}
+
+/// Capture is ordered stdout then stderr. Preserve that order when containment
+/// owns the primary error, then append any subordinate operation failure.
+fn completion_error(
+    containment: RuntimeResult<()>,
+    capture: RuntimeResult<()>,
+    operation: Option<RuntimeError>,
+) -> Option<RuntimeError> {
+    let mut primary = containment.err();
+    if let Err(mut capture) = capture {
+        primary = Some(match primary {
+            Some(error) => {
+                let causes = std::mem::take(&mut capture.causes);
+                let mut error = error.with_cause(capture);
+                error.causes.extend(*causes);
+                error
+            }
+            None => capture,
+        });
+    }
+    if let Some(mut operation) = operation {
+        primary = Some(match primary {
+            Some(mut error) => {
+                error.causes.extend(operation.causes.drain(..));
+                error.with_cause(operation)
+            }
+            None => operation,
+        });
+    }
+    primary
+}
+
 pub(crate) fn run_bounded_exec(
     spec: &BoundedExec<'_>,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<BoundedExecOutcome> {
-    let label = spec.label;
-    let output = child_output(spec.stdout_path, spec.stderr_path, spec.redactor)?;
-    let mut command = Command::new(spec.executable);
-    // Hermetic child environment, same as the long-lived spawn paths.
-    command
-        .env_clear()
-        .args(spec.args)
-        .current_dir(spec.cwd)
-        .envs(spec.env)
-        .stdin(stdin_for(spec.stdin))
-        .stdout(output.stdout)
-        .stderr(output.stderr);
-    command.process_group(0);
-    let mut child = command.spawn().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to spawn lifecycle operation {label}: {error}"),
-        )
-    })?;
-    // Command retains configured pipe writers; release them before relay EOF.
-    drop(command);
-    // Successful process_group(0) spawning establishes this group before exec.
-    let pgid = child.id() as i32;
-    let deadline = Instant::now() + spec.timeout;
-    let outcome = loop {
-        if cancellation.is_canceled() {
-            break Ok(BoundedExecOutcome::Canceled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(BoundedExecOutcome::Exited(status)),
-            Ok(None) => {}
-            Err(error) => {
-                break Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to inspect lifecycle operation {label}: {error}"),
-                ));
-            }
-        }
-        if Instant::now() >= deadline {
-            break Ok(BoundedExecOutcome::TimedOut);
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    if let Err(cleanup) = terminate_and_reap(&mut child, pgid) {
-        return Err(match outcome {
-            Err(error) => cleanup.with_cause(error),
-            Ok(_) => cleanup,
-        });
-    }
-    match (outcome, output.relays.join()) {
-        (Ok(outcome), Ok(())) => Ok(outcome),
-        (Err(error), Err(relay)) => Err(error.with_cause(relay)),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-    }
+    spawn_bounded_exec(spec)?
+        .complete(cancellation, |_| Ok(()))
+        .map_err(|failure| *failure.error)
 }
 
 /// Finish an owned bounded child, including descendants left after direct exit.
 /// Reaping is attempted even if group containment fails; it cannot erase that failure.
 pub(crate) fn terminate_and_reap(child: &mut Child, pgid: i32) -> RuntimeResult<()> {
     let containment = terminate_process_group(pgid, 1000);
-    let reaped = (|| {
-        if wait_for_child_exit(child, 1000)? {
-            return Ok(());
-        }
-        let killed = child.kill();
-        // A kill can race with exit. Reaping proves completion in either case.
-        if wait_for_child_exit(child, 1000)? {
-            return Ok(());
-        }
-        Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            match killed {
-                Ok(()) => "owned child did not exit after containment or direct kill".into(),
-                Err(error) => format!("failed to kill owned child after containment: {error}"),
-            },
-        ))
-    })();
+    let reaped = reap_owned_child(child);
     match (containment, reaped) {
         (Ok(()), result) | (result, Ok(())) => result,
         (Err(error), Err(reap)) => Err(error.with_cause(reap)),
     }
+}
+
+fn reap_owned_child(child: &mut Child) -> RuntimeResult<()> {
+    if wait_for_child_exit(child, 1000)? {
+        return Ok(());
+    }
+    let killed = child.kill();
+    if wait_for_child_exit(child, 1000)? {
+        return Ok(());
+    }
+    Err(RuntimeError::new(
+        ErrorCode::ProcEscape,
+        match killed {
+            Ok(()) => "owned child did not exit after containment or direct kill".into(),
+            Err(error) => format!("failed to kill owned child after containment: {error}"),
+        },
+    ))
 }
 
 fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
@@ -3311,6 +3474,57 @@ mod tests {
     use nixfied_manifest::ServiceId;
 
     #[test]
+    fn capture_completion_error_goldens_preserve_stream_and_outcome_order() {
+        for containment_failed in [false, true] {
+            let capture = RuntimeError::new(
+                ErrorCode::SecretLeakBlocked,
+                "captured stdout did not reach EOF before shutdown deadline",
+            )
+            .with_cause(RuntimeError::new(
+                ErrorCode::SecretLeakBlocked,
+                "captured stderr did not reach EOF before shutdown deadline",
+            ));
+            let containment = if containment_failed {
+                Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    "containment failed",
+                ))
+            } else {
+                Ok(())
+            };
+            let error = completion_error(
+                containment,
+                Err(capture),
+                Some(RuntimeError::new(
+                    ErrorCode::TaskFailed,
+                    "task smoke exited with code 7",
+                )),
+            )
+            .unwrap();
+            let actual = serde_json::to_value(error).unwrap();
+            let expected = if containment_failed {
+                serde_json::json!({
+                    "code":"PROC_ESCAPE", "exitClass":"error", "message":"containment failed", "details":{}, "manifestPath":null, "computedManifestHash":null,
+                    "causes":[
+                        {"code":"SECRET_LEAK_BLOCKED", "exitClass":"error", "message":"captured stdout did not reach EOF before shutdown deadline", "details":{}},
+                        {"code":"SECRET_LEAK_BLOCKED", "exitClass":"error", "message":"captured stderr did not reach EOF before shutdown deadline", "details":{}},
+                        {"code":"TASK_FAILED", "exitClass":"error", "message":"cause: TASK_FAILED", "details":{}}
+                    ]
+                })
+            } else {
+                serde_json::json!({
+                    "code":"SECRET_LEAK_BLOCKED", "exitClass":"error", "message":"captured stdout did not reach EOF before shutdown deadline", "details":{}, "manifestPath":null, "computedManifestHash":null,
+                    "causes":[
+                        {"code":"SECRET_LEAK_BLOCKED", "exitClass":"error", "message":"captured stderr did not reach EOF before shutdown deadline", "details":{}},
+                        {"code":"TASK_FAILED", "exitClass":"error", "message":"cause: TASK_FAILED", "details":{}}
+                    ]
+                })
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn bounded_exec_contains_pipe_holding_descendants_before_relay_join() {
         let root = std::env::temp_dir().join(format!(
             "nixfied-bounded-{}-{}",
@@ -3357,6 +3571,56 @@ mod tests {
             "relay completion must follow descendant containment, not natural expiry"
         );
         assert_eq!(captured, crate::redaction::REDACTION_TOKEN);
+    }
+
+    #[test]
+    fn bounded_spawn_failure_and_unrecorded_abort_close_capture_and_reap() {
+        let root = std::env::temp_dir().join(format!(
+            "nixfied-bounded-abort-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let executable = std::env::var("NIXFIED_TEST_SLEEP").unwrap();
+        let missing = root.join("missing-program");
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        let mut spec = BoundedExec {
+            executable: missing.to_str().unwrap(),
+            args: &["30".into()],
+            env: &BTreeMap::new(),
+            cwd: &root,
+            stdin: StdinPolicy::Null,
+            timeout: Duration::from_secs(30),
+            stdout_path: &stdout,
+            stderr_path: &stderr,
+            redactor: &Redactor::empty(),
+            label: "task process",
+        };
+        let error = spawn_bounded_exec(&spec).err().unwrap();
+        assert_eq!(error.code, ErrorCode::ProcEscape);
+        assert!(std::fs::read(&stdout).unwrap().is_empty());
+        assert!(std::fs::read(&stderr).unwrap().is_empty());
+        spec.executable = &executable;
+        let child = spawn_bounded_exec(&spec).unwrap();
+        let pid = child.pid() as i32;
+        let error = child.abort(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "process recording denied",
+        ));
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert_eq!(error.message, "process recording denied");
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "unrecorded child must be reaped"
+        );
+        assert!(std::fs::read(&stdout).unwrap().is_empty());
+        assert!(std::fs::read(&stderr).unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

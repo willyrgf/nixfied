@@ -270,6 +270,27 @@ when the manifest/runtime contract changes.
   success, task failure, timeout, and cancellation, before service teardown,
   lease release, aggregate summary, footer, or final error projection. Cleanup
   and finalization continue after a replay failure.
+- Bounded task/probe capture always uses pipes, including without secrets. After
+  containment and reap attempts, both stream workers receive one absolute
+  shutdown deadline 1,000 ms away. Workers check control and expiry before reads,
+  poll for at most 10 ms, and read at most 8 KiB per iteration. Only actual EOF
+  completes capture. Expiry discards the undecided redactor tail, closes both
+  evidence writers, and retains safe prefix files without completed task evidence
+  or replay. Both workers are joined even when either fails. This bound excludes
+  blocked regular-file writes/flushes and OS scheduling; it proves neither that
+  an escaped process died nor that the runtime discovered every descendant.
+- Incomplete capture reports `SECRET_LEAK_BLOCKED` with the fixed message
+  `captured stdout did not reach EOF before shutdown deadline` (or `stderr`).
+  This reports inability to prove completed capture, not an observed secret leak.
+  Containment/reap failure remains primary; capture errors follow in stdout then
+  stderr order, before subordinate task outcomes. Capture failure outranks task
+  and projection outcomes. Terminal service cleanup uses the same bounded
+  shutdown; successful standing explicitly transfers persistent relay ownership.
+- Task and probe child completion share containment, reaping, and capture
+  ordering. Tasks record their process after spawn and before completion; a
+  recording failure still consumes the child through cleanup. Cancellation and
+  timeout intent are recorded before any signal, and intent-recording failure
+  cannot bypass containment, reaping, or capture shutdown.
 - Runtime errors may carry a non-recursive `causes` array. Projection failures
   use typed redaction-safe `details.projections` entries, whose fields are
   rendered by `nix run .#docs -- api record output-schema/runtime-error-projection`.

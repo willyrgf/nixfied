@@ -1,9 +1,11 @@
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
@@ -156,35 +158,124 @@ impl Redactor {
     }
 }
 
+pub(crate) const CAPTURE_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1000);
+
 pub struct RedactedLogRelays {
-    handles: Vec<JoinHandle<RuntimeResult<()>>>,
+    stdout: CaptureWorker,
+    stderr: CaptureWorker,
 }
 
 impl RedactedLogRelays {
-    pub fn empty() -> Self {
-        Self {
-            handles: Vec::new(),
-        }
-    }
-
     /// Transfer live service relays to persistent operation without waiting for EOF.
     pub(crate) fn detach_for_persistent(self) {
-        drop(self.handles);
+        self.stdout.detach_for_persistent();
+        self.stderr.detach_for_persistent();
     }
 
-    pub fn join(self) -> RuntimeResult<()> {
-        for handle in self.handles {
-            match handle.join() {
-                Ok(result) => result?,
-                Err(_) => {
-                    return Err(RuntimeError::new(
-                        ErrorCode::SecretLeakBlocked,
-                        "redaction relay panicked before proving captured output was scrubbed",
-                    ));
+    pub fn shutdown(self, deadline: Instant) -> RuntimeResult<()> {
+        // Publish to both before joining either: progress never extends the budget.
+        self.stdout.shutdown_at(deadline);
+        self.stderr.shutdown_at(deadline);
+        let stdout = self.stdout.join();
+        let stderr = self.stderr.join();
+        match (stdout, stderr) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(stdout), Err(stderr)) => Err(stdout.with_cause(stderr)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CapturedStream {
+    Stdout,
+    Stderr,
+}
+impl CapturedStream {
+    fn incomplete(self) -> RuntimeError {
+        leak_blocked(match self {
+            Self::Stdout => "captured stdout did not reach EOF before shutdown deadline",
+            Self::Stderr => "captured stderr did not reach EOF before shutdown deadline",
+        })
+    }
+}
+
+enum CaptureControl {
+    Shutdown(Instant),
+    Persistent,
+}
+enum CaptureMode {
+    Owned,
+    Shutdown(Instant),
+    Persistent,
+}
+impl CaptureMode {
+    fn aborted(&mut self, control: &Receiver<CaptureControl>) -> bool {
+        if matches!(self, Self::Persistent) {
+            return false;
+        }
+        loop {
+            match control.try_recv() {
+                Ok(CaptureControl::Shutdown(deadline)) => {
+                    *self = Self::Shutdown(match self {
+                        Self::Shutdown(existing) => deadline.min(*existing),
+                        Self::Owned | Self::Persistent => deadline,
+                    });
                 }
+                Ok(CaptureControl::Persistent) => {
+                    *self = Self::Persistent;
+                    return false;
+                }
+                Err(TryRecvError::Disconnected) => return true,
+                Err(TryRecvError::Empty) => break,
             }
         }
-        Ok(())
+        matches!(self, Self::Shutdown(deadline) if Instant::now() >= *deadline)
+    }
+}
+
+enum CaptureCompletion {
+    Eof,
+    Incomplete,
+}
+
+struct CaptureWorker {
+    stream: CapturedStream,
+    control: Sender<CaptureControl>,
+    // Taken only by consuming join/transfer; never an authored lifecycle state.
+    handle: Option<JoinHandle<RuntimeResult<CaptureCompletion>>>,
+}
+impl CaptureWorker {
+    fn shutdown_at(&self, deadline: Instant) {
+        let _ = self.control.send(CaptureControl::Shutdown(deadline));
+    }
+    fn join(mut self) -> RuntimeResult<()> {
+        match self
+            .handle
+            .take()
+            .expect("capture handle is consumed once")
+            .join()
+        {
+            Ok(Ok(CaptureCompletion::Eof)) => Ok(()),
+            Ok(Ok(CaptureCompletion::Incomplete)) => Err(self.stream.incomplete()),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(leak_blocked(
+                "redaction relay panicked before proving captured output was scrubbed",
+            )),
+        }
+    }
+    fn detach_for_persistent(mut self) {
+        // A named transfer is required: bare channel disconnection means abort.
+        let _ = self.control.send(CaptureControl::Persistent);
+        drop(self.handle.take());
+    }
+}
+impl Drop for CaptureWorker {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.shutdown_at(Instant::now());
+            let _ = handle.join();
+        }
     }
 }
 
@@ -194,26 +285,42 @@ pub struct RedactedChildOutput {
     pub relays: RedactedLogRelays,
 }
 
+/// Long-lived services without secrets preserve direct-file output across
+/// runtime interruption. Bounded task/probe evidence never uses this path.
+pub(crate) fn direct_service_output(
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> RuntimeResult<(Stdio, Stdio)> {
+    Ok((
+        Stdio::from(create_log_file(stdout_path, false)?),
+        Stdio::from(create_log_file(stderr_path, false)?),
+    ))
+}
+
 pub fn child_output(
     stdout_path: &Path,
     stderr_path: &Path,
     redactor: &Redactor,
 ) -> RuntimeResult<RedactedChildOutput> {
-    if redactor.is_empty() {
-        return Ok(RedactedChildOutput {
-            stdout: Stdio::from(create_log_file(stdout_path, false)?),
-            stderr: Stdio::from(create_log_file(stderr_path, false)?),
-            relays: RedactedLogRelays::empty(),
-        });
-    }
-
-    let (stdout, stdout_relay) = redacted_stdio(stdout_path, redactor)?;
-    let (stderr, stderr_relay) = redacted_stdio(stderr_path, redactor)?;
+    let (stdout, stdout_relay) = redacted_stdio(stdout_path, redactor, CapturedStream::Stdout)?;
+    let (stderr, stderr_relay) = match redacted_stdio(stderr_path, redactor, CapturedStream::Stderr)
+    {
+        Ok(output) => output,
+        Err(error) => {
+            drop(stdout);
+            stdout_relay.shutdown_at(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+            return Err(match stdout_relay.join() {
+                Ok(()) => error,
+                Err(capture) => capture.with_cause(error),
+            });
+        }
+    };
     Ok(RedactedChildOutput {
         stdout,
         stderr,
         relays: RedactedLogRelays {
-            handles: vec![stdout_relay, stderr_relay],
+            stdout: stdout_relay,
+            stderr: stderr_relay,
         },
     })
 }
@@ -221,9 +328,14 @@ pub fn child_output(
 fn redacted_stdio(
     path: &Path,
     redactor: &Redactor,
-) -> RuntimeResult<(Stdio, JoinHandle<RuntimeResult<()>>)> {
+    stream: CapturedStream,
+) -> RuntimeResult<(Stdio, CaptureWorker)> {
     let mut fds = [0; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+    #[cfg(target_os = "linux")]
+    let result = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    #[cfg(not(target_os = "linux"))]
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
         return Err(leak_blocked(format!(
             "failed to create redaction pipe for {}: {}",
             path.display(),
@@ -232,33 +344,113 @@ fn redacted_stdio(
     }
     let read_end = unsafe { File::from_raw_fd(fds[0]) };
     let write_end = unsafe { File::from_raw_fd(fds[1]) };
-    let writer = create_log_file(path, true)?;
-    let redactor = redactor.clone();
-    let handle = thread::spawn(move || redact_stream(read_end, writer, redactor));
-    Ok((Stdio::from(write_end), handle))
-}
-
-fn redact_stream(mut reader: File, mut writer: File, redactor: Redactor) -> RuntimeResult<()> {
-    let mut pending = Vec::new();
-    let mut buf = [0; 8192];
-    loop {
-        let read = reader.read(&mut buf).map_err(|error| {
-            leak_blocked(format!(
-                "failed to read child output for redaction: {error}"
-            ))
-        })?;
-        if read == 0 {
-            break;
-        }
-        pending.extend_from_slice(&buf[..read]);
-        if pending.len() >= redactor.max_pattern_len() {
-            let redacted = redactor.redact_available(&mut pending);
-            writer.write_all(&redacted).map_err(|error| {
-                leak_blocked(format!("failed to write redacted child output: {error}"))
-            })?;
+    for fd in [read_end.as_raw_fd(), write_end.as_raw_fd()] {
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+            return Err(leak_blocked("failed to set capture pipe close-on-exec"));
         }
     }
-    if !pending.is_empty() {
+    let flags = unsafe { libc::fcntl(read_end.as_raw_fd(), libc::F_GETFL) };
+    if flags == -1
+        || unsafe {
+            libc::fcntl(
+                read_end.as_raw_fd(),
+                libc::F_SETFL,
+                flags | libc::O_NONBLOCK,
+            )
+        } == -1
+    {
+        return Err(leak_blocked("failed to set capture pipe nonblocking"));
+    }
+    let writer = create_log_file(path, !redactor.is_empty())?;
+    let redactor = redactor.clone();
+    let (control, receiver) = mpsc::channel();
+    let handle = thread::Builder::new()
+        .name("nixfied-capture".into())
+        .spawn(move || redact_stream(read_end, writer, redactor, receiver))
+        .map_err(|error| leak_blocked(format!("failed to start redaction relay: {error}")))?;
+    Ok((
+        Stdio::from(write_end),
+        CaptureWorker {
+            stream,
+            control,
+            handle: Some(handle),
+        },
+    ))
+}
+
+fn redact_stream(
+    mut reader: File,
+    mut writer: File,
+    redactor: Redactor,
+    control: Receiver<CaptureControl>,
+) -> RuntimeResult<CaptureCompletion> {
+    let mut pending = Vec::new();
+    let mut buf = [0; 8192];
+    let mut mode = CaptureMode::Owned;
+    let completion = loop {
+        if mode.aborted(&control) {
+            break CaptureCompletion::Incomplete;
+        }
+        let wait = match mode {
+            CaptureMode::Shutdown(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    break CaptureCompletion::Incomplete;
+                }
+                (deadline - now).min(Duration::from_millis(10))
+            }
+            CaptureMode::Owned | CaptureMode::Persistent => Duration::from_millis(10),
+        };
+        let mut pollfd = libc::pollfd {
+            fd: reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let polled = unsafe { libc::poll(&mut pollfd, 1, wait.as_millis() as i32) };
+        if polled == -1 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(leak_blocked(format!(
+                "failed to read child output for redaction: {error}"
+            )));
+        }
+        if polled == 0 {
+            continue;
+        }
+        // A shutdown message can arrive during poll. Observe it before any
+        // subsequent read, including EOF, so expired shutdown wins over readiness.
+        if mode.aborted(&control) {
+            break CaptureCompletion::Incomplete;
+        }
+        let read = match reader.read(&mut buf) {
+            Ok(read) => read,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(leak_blocked(format!(
+                    "failed to read child output for redaction: {error}"
+                )));
+            }
+        };
+        if read == 0 {
+            break CaptureCompletion::Eof;
+        }
+        pending.extend_from_slice(&buf[..read]);
+        let redacted = redactor.redact_available(&mut pending);
+        writer.write_all(&redacted).map_err(|error| {
+            leak_blocked(format!("failed to write redacted child output: {error}"))
+        })?;
+    };
+    drop(reader);
+    if matches!(completion, CaptureCompletion::Eof) && !pending.is_empty() {
         let redacted = redactor.redact_bytes(&pending);
         writer.write_all(&redacted).map_err(|error| {
             leak_blocked(format!(
@@ -266,10 +458,11 @@ fn redact_stream(mut reader: File, mut writer: File, redactor: Redactor) -> Runt
             ))
         })?;
     }
+    // Incomplete capture discards the undecided tail; only safe bytes are flushed.
     writer
         .flush()
         .map_err(|error| leak_blocked(format!("failed to flush redacted child output: {error}")))?;
-    Ok(())
+    Ok(completion)
 }
 
 fn create_log_file(path: &Path, redacted: bool) -> RuntimeResult<File> {
@@ -290,6 +483,251 @@ fn leak_blocked(message: impl Into<String>) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CaptureFixture(std::path::PathBuf);
+    impl CaptureFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "nixfied-capture-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+        fn worker(
+            &self,
+            stream: CapturedStream,
+            redactor: Redactor,
+            writable: bool,
+        ) -> (
+            CaptureWorker,
+            std::os::unix::net::UnixStream,
+            std::path::PathBuf,
+        ) {
+            let name = match stream {
+                CapturedStream::Stdout => "stdout",
+                CapturedStream::Stderr => "stderr",
+            };
+            let path = self.0.join(name);
+            let writer = File::create(&path).unwrap();
+            let writer = if writable {
+                writer
+            } else {
+                drop(writer);
+                File::open(&path).unwrap()
+            };
+            let (reader, sender) = std::os::unix::net::UnixStream::pair().unwrap();
+            reader.set_nonblocking(true).unwrap();
+            let reader = File::from(std::os::fd::OwnedFd::from(reader));
+            let (control, receiver) = mpsc::channel();
+            let handle = thread::spawn(move || redact_stream(reader, writer, redactor, receiver));
+            (
+                CaptureWorker {
+                    stream,
+                    control,
+                    handle: Some(handle),
+                },
+                sender,
+                path,
+            )
+        }
+    }
+    impl Drop for CaptureFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn eof_finalizes_both_streams_and_preserves_binary_empty_redactor_output() {
+        let fixture = CaptureFixture::new();
+        let (stdout, mut out, out_path) = fixture.worker(
+            CapturedStream::Stdout,
+            Redactor {
+                patterns: vec![b"abcdef".to_vec()],
+            },
+            true,
+        );
+        let (stderr, mut err, err_path) =
+            fixture.worker(CapturedStream::Stderr, Redactor::empty(), true);
+        out.write_all(b"abcdef-tail").unwrap();
+        err.write_all(b"\x00\xffbinary").unwrap();
+        drop(out);
+        drop(err);
+        RedactedLogRelays { stdout, stderr }
+            .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT)
+            .unwrap();
+        assert_eq!(std::fs::read(out_path).unwrap(), b"[REDACTED]-tail");
+        assert_eq!(std::fs::read(err_path).unwrap(), b"\x00\xffbinary");
+    }
+
+    #[test]
+    fn shutdown_arriving_during_poll_is_observed_before_eof() {
+        let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let (polling, enter_poll) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut mode = CaptureMode::Owned;
+            assert!(!mode.aborted(&receiver));
+            polling.send(()).unwrap();
+            let mut fd = libc::pollfd {
+                fd: reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut fd, 1, 1000) }, 1);
+            // EOF follows an expired shutdown message. The post-poll boundary
+            // must observe that message before accepting the readable EOF.
+            finished.send(mode.aborted(&receiver)).unwrap();
+        });
+        enter_poll.recv_timeout(Duration::from_secs(2)).unwrap();
+        sender
+            .send(CaptureControl::Shutdown(Instant::now()))
+            .unwrap();
+        drop(writer);
+        assert!(done.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn partial_capture_construction_closes_stdout_and_preserves_file_error_classes() {
+        for secret in [false, true] {
+            let fixture = CaptureFixture::new();
+            let stdout = fixture.0.join("stdout");
+            let redactor = if secret {
+                Redactor {
+                    patterns: vec![b"secret".to_vec()],
+                }
+            } else {
+                Redactor::empty()
+            };
+            let error = child_output(&stdout, &fixture.0, &redactor).err().unwrap();
+            assert_eq!(
+                error.code,
+                if secret {
+                    ErrorCode::SecretLeakBlocked
+                } else {
+                    ErrorCode::StateUnwritable
+                }
+            );
+            assert!(std::fs::read(&stdout).unwrap().is_empty());
+            // Construction returned only after the already-created stdout worker joined.
+            std::fs::remove_file(stdout).unwrap();
+        }
+    }
+
+    #[test]
+    fn persistent_transfer_keeps_redacting_after_control_owner_is_gone() {
+        let fixture = CaptureFixture::new();
+        let (worker, mut writer, path) = fixture.worker(
+            CapturedStream::Stdout,
+            Redactor {
+                patterns: vec![b"secret".to_vec()],
+            },
+            true,
+        );
+        worker.detach_for_persistent();
+        writer.write_all(b"secretsecret-tail").unwrap();
+        drop(writer);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let bytes = std::fs::read(&path).unwrap();
+            if bytes == b"[REDACTED][REDACTED]-tail" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "persistent transfer must preserve EOF tail handling: {bytes:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn retained_writers_share_one_deadline_and_discard_partial_secret_tails() {
+        let fixture = CaptureFixture::new();
+        let redactor = Redactor {
+            patterns: vec![b"abcdef".to_vec()],
+        };
+        let (stdout, mut out, out_path) =
+            fixture.worker(CapturedStream::Stdout, redactor.clone(), true);
+        let (stderr, mut err, err_path) = fixture.worker(CapturedStream::Stderr, redactor, true);
+        out.write_all(b"safe-data-abc").unwrap();
+        err.write_all(b"safe-data-abc").unwrap();
+        let (done, result) = mpsc::channel();
+        let started = Instant::now();
+        thread::spawn(move || {
+            done.send(
+                RedactedLogRelays { stdout, stderr }
+                    .shutdown(Instant::now() + Duration::from_millis(100)),
+            )
+            .unwrap();
+        });
+        let error = result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        assert_eq!(
+            error.message,
+            "captured stdout did not reach EOF before shutdown deadline"
+        );
+        assert_eq!(error.causes.len(), 1);
+        assert_eq!(
+            error.causes[0].message,
+            "captured stderr did not reach EOF before shutdown deadline"
+        );
+        assert_eq!(std::fs::read(&out_path).unwrap(), b"safe-dat");
+        assert_eq!(std::fs::read(&err_path).unwrap(), b"safe-dat");
+        assert!(out.write_all(b"def").is_err());
+        assert!(err.write_all(b"def").is_err());
+        assert_eq!(std::fs::read(out_path).unwrap(), b"safe-dat");
+        assert_eq!(std::fs::read(err_path).unwrap(), b"safe-dat");
+    }
+
+    #[test]
+    fn first_worker_error_still_joins_the_other_continuously_readable_worker() {
+        let fixture = CaptureFixture::new();
+        let (stdout, mut out, _) = fixture.worker(CapturedStream::Stdout, Redactor::empty(), false);
+        let (stderr, mut err, err_path) =
+            fixture.worker(CapturedStream::Stderr, Redactor::empty(), true);
+        out.write_all(b"cannot write this").unwrap();
+        drop(out);
+        let writer = thread::spawn(move || while err.write_all(&[b'x'; 8192]).is_ok() {});
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            done.send(
+                RedactedLogRelays { stdout, stderr }
+                    .shutdown(Instant::now() + Duration::from_millis(100)),
+            )
+            .unwrap();
+        });
+        let error = result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error
+                .message
+                .starts_with("failed to write redacted child output:")
+        );
+        assert_eq!(error.causes.len(), 1);
+        assert_eq!(
+            error.causes[0].message,
+            "captured stderr did not reach EOF before shutdown deadline"
+        );
+        writer.join().unwrap();
+        let captured = std::fs::read(&err_path).unwrap();
+        assert!(!captured.is_empty());
+        assert!(captured.iter().all(|byte| *byte == b'x'));
+        assert_eq!(std::fs::read(err_path).unwrap(), captured);
+    }
 
     #[test]
     fn redacts_text_and_json_values() {

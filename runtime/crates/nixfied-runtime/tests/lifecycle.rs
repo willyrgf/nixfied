@@ -64,6 +64,42 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         panic!("postgres never came up on port {port} within 90 s");
     }
 
+    // Listening can precede the runtime's process-record commit. Interrupt only
+    // after this run has durable ownership evidence, so recovery has a row to
+    // reconcile rather than accidentally exercising unrecorded-child loss.
+    let registry_path = state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
+    loop {
+        let recorded = rusqlite::Connection::open_with_flags(
+            &registry_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL
+                     AND status IN ('running', 'ready') LIMIT 1",
+                    [],
+                    |row| row.get::<_, i32>(0),
+                )
+                .ok()
+        })
+        .is_some_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
+        if recorded {
+            break;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "runtime exited before committed live service evidence"
+        );
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("postgres listened but no committed live service process appeared");
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
     let pid = child.id() as libc::pid_t;
     let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
     child.wait().expect("killed child should reap");
@@ -107,7 +143,6 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
     }
     thread::sleep(Duration::from_millis(500));
 
-    let registry_path = state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
     let expire = Command::new("sqlite3")
         .arg(&registry_path)
         .arg(

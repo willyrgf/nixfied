@@ -244,8 +244,57 @@ removed state owners, coordinated change sites, and capture correctness addition
    source checks, fixture-backed Cargo, all 22 runtime cases, and Nix compiler/
    install/upgrade integration. macOS remains unverified. Bounded relay shutdown
    remains steps 9–10.
-9. Bounded capture and child completion ABI cutover: pending.
-10. Terminal/persistent capture integration: pending.
+9. Bounded capture and child completion ABI cutover: complete.
+   `OwnedBoundedChild` now owns task/probe spawn, polling, intent-before-signal,
+   containment/reap, and capture completion. Tasks record between spawn and
+   consuming completion; recording failure consumes the same owner through abort.
+   The duplicate task spawn/wait/cleanup implementation is removed. Service start
+   shares hermetic command configuration, while retaining long-lived ownership.
+   Bounded capture always uses close-on-exec pipes, including empty redactors. Nonblocking
+   workers check control/expiry before and after polling, read at most 8 KiB,
+   poll at most 10 ms, and receive one shared 1,000 ms shutdown deadline before
+   either is joined. EOF alone finalizes the redactor tail; incomplete capture
+   discards it and closes files. Both streams are joined after errors/panics.
+   Safe fixed incomplete messages survive cause projection; containment, stdout,
+   stderr, and task outcome ordering has literal JSON goldens. No incomplete
+   task evidence or replay is constructed. Architect review caught a pending
+   control message after poll and an incidental cancellation-reason change; both
+   are fixed, with a synchronized poll/EOF boundary proof and original event text.
+   Independent test-child fixtures handshake a setsid escape holding idle or
+   continuously written pipes. Four real CLI combinations (with/without secrets)
+   prove bounded return, no replay/completed node, stable closed prefix files,
+   undecided-tail secrecy, and a still-live test-owned survivor cleaned by tests.
+   Additional proofs cover ordinary descendants, EOF tails/binary empty-redactor
+   output, one failing worker while the other stays readable, partial creation,
+   spawn failure, unrecorded abort/reap, and intent failure before signaling.
+   Current focused proof: 124 runtime unit, 22 output, 73 service tests and Clippy
+   pass (`/tmp/nixfied-capture-final-focused.log`). The fixture-backed `.#test`
+   floor passed before final error-order fixes (`/tmp/nixfied-capture-floor.log`).
+   Contract/guide/architecture and native descriptor coverage updated together;
+   ABI snapshot is `nixfied-runtime-abi:1-aaed2238d5f9`. Full CI session `30624`
+   failed at Postgres interruption recovery (`/tmp/nixfied-bounded-capture-ci.log`):
+   `ps` returned no process rows. A focused rerun reproduced it. Review established
+   that the test's TCP-only synchronization could interrupt before process-record
+   commit; stale processes would still have been reported. The proof now waits
+   for committed live service evidence before interruption. Separately restored
+   long-lived no-secret service direct-file output; always-piped capture is the
+   bounded task/probe policy, and should not change service orphan semantics.
+   Focused recovery and Clippy pass (`/tmp/nixfied-service-output-policy.log`).
+   Full current-tree CI passed (session `36838`, exit 0), including source
+   checks, fixture-backed Cargo, runtime gates, and downstream Nix/install/upgrade
+   integration (`/tmp/nixfied-bounded-capture-ci-repaired.log`).
+10. Terminal/persistent capture integration is included in the atomic step 9 cut.
+   Service failure, stop, cancellation, unrecorded get-pgid/recording failures,
+   pre-spawn cancellation/spawn failure, and Drop all use bounded capture shutdown.
+   Explicit cleanup no longer skips reap/capture after containment failure or
+   silently discards capture errors. Registry escape settlement retains collected
+   termination/reap evidence. Cancellation preserves containment/capture/intent/
+   cancellation order; settlement failures retain their existing precedence.
+   Persistent transfer sends a named control before detaching, so owner-channel
+   disconnection cannot abort transferred relays. Ongoing redaction/EOF-tail
+   behavior has a worker proof; existing persistent survival/borrow/release/down,
+   until-idle, cancellation, identity/lease race, and escape service tests pass.
+   macOS execution remains unverified; final acceptance must report that gap.
 11. Borrowed plans, node runner, and occurrence evidence ABI cutover: pending.
 12. Registry decoding/event context: pending.
 13. Shared redaction scanner/safe projections: pending.

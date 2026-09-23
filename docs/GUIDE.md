@@ -362,6 +362,14 @@ before treating stdout as a valid result; a child exit accepted by
 composite is rejected before runtime state or child side effects. Use `summary`,
 `json`, or `both` when you need runtime results rather than the selected leaf's
 captured bytes.
+
+If a descendant keeps an output pipe open after child cleanup, capture stops
+after a shared one-second shutdown deadline and reports `SECRET_LEAK_BLOCKED`.
+The diagnostic names the incomplete stream. Safe prefix log files remain for
+inspection, but the runtime publishes no completed task evidence or replay for
+that task. This diagnostic does not mean a secret was observed leaking, or that
+every escaped descendant was terminated; inspect the program's child-process
+behavior along with the retained logs.
 There are no mode-specific flag aliases. There is no framework `logs`
 command: metadata modes report the evidence paths for inspection.
 

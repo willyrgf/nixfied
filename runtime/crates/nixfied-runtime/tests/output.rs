@@ -106,6 +106,105 @@ fn no_service(manifest: &mut Value) {
 }
 
 #[test]
+fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
+    struct Survivor(libc::pid_t);
+    impl Drop for Survivor {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+            }
+        }
+    }
+    for activity in ["idle", "continuous"] {
+        for secret in [false, true] {
+            let markers = TempDir::new();
+            let pid_path = markers.path.join("pid");
+            let acknowledgement = markers.path.join("ack");
+            let prefix = if secret {
+                b"safe-data-abc".as_slice()
+            } else {
+                b"safe-data".as_slice()
+            };
+            let args = vec![
+                "output".into(),
+                "escaped-writer".into(),
+                activity.into(),
+                pid_path.to_string_lossy().into_owned(),
+                acknowledgement.to_string_lossy().into_owned(),
+                hex(prefix),
+                hex(prefix),
+            ];
+            let mut manifest = task_manifest(&args);
+            no_service(&mut manifest);
+            if secret {
+                manifest["secrets"]["token"] = json!({"secretId":"token","source":{
+                    "kind":"env-var","envVar":"NIXFIED_CAPTURE_SECRET"
+                }});
+                manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
+            }
+            let fixture = fixture(manifest);
+            let child = command(&fixture, &["--task", "smoke", "--output", "task-output"])
+                .env("NIXFIED_CAPTURE_SECRET", "abcdef")
+                .spawn()
+                .unwrap();
+            assert!(wait_for_path(&pid_path, Duration::from_secs(5)));
+            let survivor = Survivor(
+                fs::read_to_string(&pid_path)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap(),
+            );
+            assert_eq!(
+                unsafe { libc::getpgid(survivor.0) },
+                survivor.0,
+                "fixture must have escaped into its own group"
+            );
+            let started = std::time::Instant::now();
+            fs::write(acknowledgement, b"release parent").unwrap();
+            let output = wait_for_child_output(child, Duration::from_secs(8));
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "capture must not wait for escaped writers"
+            );
+            assert!(!output.status.success());
+            assert!(
+                output.stdout.is_empty(),
+                "incomplete capture must not replay safe prefix files"
+            );
+            assert_eq!(
+                unsafe { libc::kill(survivor.0, 0) },
+                0,
+                "capture timeout is not proof of process death"
+            );
+            let text = String::from_utf8_lossy(&output.stderr);
+            assert!(text.contains("SECRET_LEAK_BLOCKED"), "{text}");
+            // Task-output emits human diagnostics. Inspect the durable aggregate summary
+            // and files directly: no completed node or task summary may be published.
+            let runs = fixture.state_base.join("runtime-test/dev/0/runs");
+            let run = fs::read_dir(runs).unwrap().next().unwrap().unwrap().path();
+            let summary: Value =
+                serde_json::from_slice(&fs::read(run.join("artifacts/run-summary.json")).unwrap())
+                    .unwrap();
+            assert_eq!(summary["nodes"], json!([]));
+            assert!(!run.join("summary.smoke.json").exists());
+            for stream in ["stdout", "stderr"] {
+                let path = run.join(format!("logs/task.smoke.{stream}.log"));
+                let before = fs::read(&path).unwrap();
+                assert!(!before.is_empty());
+                if secret && activity == "idle" {
+                    assert_eq!(before, b"safe-dat");
+                }
+                // The survivor remains alive with writers. Returned evidence is closed.
+                std::thread::sleep(Duration::from_millis(30));
+                assert_eq!(fs::read(path).unwrap(), before);
+            }
+            drop(survivor);
+        }
+    }
+}
+
+#[test]
 fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
     for fault in ["cycle", "template", "nested-secret"] {
         let mut manifest = task_manifest(&["prepare".into(), "child-started".into()]);

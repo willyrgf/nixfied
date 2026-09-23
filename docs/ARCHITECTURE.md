@@ -370,6 +370,17 @@ rendered by `nix run .#docs -- api record output-schema/run-json`.
 explicitly for diagnostics. When the option is omitted, the runtime uses the
 selected root task's manifest `defaultOutput`, whose normal value is `summary`.
 
+Task and probe execution share a concrete child owner. Spawn returns that owner;
+tasks record their process before consuming it through completion, while probes
+complete directly. Cancellation/timeout intent precedes signaling. Every exit
+path attempts containment and reap, then shuts down both capture workers under
+one absolute deadline. Workers own evidence files, and bounded children receive only pipe
+writers, including when no secrets are configured. Actual EOF alone completes
+capture; an incomplete stream cannot issue completed evidence or a replay ticket.
+Service terminal cleanup reuses bounded relay shutdown; services without secrets
+retain their direct-file output policy across runtime interruption. Standing
+explicitly transfers persistent relay ownership.
+
 `--output task-output` is a separate direct-leaf boundary. The runtime validates
 one explicit leaf after admission but before slot selection, placement, state,
 registry, services, prepare tasks, or child spawn. It captures and redacts the
