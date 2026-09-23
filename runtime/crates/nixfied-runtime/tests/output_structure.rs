@@ -1,9 +1,8 @@
-use std::error::Error;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use nixfied_runtime::error::{ErrorCode, RuntimeCause, RuntimeError};
+use nixfied_runtime::error::{ErrorCode, ExitClass, RuntimeCause, RuntimeError};
 use nixfied_runtime::service::TaskRun;
 use nixfied_runtime::state::CleanupOutcome;
 use serde_json::{Value, json};
@@ -47,7 +46,7 @@ fn native_paths_keep_non_utf8_failure_instead_of_becoming_lossy() {
 fn runtime_error_is_one_owned_native_error_with_open_details() {
     let error = RuntimeError::new(ErrorCode::TaskFailed, "task failed").with_details(Value::Null);
     assert_eq!(error.to_string(), "TaskFailed: task failed");
-    assert!(error.source().is_none());
+    assert_eq!(serde_json::to_string(&ExitClass::Ok).unwrap(), r#""ok""#);
     assert_eq!(
         serde_json::to_string(&error).unwrap(),
         r#"{"code":"TASK_FAILED","exitClass":"error","message":"task failed","details":null,"manifestPath":null,"computedManifestHash":null}"#

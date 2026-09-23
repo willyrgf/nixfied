@@ -41,8 +41,6 @@ assert lib.unique covered == covered;
 assert builtins.sort builtins.lessThan covered == builtins.attrNames inventory;
 assert builtins.all (topic: topics ? ${topic}) (builtins.attrValues native);
 assert syntax.runtimeCommands == inventory.surface;
-assert builtins.length structure.records == 48;
-assert builtins.length structure.vocabularies == 23;
 assert
   builtins.sort builtins.lessThan (
     map (record: record.id) (

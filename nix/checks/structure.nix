@@ -309,6 +309,14 @@ let
       expr = badRecord (r: r // { fields = r.fields ++ r.fields; });
       expected = true;
     };
+    missingInventoryField = {
+      expr = badRecord (r: r // { fields = builtins.tail r.fields; });
+      expected = true;
+    };
+    wrongInventoryFieldWithSameCount = {
+      expr = badField (f: f // { name = "unexpectedField"; });
+      expected = true;
+    };
     localBypass = {
       expr = badRecord (r: r // { identity = d.local "Project"; });
       expected = true;

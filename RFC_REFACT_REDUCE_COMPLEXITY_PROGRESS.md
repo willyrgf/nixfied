@@ -424,8 +424,25 @@ removed state owners, coordinated change sites, and capture correctness addition
    Clippy, 73 service tests, and ten upgrade tests pass after the method cutover
    (`/tmp/nixfied-service-start-method-tests.log`); final endpoint-less/prepare
    method checks are in `/tmp/nixfied-service-fixture-final-tests.log`.
-   Remaining: broader CLI fixture adoption where cohesive, registry identity/
-   cleanup setup tables, and approximate-audit replacement mapping/removal.
+   Approximate-audit retirement is complete. DEVELOPMENT maps each removed
+   fixture-token/history blacklist, error/exit sentinel/list, and fixed-count
+   assertion to its owning structural, freshness, raw-wire, literal ABI, or
+   behavioral proof. The mapping explicitly limits decoder negatives to the
+   represented policies; it does not claim every record has a separate unknown-
+   field test. AGENTS now routes new fields through this replacement coverage.
+   Exact whole-inventory/native-owner routing, per-record equality, explicit
+   local-record inventory, independent literal wire tests, and required-field
+   maintenance exercises remain. Added missing-field and same-count renamed-field
+   declaration rejection vectors. Removed the default Error::source readback;
+   literal error JSON remains and also pins ExitClass::Ok spelling.
+   Architect review found no coverage gap blocking retirement. Clippy, manifest
+   tests, error unit tests, and output_structure tests pass
+   (`/tmp/nixfied-audit-replacement-tests.log`). The hermetic rust-workspace source
+   check passed, including generation/reference freshness and maintenance exercises
+   (`/tmp/nixfied-audit-source-check.log`). Current structure/coverage Nix evaluation
+   also passed after the new field-rejection vectors. Final full CI remains due.
+   Remaining: broader CLI fixture adoption where cohesive and registry identity/
+   cleanup setup tables.
 
 No completion claim: final acceptance audit, final measurements, full fixture-backed
 test floor, CI/downstream gate, macOS process/endpoint/capture evidence, and release
