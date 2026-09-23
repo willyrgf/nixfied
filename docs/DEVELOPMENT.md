@@ -74,7 +74,9 @@ skips that case.
 Rust integration tests that exercise spawned process and socket behavior use a
 private Nix-built child executable. Run those tests through `nix develop` or
 `.#test`; raw Cargo outside that environment has no `NIXFIED_TEST_CHILD` fixture
-and fails loudly rather than skipping coverage.
+and fails loudly rather than skipping coverage. Lifecycle fixtures also receive
+`NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_SHELL` from the same Nix environments, so
+their declared programs are realised store closures.
 
 For a targeted Rust iteration inside the pinned development environment:
 

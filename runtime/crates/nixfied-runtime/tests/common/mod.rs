@@ -43,35 +43,47 @@ pub fn runtime_binary() -> PathBuf {
 }
 
 pub fn test_child() -> PathBuf {
-    let configured = std::env::var_os("NIXFIED_TEST_CHILD")
-        .expect("NIXFIED_TEST_CHILD must name the Nix-built test fixture");
+    fixture_executable("NIXFIED_TEST_CHILD")
+}
+
+pub fn test_sleep() -> String {
+    fixture_executable("NIXFIED_TEST_SLEEP")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+pub fn test_shell() -> String {
+    fixture_executable("NIXFIED_TEST_SHELL")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn fixture_executable(variable: &str) -> PathBuf {
+    let configured = std::env::var_os(variable)
+        .unwrap_or_else(|| panic!("{variable} must name the Nix-built test fixture"));
     let configured = PathBuf::from(configured);
     let canonical = configured.canonicalize().unwrap_or_else(|error| {
         panic!(
-            "NIXFIED_TEST_CHILD {} should canonicalize: {error}",
+            "{variable} {} should canonicalize: {error}",
             configured.display()
         )
     });
-    let metadata = fs::metadata(&canonical).unwrap_or_else(|error| {
-        panic!(
-            "NIXFIED_TEST_CHILD {} should be inspectable: {error}",
-            canonical.display()
-        )
-    });
-    assert!(metadata.is_file(), "test child must be a regular file");
+    let metadata = fs::metadata(&canonical).expect("fixture executable should be inspectable");
+    assert!(
+        metadata.is_file(),
+        "fixture executable must be a regular file"
+    );
     assert_ne!(
         metadata.permissions().mode() & 0o111,
         0,
-        "test child must be executable"
-    );
-    assert!(
-        canonical.starts_with("/nix/store"),
-        "test child must resolve under /nix/store, got {}",
-        canonical.display()
+        "fixture must be executable"
     );
     closure_root_for_store_executable(&canonical)
-        .expect("test child should have a Nix store closure root");
-    canonical
+        .expect("fixture executable must resolve under a Nix store closure root");
+    // Preserve the declared basename: multicall programs dispatch through argv[0].
+    configured
 }
 
 pub fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {
@@ -103,6 +115,16 @@ pub fn synthetic_manifest_default(port_start: u16, port_end: u16) -> Value {
     synthetic_manifest(
         SYNTHETIC_EXECUTABLE,
         SYNTHETIC_START_ARGS,
+        port_start,
+        port_end,
+    )
+}
+
+/// A realised service executable for lifecycle/state fixtures that will undergo admission.
+pub fn test_child_manifest(port_start: u16, port_end: u16) -> Value {
+    synthetic_manifest(
+        test_child().to_str().unwrap(),
+        &["listen", "127.0.0.1", "${port}", "hold"],
         port_start,
         port_end,
     )
