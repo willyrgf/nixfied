@@ -184,20 +184,6 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
     transaction.commit().map_err(sql_error)
 }
 
-pub fn verify_existing(conn: &Connection) -> RuntimeResult<()> {
-    let user_version = conn
-        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .map_err(sql_error)?;
-    if user_version != SCHEMA_VERSION {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("expected registry user_version {SCHEMA_VERSION}, got {user_version}"),
-        ));
-    }
-    verify_required_columns(conn)?;
-    Ok(())
-}
-
 fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
     for (table, columns) in [
         ("events", &["environment", "slot"][..]),

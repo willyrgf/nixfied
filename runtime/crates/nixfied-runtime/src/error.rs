@@ -145,15 +145,6 @@ impl RuntimeError {
         self
     }
 
-    pub fn with_causes<I>(mut self, causes: I) -> Self
-    where
-        I: IntoIterator<Item = RuntimeError>,
-    {
-        self.causes
-            .extend(causes.into_iter().map(RuntimeCause::from_error));
-        self
-    }
-
     pub fn with_detail(mut self, key: impl Into<String>, value: impl Serialize) -> Self {
         let value = serde_json::to_value(value)
             .unwrap_or_else(|_| Value::String("detail-serialization-failed".to_string()));
