@@ -89,8 +89,8 @@ removed state owners, coordinated change sites, and capture correctness addition
    endpoint/state component digests pin JSON order and length/domain framing.
    Clippy, manifest tests, the hash proof, 73 service tests, both CLI signal tests,
    and 22 output tests pass (`/tmp/nixfied-smaller-subtractions-tests.log`,
-   `/tmp/nixfied-signal-helper-tests.log`). Full fixture-backed floor is running
-   (session `24863`, `/tmp/nixfied-refactor-consolidated-floor.log`).
+   `/tmp/nixfied-signal-helper-tests.log`). Full fixture-backed floor session
+   `24863` later failed; diagnostics and subsequent receipts are recorded below.
 3. Placement characterization: exact slot-one registry/run/log/artifact/summary
    paths are pinned alongside existing slot-zero paths. Materialization rejects
    symlinks at each owned root and nested run path without writing through them.
@@ -485,12 +485,12 @@ removed state owners, coordinated change sites, and capture correctness addition
    marker and reports status/stdout/stderr without changing its deadlines or success
    assertions. Two subsequent complete service suites passed, including that case
    (`/tmp/nixfied-shutdown-diagnostic-suite.log`,
-   `/tmp/nixfied-cli-fixture-adoption.log`). The complete fixture-backed floor is
-   running again as session `2926` (`/tmp/nixfied-refactor-final-floor.log`).
+   `/tmp/nixfied-cli-fixture-adoption.log`). The complete fixture-backed floor
+   passed as session `2926` (`/tmp/nixfied-refactor-final-floor.log`).
    This is additional evidence gathering, not a claimed root-cause fix.
 
-The implementation audit, measurements, complete Linux fixture floor, and public
-package builds are recorded below. Full CI is still running; macOS execution
+The implementation audit, measurements, complete Linux fixture floor, full Linux
+CI, and public package builds are recorded below. macOS execution
 remains unavailable. No full acceptance or completion claim is made.
 
 ## Final implementation audit
@@ -584,9 +584,12 @@ reported as added contract documentation, not hidden as refactor savings.
   gate-only slot override moved from 34880 to 31880, below this host's ephemeral
   range 32768–60999; both proposed windows were bindable before the rerun.
   Production endpoint refusal semantics are unchanged.
-- Repaired final CI: session `96889`, still running when this draft was prepared.
-  All 22 runtime-gate cases, including both slots, passed; downstream Nix/install/
-  upgrade fixtures are still running. Log: `/tmp/nixfied-refactor-final-ci-repaired.log`.
+- Repaired final CI: `nix run .#ci -- --dirty`, session `96889`, exit 0.
+  Source checks, the fixture-backed floor, all 22 runtime-gate cases (including
+  both slots), and downstream Nix/install/upgrade fixtures passed.
+  Log: `/tmp/nixfied-refactor-final-ci-repaired.log`. The tested source was
+  `c324538` plus the gate port adjustment committed as `716b403`. Subsequent
+  changes add the macOS workflow coverage and documentation only.
 - Earlier full floor session `24863` failed once on the shutdown test's initial
   service marker. Its failure path now reaps the child and reports diagnostics,
   without changing time limits or success assertions. Subsequent service suites
@@ -595,7 +598,7 @@ reported as added contract documentation, not hidden as refactor savings.
   extra execution platform or configured remote builder (`/etc/nix/machines`
   absent). The user has been asked for an available macOS host/runner. The hosted
   macOS workflow now runs service/output suites alongside unit/endpoint tests
-  (commit `5f586a4`); YAML and shell syntax have been checked, not macOS execution.
+  (commit `3b4a70a`); YAML and shell syntax have been checked, not macOS execution.
 
 Implementation evidence is not full RFC acceptance while the required macOS
 process/endpoint/capture proof is missing. No completion claim is made here.
