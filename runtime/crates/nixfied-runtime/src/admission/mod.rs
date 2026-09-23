@@ -19,10 +19,17 @@ pub enum StoreOriginPolicy {
 }
 
 #[derive(Debug, Clone)]
+pub enum InvocationRoot {
+    CurrentDirectory,
+    Path(PathBuf),
+}
+
+#[derive(Debug, Clone)]
 pub struct AdmissionContext {
     pub policy: StoreOriginPolicy,
     pub store_root: PathBuf,
     pub host_system: String,
+    pub invocation_root: InvocationRoot,
 }
 
 impl AdmissionContext {
@@ -31,6 +38,7 @@ impl AdmissionContext {
             policy,
             store_root: PathBuf::from("/nix/store"),
             host_system: host_system(),
+            invocation_root: InvocationRoot::CurrentDirectory,
         }
     }
 }

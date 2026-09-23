@@ -106,6 +106,17 @@ removed state owners, coordinated change sites, and capture correctness addition
    the existing map. Eight malformed-source cases prove exact diagnostics and
    descriptor-before-reference/value precedence. All 31 admission tests, three
    context tests, three secret unit tests, and Clippy pass on Linux.
+   Architect review selected lazy `InvocationRoot::{CurrentDirectory, Path}` in
+   admission context. Resolution remains inside live-source admission after
+   target/dirty-policy checks; controls and immutable sources never resolve it.
+   All 33 admission tests and Clippy pass, including explicit-root deletion and
+   immutable-source independence. The fixture-backed `.#test` floor at `5d26b54`
+   passed (session `99052`, `/tmp/nixfied-complexity-pre-admission-floor.log`).
+   A real-admission fixture trial exposed nonexistent state-fixture closures and
+   fabricated service/upgrade metadata. The trial was removed; do not broaden the
+   store root to `/` or add unchecked constructors to preserve those fixtures.
+   Configure real declared executables before admission. Upgrade hash fixtures
+   should use distinct valid raw JSON bytes and independently computed hashes.
    Remaining in this step: private run/control admissions owning the loaded
    document; removal of fabricated admission fixtures; one origin entry point and
    one store-root observation per admission.

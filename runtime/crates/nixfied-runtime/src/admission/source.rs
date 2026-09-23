@@ -3,8 +3,8 @@ use std::path::{Component, Path, PathBuf};
 use nixfied_manifest::{DirtyPolicy, Manifest, SourceMode};
 use serde::Serialize;
 
-use crate::admission::AdmissionContext;
 use crate::admission::origin;
+use crate::admission::{AdmissionContext, InvocationRoot};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -44,7 +44,7 @@ pub fn check_source(
                     "runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
                 ))?,
             }
-            resolve_live_observed_root(&codebase.logical_root)?
+            resolve_live_observed_root(&codebase.logical_root, &context.invocation_root)?
         }
         SourceMode::Snapshot | SourceMode::FlakeInput => resolve_immutable_observed_root(
             &codebase.source_identity,
@@ -63,15 +63,21 @@ pub fn check_source(
     })
 }
 
-fn resolve_live_observed_root(logical_root: &str) -> RuntimeResult<PathBuf> {
+fn resolve_live_observed_root(
+    logical_root: &str,
+    invocation_root: &InvocationRoot,
+) -> RuntimeResult<PathBuf> {
     let logical_path = Path::new(logical_root);
     validate_logical_root(logical_root, logical_path)?;
-    let invocation_root = std::env::current_dir().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            format!("failed to inspect invocation root: {error}"),
-        )
-    })?;
+    let invocation_root = match invocation_root {
+        InvocationRoot::CurrentDirectory => std::env::current_dir().map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::SourceMismatch,
+                format!("failed to inspect invocation root: {error}"),
+            )
+        })?,
+        InvocationRoot::Path(path) => path.clone(),
+    };
     let invocation_root = invocation_root.canonicalize().map_err(|error| {
         RuntimeError::new(
             ErrorCode::SourceMismatch,
