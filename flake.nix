@@ -395,11 +395,13 @@
           # deterministic windows. A stopped Postgres can leave a non-listening
           # TIME_WAIT claim that the required raw-bind preflight must refuse as
           # unverifiable rather than silently treating as available.
+          # Keep both slot windows below the usual Linux ephemeral range too,
+          # so the preceding socket tests do not allocate these as client ports.
           downstreamSlotsManifest = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/downstream/nixfied.nix ];
-              nixfied.placement.ports.base = lib.mkForce 34880;
+              nixfied.placement.ports.base = lib.mkForce 31880;
             }
           );
           rethManifest = nixfiedLib.compileManifest ./examples/reth/nixfied.nix;
