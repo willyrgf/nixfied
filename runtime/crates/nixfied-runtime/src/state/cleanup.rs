@@ -100,8 +100,9 @@ pub fn clean_marked_state(
             &cleanup_id,
             &marker.computed_manifest_hash,
             &payload_json,
-            CleanupStatus::Failed,
-            Some(cleanup_error.message.as_str()),
+            CleanupTerminal::Failed {
+                safe_reason: &cleanup_error.message,
+            },
         );
         return Err(cleanup_error);
     }
@@ -110,8 +111,7 @@ pub fn clean_marked_state(
         &cleanup_id,
         &marker.computed_manifest_hash,
         &payload_json,
-        CleanupStatus::Deleted,
-        None,
+        CleanupTerminal::Deleted,
     )?;
     Ok(CleanupOutcome {
         cleanup_id,
@@ -130,7 +130,7 @@ fn finish_missing_target_cleanup(
     refuse_active_refs(registry)?;
     refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
     let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
-    if CleanupStatus::from_db(&cleanup.status) == Some(CleanupStatus::Intent) {
+    if cleanup.status == CleanupStatus::Intent {
         let payload_json =
             cleanup_payload_json(&cleanup.cleanup_id, &canonical_target, cleanup.mode);
         record_cleanup_terminal(
@@ -138,8 +138,7 @@ fn finish_missing_target_cleanup(
             &cleanup.cleanup_id,
             &cleanup.marker.computed_manifest_hash,
             &payload_json,
-            CleanupStatus::Deleted,
-            None,
+            CleanupTerminal::Deleted,
         )?;
     }
     Ok(CleanupOutcome {
@@ -151,7 +150,7 @@ fn finish_missing_target_cleanup(
 #[derive(Debug)]
 struct PriorCleanup {
     cleanup_id: String,
-    status: String,
+    status: CleanupStatus,
     mode: CleanupMode,
     marker: StateMarker,
 }
@@ -239,7 +238,7 @@ fn find_prior_cleanup(
         if marker.matches_ownership(expected) {
             return Ok(PriorCleanup {
                 cleanup_id,
-                status,
+                status: CleanupStatus::parse_db(&status)?,
                 mode: if purge == 0 {
                     CleanupMode::Standard
                 } else {
@@ -387,14 +386,24 @@ fn record_cleanup_intent(
     Ok(())
 }
 
+enum CleanupTerminal<'a> {
+    Deleted,
+    Failed { safe_reason: &'a str },
+}
+
 fn record_cleanup_terminal(
     registry: &mut Registry,
     cleanup_id: &str,
     computed_manifest_hash: &str,
     payload_json: &str,
-    status: CleanupStatus,
-    refusal_reason: Option<&str>,
+    terminal: CleanupTerminal<'_>,
 ) -> RuntimeResult<()> {
+    let (status, refusal_reason, event_type) = match terminal {
+        CleanupTerminal::Deleted => (CleanupStatus::Deleted, None, "cleanup.deleted"),
+        CleanupTerminal::Failed { safe_reason } => {
+            (CleanupStatus::Failed, Some(safe_reason), "cleanup.failed")
+        }
+    };
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
@@ -408,11 +417,6 @@ fn record_cleanup_terminal(
             params![cleanup_id, status.as_str(), refusal_reason],
         )
         .map_err(sql_error)?;
-    let event_type = match status {
-        CleanupStatus::Deleted => "cleanup.deleted",
-        CleanupStatus::Failed => "cleanup.failed",
-        CleanupStatus::Intent => "cleanup.terminal",
-    };
     insert_event(
         &transaction,
         &identity,
