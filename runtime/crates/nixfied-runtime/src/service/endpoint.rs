@@ -10,7 +10,9 @@ use std::io;
 use std::net::IpAddr;
 #[cfg(test)]
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+#[cfg(target_os = "macos")]
+use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
 
@@ -18,6 +20,7 @@ use nixfied_manifest::ContainmentRequirement;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::filesystem::{Directory, DirectoryMode, PrivateFile};
 use crate::service::process::{
     SelectedEndpoint, process_is_in_containment, process_is_live_with_identity,
 };
@@ -152,7 +155,7 @@ impl EndpointFailure {
 /// The complete startup lock set for one service. Dropping it releases every
 /// kernel lock; the rendezvous files deliberately remain.
 pub(crate) struct EndpointLockGuards {
-    _guards: Vec<OwnedFd>,
+    _guards: Vec<PrivateFile>,
 }
 
 impl EndpointLockGuards {
@@ -173,29 +176,25 @@ pub(super) enum LockRoot<'a> {
     Opened(&'a ValidatedLockRoot),
 }
 
-pub(super) struct ValidatedLockRoot(OwnedFd);
+pub(super) struct ValidatedLockRoot(Directory);
 
 impl ValidatedLockRoot {
     #[cfg(test)]
     fn new(fd: OwnedFd) -> Result<Self, EndpointFailure> {
-        validate_directory(
-            fd.as_raw_fd(),
-            unsafe { libc::geteuid() },
-            DirectoryMode::OwnerOnly,
-            "endpoint lock root",
-        )?;
-        Ok(Self(fd))
+        Directory::checked(fd, unsafe { libc::geteuid() }, DirectoryMode::Private)
+            .map(Self)
+            .map_err(coordination_error)
     }
 
     fn directory(&self) -> Result<ValidatedLockDirectory, EndpointFailure> {
-        create_owned_directory(self.0.as_raw_fd(), c"endpoint-locks", unsafe {
-            libc::geteuid()
-        })
-        .map(ValidatedLockDirectory)
+        self.0
+            .create_private_child(c"endpoint-locks")
+            .map(ValidatedLockDirectory)
+            .map_err(coordination_error)
     }
 }
 
-struct ValidatedLockDirectory(OwnedFd);
+struct ValidatedLockDirectory(Directory);
 
 pub(crate) fn acquire_startup_locks<'a>(
     endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
@@ -229,7 +228,19 @@ fn acquire_keys(
 ) -> Result<EndpointLockGuards, EndpointFailure> {
     let mut guards = Vec::with_capacity(keys.len());
     for key in keys {
-        let fd = open_lock_file(lock_dir.0.as_raw_fd(), &key)?;
+        let name = CString::new(key.filename.as_str()).map_err(|_| {
+            EndpointFailure::unverifiable(
+                Some(key.endpoint.clone()),
+                "invalid endpoint lock filename",
+            )
+        })?;
+        let failure = |error| {
+            EndpointFailure::unverifiable(
+                Some(key.endpoint.clone()),
+                format!("invalid endpoint coordination object: {error}"),
+            )
+        };
+        let fd = lock_dir.0.open_private_file(&name).map_err(failure)?;
         let result = unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result != 0 {
             let error = io::Error::last_os_error();
@@ -246,6 +257,10 @@ fn acquire_keys(
                 format!("failed to acquire endpoint startup lock: {error}"),
             ));
         }
+        lock_dir
+            .0
+            .verify_private_file(&name, &fd)
+            .map_err(failure)?;
         guards.push(fd);
     }
     Ok(EndpointLockGuards { _guards: guards })
@@ -256,206 +271,33 @@ fn open_lock_root() -> Result<ValidatedLockRoot, EndpointFailure> {
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"tmp"];
     #[cfg(target_os = "macos")]
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"private", c"tmp"];
-    let root = open_path(c"/", libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)?;
-    validate_directory(root.as_raw_fd(), 0, DirectoryMode::Any, "filesystem root")?;
-    let mut current = root;
+    let mut current = Directory::root().map_err(coordination_error)?;
     for (index, component) in SYSTEM_COMPONENTS.iter().enumerate() {
-        let next = open_at(
-            current.as_raw_fd(),
-            component,
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-            0,
-        )?;
-        let is_tmp = index + 1 == SYSTEM_COMPONENTS.len();
-        validate_directory(
-            next.as_raw_fd(),
-            0,
-            if is_tmp {
-                DirectoryMode::Sticky
-            } else {
-                DirectoryMode::Any
-            },
-            if is_tmp {
-                "system temporary directory"
-            } else {
-                "fixed system directory"
-            },
-        )?;
-        current = next;
-    }
-
-    let euid = unsafe { libc::geteuid() };
-    let user_component = CString::new(format!("nixfied-{euid}")).map_err(|error| {
-        EndpointFailure::unverifiable(None, format!("invalid endpoint lock directory: {error}"))
-    })?;
-    current = create_owned_directory(current.as_raw_fd(), &user_component, euid)?;
-    // create_owned_directory already checked this descriptor's owner and mode.
-    Ok(ValidatedLockRoot(current))
-}
-
-fn create_owned_directory(
-    parent: RawFd,
-    name: &CStr,
-    euid: libc::uid_t,
-) -> Result<OwnedFd, EndpointFailure> {
-    let result = unsafe { libc::mkdirat(parent, name.as_ptr(), 0o700) };
-    if result != 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EEXIST) {
-            return Err(EndpointFailure::unverifiable(
-                None,
-                format!("failed to create endpoint lock directory: {error}"),
-            ));
-        }
-    }
-    let fd = open_at(
-        parent,
-        name,
-        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-        0,
-    )?;
-    validate_directory(
-        fd.as_raw_fd(),
-        euid,
-        DirectoryMode::OwnerOnly,
-        "endpoint lock directory",
-    )?;
-    Ok(fd)
-}
-
-fn open_lock_file(parent: RawFd, key: &EndpointKey) -> Result<OwnedFd, EndpointFailure> {
-    let name = CString::new(key.filename.as_str()).map_err(|error| {
-        EndpointFailure::unverifiable(
-            Some(key.endpoint.clone()),
-            format!("invalid endpoint lock filename: {error}"),
-        )
-    })?;
-    let create_flags =
-        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    let fd = match open_at_raw(parent, &name, create_flags, 0o600) {
-        Ok(fd) => fd,
-        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => open_at_raw(
-            parent,
-            &name,
-            libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0,
-        )
-        .map_err(|error| {
-            EndpointFailure::unverifiable(
-                Some(key.endpoint.clone()),
-                format!("failed to open existing endpoint lock target: {error}"),
+        current = current
+            .open_child(
+                component,
+                0,
+                if index + 1 == SYSTEM_COMPONENTS.len() {
+                    DirectoryMode::Sticky
+                } else {
+                    DirectoryMode::Any
+                },
             )
-        })?,
-        Err(error) => {
-            return Err(EndpointFailure::unverifiable(
-                Some(key.endpoint.clone()),
-                format!("failed to create endpoint lock target: {error}"),
-            ));
-        }
-    };
-    let stat = stat_fd(fd.as_raw_fd())
-        .map_err(|message| EndpointFailure::unverifiable(Some(key.endpoint.clone()), message))?;
-    let kind = stat.st_mode & libc::S_IFMT;
-    let mode = stat.st_mode & 0o7777;
-    let euid = unsafe { libc::geteuid() };
-    if kind != libc::S_IFREG || stat.st_uid != euid || mode != 0o600 {
-        return Err(EndpointFailure::unverifiable(
-            Some(key.endpoint.clone()),
-            "endpoint lock target must be a regular effective-user-owned 0600 file",
-        ));
+            .map_err(coordination_error)?;
     }
-    Ok(fd)
+    let user_component = CString::new(format!("nixfied-{}", unsafe { libc::geteuid() }))
+        .expect("numeric user ID cannot contain NUL");
+    current
+        .create_private_child(&user_component)
+        .map(ValidatedLockRoot)
+        .map_err(coordination_error)
 }
 
-fn open_path(path: &CStr, flags: libc::c_int) -> Result<OwnedFd, EndpointFailure> {
-    let fd = unsafe { libc::open(path.as_ptr(), flags | libc::O_CLOEXEC) };
-    owned_fd(fd, "open fixed endpoint coordination path")
-}
-
-fn open_at(
-    parent: RawFd,
-    name: &CStr,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> Result<OwnedFd, EndpointFailure> {
-    open_at_raw(parent, name, flags | libc::O_CLOEXEC, mode).map_err(|error| {
-        EndpointFailure::unverifiable(
-            None,
-            format!("failed to open endpoint coordination component: {error}"),
-        )
-    })
-}
-
-fn open_at_raw(
-    parent: RawFd,
-    name: &CStr,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> io::Result<OwnedFd> {
-    // `mode_t` is narrower than C's default variadic integer type on macOS.
-    let fd = unsafe { libc::openat(parent, name.as_ptr(), flags, mode as libc::c_uint) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a successful openat returned a new descriptor now owned here.
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-}
-
-fn owned_fd(fd: libc::c_int, action: &str) -> Result<OwnedFd, EndpointFailure> {
-    if fd < 0 {
-        return Err(EndpointFailure::unverifiable(
-            None,
-            format!("failed to {action}: {}", io::Error::last_os_error()),
-        ));
-    }
-    // SAFETY: a successful open/openat returned a new descriptor now owned here.
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-}
-
-fn stat_fd(fd: RawFd) -> Result<libc::stat, String> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
-        return Err(format!(
-            "failed to inspect endpoint coordination descriptor: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: fstat succeeded and initialized the complete struct.
-    Ok(unsafe { stat.assume_init() })
-}
-
-enum DirectoryMode {
-    Any,
-    Sticky,
-    OwnerOnly,
-}
-
-fn validate_directory(
-    fd: RawFd,
-    expected_uid: libc::uid_t,
-    permissions: DirectoryMode,
-    label: &str,
-) -> Result<(), EndpointFailure> {
-    let stat = stat_fd(fd).map_err(|message| EndpointFailure::unverifiable(None, message))?;
-    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR || stat.st_uid != expected_uid {
-        return Err(EndpointFailure::unverifiable(
-            None,
-            format!("{label} must be a directory owned by uid {expected_uid}"),
-        ));
-    }
-    let mode = stat.st_mode & 0o7777;
-    let valid = match permissions {
-        DirectoryMode::Any => true,
-        DirectoryMode::Sticky => mode & libc::S_ISVTX as libc::mode_t != 0,
-        DirectoryMode::OwnerOnly => mode == 0o700,
-    };
-    if !valid {
-        return Err(EndpointFailure::unverifiable(
-            None,
-            format!("{label} has unsafe permissions {mode:o}"),
-        ));
-    }
-    Ok(())
+fn coordination_error(error: io::Error) -> EndpointFailure {
+    EndpointFailure::unverifiable(
+        None,
+        format!("invalid endpoint coordination directory: {error}"),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -1383,6 +1225,88 @@ mod tests {
                 std::slice::from_ref(&planned),
                 LockRoot::Opened(lock_root),
             ));
+        });
+    }
+
+    #[test]
+    fn endpoint_lock_rejects_hardlinks_and_special_files_without_repair() {
+        let planned = endpoint("127.0.0.1", 23109);
+        for special in [false, true] {
+            let root = TestRoot::new();
+            with_root(&root, |lock_root| {
+                let directory = lock_root.directory().unwrap();
+                let key = EndpointKey::derive(&planned, &NetworkScope::production().unwrap());
+                let name = CString::new(key.filename.as_str()).unwrap();
+                let path = root.locks().join(&key.filename);
+                if special {
+                    use std::os::unix::ffi::OsStrExt;
+                    let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+                } else {
+                    drop(directory.0.open_private_file(&name).unwrap());
+                    std::fs::hard_link(&path, root.locks().join("alias")).unwrap();
+                }
+                // A substituted FIFO must reject immediately, never block on open.
+                assert_unverifiable(acquire_startup_locks(
+                    std::slice::from_ref(&planned),
+                    LockRoot::Opened(lock_root),
+                ));
+                let metadata = std::fs::symlink_metadata(path).unwrap();
+                if special {
+                    use std::os::unix::fs::FileTypeExt;
+                    assert!(metadata.file_type().is_fifo());
+                } else {
+                    assert!(root.locks().join("alias").exists());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn coordination_revalidation_rejects_replaced_entry_after_locking() {
+        let root = TestRoot::new();
+        with_root(&root, |lock_root| {
+            let directory = lock_root.directory().unwrap();
+            let file = directory.0.open_private_file(c"slot.lock").unwrap();
+            assert_eq!(
+                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            std::fs::rename(
+                root.locks().join("slot.lock"),
+                root.locks().join("displaced"),
+            )
+            .unwrap();
+            let replacement = directory.0.open_private_file(c"slot.lock").unwrap();
+            assert!(
+                directory
+                    .0
+                    .verify_private_file(c"slot.lock", &file)
+                    .is_err()
+            );
+            directory
+                .0
+                .verify_private_file(c"slot.lock", &replacement)
+                .unwrap();
+            // The check never unlinks either object to pretend exclusion survived.
+            assert!(root.locks().join("displaced").exists());
+        });
+    }
+
+    #[test]
+    fn coordination_components_cannot_traverse_or_follow_symlinks() {
+        let root = TestRoot::new();
+        with_root(&root, |lock_root| {
+            let directory = lock_root.directory().unwrap();
+            for name in [c"", c".", c"..", c"../escape", c"/escape", c"nested/file"] {
+                assert!(directory.0.open_private_file(name).is_err());
+                assert!(directory.0.create_private_child(name).is_err());
+            }
+            std::fs::write(root.0.join("untouched"), b"keep").unwrap();
+            symlink(root.0.join("untouched"), root.locks().join("linked")).unwrap();
+            assert!(directory.0.open_private_file(c"linked").is_err());
+            assert_eq!(std::fs::read(root.0.join("untouched")).unwrap(), b"keep");
+            assert!(!root.0.join("escape").exists());
         });
     }
 

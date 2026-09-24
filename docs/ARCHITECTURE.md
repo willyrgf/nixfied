@@ -323,6 +323,14 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   steady-state ownership. The lock is transient coordination, never durable
   service identity, liveness evidence, or owner attribution; the registry
   remains the only durable runtime authority.
+- **Coordination objects are opened through held directories.** The private
+  runtime filesystem boundary owns non-following component access, private
+  owner/mode checks, atomic close-on-exec, and opened-object/entry comparison.
+  Lock files are regular, singly linked objects; opening an existing object
+  never truncates or repairs it. Endpoint acquisition rechecks the entry after
+  locking. These checks detect observed substitution; they do not protect
+  managed ancestry against future same-user interference. Endpoint selection
+  and lock lifetime remain with the endpoint owner.
 - **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
   registry opening, and mandatory reconciliation remain run-wide. Endpoint
   locks begin when the pre-lock exact-reuse attempt does not succeed and cover
