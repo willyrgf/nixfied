@@ -6,9 +6,11 @@ start, independent compilation/presentation consumers of native definitions,
 structural type generation limited to shared wire meaning, runtime derivation
 of execution graph facts without carried duplicate answers, executable
 dependency identity based on selected outputs and executables, help scoped
-to Nixfied-generated apps, per-session FIFO cancellation for `down`, and removal
-of framework-owned application-data compatibility checks are
-accepted architectural direction. Remaining mechanisms and other solutions below
+to Nixfied-generated apps, per-session FIFO cancellation for `down`, removal
+of framework-owned application-data compatibility checks, task-owned duration
+with optional timeouts and no finite default, immutable background-establishment
+acknowledgement, and live command-owned presentation independent of supervision
+and teardown are accepted architectural direction. Remaining mechanisms and other solutions below
 remain proposals unless explicitly marked accepted.
 
 Started 2026-09-24. Problem baseline:
@@ -172,6 +174,165 @@ Audit registry records individually: durable execution evidence and interrupted
 session recovery remain necessary, but borrower coordination no longer justifies
 their own tables or transitions.
 
+### Lifecycle ownership
+
+The session owner chooses lifecycle transitions and is the only authority that
+admits work, initiates stopping, and settles the session. In the proposed
+implementation, its private supervisor owns workload process handles and performs
+checked observation, signaling, containment, and reaping under that authority.
+The finalizer is the session owner's settlement path, not another controller:
+it uses the supervisor to settle process obligations, applies retention, and
+records the outcome. The registry stores checked facts, outcomes, and unfinished
+obligations; it does not choose transitions or execute cleanup. An exclusive
+recovery successor takes responsibility for an interrupted session's remaining
+obligations before starting fresh work. The command-scoped presenter remains
+outside workload ownership as specified below.
+
+### Core domains and permitted transitions
+
+**Handoff contract:** execution outcome, settlement completeness, capture
+completeness, and delivery are distinct facts. These sketches illustrate required
+distinctions, not mandated Rust names, persisted enums, or a new framework.
+Private construction and checked transitions belong to the existing owners.
+
+```rust
+enum ExecutionOutcome {
+    Succeeded,
+    Failed(FailureEvidence),
+    Canceled(CancellationEvidence),
+    Interrupted(RecoveryEvidence),
+}
+enum ExecutionProgress { Pending, Known(ExecutionOutcome) }
+enum Finalization {
+    Unfinished(UnresolvedObligations),
+    Complete(SettlementEvidence),
+}
+enum CaptureOutcome {
+    Unknown,
+    Complete(CheckedCapture),
+    Incomplete(SafePrefixEvidence),
+}
+enum CaptureProgress { Pending, Settled(CaptureOutcome) }
+enum DeliveryOutcome {
+    Delivered(SelectedEvidence),
+    Interrupted(DeliveryProgress),
+    Failed(DeliveryFailure),
+    Unknown,
+}
+enum ChildRole {
+    Service(ServiceId),
+    Task(TaskOccurrence),             // Includes preparation.
+    Lifecycle(LifecycleOccurrence),   // Includes exec probes.
+}
+```
+
+Payload names stand for checked redaction-safe facts, not duplicate stores.
+Outcome discovery differs from error precedence: later settlement failures remain
+visible without rewriting known execution outcomes. Recovery preserves known
+results and records interruption where the execution result cannot be established.
+Complete finalization means the shared settlement rules were satisfied, not that
+execution succeeded. Incomplete capture requires writer closure and retained safe
+evidence; unknown capture cannot become complete from stable length or owner death.
+Delivered means the selected evidence was delivered, not that capture completed.
+Delivery is command-local and never rewrites the other domains. Pending capture
+is an active operation; a settled Unknown outcome records lost trustworthy
+completion evidence and does not establish writer closure.
+
+Live phases are private transition guards, not another persisted authority:
+
+| Object | Permitted transitions and boundary |
+| --- | --- |
+| Session | Establishing → Executing → Finalizing → Settled. Establishment failure can enter Finalizing; unresolved obligations never produce Settled. An unsuccessful owner may exit under S3's release rules without fabricating Settled. |
+| Workload child | Gated → Released → Stopping → Reaped. Gated/Released can exit directly to Reaped. Preserve local ownership on startup failure; S10's sterile pre-registration exception remains applicable. |
+| After reap | Descendant and capture obligations remain until checked settlement; leader reap grants no deletion authority. |
+| Capture | Pending → Settled(Complete / Incomplete / Unknown). Complete/Incomplete require checked writer closure. Delivery and recovery guesses cannot upgrade settled outcomes; Settled(Unknown) does not establish writer closure. |
+| Output source set | Open → Sealed only after registration ends and writers close with checked source outcomes. Sealed files are immutable. |
+
+Released is the live owner's permission-send observation, not proof of exec or a
+second durable release flag. Ambiguous send retains the registered child's
+obligations. Readiness is separate. Expected stopping precedes intentional
+signals; previously observed unexpected exits keep their classification.
+
+The session owner chooses transitions; its supervisor owns workload handles.
+Release requires committed identity/source registration and live supervision.
+Slot-authorized mutation requires a private guard borrow. Quiescence is checked
+only after new workload release is disabled; deletion additionally requires S3's
+exact-object and retention authorization. No caller-supplied boolean or status
+string constructs these authorities. Output sealing requires its own checked
+writer closure and publication, not a session-success flag.
+
+Raw decoding rejects incoherent records; recovery validates OS/filesystem facts
+before acting. Types do not establish liveness, commit success, or filesystem
+identity. Prove the distinctions through rejected construction and actual failure
+transitions: no pre-registration release, no second reaper, successful execution
+with unfinished settlement, failed execution with complete settlement, incomplete
+capture after delivery, and known outcomes preserved through recovery. Enum
+round-trip tests alone do not establish these guarantees.
+
+### Ownership-bearing internal interfaces
+
+These signatures specify ownership/effect boundaries, not required API spelling
+or module layout. Constructors are private and concrete; add no generic registry,
+supervisor framework, or public trait hierarchy. Error payloads preserve checked
+phase-specific facts and remaining obligations.
+
+```rust
+fn acquire_slot(slot: &ValidatedSlot) -> Result<SlotGuard, SlotAcquireError>;
+impl SlotGuard {
+    fn release(self) -> Result<(), SlotReleaseError>;
+}
+// Borrows the sole guard; privately owns registry and workload supervisor.
+impl<'slot> RunSession<'slot> {
+    fn establish(guard: &'slot SlotGuard, admitted: AdmittedSession)
+        -> Result<Self, EstablishError>;
+    fn start(&mut self, invocation: AdmittedInvocation)
+        -> Result<ChildKey, StartError>;
+    fn checkpoint(&mut self) -> Result<Observations, ObservationError>;
+    fn finalize(&mut self) -> Result<FinalizedSession, FinalizationError>;
+}
+fn recover(guard: &SlotGuard, predecessor: InterruptedSession)
+    -> Result<RecoveryComplete, RecoveryError>;
+fn authorize_cleanup(
+    guard: &SlotGuard,
+    quiet: CheckedQuiescence,
+    retention: RetentionAuthorization,
+    target: OpenedOwnedTree,
+) -> Result<CheckedCleanup, CleanupRefusal>;
+fn cleanup_step(guard: &SlotGuard, cleanup: &mut CheckedCleanup)
+    -> Result<CleanupProgress, CleanupError>;
+// Sole command-scoped owner/reaper; no registry writer or application resources.
+impl CommandPresenter {
+    fn poll(&mut self) -> Result<PresentationProgress, PresentationError>;
+    fn stop_and_reap(&mut self) -> Result<DeliveryOutcome, PresentationError>;
+}
+```
+
+| Boundary | Mandatory effects, progress, and failure semantics |
+| --- | --- |
+| Slot acquisition/release | Only S3's coordination bootstrap precedes locking. Typed contention refuses. Consuming release ends authority; failure never permits further mutation. No cloning, casual raw-FD escape, or helper relocking. |
+| Establishment | Admission and predecessor recovery precede new work. Partial establishment owns resources immediately; failure settles them or returns retained obligations to an owner. No bare error may silently drop a live child or discard evidence. |
+| Startup | Own `Child` immediately, verify identity, commit process/sources, insert into supervisor, checkpoint, then send request. Return an opaque key, not another child/reap handle. Failure preserves local teardown responsibility and committed evidence where available. |
+| Observation/waits | Supervisor alone reaps workloads and checks the entire owned set plus capture. Waits use checkpoints and bounded external waits, including presenter-status polling; observation failure never means an empty process tree. |
+| Finalization | Close workload admission, settle processes/capture, apply retention, record outcomes. Mutable borrowing preserves ownership on failure; a repeat continues the same settlement rather than admitting work or choosing a second finalizer. |
+| Recovery | Borrow fresh slot authority, validate predecessor facts and OS reality, and reuse settlement without adoption. Return success only after required obligations settle; unknown ownership refuses replacement. |
+| Cleanup authorization | Non-cloneable private authorization binds closed-admission quiescence, same-slot guard, predecessor retention, and held target identity/generation. Revalidate relationships not expressible by types before deletion. |
+| Cleanup progress | Preserve claim/delete/settle order and pending operation identity. Bounded traversal steps return control for observation; arbitrary kernel/storage stalls are outside timing guarantees. Failed steps grant no authority over replacement paths. |
+| Presentation | Only command scope owns/reaps helper. Polling cannot block session duties on output. Stop/reap while duties remain must use cooperative checks, not an unconditional blocking wait. Post-slot drain owns no application duties. |
+
+A checked cleanup authorization cannot survive new workload admission, guard
+replacement, or target-identity change as usable authority. Private construction
+or immediate owner checks enforce these relationships. `CheckedQuiescence` is
+not a boolean and never substitutes for retention or exact-object authorization.
+
+A finalization error leaves the owner able to continue safe settlement and report
+remaining obligations. When it must exit, S3's unsuccessful-release rules apply;
+no destructor can certify settlement. RAII closes resources on unwind but does
+not replace checked containment, capture joins, or reaping. Admission/start,
+observation, containment, capture, delivery, deletion, registry, and release
+failures remain distinct; failed diagnostic persistence never becomes durable
+success. Prove effect exclusion and retained ownership across each failing call,
+not merely that the illustrative signatures compile.
+
 ### Task-owned session duration and optional background launch
 
 Accepted direction: retain existing task entrypoints. Tasks are the selected work
@@ -220,7 +381,7 @@ decision adds no composite-wide deadline or timeout inheritance policy.
 
 Observe every owned service while the task graph or preparation runs, including
 transitive and prepare-only dependencies. Unexpected service failure cancels the
-remaining work and reaches the one finalizer. Preserve actual failure evidence
+remaining work and enters the session owner's settlement path. Preserve failure evidence
 when cancellation follows it; intentional teardown exits are not fresh execution
 failures. Reuse readiness and startup-health behavior without silently introducing
 periodic application-health scheduling.
@@ -365,10 +526,15 @@ execution or supervision. After establishment, failed delivery does not reverse
 the commit. No acknowledgement-of-acknowledgement is added.
 
 Pass semantic run/source/placement inputs privately, never raw secret values in
-argv, reply diagnostics, or persistent bootstrap records. The owner remains the
-admission authority. Specify the narrow parent-side validation needed before
-spawning an internal owner without creating a second independent admission
-implementation. Both paths reuse the same validation definitions.
+argv, reply diagnostics, or persistent bootstrap records. The launcher validates
+command syntax, option combinations, and bounded request representation before
+spawning the internal owner. This is request validation, not manifest or execution
+admission. The receiving owner validates that representation at its IPC boundary,
+then runs the same authoritative admission path used by the foreground owner:
+manifest/ABI, selection, source/secret/closure, and host checks. The launcher does
+not establish an admitted session or substitute its observations for owner checks.
+Reuse shared owning functions rather than a second background admission path.
+[Placement and role access](#placement-and-role-access) specifies inherited resources.
 
 Uncommitted empty evidence directories or an unused FIFO are inert, non-authoritative
 leftovers; never reuse their ID. They can be removed under slot ownership without
@@ -457,13 +623,15 @@ outstanding for both.
 
 **Invariant:** every direct child has one live owner and one reaper; every owned
 service remains observed throughout startup, task execution, and finalization.
-Typed observations feed one lifecycle owner. Observation failure stops further
-work and preserves unresolved obligations; it never means an empty process tree.
+Typed observations return to the [session owner](#lifecycle-ownership), which
+chooses the transition. Observation failure stops further work and preserves
+unresolved obligations; it never means an empty process tree.
 
 #### One owner, one observation cycle
 
-Use one private session supervisor owned by `RunSession`, driven by the existing
-execution thread. Consolidate child ownership into its single in-memory collection:
+Implement the [ownership boundary](#lifecycle-ownership) with a private supervisor
+inside `RunSession`, driven by the existing execution thread. Its single
+in-memory collection contains:
 `Child` handles, immutable process identities, role, containment/stop policy,
 lifecycle phase, descendant evidence, and checked capture-worker results. Do not
 copy that collection into a second liveness registry or background monitor.
@@ -580,8 +748,8 @@ not free that blocked owner to finalize.
 
 Accepted ordering revision: process teardown proceeds on failure/cancellation
 without waiting indefinitely for pending projection. Cancellation can interrupt
-output delivery; retain redacted evidence and record incomplete delivery as a
-checked output outcome, not successful projection. Failure reporting must not
+output delivery; retain redacted evidence and retain incomplete delivery as a
+checked command-local presentation outcome, not successful projection. Failure reporting must not
 depend solely on writing to the same blocked stream. Preserve exact redacted
 bytes, per-stream ordering, and checked evidence; never call incomplete projection
 successful. This explicitly revises strict replay-complete-before-service-stop
@@ -598,7 +766,8 @@ but ordinary command completion need not have a finite delivery deadline.
 
 **Proof:** a consumer keeps its pipe open but stops reading while a service fails
 or Ctrl-C/FIFO cancellation arrives. Supervision and process teardown continue,
-retained redacted evidence survives, and incomplete presentation is recorded.
+retained redacted evidence survives, and the surviving command owner retains and
+reports the checked incomplete presentation outcome.
 Cover stdout and stderr separately and together, partial delivery, and worker
 settlement on Linux and macOS; a broken-pipe test alone does not prove backpressure
 handling.
@@ -639,10 +808,14 @@ descriptor and environment constraints, not a same-user security sandbox. Reuse
 the trusted launcher and descriptor hygiene where applicable, with an explicit
 auxiliary role; do not force an inert reader through workload registration or
 recursively capture its output. Specify its exact hidden invocation at cutover.
-Establish the presenter before launching new foreground workloads. Establishment
-failure rejects startup and settles acquired resources or predecessor recovery;
-it cannot leave application work running without the requested presentation.
-Failures after workload launch follow the continuation policy below.
+Establish the presenter after owner admission and creation of its read-only
+evidence/control inputs under slot ownership, but before releasing any new
+foreground application, preparation, or probe workload. It is a constrained
+auxiliary process, not permission for pre-admission workload execution.
+Establishment failure rejects new workload startup and settles acquired resources
+or predecessor recovery. Failures after workload release follow the continuation
+policy below. Resource access follows the common
+[role matrix](#placement-and-role-access).
 
 **Evidence is the data path.** The owner never feeds application bytes to the
 presenter through a pipe or an in-memory delivery queue. Capture writes retained
@@ -655,8 +828,9 @@ Discover sources through existing committed process evidence with typed opaque
 run/occurrence/source identity and validated relative evidence placement. Retain
 those facts during S10's registry simplification; add no independently maintained
 output-source registry. Redacted display labels and command JSON are not machine
-locators: redaction may alter embedded paths or names. Specify the typed record
-cutover rather than parsing display text to rediscover sources.
+locators: redaction may alter embedded paths or names. S10's [output evidence publication](#output-evidence-publication-within-the-existing-records)
+places these facts in `runs` and `processes`; do not parse display text to
+rediscover sources.
 Commit each source registration before permitting its workload to execute.
 Read-only SQLite discovery uses short transactions that end before consumer
 writes. Polling is sufficient; require neither filesystem watchers nor an event
@@ -708,14 +882,28 @@ the helper. This explicitly narrows “all children before slot release” to al
 workload/resource-owning children; the read-only presenter is command-owned and
 cannot keep application state or the slot alive. No worker is silently detached.
 
-Keep the session result separate from the command's presentation result. A slow
-reader is not failure. A failed presenter or broken pipe records output failure
-and does not implicitly cancel an already-running workload: evidence capture and
-signal/FIFO control continue. Thus `serve | head` is not an implicit `down`.
-The command ultimately reports observed delivery failure without rewriting the
-session's workload outcome. On cancellation, delivery may be abandoned while
-safe evidence remains available. Never depend solely on the failed stream to
-report the problem, and never let the presenter become a second registry writer.
+Keep the session result separate from the command's presentation result. The
+command-scoped presenter owner retains the checked delivery outcome in memory,
+whether failure occurs before or after slot release. Delivery outcomes are
+command-local; they do not require a registry event, persistent delivery-status
+file, or run-summary update. Durable session evidence describes execution,
+capture, and finalization, not whether a caller received every byte.
+
+A slow reader is not failure. A failed presenter or broken pipe produces a typed
+presentation failure and does not implicitly cancel an already-running workload:
+evidence capture and signal/FIFO control continue. Thus `serve | head` is not an
+implicit `down`. The command combines its observed presentation outcome with the
+session result using the specified error precedence when deciding its final exit
+result, without rewriting workload outcome or finalization state. Preserve the
+existing error vocabulary and precedence at cutover unless explicitly revised.
+
+On cancellation, delivery may be abandoned while safe evidence remains available.
+Report failure through command exit status and a redaction-safe diagnostic where
+delivery remains possible; diagnostic failure cannot block teardown or turn
+delivery into success. Neither the presenter nor its command owner acquires
+registry-writing authority merely to report delivery. After slot release, they
+make no changes to retained session evidence. If the command itself dies, delivery
+may remain unknown; recovery does not infer success or recreate that result.
 Precise byte-delivery accounting across abrupt presenter death is not promised.
 
 **Incremental redaction.** Display only bytes already made safe by the capture
@@ -763,6 +951,9 @@ final drain, and failures before a complete evidence seal remain distinct. Check
 all active diagnostics, descriptor/environment isolation, parent EOF detection,
 terminal job control, single reaping, short discovery transactions, bounded source
 fairness, and evidence surviving run-scoped cleanup and a successor session.
+Inject presentation failure after slot release, including after a successor
+starts: command failure must leave predecessor rows, events, and retained evidence
+unchanged and must not block the successor. Command death leaves delivery unknown.
 Test exact output-mode boundaries and redaction equivalence across chunkings,
 overlapping secrets, binary data, short messages, and incomplete capture.
 
@@ -805,9 +996,20 @@ on Linux and macOS. No implementation tests were run for this specification.
 
 **Invariant:** application state is not deleted while any session-owned process
 may still use it. Success, task failure, timeout, and graceful cancellation all
-enter the same finalization owner.
+enter the session owner's [settlement path](#lifecycle-ownership).
 
-The proposed ordering constraints are:
+Ordinary finalization and interrupted-session recovery apply the same settlement
+rules under exclusive slot ownership: settle workload process obligations,
+establish quiescence before application-data deletion, apply the existing
+retention authorization through S3, and record completion or attempt to record
+unresolved obligations through S10. They differ in available evidence. The live
+owner uses owned child handles and current observations; recovery reconstructs
+outstanding obligations from durable records and checks recorded identities
+against fresh OS observations. Insufficient evidence refuses the unsafe action,
+preserves application data and existing evidence, and blocks new execution. This
+shared policy requires no generic workflow engine or additional recovery mechanism.
+
+For a live session owner, the ordering constraints are:
 
 1. Stop scheduling new work and settle active task/prepare/probe children.
 2. Continue live presentation independently while retaining its sources; pending
@@ -833,17 +1035,20 @@ by teardown or recovery, not a public boolean that callers can manufacture.
 ### Accepted recovery behavior and its limits
 
 Distinguish service failure from runtime-owner failure. While the runtime is
-alive, it follows normal finalization and releases ownership only after teardown
-and the applicable state handling. A forcibly killed runtime cannot execute that
+alive, it performs teardown, applicable state handling, and recording attempts
+before releasing ownership. Failures may leave finalization unfinished; release
+and exit do not certify quiescence, successful cleanup, or permission for fresh
+execution. A forcibly killed runtime cannot execute that
 sequence. An owner-only OS lock may become available while children survive;
 acquiring it permits recovery, not immediate execution or application-data deletion.
 
-On the next run, the new owner inspects interrupted-session evidence, stops
-surviving owned children as necessary, completes pending run-scoped cleanup while
-preserving persistent data, and then starts a fresh session. It does not resume
-the interrupted task graph, adopt a surviving service, or run an automatic restart
-loop. If cleanup cannot complete safely, report the failure and refuse new
-execution against the unresolved slot.
+On the next run, the exclusive recovery owner applies the shared settlement rules
+in [Finalization](#finalization) to the interrupted predecessor before starting a
+fresh session. It does not resume the interrupted task graph, adopt surviving
+services, or run an automatic restart loop. Recovery uses the predecessor's
+ownership and retention authorization as specified in
+[Data and evidence survive on different terms](#data-and-evidence-survive-on-different-terms);
+the next manifest cannot make retained persistent data disposable.
 
 The design target is reliable cleanup for supported process behavior with explicit
 failure when recovery cannot proceed. It is not proof against every possible
@@ -884,8 +1089,8 @@ not reasons to reopen the accepted session model. Preserve the current contract
 until any necessary guarantee revisions are explicitly specified and cut over.
 
 `ps` may continue to inspect session and recovery evidence. A live-session `down`
-uses the accepted per-session FIFO to request cancellation from the sole
-finalization owner; recovery of a dead owner is a separate case. S10 specifies
+uses the accepted per-session FIFO to request cancellation from the session
+owner; recovery of a dead owner is a separate case. S10 specifies
 the control mechanism and its required proofs before cutover.
 
 **Proof:** ordinary shutdown of a separately grouped descendant, graceful
@@ -900,6 +1105,64 @@ behavior and ambiguous ownership evidence: refusal must preserve data, avoid
 signaling unrelated processes, block replacement execution, and provide actionable
 diagnostics. These proofs cover the supported boundary, not every possible
 external scenario.
+
+### Engineering sequence contract
+
+These sequences bind the existing owners and transition contracts; they introduce
+no additional engine or state registry. “Owner” is the foreground runtime or the
+background runtime, never the launch parent or presenter.
+
+| Startup stage | Foreground/background rule | Failure boundary |
+| --- | --- | --- |
+| Request | Foreground owner decodes; daemon launcher validates representation and allocates ID, then owner decodes IPC. | Reject malformed requests without workload effects. |
+| Admit | Eventual owner uses the same full admission functions in either mode. | Rejection causes no registry/application mutation or workload release. |
+| Acquire | Only permitted coordination bootstrap precedes direct owner acquisition. | Contention causes no registry initialization or application mutation. |
+| Recover | Validate predecessor evidence and fresh OS facts; apply shared settlement. | Unsettled/unsafe predecessor blocks new execution. |
+| Establish | Evidence, capture facilities, FIFO and session record; foreground additionally establishes requested presenter. | Settle partial acquisition/recovery effects; release no workload. |
+| Background commit/reply | Check precommit abandonment, commit session establishment, send bounded reply with immutable ID. | Observed precommit abandonment prevents new work; postcommit reply failure leaves independent session and uncertain launcher result. |
+| Execute | Required dependencies and selected task graph use the same owner. | Every workload passes the registration gate; no automatic task retry. |
+
+For every service/task/prepare/probe: own the inert child immediately → verify
+identity → commit process/source evidence → place it in the supervisor → checkpoint
+→ send execution request → observe and reap through that supervisor. Registration
+or checkpoint failure withholds permission and retains cleanup ownership. The
+presenter is an auxiliary reader, not a workload registration exception for user
+code. Background disconnection between last check and commit can yield an
+established session; postcommit launcher loss does not undo it.
+
+| Execution observation | Required owner action |
+| --- | --- |
+| Root graph completes | Preserve result; enter finalization. |
+| Task failure/deadline or unexpected service exit, including zero | Stop new nodes/releases; preserve initiating failure; finalize. |
+| Exit after expected stopping | Record actual teardown result without inventing prior execution failure. |
+| SIGINT/TERM/HUP or selected FIFO request | Request cancellation and use the same settlement path; repeated inputs create no competing finalizer. |
+| Observation, containment or required capture failure | Preserve typed failure/obligations; refuse unsafe continuation. |
+| Presenter failure after workload release | Retain command-local delivery failure; workload/capture/control continue. |
+
+The session observes all owned services during startup, execution, probes and
+teardown. `down` requests cancellation, not completion; it never targets a successor.
+
+| Finalization order | Owner action | Failure boundary |
+| --- | --- | --- |
+| 1 | Close graph admission and gate releases; retain execution result. | Continue safe settlement without erasing initiating failure. |
+| 2 | Settle workload children/descendants, reap owned workloads, settle capture. | Unknown process quiescence blocks application-data deletion. |
+| 3 | Apply authorized retention through S3. | Preserve existing evidence/pending cleanup; attempt failure recording. |
+| 4 | Commit session outcome and actual finalization state with event. | No complete claim without confirmed commit; reread uncertain acknowledgement. |
+| 5 | Publish derived final result, finish diagnostics, close evidence writers and commit output seal. | Completed session may remain unsealed; never repeat settled work to repair publication. |
+| 6 | End all mutation and recording attempts, release slot. | Failed owner can exit with unfinished obligations; availability never certifies settlement. |
+| 7 | Command drains or cancels/reaps presenter. | Delivery remains command-local; no slot authority or predecessor evidence mutation. |
+
+While the consumer is blocked, steps 1–6 still proceed. A healthy slow consumer
+can drain after release without a default deadline; Ctrl-C ends that drain without
+changing session state or signaling a successor. Owner death ends presentation
+through its private channel with unknown completeness where no seal exists.
+
+Recovery acquires the guard, reloads evidence and verifies identities before safe
+settlement or refusal. It does not resume tasks, adopt survivors, repeat confirmed
+cleanup, or reconstruct lost delivery results. A completed but unsealed predecessor
+retains that distinction. Runtime/capture/registry failure never substitutes a
+successful seal for missing evidence. Apply the incompatible-state cutover limit
+before interpreting old records.
 
 ## 5. S3: separate data retention from safe deletion authority
 
@@ -927,8 +1190,10 @@ permission to mutate a slot already owned by another session. The concrete
 On abrupt owner death, an available lock is only permission to attempt recovery;
 it is not proof of process quiescence. The successor must resolve surviving owned
 processes and pending deletion before starting new work. If finalization fails and
-the owner exits, retain durable unresolved evidence so another invocation recovers
-or refuses the slot rather than executing against ambiguous state.
+the owner exits, preserve existing evidence and attempt to record unresolved
+obligations. A successor must recover or refuse based on trustworthy evidence;
+neither lock availability nor a missing final diagnostic permits execution against
+ambiguous state.
 
 Slot exclusion coordinates Nixfied participants. It does not by itself prevent
 another filesystem writer from replacing paths, so the deletion-identity and
@@ -944,7 +1209,9 @@ alternate lock fallback, or SQLite transaction held for the session lifetime.
 placed project/environment/slot. Its constructor validates the object and acquires
 the kernel lock. Mutating helpers borrow the existing guard rather than opening
 their own locks. The session or recovery/cleanup owner holds it continuously
-through finalization attempts and durable settlement of unfinished obligations.
+through all finalization attempts and their recording attempts. Successful
+finalization requires confirmed settlement; unsuccessful finalization may end with
+unresolved obligations and release the guard without authorizing new execution.
 Possession authorizes recovery; it does not prove process quiescence.
 
 #### Stable placement and namespace separation
@@ -964,6 +1231,35 @@ the existing layout cutover. The current application path directly beneath
 overlap another project's coordination ancestry. Separate namespaces instead of
 adding reserved project-name exceptions.
 
+#### Placement and role access
+
+This is the shared placement and inherited-resource specification; detailed
+lifecycle sections define protocol timing. Framework-owned application data lives
+under the `data/` tree above; slot authority, SQLite, retained evidence, and session
+control live under its disjoint `registry/` tree. Evidence and the cancellation
+FIFO use the never-reused `runs/<session>` directory. Application cleanup and
+presenter completion do not remove coordination authority.
+
+The matrix distinguishes acquired resources from inherited descriptors. It
+specifies trusted internal roles, not a sandbox against hostile same-user code.
+
+| Role | Placement and authority | Descriptors and environment |
+| --- | --- | --- |
+| Foreground session owner | Acquires slot authority; owns state mutation, registry writes, evidence and session FIFO lifecycle. | Owner/admission inputs, capture and private presenter endpoints. Active output goes through evidence/presenter; ownership/control descriptors do not pass to workloads. |
+| Daemon launch parent and owner bootstrap | Parent has no slot guard or registry writer; final owner acquires them using the same layout/session rules. | Private bounded bootstrap socketpair; owner stdin is null and caller terminal/pipe output is excluded. Owner resolves secrets at admission. Bootstrap channel never reaches workloads. |
+| Sterile workload gate | No application mutation or registry authority before authorization; committed identity precedes execution request. | Controlled bootstrap environment and safe cwd; only intended stdio and private startup descriptors. No locks, database descriptors, or unrelated controls. Workload env/cwd apply only after a valid complete request. |
+| Task, service, preparation, probe | Uses admitted application/source resources; no runtime lifecycle or cleanup authority. | Declared hermetic environment/stdin and owned output capture. No runtime locks, SQLite connections, startup channels, presenter channel, or cancellation FIFO descriptors. |
+| Presenter | Reads selected immutable run evidence and committed source records; no state or registry mutation. | Null stdin, caller streams, private control endpoint and read-only evidence access. No secrets, application handles, locks, database writers, or cancellation FIFO. |
+| `down` | Selects one run; observes and requests cancellation. Recovery separately requires slot acquisition and fresh inspection. | Opens selected FIFO writer under bounded nonblocking/SIGPIPE rules; inherits none of the live owner's resources. |
+| Scoped FIFO receiver | Owns reader/keeper descriptors and sets cancellation token; no registry or teardown authority. | In-process worker, not an environment-isolated child. Owner stops/joins it and closes/removes its endpoint while holding slot authority. |
+
+Child setup closes inherited ownership descriptors without `LOCK_UN`.
+Close-on-exec prevents survival across exec, not transient fork inheritance; the
+[descriptor lifetime rules](#descriptor-lifetime-and-background-launch) cover that
+interval. Bootstrap socketpair, workload execution/error channels, presenter
+socketpair, and cancellation FIFO remain distinct purpose-specific channels.
+This matrix introduces no common message protocol.
+
 The lock identity follows the opened placement base and validated project,
 environment, and slot components. It excludes manifest hash, ABI, toolchain,
 task/service selection, PID, and session ID. Distinct state bases intentionally
@@ -977,7 +1273,10 @@ the pathname permits two independent locks and destroys exclusion.
 
 #### Acquisition boundary
 
-1. Perform pure admission and source/closure checks.
+1. In the session-owning process, complete shared admission checks requiring no
+   slot-authorized mutation: manifest/ABI, selection, source/secret/closure, and
+   host validation. Foreground execution uses the invoking runtime; background
+   execution uses the internal owner after launch-request decoding.
 2. Open the placement anchor and bootstrap only the private coordination
    directories and lock object, using held directory descriptors.
 3. Reject symlinks within managed ancestry and unsafe directory ownership/modes.
@@ -993,9 +1292,13 @@ the pathname permits two independent locks and destroys exclusion.
    without turning this into an indefinite wait-for-slot loop.
 7. Revalidate the opened object's directory entry before granting the guard.
    Observed replacement refuses admission.
-8. Only then open/create SQLite, initialize schema/WAL, mutate registry records,
-   recover predecessors, inspect/change owned markers, materialize application
-   data or session evidence/FIFO, and launch workload children.
+8. Only after acquiring the guard may the owner open/create SQLite, initialize
+   schema/WAL, mutate registry records, recover predecessors, inspect/change owned
+   markers, or materialize application data and session evidence/FIFO. The guard
+   alone does not authorize workload release: complete predecessor recovery,
+   session/output/control establishment, and owning-boundary checks first.
+   Foreground execution additionally establishes its requested presenter. Each
+   application, preparation, and probe child follows gated-child registration.
 
 Coordination bootstrap is the narrow pre-lock filesystem effect needed to
 rendezvous. A losing invocation must not modify application data, initialize
@@ -1014,15 +1317,23 @@ can delay release. That is an availability failure, not authority to bypass the
 lock or claim the owner has been recovered.
 
 Do not expose or duplicate the raw guard descriptor casually. For `--daemon`,
-the final background owner acquires the guard itself; the launching parent only
-waits for the accepted acknowledgement. No transfer or release/reacquire protocol
-is needed. Distinguish that internal owner bootstrap process from application,
-prepare, and probe children: no workload starts on a contended slot. Specify pure
-admission before background-owner launch without claiming literally no OS process
-can be created before that owner acquires its guard.
+the final background owner acquires the guard itself; the launcher holds none and
+waits for acknowledgement. No transfer or release/reacquire protocol is needed.
+Starting that internal owner and temporary IPC is the narrow process-bootstrap
+exception to the workload admission barrier. It does not permit application,
+preparation, or probe execution before owner admission and session establishment.
+Before guard acquisition, filesystem effects remain limited to private coordination
+directories and the stable lock object. Neither launcher nor losing owner may
+initialize the registry or mutate application data.
 
-Normal release consumes the guard only after all slot mutations have stopped and
-finalization or unfinished recovery evidence has been recorded. Surface checked
+Release consumes the guard only after the owner has stopped all further slot
+mutation and finished finalization and recording attempts. Successful finalization
+requires confirmed durable completion. If attempts fail, preserve already committed
+evidence, attempt to record unresolved failure, and report unsuccessful finalization
+before releasing ownership and exiting. Recording failure cannot guarantee a new
+durable diagnostic; a successor must validate existing evidence and OS reality,
+recovering or refusing rather than inferring success from an available lock.
+Surface checked
 release failures, close once, and keep RAII close on unwind. Do not blindly retry
 a raw failed close, unlink the file to repair release, or continue mutation after
 release begins. Failure to record completion cannot be converted to successful
@@ -1212,12 +1523,20 @@ current permission.
    filesystem durability barrier for payload removal before removing the marker.
 8. Unlink the marker and remove the now-empty root through its held parent.
    Establish the required parent-directory durability barrier.
-9. Commit completion and its event. Only then may finalization release the slot
-   or a successor create a fresh data generation.
+9. Commit completion and its event. Successful cleanup finalization and creation
+   of a fresh data generation require that commit. If deletion or completion
+   recording fails, stop further application-state mutation and report unsuccessful
+   finalization. The failed owner may release ownership and exit; a successor must
+   recover the operation or refuse before creating a fresh generation or executing
+   work.
 
 There are only two durable operation states. Marker-present, markerless-empty,
 and root-absent are filesystem observations, not separate persisted phase flags.
-A registry completion failure leaves the pending intent for another attempt.
+A failed completion transaction does not authorize fresh execution. Re-read
+authoritative evidence during recovery: pending intent requires settlement;
+a committed completion is recognized even if its acknowledgement was lost. If
+the registry cannot be read or its evidence is inconsistent, refuse. Attempt to
+record failure diagnostics, but do not claim persistence when that write failed.
 
 A committed purge remains authorization for that operation during recovery; the
 next invocation does not need another purge request. Recovery still revalidates
@@ -1242,8 +1561,8 @@ All observations and actions below occur under exclusive slot ownership.
 | Completed operation; target absent | Report idempotent observation, without inventing a new deletion. |
 | Completed operation; new marked generation present | The old operation grants no authority over it. |
 | Completed operation; supposedly deleted generation reappears | Refuse contradictory history; do not call it fresh data. |
-| Permission/I/O failure during deletion | Keep intent pending; record safe failure; block new execution. |
-| Root removed; completion/event transaction fails | Keep intent pending and settle it from absence on retry. |
+| Permission/I/O failure during deletion | Keep committed intent unresolved; attempt failure recording, report unsuccessful finalization, and block new execution. |
+| Root removed; completion/event transaction fails | Refuse fresh execution until authoritative recovery confirms completion or settles the still-pending intent from root absence. |
 | Registry missing/corrupt or authorization inconsistent | Refuse destructive recovery. |
 | Observed/evidenced external move of the root | Do not search by inode or guess another target; refuse ambiguous evidence. |
 
@@ -1594,8 +1913,8 @@ context-mismatch rejection tests with successful caller-independent catalog test
 
 ## 11. S9: retain honest compatibility checks
 
-Initial proposal: retain the current exact ABI rejection and capability-descriptor
-mechanism during the functional cutovers. Record semantic changes deliberately.
+Retain the current exact ABI rejection and capability-descriptor mechanism during
+this refactor; replacement is deferred. Record semantic changes deliberately.
 Do not add a structural digest or build fingerprint merely to make the existing
 digest appear stronger. It certifies recorded inventory bytes, not all behavior.
 
@@ -1621,9 +1940,10 @@ No schema or runtime implementation has been changed by this specification.
 
 ### Ownership and scope
 
-**Invariant:** one slot owner authorizes mutation, one session owner executes and
-finalizes its work, and durable records retain unfinished obligations when that
-owner disappears. Registry rows do not grant a second invocation execution rights.
+**Invariant:** registry mutations require exclusive slot ownership and follow
+S2's [lifecycle ownership](#lifecycle-ownership). Durable records retain unfinished
+obligations when the session owner disappears; rows do not grant another
+invocation execution rights.
 
 Keep the per-slot SQLite database. Remove its role as a coordinator of independent
 users borrowing standing services. Do not replace SQLite with files, add a second
@@ -1633,11 +1953,12 @@ The implementation boundaries are:
 
 - The slot exclusion mechanism arbitrates mutating invocations. A private borrowed
   ownership context is required by mutation entrypoints, including control repair.
-- Child execution records local process and outcome evidence. It cannot declare
-  the session finalized.
-- The session finalizer aggregates the outcome and settles teardown and retention.
-- An exclusive recovery successor settles an interrupted predecessor before new
-  execution. It never adopts that predecessor's services for continued use.
+- Process transitions record local evidence and events without independently
+  settling aggregate session status.
+- The session owner's settlement path is the sole live-session completion writer.
+  The outcome and finalization domains are specified below.
+- Only an exclusive recovery successor may settle an interrupted predecessor;
+  it preserves recorded outcomes and never adopts services for continued use.
 - OS process identity and held filesystem identity justify signaling and deletion;
   a status string, expired timestamp, or absent lock does not establish safety.
 
@@ -1651,9 +1972,9 @@ by tables. Table count is an expected consequence, not the acceptance criterion.
 | --- | --- | --- |
 | `registry_meta` | Keep | Immutable project/environment/slot and schema/ABI/toolchain identity. Preserve exact ownership and compatibility rejection. |
 | `events` | Keep | Append-only per-slot sequence, redacted payloads, and transition/event atomicity. Replace cross-session service-instance references with run plus declared service identity where needed. |
-| `runs` | Reshape | Keep `run_id` as the session identifier, immutable manifest/source/target provenance, and evidence paths. Add owner recovery identity and distinguish execution outcome from unfinished finalization. No second session-ID registry. |
+| `runs` | Reshape | Keep `run_id` as the session identifier, immutable manifest/source/target provenance, and evidence paths. Add owner recovery identity and distinguish execution outcome from unfinished finalization. Own the diagnostic source identity and relative path, final-result evidence location, and publication of the closed source set and checked output seal below. No second session-ID or output-source registry. |
 | `services` | Remove | Delete the reusable service identity/lifetime registry. Move the declared service label to process/event records. Slot state ownership remains with the marker; do not create a replacement service registry. |
-| `processes` | Reshape | Keep session association, process key, PID/PGID/start identity, redacted command evidence, and supported descendant evidence. Record role and unresolved teardown explicitly, independently of task outcome or ports. |
+| `processes` | Reshape | Keep session association, process key, PID/PGID/start identity, redacted command evidence, and supported descendant evidence. Record role and unresolved teardown explicitly, independently of task outcome or ports. Own captured stdout/stderr source identities, stream roles, validated relative evidence paths, and checked capture outcomes. |
 | `ports` | Narrow to endpoint evidence | Keep endpoint ID/address/port, session/process attribution, and observations required for readiness and recovery. Remove per-slot sharing arbitration and lease-derived reservation ownership. Host endpoint locks and kernel ownership checks remain. |
 | `run_leases` | Remove | Delete per-(run, service) leases, owner tokens, heartbeat/expiry timestamps, borrower counts, and TTL transitions. Do not replace them with session TTL leases. |
 | `cleanups` | Keep and reshape | Retain intent tied to the exact owned deletion object, authorization evidence, attempts, and completion. Remove the old cleanup-policy dimension; preserve persistence/purge and unconditional safety checks. |
@@ -1708,7 +2029,8 @@ Today `mark_task_finished` updates its process, `runs.status`, lease statuses, a
 an event. Service settlement also updates the run; expiry reconciliation can
 update it again. Guarded updates then try to preserve other participants' outcomes.
 
-Replace that distributed aggregation with one finalizer. Persist two distinct
+Remove those independent aggregate-status writes. The
+[session owner's settlement path](#lifecycle-ownership) records two distinct
 facts: execution outcome, and whether finalization remains unfinished. A useful
 conceptual representation is:
 
@@ -1723,17 +2045,128 @@ cleanup records: claimed deletion objects + incomplete/completed operations
 
 These are conceptual domains, not finalized SQL column names or new wire enums.
 Use closed native types and checked decoding to prevent incoherent combinations.
-Complete finalization requires all workload process obligations settled and the chosen
-retention action completed or deliberately retained under persistent policy.
-Successful task execution with unresolved teardown is unfinished. Failed execution
-with completed teardown can be finalized. A registry write failure cannot turn
-either into successful completion.
+Completion is established by the shared settlement rules in
+[Finalization](#finalization), using S3's retention and deletion authorization.
+Successful execution with unresolved obligations remains unfinished; failed
+execution with settled obligations can be finalized. A registry write failure
+cannot establish completion.
 
-Child transitions commit local evidence and events; only the live session owner
-or its exclusive recovery successor settles run finalization. Recovery preserves
-recorded task outcomes and appends recovery evidence rather than fabricating a
-successful result for interrupted work. Do not keep an independent aggregate
-status writer in each service/task helper.
+Process transitions may commit local evidence and events, but cannot settle the
+session. The sole live completion writer and exclusive recovery successor follow
+the ownership boundary above. Recovery preserves recorded task outcomes and
+appends recovery evidence rather than fabricating success for interrupted work.
+
+### Output evidence publication within the existing records
+
+Process records own workload source discovery; the run record owns runtime
+diagnostics, which have no workload process. Source identities and paths are
+typed machine facts, separate from redacted labels and command JSON. Resolve
+validated relative paths beneath the run's immutable evidence directory. Register
+workload sources before execution permission and the diagnostic source before its
+first write. No separate source table, registry, or event replay is needed.
+
+Only the session owner's finalization path or its exclusive recovery successor
+publishes the run's output seal. Publication requires source registration to have
+ended, every retained-file writer to have closed, and final evidence to record
+each source's checked capture outcome. Complete capture means checked EOF and
+successful redaction/write settlement; an incomplete safe prefix means closure is
+established but capture did not complete. Without trustworthy settlement or a
+successfully published seal, completeness remains unknown. A failed run status,
+owner death, temporary EOF, or recovery successor proves none of these facts.
+
+The session completion record and output seal express different facts. Commit
+the settled execution outcome and finalization state before serializing a
+final-result artifact that claims them. A failed completion transaction must not
+produce an artifact claiming complete finalization. Then finish diagnostic/result
+writes, close their writers, and publish the output seal. Interruption or
+publication failure after session completion can leave a completed session with
+unsealed output; observation and recovery preserve that distinction and do not
+repeat settled process or retention work solely to complete presentation. A seal
+does not certify a later successful guard release.
+
+Append observed finalization diagnostics before closing their writer. Sealed
+files are immutable. If writing, writer settlement, or publication
+fails, preserve available evidence without claiming a complete seal; never append
+a diagnostic to an already sealed source. Failures discovered after closure must
+use the command's checked result rather than reopen that source. Later recovery
+records its own diagnostics while preserving predecessor capture outcomes; stable
+file length cannot upgrade unknown capture to complete. Recovery does not reopen
+a sealed predecessor source set to add its own diagnostics.
+
+After observing a seal, the presenter uses a fresh short transaction to discover
+the final sources and outcomes, ends that transaction, and drains stable files.
+An incomplete safe prefix remains incomplete after delivery. Without a trustworthy
+seal, owner/channel termination ends following with unknown completeness rather
+than waiting for an invented final EOF. Presentation failure is command-local;
+it neither rewrites sealed evidence nor grants registry-writing authority.
+
+### Durable record and transaction contract
+
+This contract makes the six-table disposition above implementable without adding
+a source table, event-sourced execution, or compatibility readers. Exact SQL names
+remain local choices; typed facts, relationships, and rejection are required.
+
+- `registry_meta` binds immutable placed-slot identity and schema/ABI/toolchain.
+- `runs` owns opaque run ID, recovery owner identity, provenance, evidence/result
+  locations, diagnostic source descriptor, execution progress, finalization,
+  source-registration closure, and output seal.
+- `processes` belongs to one run and owns opaque key/occurrence/role, PID/PGID/start
+  identity, containment/stop requirements, observed outcome, stop intent, unresolved
+  ownership, stdout/stderr descriptors, and capture progress/outcomes.
+- `ports` links observed endpoint ownership to its run/process; neither a socket
+  reservation nor a replacement for unresolved process obligations.
+- `cleanups` binds operation ID, relative target, data generation, original marker,
+  retention/purge authorization, corroborating identity, and pending/completed state.
+- `events` commits redaction-safe transition evidence with affected rows under the
+  existing per-slot sequence; it does not reconstruct executable state.
+
+Descriptors contain an opaque source ID, stream role, and validated relative path
+under the immutable run evidence directory. Source IDs and paths are unique within
+the run, including its diagnostic source. Enforce the relation without a mutable
+source registry. Opaque machine keys are runtime-generated, not redacted display
+labels; never infer identity/path from command JSON or persist resolved secrets.
+
+Use the [core domains](#core-domains-and-permitted-transitions) in checked decoding.
+Process ownership is unresolved/settled independently of leader exit. Source
+registration is open/closed; closure forbids new sources. Output is unsealed/sealed;
+sealing requires closed registration, checked writer closure, and recorded source
+outcomes. Failed cleanup attempts retain pending intent. Complete finalization
+with unsealed output is valid; successful execution with unfinished finalization
+is also valid. Reject records that falsely equate these independent facts.
+
+#### Required durable transitions
+
+All mutations borrow slot authority. Session owner/recovery successor publishes
+aggregate settlement and seal; local child records never complete a session.
+
+| Transition | Required ordering/transaction | Failure or interruption interpretation |
+| --- | --- | --- |
+| Session registration | Establish evidence namespace; commit run identity, owner facts, diagnostic descriptor and event before workloads or diagnostic writes. | Uncommitted directories grant no permission. Lost commit acknowledgement requires authoritative reread. |
+| Process/source registration | Create capture files and verify sterile launcher's identity; commit process ownership, descriptors and event; register live supervision before permission send. | No precommit execution request. A committed child is possibly executing; no second durable release authority. |
+| Stop intent | Observe pending exits, mark expected stopping locally, attempt intent/event commit before signal. | Registry failure remains visible but does not prevent containment/reaping. Missing durable intent cannot retrospectively prove an expected exit. |
+| Local settlement | Commit observed outcome and independently proven ownership settlement with event; record checked capture outcomes when available. | Leader exit cannot settle descendants/capture; unknown facts stay unresolved. |
+| Close source registration | Disable new source admission, then commit closed registration and event. | No seal while open; recovery cannot extend a sealed predecessor source set. |
+| Cleanup intent | Validate guard, quiescence, held target, generation, marker and authorization; commit pending intent/event before deletion. | Failed/uncertain commit prohibits deletion until reread. At most one pending operation per slot tree; retry the same ID. |
+| Cleanup completion | Perform marker-last deletion and filesystem barriers, then commit completion/event. | Pending intent blocks new generation. Recognize committed completion even if acknowledgement was lost. |
+| Session settlement | Evaluate process/capture and retention obligations; commit execution outcome, checked finalization state and event. | Complete requires actual settlement. Commit failure does not establish completion; reread before claiming a result if acknowledgement is uncertain. |
+| Final-result publication | Read committed session facts, write derived result and remaining diagnostics, check writes and close evidence writers. | Never claim complete finalization before its commit. Partial/missing artifacts leave publication unsealed without undoing committed settlement. |
+| Output seal | Verify closed registration, capture outcomes and result/diagnostic writer closure; commit seal/event. | Failed publication makes no sealing claim; reread if commit outcome is uncertain. Never reopen sealed files or redo completed cleanup to repair output. |
+
+Transactions cover related rows and events, not gate sends, signals, filesystem
+creation/deletion, or artifact writes. Each ordering boundary needs an explicit
+recovery interpretation; do not invent cross-store atomicity. A completed but
+unsealed run is not grounds to repeat execution or committed cleanup. Recovery
+may publish only from trustworthy source outcomes and independently established
+writer closure. Stable length, temporary EOF, and owner death prove no complete
+capture. Late errors remain command-local; subsequent recovery diagnostics do not
+rewrite predecessor sealed files or recorded task results.
+
+Inject failures on both sides of each commit/external effect, including lost
+acknowledgement, partial permission transfer, signaling, root removal, artifact
+close, and seal publication. Prove no unregistered execution, safe stopping despite
+registry failure, generation-bound cleanup, commit-before-result claims, last-source
+discovery, unknown capture preservation, and sealed immutability. Process-kill
+proofs do not establish host-power-loss durability.
 
 ### Endpoint evidence must not hide process obligations
 
@@ -1795,7 +2228,8 @@ replacement. Only the session finalizes live work; only an exclusive recovery
 successor repairs interrupted work. The control endpoint carries no lifecycle
 state and grants no authority to perform cleanup.
 
-Use one FIFO in a private, never-reused session directory under runtime control
+Use one FIFO in S3's private, never-reused `runs/<session>` directory
+([placement](#placement-and-role-access)) under runtime control
 storage, outside application-data cleanup. Derive its location from existing slot
 placement and immutable run identity; add no endpoint registry or persisted
 address. Exact layout joins the already-required evidence-layout cutover. Reject
@@ -1986,7 +2420,8 @@ registry simplification must not assume that deleting leases closes this window.
 Specify gated startup, attachment of actual process identity, and permission for
 the workload to proceed as separate steps with explicit interruption outcomes.
 
-A gated parent/child startup handshake is one candidate, not an accepted mechanism.
+The proposed gated-launcher protocol is specified once in the investigation
+below; S2's proposed supervisor uses that same protocol, not another handshake.
 Writing intent before spawn alone cannot identify a child created afterward. If
 recovery lacks sufficient ownership evidence, retain data and refuse new execution.
 Cover tasks, prepare invocations, probes, and service leaders with the same
@@ -2003,7 +2438,9 @@ Independent architect verdict: retain the launcher approach, but simplify the
 protocol and distinguish inert launcher liveness from workload recovery. This is
 an architect recommendation pending implementation proof on both platforms.
 
-Use a small trusted launcher that waits for one private execution request, then
+The shared [role matrix](#placement-and-role-access) defines the launcher's
+resource/environment boundary. Use a small trusted launcher that waits for one
+private execution request, then
 replaces itself with the workload. The request carries execution configuration
 and is itself permission; there is no separate configuration/permit negotiation.
 This could be an early internal mode of the packaged runtime or a packaged helper;
@@ -2140,9 +2577,10 @@ safe to read and report without reconstructing the old secret environment.
 
 There is a concrete layout dependency: [placement.rs](runtime/crates/nixfied-runtime/src/state/placement.rs)
 currently puts `run_dir` beneath `state_root/runs/<run_id>`, while the registry is
-outside that tree. Move retained run evidence outside the application-data deletion
-target, or split that target explicitly, before enabling automatic run-scoped
-deletion. Exact paths remain runtime-owned and require a coordinated layout change.
+outside that tree. Adopt S3's disjoint
+[placement](#placement-and-role-access) before enabling automatic run-scoped
+deletion: retained evidence belongs under the registry-side run directory, outside
+the application deletion target. Paths remain runtime-owned and change together.
 Do not preserve history in SQLite while deleting all files its evidence paths name.
 Define which artifact files are retained evidence and which belong to disposable
 application state; introduce no new cache or retention manager here.
@@ -2184,7 +2622,8 @@ Required evidence:
    termination, deletion intent, marker removal, and partial deletion. The successor
    cleans before new execution or safely refuses. Test endpoint-less survivors.
 5. Process identity checks prevent signaling unrelated reused PIDs. `ps` verifies
-   liveness without database writes or signals; live `down` has one finalizer.
+   liveness without database writes or signals; live `down` leaves finalization
+   with the session owner.
 6. Persistent state survives ordinary clean and new process startup; run-scoped
    cleanup preserves registry history and retained logs/summaries. A new manifest
    cannot downgrade old persistent data into automatic deletion.
@@ -2198,7 +2637,9 @@ authored declarations, generated surfaces still needed, fixtures, and docs toget
 Do not migrate or reinterpret old history. Document old-runtime shutdown and an
 explicit preservation/export procedure for persistent data before incompatible
 registry/marker replacement. Do not automatically delete old history to make the
-new schema initialize successfully.
+new schema initialize successfully. The
+[incompatible-state cutover boundary](#incompatible-prior-state-at-cutover) applies;
+ordinary next-run recovery does not interpret unsupported prior formats.
 
 Measure the result by removal of the borrower/standing/heartbeat/replacement
 protocol and competing completion writers, plus preserved recovery proofs. Six
@@ -2207,41 +2648,96 @@ before implementation and measurement.
 
 ## 13. Delivery and verification
 
-Use ordered coherent commits rather than one rewrite. Suggested sequence:
+**Decision status.** Accepted direction fixes architectural boundaries; it does
+not claim implementation or platform validation. Detailed mechanisms remain
+proposals where labeled. They cannot reopen the accepted fundamentals.
 
-1. Reproduce and fix package selection independently.
-2. Complete the session/containment/control and state-exclusion design, including
-   S10's registry records and interruption protocol, before dependent behavior.
-3. Cut over session ownership, persistence finalization, recovery, and their wire
-   surfaces together. Remove standing/borrower alternatives, their registry
-   coordination, and competing session-completion writers in the same cutover.
-4. Remove obsolete reuse/replacement and epoch machinery; verify retained state
-   ownership, retention, and application-owned compatibility behavior.
-   Changes inseparable from step 3 belong in that same coherent commit.
-5. Reverse presentation dependencies and narrow internal type generation while
-   preserving observable behavior where possible.
-6. Remove accepted redundant wire assertions in a scoped contract change. Defer
-   unrelated inert-field and source-policy changes to the API behavior audit.
-7. Simplify help and any separately accepted compatibility/parser changes.
+| Area | Settled direction | Remaining specification or proof |
+| --- | --- | --- |
+| Sessions | Task entrypoints own duration; optional task deadlines have no finite default; no service-root API. | Supervisor/checkpoint implementation and enclosing lifecycle deadlines. |
+| Background launch | Acknowledgement means established ownership with immutable result identity, not readiness/success. | Exact optional launch surface, proposed handshake, abandonment/input mechanics, platform proof. |
+| Live output | Command-owned read-only presenter; retained redacted files; no output dependency in teardown/slot release. | Implement source records/sealing, auxiliary launch/control and platform proofs under the specified owners. |
+| Ownership and recovery | Exclusive slot, cleanup before replacement, FIFO cancellation, independent retention, application-owned compatibility. | Proposed guard, process-recovery mechanics, deletion protocol and six-table schema. |
+| Compiler boundaries | Executable identity, independent documentation consumers, wire-only generation, runtime graph derivation, generated-app help. | Coordinated implementation and independent proofs. |
+| Deferred work | Keep current ABI mechanism during refactor; unrelated API work stays in its audit. | Any later replacement needs a separately scoped decision. |
 
-For each cutover, update authored declarations, capability inventory, generated
-definitions, fixtures, examples, guides, contract, and independent proofs together.
-Change numeric versions only for their defined semantics. Reject obsolete bytes;
-do not retain compatibility readers, silently reinterpret old state, or rewrite
-append-only history. Specify how users stop old sessions and preserve persistent
-data before moving between incompatible runtime contracts.
+### Work packages and dependencies
 
-Use focused behavioral proofs first, then the checks required by
-[DEVELOPMENT.md](docs/DEVELOPMENT.md). Runtime changes need fixture-backed `.#test`;
-cross-layer cutovers need `.#ci -- --dirty`. Verify shipped release behavior and
-supported platforms, not only compilation of the release artifact. Every delivery
-must report remaining platform, release, and integration gaps.
+These are dependency boundaries, not mandatory commit counts. Supporting commits
+preserve one working contract. Combine dependent behavioral cuts if an intermediate
+version would violate the accepted invariants. Resolve concrete representations
+within their owning package; the engineering contracts above constrain them.
 
-Completion means fewer competing authorities with preserved or explicitly revised
-guarantees. Counts of deleted lines, generated records, or passing tests are not a
-substitute for demonstrating those guarantees.
+| Package | Prerequisite | Coherent deliverable |
+| --- | --- | --- |
+| A: executable identity | None | Selected-output/executable identity and collision rejection, proved with distinguishable programs. |
+| B: lifecycle/evidence foundation | Current normative contract and these handoff contracts | Resolve slot/process/deletion representations, typed sources, capture settlement, durable publication order, and incompatible-state handling before stored bytes change. |
+| C: session ownership | B | Task-owned sessions, cooperative supervision, gated launch, exclusive slot, FIFO, shared settlement/recovery, retention and placement. Remove standing/borrowing/heartbeat/replacement/epoch coordination and competing completion writers together. |
+| D: live presentation | B and C | Command-owned presenter, source discovery, retained diagnostics, checked seal, post-slot drain. Remove active owner writes to caller streams; combine C–D if needed to preserve the accepted output/finalization contract. |
+| E: background launch | C and terminal-independent capture from D | Same task session, immutable establishment acknowledgement, abandonment/input/descriptor handling; no terminal presenter. |
+| F: compiler/documentation cuts | Respective owning contracts | Independent documentation consumers, wire-only generation, runtime graph derivation and generated-app help, each with coupled producer/consumer proofs. |
 
-## 14. Open decisions
+A and independent F changes can precede C. B fixes machine facts before registry
+simplification removes their old representations. E reuses owner/capture contracts;
+it does not introduce a second execution implementation. The
+[durable transition contract](#required-durable-transitions) orders session commit,
+result writes, writer closure, and output seal; SQLite/filesystem atomicity is not
+assumed. Publication failure never triggers repeated workload/cleanup execution.
+
+For each cutover update declarations, capability inventory, generated surfaces
+still required, fixtures, examples, guides, normative contracts and independent
+proofs together. Change versions only for their defined semantics. Remove old
+readers/aliases/dormant alternatives; retain the current ABI mechanism and defer
+unrelated API changes. Specify old-session shutdown and data preservation before
+introducing incompatible stored formats.
+
+### Independent acceptance scenarios
+
+| Package | Required observable proof |
+| --- | --- |
+| A | Same-name distinct packages execute distinguishable selected programs; identical selections deduplicate; unequal ID collisions reject. |
+| B–C | Invalid admission releases no workload; simultaneous same-slot runs admit one owner; separate slots still respect endpoint conflicts; diamond dependencies start once without borrowing across sessions. |
+| C | Transitive/prepare-only service failure is observed during another probe, preparation or no-deadline task; no further workload starts. Distinguish successful task exit, unexpected service exit zero, deliberate stop, deadline and cancellation. |
+| C | Kill owner before/after permission and at recovery/deletion boundaries. Successor settles trustworthy obligations or refuses. Cover endpoint-less survivors, reused identities, partial deletion, persistent data and retained evidence. |
+| C–D | Stop reading stdout/stderr while a service fails or cancellation arrives. Supervision, teardown and slot release proceed; presenter drains or is reaped independently. Secret sentinels never reach evidence or display. |
+| D | Add a late source, delay writer closure, fail commits/artifact/seal writes and kill at publication boundaries. No temporary EOF becomes a seal; completed unsealed sessions do not repeat work; sealed sources stay immutable. |
+| D | Live HTTP output appears with PostgreSQL/Redis running; exact task-output remains unmixed, human output is labeled, structured output keeps its contract. Chunk-split secrets redact identically, incomplete capture remains incomplete after delivery, and slow healthy readers are not arbitrarily truncated. |
+| E | Fail pre-establishment stages and disconnect at handshake boundaries; then fail work after acknowledgement. Acknowledgement never means task success and never loses original run identity. |
+| F | Bad documentation references fail their checks without blocking valid compilation; independent graph vectors/executable fixtures detect bad derivation; generated help excludes final-flake-only apps. |
+
+Use deterministic fixture barriers rather than timing-only races. Run focused
+behavioral proofs, then fixture-backed `.#test` and required cross-layer
+`.#ci -- --dirty` checks under [DEVELOPMENT.md](docs/DEVELOPMENT.md). Verify the
+shipped runtime on Linux and macOS; compilation alone is not platform proof.
+Demonstrate descriptor inheritance, identity across exec, cancellation/containment,
+presenter blocking and deletion recovery. Power-loss claims additionally require
+tested SQLite/filesystem durability barriers; process-kill tests do not establish
+those guarantees.
+
+Each delivered package reports scenarios completed, obsolete authorities removed,
+checks run and remaining platform/release/integration coverage. Do not mark a
+guarantee complete while its required implementation or independent proof remains
+absent. Function naming, module layout and cohesive helper extraction belong to
+the engineer; do not introduce new public behavior or orchestration abstractions
+under the guise of implementing these sketches.
+
+### Incompatible prior state at cutover
+
+Ordinary interrupted-session recovery requires a registry and marker contract the
+runtime can validate. Incompatible prior bytes are a cutover boundary: reject
+before using them to signal processes, authorize deletion, initialize replacement
+history, or start application work. Use the matching old runtime to stop or recover
+old sessions before upgrade. If unavailable or unable to recover safely, use a
+documented offline/operator procedure to stop relevant processes and preserve
+application data and history before establishing new framework state.
+
+Do not invent recovery identities, delete old evidence, migrate records, or
+reinterpret old markers to bypass rejection. Reuse of preserved data, if supported,
+requires an explicit ownership-establishment procedure; preservation alone grants
+no permission to rewrite old metadata. These limits do not add compatibility
+readers or expand the ordinary recovery protocol.
+
+## 14. Remaining implementation decisions and proof obligations
 
 The accepted process/data separation, exclusive slot ownership, cleanup-then-
 restart recovery behavior, independent compilation/presentation dependency
@@ -2250,11 +2746,13 @@ duplicate graph answers, persistence as the sole retention policy, executable
 identity based on selected outputs, help scoped to generated apps, per-session
 FIFO cancellation, application/user-owned data compatibility, optional task
 timeouts with no finite default, and live command-owned presentation independent
-of supervision/teardown are not reopened by this list. These items remain to make
-implementation concrete:
+of supervision/teardown are not reopened by this list. The contracts above now
+specify owners, domains, interfaces, durable ordering and
+execution sequences. The following implementation choices and proofs remain:
 
-- Specify S2's optional `--daemon` detachment/input/handoff mechanics and the
-  precise relationship between preparation and enclosing lifecycle deadlines.
+- Complete the proposed background-launch mechanics under S2's settled
+  acknowledgement and immutable-result boundary, including detachment/input and
+  the relationship between preparation and enclosing lifecycle deadlines.
   Existing task entrypoints, optional task timeouts with no finite default,
   task-owned duration, the background acknowledgement boundary, and immutable
   result identity are settled; `--service` selection is withdrawn.
@@ -2267,17 +2765,20 @@ implementation concrete:
   proofs. Live output, existing-mode behavior, command ownership of presentation,
   and slot-independent final drain are settled; do not reopen the in-process
   blocking-output design.
-- Specify the FIFO's exact runtime-owned placement and complete its Linux/macOS
-  implementation proofs; transport selection and single-owner finalization are
-  settled. Dead-session recovery follows the accepted sequence.
-- Specify the slot exclusion and filesystem/registry deletion protocol, including
-  durability, identity, and every interrupted transition.
-- Review S10's six-table target, finalizer-owned session completion, read-only
-  observation, recovery records, and evidence layout before implementing the
-  registry cutover. Those details are architect proposals, not yet accepted schema.
-- Accept or revise S9; defer S7's remaining metadata/policy proposals to
-  the API behavior audit after the main refactor. Review their explicit losses
-  and required proofs before accepting them as commitments.
+- Complete FIFO implementation and Linux/macOS proofs using S3's shared placement
+  and role-access specification; transport selection, namespace, and single-owner
+  finalization are settled. Dead-session recovery follows the shared settlement
+  policy.
+- Implement and validate the proposed slot/deletion mechanics against the specified
+  authority, durable-transition and interruption contracts. Confirm supported
+  filesystem durability rather than inferring it from process-kill tests.
+- Resolve concrete SQL layout and checked decoding within S10's six-table target
+  and durable-record contract before cutover. Preserve session-owner-only writes,
+  read-only observation, recovery evidence and typed source discovery. Physical
+  schema and platform implementation remain engineering work, not validated code.
+- Retain S9's current compatibility mechanism for this refactor; defer replacement.
+  S7's remaining metadata/policy proposals stay with the API behavior audit after
+  the main refactor, with their losses and required proofs reviewed separately.
 
 This draft contains design and verification obligations only. None of the proposed
 runtime behavior has been implemented or validated by adding this document.
