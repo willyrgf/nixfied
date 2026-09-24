@@ -41,13 +41,13 @@ pkgs.writeShellApplication {
       lock_before=$(sha256sum "$checkout/flake.lock")
       expected=$(nix eval --no-write-lock-file --raw "$checkout#apps.$current_system" \
         --apply "$(<"$checkout/nix/help-renderer.nix")") \
-        || fail "framework help: final root app metadata did not render"
+        || fail "framework help: generated root app metadata did not render"
       actual=$(
         cd "$help_dir"
         NIXFIED_STATE_DIR="$help_state" nix run --no-write-lock-file "$checkout#help"
       ) || fail "framework help: explicit checkout invocation failed"
       [ "$actual" = "$expected" ] \
-        || fail "framework help: output did not match the final root app metadata"
+        || fail "framework help: output did not match the generated root app metadata"
       for flag in -h --help; do
         actual=$(
           cd "$help_dir"
@@ -79,10 +79,10 @@ pkgs.writeShellApplication {
           bbb = { program = \"/bbb\"; meta.description = \"B\"; };
         }
       " >"$help_dir/renderer.actual" || fail "framework help: renderer golden did not evaluate"
-      printf 'Available commands:\n\n  a    A\n  bbb  B\n' >"$help_dir/renderer.expected"
+      printf 'Nixfied-generated commands:\n\n  a    A\n  bbb  B\n' >"$help_dir/renderer.expected"
       [ "$(sha256sum <"$help_dir/renderer.actual")" = "$(sha256sum <"$help_dir/renderer.expected")" ] \
         || fail "framework help: renderer order or layout drifted"
-      printf '%s\n' "$actual" | grep -Eq "^  help +List this flake's runnable commands$" \
+      printf '%s\n' "$actual" | grep -Eq "^  help +List Nixfied-generated commands$" \
         || fail "framework help: catalog omitted its own app"
       if printf '%s\n' "$actual" | grep -Fq "nix run .#"; then
         fail "framework help: catalog baked a caller-relative invocation"
@@ -91,7 +91,7 @@ pkgs.writeShellApplication {
     }
 
     t0=$SECONDS
-    echo "  framework help (final root app metadata from any cwd)" >&2
+    echo "  framework help (generated root app metadata from any cwd)" >&2
     framework_help
     printf '  framework_help: %ds\n' "$((SECONDS - t0))" >&2
 
@@ -147,7 +147,7 @@ MODULE
   cmp "$work/source-$variant" "$work/direct-$variant" \
     || fail 'reference: realised docs changed source with its caller'
   test ! -e "$work/no-state" || fail 'reference: docs materialised runtime state'
-  # Help retains its native final-app evaluation boundary. Supply valid manifest
+  # Help consumes the generated app definitions. Supply valid manifest
   # metadata for that separate discovery proof after the poisoned docs queries.
   cat > "$project/nixfied.nix" <<'MODULE'
 { adapters, ... }: {
@@ -985,11 +985,11 @@ rm -rf "$work"
     nix flake lock "$path_project" || fail "adoption: non-Git scaffold lock failed"
     path_lock_before=$(sha256sum "$path_project/flake.lock")
     path_help=$(cd "$path_project" && nix run --no-write-lock-file .#help) \
-      || fail "adoption: non-Git contextual help failed"
+      || fail "adoption: non-Git generated help failed"
     printf '%s\n' "$path_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
-      || fail "adoption: non-Git contextual help omitted the exported task"
+      || fail "adoption: non-Git generated help omitted the exported task"
     [ "$(sha256sum "$path_project/flake.lock")" = "$path_lock_before" ] \
-      || fail "adoption: non-Git contextual help modified the lock file"
+      || fail "adoption: non-Git generated help modified the lock file"
     ${pkgs.gnused}/bin/sed -i \
       '/^  nixfied.surface.verbs.smoke = /c\  nixfied.surface.verbs = { };' \
       "$path_project/nixfied.nix"
@@ -1013,11 +1013,6 @@ rm -rf "$work"
       | grep -Fq "stage flake.nix and nixfied.nix when using Git, then run nix flake lock" \
       || fail "adoption: installer omitted the required Git lock ordering"
     git -C "$project" add flake.nix nixfied.nix
-    if prelock_error=$(nix eval --no-write-lock-file --json "$project#apps.$current_system" 2>&1); then
-      fail "adoption: projectApps accepted a project without flake.lock"
-    fi
-    printf '%s\n' "$prelock_error" | grep -Fq "project-root flake.nix, flake.lock, and nixfied.nix" \
-      || fail "adoption: pre-lock evaluation failed for the wrong reason"
     nix flake lock "$project" || fail "adoption: scaffold lock failed"
     git -C "$project" add flake.lock
     git -C "$project" commit -q -m scaffold
@@ -1064,11 +1059,11 @@ rm -rf "$work"
       and .["composite-smoke"].meta.description == "Run the composite smoke test"
     ' >/dev/null || fail "adoption: leaf/composite app descriptions were not copied exactly"
     surface_help=$(cd "$project" && nix run --no-write-lock-file .#help) \
-      || fail "adoption: leaf/composite contextual help failed"
+      || fail "adoption: leaf/composite generated help failed"
     printf '%s\n' "$surface_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
-      || fail "adoption: contextual help omitted the exact leaf description"
+      || fail "adoption: generated help omitted the exact leaf description"
     printf '%s\n' "$surface_help" | grep -Eq "^  composite-smoke +Run the composite smoke test$" \
-      || fail "adoption: contextual help omitted the exact composite description"
+      || fail "adoption: generated help omitted the exact composite description"
     ${pkgs.gnused}/bin/sed -i \
       '/^      apps = forAllSystems /c\      apps = forAllSystems (system: let generated = (builtins.getAttr system nixfied.lib).projectApps ./nixfied.nix; in generated // { smoke = generated.smoke // { meta.description = "Overridden adopter verb"; }; merged = generated.run // { meta.description = "Merged adopter app"; }; });' \
       "$project/flake.nix"
@@ -1099,41 +1094,25 @@ rm -rf "$work"
     wk=$(mktemp -d)
     help_state="$st-help"
     help_lock_before=$(sha256sum "$project/flake.lock")
-    project_help_expected=$(
-      cd "$project"
-      nix eval --no-write-lock-file --raw ".#apps.$current_system" \
-        --apply "$(<"$checkout/nix/help-renderer.nix")"
-    ) || fail "adoption: final project app metadata did not render"
     project_help=$(
       cd "$project"
       NIXFIED_STATE_DIR="$help_state" nix run --no-write-lock-file .#help
     ) || fail "adoption: contextual project help failed"
-    [ "$project_help" = "$project_help_expected" ] \
-      || fail "adoption: contextual help did not match final project app metadata"
-    printf '%s\n' "$project_help" | grep -Eq "^  help +List this flake's runnable commands$" \
-      || fail "adoption: contextual help omitted itself"
-    printf '%s\n' "$project_help" | grep -Eq "^  smoke +Overridden adopter verb$" \
-      || fail "adoption: contextual help ignored a final app metadata override"
+    printf '%s\n' "$project_help" | grep -Eq "^  help +List Nixfied-generated commands$" \
+      || fail "adoption: generated help omitted itself"
+    printf '%s\n' "$project_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
+      || fail "adoption: generated help lost its original description"
     printf '%s\n' "$project_help" | grep -Eq "^  composite-smoke +Run the composite smoke test$" \
-      || fail "adoption: contextual help lost the composite description"
-    printf '%s\n' "$project_help" | grep -Eq '^  merged +Merged adopter app$' \
-      || fail "adoption: contextual help omitted a post-projectApps merge"
-    if wrong_context_error=$(
-      cd "$checkout"
-      nix run --no-write-lock-file "$project#help" 2>&1
-    ); then
-      fail "adoption: explicit help from another flake guessed the caller catalog"
+      || fail "adoption: generated help lost the composite description"
+    if printf '%s\n' "$project_help" | grep -Eq '^  merged +|Overridden adopter verb'; then
+      fail "adoption: generated help included a later merge or metadata override"
     fi
-    printf '%s\n' "$wrong_context_error" | grep -Fq "help: context mismatch" \
-      || fail "adoption: explicit help failed for a reason other than context identity"
-    if unresolved_context_error=$(
-      cd "$wk"
-      nix run --no-write-lock-file "$project#help" 2>&1
-    ); then
-      fail "adoption: explicit help from a non-flake directory guessed a catalog"
-    fi
-    printf '%s\n' "$unresolved_context_error" | grep -Fq "help: could not resolve the current flake source" \
-      || fail "adoption: non-flake context failed for the wrong reason"
+    for caller in "$checkout" "$wk"; do
+      external_help=$(cd "$caller"; nix run --no-write-lock-file "$project#help") \
+        || fail "adoption: caller-independent help failed"
+      [ "$external_help" = "$project_help" ] \
+        || fail "adoption: caller directory changed the generated catalog"
+    done
     for app in run manifest-check ps down clean smoke; do
       case "$app" in
         run) help_flag=--help; usage='nix run .#run' ;;

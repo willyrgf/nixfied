@@ -1,8 +1,8 @@
 # Batched Nix-layer negative cases for gate-nix.
 #
-# Each case must fail during Nix evaluation. Manifest cases force the compiled
-# derivation; help cases force the complete rendered string. The result lists
-# cases that unexpectedly evaluated.
+# Rejection cases must fail during Nix evaluation; supported module forms must
+# construct help. Manifest cases force the compiled derivation; help cases force
+# the complete rendered string. The result lists violated expectations.
 { checkout }:
 
 let
@@ -17,7 +17,7 @@ let
   renders = apps: (builtins.tryEval (builtins.stringLength (renderHelp apps))).success;
 
   reject = name: module: if compiles module then [ name ] else [ ];
-  rejectProjectApps = name: module: if projects module then [ name ] else [ ];
+  acceptProjectApps = name: module: if projects module then [ ] else [ name ];
   rejectHelp = name: apps: if renders apps then [ name ] else [ ];
 
   validCompositeCompiles = compiles (
@@ -31,27 +31,6 @@ if !validCompositeCompiles then
   throw "gate-nix negatives sanity check failed: valid composite manifest did not compile"
 else
   builtins.concatLists [
-    (rejectHelp "a help app whose program does not evaluate" {
-      broken = {
-        program = throw "program must be forced";
-        meta.description = "Broken app";
-      };
-    })
-
-    (rejectHelp "a help app with an empty program" {
-      broken = {
-        program = "";
-        meta.description = "Broken app";
-      };
-    })
-
-    (rejectHelp "a help app with a non-string program" {
-      broken = {
-        program = [ "/bin/false" ];
-        meta.description = "Broken app";
-      };
-    })
-
     (rejectHelp "a help app without a description" {
       broken.program = "/bin/false";
     })
@@ -70,20 +49,18 @@ else
       };
     })
 
-    (rejectProjectApps "projectApps called with a function module" (
+    (acceptProjectApps "projectApps called with a function module" (
       { ... }:
       {
         imports = [ composite ];
       }
     ))
 
-    (rejectProjectApps "projectApps called with an attrset module" {
+    (acceptProjectApps "projectApps called with an attrset module" {
       imports = [ composite ];
     })
 
-    (rejectProjectApps "projectApps called with a wrongly named root module" (checkout + /flake.nix))
-
-    (rejectProjectApps "projectApps called with a nested module path" composite)
+    (acceptProjectApps "projectApps called with a nested module path" composite)
 
     (reject "an undeclared step task" (
       { ... }:

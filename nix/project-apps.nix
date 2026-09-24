@@ -5,11 +5,8 @@
 # - the **project verbs**, adopter-owned: one app per task id exported in
 #   `nixfied.surface.verbs` (`.#check` -> `runtime run --task check`).
 #
-# Runtime-backed apps use the manifest store path baked in at evaluation. The help
-# app instead projects final flake metadata through Nix and never enters the
-# runtime, so SEAM-1 remains intact.
+# Help renders the generated definitions without inspecting the caller flake.
 {
-  module,
   pkgs,
   lib,
   releaseRuntime,
@@ -20,13 +17,6 @@
   publicationTargets,
 }:
 let
-  modulePath = toString module;
-  moduleRoot = builtins.dirOf modulePath;
-  moduleIsProjectRoot =
-    builtins.isPath module
-    && builtins.baseNameOf modulePath == "nixfied.nix"
-    && builtins.pathExists "${moduleRoot}/flake.nix"
-    && builtins.pathExists "${moduleRoot}/flake.lock";
   runtimeBin = "${releaseRuntime}/bin/nixfied-runtime";
   manifestJson = "${manifest}/manifest.json";
   syntax = (import ./meta/command-default.nix { inherit lib; }).byName.run;
@@ -53,20 +43,27 @@ let
           ''exec "${runtimeBin}" ${syntax.name} ${syntax.args.manifest.token} "${manifestJson}" ${syntax.args.task.token} "${verb}" "$@"'';
     }) verbIds
   );
+  declarations = import ./project-publications.nix {
+    inherit
+      pkgs
+      system
+      runtimeBin
+      manifestJson
+      docs
+      ;
+    apps =
+      builtins.listToAttrs (
+        map (entry: {
+          name = entry.name;
+          value.meta.description = entry.description;
+        }) declarations
+      )
+      // verbApps;
+  };
   framework = import ./meta/publications.nix { inherit lib; } {
     targets = publicationTargets;
-    declarations = import ./project-publications.nix {
-      inherit
-        pkgs
-        system
-        moduleRoot
-        runtimeBin
-        manifestJson
-        docs
-        ;
-    };
+    inherit declarations;
   };
+  apps = framework.project "app" "project" // verbApps;
 in
-assert lib.assertMsg moduleIsProjectRoot
-  "lib.projectApps requires project-root flake.nix, flake.lock, and nixfied.nix";
-framework.project "app" "project" // verbApps
+apps

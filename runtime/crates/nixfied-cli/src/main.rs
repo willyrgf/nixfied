@@ -273,7 +273,7 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
 
   # The synthetic adapter contributes the `smoke` task (it pings the
   # service); exporting it below makes it a flake app: `nix run .#smoke`.
-  # `nix run .#help` lists the final flake app surface.
+  # `nix run .#help` lists the Nixfied-generated app surface.
   # `nix run .#docs` explains authoring at this project's pinned Nixfied revision.
   # Add your own leaf tasks (lint/test), compose them into composite tasks
   # (kind = "composite", steps = ...), and export the ones that form your

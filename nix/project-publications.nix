@@ -2,7 +2,7 @@
 {
   pkgs ? throw "project app package set demanded",
   system ? throw "project app system demanded",
-  moduleRoot ? throw "project app root demanded",
+  apps ? throw "project apps demanded",
   runtimeBin ? throw "project runtime demanded",
   manifestJson ? throw "project manifest demanded",
   docs ? throw "project reference package demanded",
@@ -37,14 +37,12 @@ in
     kind = "app";
     scope = "project";
     name = "help";
-    description = "List this flake's runnable commands";
+    description = "List Nixfied-generated commands";
     usage = "nix run .#help";
-    effects = "Evaluates the current flake app metadata through Nix; checks that its source matches the defining project.";
+    effects = "Prints the generated app catalog without manifest admission or caller-flake inspection.";
     topic = "discovery";
     binding = import ./help-app.nix {
-      inherit pkgs system;
-      expectedFlakePath = moduleRoot;
-      flakeRef = ".";
+      inherit pkgs apps;
     };
   }
   {
