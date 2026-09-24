@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use crate::admission::RunAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{EventInsert, append_event, insert_event};
-use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
+use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
 
@@ -60,7 +60,7 @@ pub(crate) struct ServiceSnapshot {
     pub(crate) endpoints: Vec<StoredServiceEndpoint>,
 }
 
-pub(crate) struct TaskProcessRecord<'a> {
+pub(crate) struct InvocationProcessRecord<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) process_key: &'a str,
     pub(crate) pid: u32,
@@ -242,8 +242,8 @@ pub(crate) fn record_service_start(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, service_name
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              command_json, run_id, service_instance_id, status, service_name, role
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service')
             ",
             params![
                 process.process_key,
@@ -857,9 +857,44 @@ pub(crate) fn ensure_service_instance_probe_ready(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum InvocationOwner<'a> {
+    Task,
+    Probe(&'a str),
+}
+impl<'a> InvocationOwner<'a> {
+    pub(crate) fn role(self) -> ProcessRole {
+        match self {
+            Self::Task => ProcessRole::Task,
+            Self::Probe(_) => ProcessRole::Probe,
+        }
+    }
+    fn service_name(self) -> Option<&'a str> {
+        match self {
+            Self::Task => None,
+            Self::Probe(name) => Some(name),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(crate) struct InvocationIdentity<'a> {
+    pub run_id: &'a str,
+    pub process_key: &'a str,
+    pub manifest_hash: &'a str,
+    pub owner: InvocationOwner<'a>,
+}
+
 pub(crate) fn record_task_started(
     registry: &mut Registry,
-    process: &TaskProcessRecord<'_>,
+    process: &InvocationProcessRecord<'_>,
+) -> RuntimeResult<()> {
+    record_invocation_started(registry, process, InvocationOwner::Task)
+}
+
+pub(crate) fn record_invocation_started(
+    registry: &mut Registry,
+    process: &InvocationProcessRecord<'_>,
+    owner: InvocationOwner<'_>,
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
@@ -868,13 +903,19 @@ pub(crate) fn record_task_started(
     } = registry.context()?;
     let command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = connection.transaction().map_err(sql_error)?;
+    require_run(
+        &transaction,
+        identity,
+        process.run_id,
+        process.computed_manifest_hash,
+    )?;
     transaction
         .execute(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)
+              command_json, run_id, service_instance_id, status, role, service_name
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)
             ",
             params![
                 process.process_key,
@@ -886,6 +927,8 @@ pub(crate) fn record_task_started(
                 command_json,
                 process.run_id,
                 ProcessStatus::Running.as_str(),
+                owner.role().as_str(),
+                owner.service_name(),
             ],
         )
         .map_err(sql_error)?;
@@ -894,7 +937,10 @@ pub(crate) fn record_task_started(
         identity,
         redactor,
         EventInsert {
-            event_type: "task.running",
+            event_type: match owner {
+                InvocationOwner::Task => "task.running",
+                InvocationOwner::Probe(_) => "probe.running",
+            },
             run_id: Some(process.run_id),
             service_instance_id: None,
             process_key: Some(process.process_key),
@@ -914,6 +960,31 @@ pub(crate) fn record_task_observed(
     outcome: crate::registry::session::ExecutionOutcome,
     exit_code: Option<i32>,
 ) -> RuntimeResult<()> {
+    record_invocation_observed(
+        registry,
+        InvocationIdentity {
+            run_id,
+            process_key,
+            manifest_hash,
+            owner: InvocationOwner::Task,
+        },
+        outcome,
+        exit_code,
+    )
+}
+
+pub(crate) fn record_invocation_observed(
+    registry: &mut Registry,
+    invocation: InvocationIdentity<'_>,
+    outcome: crate::registry::session::ExecutionOutcome,
+    exit_code: Option<i32>,
+) -> RuntimeResult<()> {
+    let InvocationIdentity {
+        run_id,
+        process_key,
+        manifest_hash,
+        owner,
+    } = invocation;
     let RegistryContext {
         connection,
         identity,
@@ -927,14 +998,15 @@ pub(crate) fn record_task_observed(
         .execute(
             "UPDATE processes SET execution_outcome = ?3, exit_code = ?4
          WHERE process_key = ?1 AND run_id = ?2 AND service_instance_id IS NULL
-           AND execution_outcome IS NULL AND environment = ?5 AND slot = ?6",
+           AND execution_outcome IS NULL AND environment = ?5 AND slot = ?6 AND role = ?7",
             params![
                 process_key,
                 run_id,
                 outcome.as_str(),
                 exit_code,
                 identity.environment,
-                identity.slot
+                identity.slot,
+                owner.role().as_str()
             ],
         )
         .map_err(sql_error)?;
@@ -951,7 +1023,10 @@ pub(crate) fn record_task_observed(
         identity,
         redactor,
         EventInsert {
-            event_type: "task.execution-observed",
+            event_type: match owner {
+                InvocationOwner::Task => "task.execution-observed",
+                InvocationOwner::Probe(_) => "probe.execution-observed",
+            },
             run_id: Some(run_id),
             service_instance_id: None,
             process_key: Some(process_key),
@@ -970,11 +1045,60 @@ pub(crate) fn mark_task_finished(
     terminal_status: TaskTerminalStatus,
     payload_json: &str,
 ) -> RuntimeResult<()> {
+    mark_invocation_finished(
+        registry,
+        InvocationIdentity {
+            run_id,
+            process_key,
+            manifest_hash: computed_manifest_hash,
+            owner: InvocationOwner::Task,
+        },
+        terminal_status,
+        payload_json,
+    )
+}
+
+pub(crate) fn record_probe_canceling(
+    registry: &mut Registry,
+    invocation: InvocationIdentity<'_>,
+) -> RuntimeResult<()> {
+    record_canceling(
+        registry,
+        invocation.run_id,
+        None,
+        invocation.process_key,
+        invocation.manifest_hash,
+        "probe.canceling",
+        "{}",
+    )
+}
+
+pub(crate) fn mark_invocation_finished(
+    registry: &mut Registry,
+    invocation: InvocationIdentity<'_>,
+    terminal_status: TaskTerminalStatus,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let InvocationIdentity {
+        run_id,
+        process_key,
+        manifest_hash: computed_manifest_hash,
+        owner,
+    } = invocation;
     let (process_status, event_type) = match terminal_status {
         TaskTerminalStatus::Succeeded => (ProcessStatus::Succeeded, "task.succeeded"),
         TaskTerminalStatus::Failed => (ProcessStatus::Failed, "task.failed"),
         TaskTerminalStatus::TimedOut => (ProcessStatus::Failed, "task.timed-out"),
         TaskTerminalStatus::Canceled => (ProcessStatus::Canceled, "task.canceled"),
+    };
+    let event_type = match owner {
+        InvocationOwner::Task => event_type,
+        InvocationOwner::Probe(_) => match terminal_status {
+            TaskTerminalStatus::Succeeded => "probe.succeeded",
+            TaskTerminalStatus::Failed => "probe.failed",
+            TaskTerminalStatus::TimedOut => "probe.timed-out",
+            TaskTerminalStatus::Canceled => "probe.canceled",
+        },
     };
     let RegistryContext {
         connection,
@@ -982,12 +1106,16 @@ pub(crate) fn mark_task_finished(
         redactor,
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, process_status.as_str()],
-        )
-        .map_err(sql_error)?;
+    let changed = transaction.execute(
+        "UPDATE processes SET status = ?2 WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
+        params![process_key, process_status.as_str(), run_id, owner.role().as_str(), identity.environment, identity.slot],
+    ).map_err(sql_error)?;
+    if changed != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "invocation settlement must update exactly one matching process",
+        ));
+    }
     insert_event(
         &transaction,
         identity,
@@ -1410,7 +1538,7 @@ mod tests {
         insert_run(registry, RUN_ID);
         record_task_started(
             registry,
-            &TaskProcessRecord {
+            &InvocationProcessRecord {
                 run_id: RUN_ID,
                 process_key: PROCESS_KEY,
                 pid: 123,
@@ -1671,6 +1799,10 @@ mod tests {
             "UPDATE processes SET service_name = NULL",
             "UPDATE processes SET service_name = ''",
             "UPDATE processes SET service_instance_id = NULL",
+            "UPDATE processes SET role = NULL",
+            "UPDATE processes SET role = 'unknown'",
+            "UPDATE processes SET role = 'task'",
+            "UPDATE processes SET role = 'probe'",
         ] {
             assert!(
                 fixture
@@ -1710,9 +1842,9 @@ mod tests {
             .execute_batch(
                 "INSERT INTO processes (
                 process_key, environment, slot, pid, pgid, start_identity,
-                command_json, run_id, service_instance_id, status, service_name
+                command_json, run_id, service_instance_id, status, service_name, role
              ) SELECT 'z-second', environment, slot, pid, pgid, 'invalid-json',
-                      command_json, run_id, service_instance_id, status, service_name FROM processes;",
+                      command_json, run_id, service_instance_id, status, service_name, role FROM processes;",
             )
             .unwrap();
         let error = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap_err();

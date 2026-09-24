@@ -11,7 +11,8 @@ use crate::error::RuntimeResult;
 use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
-    CapturedExec, CapturedExecOutcome, RenderedInvocation, resolve_exec_cwd, run_captured_exec,
+    CapturedExec, CapturedExecOutcome, CapturedExecTransition, RenderedInvocation,
+    get_process_group, platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,14 +73,18 @@ pub(crate) struct ExecProbe<'a> {
     pub source_root: &'a Path,
     pub logs_dir: &'a Path,
     pub redactor: &'a Redactor,
-    pub authority: &'a crate::state::ownership::SlotGuard,
+    pub registry: &'a mut crate::registry::Registry,
+    pub launcher: &'a Path,
+    pub run_id: &'a str,
+    pub service_name: &'a str,
+    pub manifest_hash: &'a str,
+    pub occurrence: u64,
 }
 
 /// Execute one invocation probe attempt: run the probe's bound exec
 /// (args/env already substituted at service start) in its own process group
 /// with the probe's per-attempt deadline; exit 0 is success. Each attempt's
-/// output overwrites `lifecycle.<label>.probe.{stdout,stderr}.log`, so the last
-/// attempt's evidence — the one an operator debugs — survives.
+/// output is retained in exclusive occurrence files, preserving earlier attempts.
 pub(crate) fn exec_probe_attempt(
     probe: &ProbePolicy,
     invocation: ExecProbe<'_>,
@@ -91,16 +96,27 @@ pub(crate) fn exec_probe_attempt(
         source_root,
         logs_dir,
         redactor,
-        authority,
+        registry,
+        launcher,
+        run_id,
+        service_name,
+        manifest_hash,
+        occurrence,
     } = invocation;
     let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
-    let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
-    let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
+    let stdout_path = logs_dir.join(format!(
+        "lifecycle.{service_name}.{}.probe.{occurrence}.stdout.log",
+        probe.label
+    ));
+    let stderr_path = logs_dir.join(format!(
+        "lifecycle.{service_name}.{}.probe.{occurrence}.stderr.log",
+        probe.label
+    ));
     cancellation.check()?;
     checkpoint()?;
-    let outcome = run_captured_exec(
+    let pending = spawn_gated_captured_exec(
         &CapturedExec {
-            authority,
+            authority: registry.authority(),
             executable: &command.executable,
             args: &command.args,
             env: &command.env,
@@ -110,12 +126,96 @@ pub(crate) fn exec_probe_attempt(
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,
             redactor,
-            log_file_mode: crate::redaction::LogFileMode::Replace,
+            log_file_mode: crate::redaction::LogFileMode::New,
             label: &format!("lifecycle operation {}", probe.label),
         },
-        cancellation,
-        checkpoint,
+        launcher,
     )?;
+    use crate::registry::session::ExecutionOutcome;
+    use crate::service::registry::{
+        InvocationIdentity, InvocationOwner, InvocationProcessRecord, TaskTerminalStatus,
+        mark_invocation_finished, record_invocation_observed, record_invocation_started,
+        record_probe_canceling,
+    };
+    let pid = pending.pid();
+    let pgid = pid as i32;
+    let process_key = format!("process-{run_id}-probe-{service_name}-{occurrence}-{pid}");
+    let identity = InvocationIdentity {
+        run_id,
+        process_key: &process_key,
+        manifest_hash,
+        owner: InvocationOwner::Probe(service_name),
+    };
+    let command_json = serde_json::json!({
+        "label": probe.label, "serviceId": service_name, "executable": command.executable,
+        "args": command.args, "cwd": command_cwd, "stdoutPath": stdout_path, "stderrPath": stderr_path,
+    }).to_string();
+    let child = pending.register_and_release(
+        |_| {
+            if get_process_group(pid)? != pgid {
+                return Err(crate::RuntimeError::new(
+                    crate::ErrorCode::ProcEscape,
+                    "probe launcher process group changed",
+                ));
+            }
+            let start = platform_start_identity(pid).ok_or_else(|| {
+                crate::RuntimeError::new(
+                    crate::ErrorCode::ProcEscape,
+                    "probe launcher start identity is unavailable",
+                )
+            })?;
+            let start_identity =
+                crate::service::StoredProcessIdentity::encode(pid, pgid, Some(&start), None);
+            record_invocation_started(
+                registry,
+                &InvocationProcessRecord {
+                    run_id,
+                    process_key: &process_key,
+                    pid,
+                    pgid,
+                    start_identity: &start_identity,
+                    command_json: &command_json,
+                    computed_manifest_hash: manifest_hash,
+                },
+                identity.owner,
+            )
+        },
+        || {
+            cancellation.check()?;
+            checkpoint()
+        },
+    )?;
+    let terminal = |outcome: &CapturedExecOutcome| match outcome {
+        CapturedExecOutcome::Exited(status) if status.success() => (
+            ExecutionOutcome::Succeeded,
+            status.code(),
+            TaskTerminalStatus::Succeeded,
+        ),
+        CapturedExecOutcome::Exited(status) => (
+            ExecutionOutcome::Failed,
+            status.code(),
+            TaskTerminalStatus::Failed,
+        ),
+        CapturedExecOutcome::Canceled => (
+            ExecutionOutcome::Canceled,
+            None,
+            TaskTerminalStatus::Canceled,
+        ),
+        CapturedExecOutcome::TimedOut => {
+            (ExecutionOutcome::Failed, None, TaskTerminalStatus::TimedOut)
+        }
+    };
+    let outcome = child
+        .complete(cancellation, checkpoint, |transition| match transition {
+            CapturedExecTransition::Observed(outcome) => {
+                let (outcome, code, _) = terminal(outcome);
+                record_invocation_observed(registry, identity, outcome, code)
+            }
+            CapturedExecTransition::Terminating(_) => record_probe_canceling(registry, identity),
+        })
+        .map_err(|failure| *failure.error)?;
+    mark_invocation_finished(registry, identity, terminal(&outcome).2, "{}")?;
+
     Ok(match outcome {
         CapturedExecOutcome::Canceled => return Err(canceled_error()),
         CapturedExecOutcome::Exited(status) if status.success() => ProbeAttempt::Succeeded,

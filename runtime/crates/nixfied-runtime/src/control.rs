@@ -6,7 +6,7 @@ use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{EventInsert, insert_event};
-use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
+use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryReader};
 use crate::service::{
     ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
@@ -199,6 +199,8 @@ pub fn clean_reconciled_state(
 
 #[derive(Debug)]
 struct ProcessRow {
+    role: ProcessRole,
+    service_name: Option<String>,
     process_key: String,
     pid: u32,
     pgid: i32,
@@ -304,7 +306,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
               p.run_id, p.service_instance_id, p.status, r.computed_manifest_hash,
               CASE WHEN {escaped_process}
-                   THEN 1 ELSE 0 END
+                   THEN 1 ELSE 0 END, p.role, p.service_name
             FROM processes p
             LEFT JOIN runs r ON r.run_id = p.run_id
             ORDER BY p.process_key
@@ -326,6 +328,8 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, i64>(9)? != 0,
+                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })
         .map_err(sql_error)?
@@ -344,7 +348,27 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 status,
                 computed_manifest_hash,
                 unresolved_escape,
+                role,
+                service_name,
             )| {
+                let role = ProcessRole::parse_db(&role)?;
+                let coherent = match role {
+                    ProcessRole::Task => service_instance_id.is_none() && service_name.is_none(),
+                    ProcessRole::Service => {
+                        service_instance_id.is_some()
+                            && service_name.as_ref().is_some_and(|name| !name.is_empty())
+                    }
+                    ProcessRole::Probe => {
+                        service_instance_id.is_none()
+                            && service_name.as_ref().is_some_and(|name| !name.is_empty())
+                    }
+                };
+                if !coherent {
+                    return Err(RuntimeError::new(
+                        ErrorCode::RegistryCorrupt,
+                        "process role and service attribution disagree",
+                    ));
+                }
                 let start_identity = serde_json::from_str::<StoredProcessIdentity>(
                     &start_identity_json,
                 )
@@ -355,6 +379,8 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     )
                 })?;
                 Ok(ProcessRow {
+                    role,
+                    service_name,
                     process_key,
                     pid,
                     pgid,
@@ -528,6 +554,23 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
         "command": row.command_json,
     })
     .to_string();
+    if row.role == ProcessRole::Probe {
+        return crate::service::mark_invocation_finished(
+            registry,
+            crate::service::InvocationIdentity {
+                run_id: &row.run_id,
+                process_key: &row.process_key,
+                manifest_hash: &row.computed_manifest_hash,
+                owner: crate::service::InvocationOwner::Probe(
+                    row.service_name
+                        .as_deref()
+                        .expect("probe attribution decoded"),
+                ),
+            },
+            TaskTerminalStatus::Canceled,
+            &payload_json,
+        );
+    }
     mark_task_finished(
         registry,
         &row.run_id,

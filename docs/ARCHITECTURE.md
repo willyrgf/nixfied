@@ -419,9 +419,14 @@ rendered by `nix run .#docs -- api record output-schema/run-json`.
 explicitly for diagnostics. When the option is omitted, the runtime uses the
 selected root task's manifest `defaultOutput`, whose normal value is `summary`.
 
-Task and probe execution share a concrete child owner. Spawn returns that owner;
-tasks record their process before consuming it through completion, while probes
-complete directly. Task observation records the execution outcome and exit code
+Task and probe completion share a concrete captured-child owner. Tasks first own
+an inert captured launcher, verify its process identity, and commit their process
+record before releasing execution permission. Preparation uses the same task path.
+Service startup establishes monitoring and commits process/endpoint evidence before
+release; post-registration exec failure retains and settles that evidence.
+Exec probes commit their own role, service attribution and process identity through
+the same gate, retaining separate evidence for every attempt. Task and probe
+observation records the execution outcome and exit code
 before containment and capture settlement. `ObservedWithoutEvidence` preserves
 that result when settlement cannot produce completed evidence; it grants no
 replay ticket. Cancellation/timeout intent precedes signaling. Every exit

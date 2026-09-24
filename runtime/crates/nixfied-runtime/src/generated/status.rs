@@ -17,6 +17,14 @@ Complete => "complete",
 }
 
 db_status! {
+    ProcessRole {
+    Task => "task",
+Service => "service",
+Probe => "probe",
+    }
+}
+
+db_status! {
     ProcessStatus {
     Starting => "starting",
 Running => "running",

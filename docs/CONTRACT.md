@@ -563,6 +563,15 @@ before sending bytes, checks cancellation during bounded delivery/response waits
 and returns the child with any registration, delivery, or exec failure. Abandoning
 an inert pending launch returns the child for checked reaping without permission.
 
-The callback must commit process ownership and establish supervision. Workload-path
-integration is still pending: ordinary workload startup retains its existing
-spawn-before-registration behavior until every role uses this primitive.
+Task execution, including preparation tasks, verifies the inert launcher's process
+group and start identity and commits its task process/event before sending the
+request. Service startup establishes its monitor and commits process/endpoint/event
+evidence before release. Registration failure closes the gate and contains/reaps
+the inert child. A service exec failure after registration retains the process
+record and uses owned failed-start settlement. Permission delivery observes
+cancellation; task startup also observes already-started services.
+
+Exec probes use the same gate, committing their role, service attribution, process
+identity and event before permission. Each attempt retains separate capture files
+and execution evidence. Probe outcomes never settle the enclosing session. Probe
+permission delivery observes cancellation and service liveness.

@@ -337,6 +337,9 @@ in
     (vocabulary "status FinalizationStatus" "FinalizationStatus" status "pub" copy
       "Session resource finalization, independent of execution outcome and output sealing."
     )
+    (vocabulary "status ProcessRole" "ProcessRole" status "pub" copy
+      "Durable workload role; preparation is a task occurrence and probes own separate process evidence."
+    )
     (vocabulary "status ProcessStatus" "ProcessStatus" status "pub" copy
       "Native processes.status vocabulary; host reconciliation stays native."
     )

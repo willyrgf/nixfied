@@ -402,9 +402,11 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         record_run_created(&mut registry, "evidence-test", &admission, &placement).unwrap();
         let redactor = Redactor::from_secrets(admission.secrets());
         let cancellation = CancellationToken::new();
+        let launcher = common::runtime_binary();
         let context = NodeContext {
             placement: &placement,
             run: RunContext::new(
+                &launcher,
                 &admission,
                 "evidence-test",
                 &placement.state_root,

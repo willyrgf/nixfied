@@ -474,3 +474,81 @@ fn owner_rejects_invalid_or_oversized_requests_before_constructing_a_launch() {
     }
     assert!(!root.path.join("marker").exists());
 }
+
+#[test]
+fn native_task_registration_failure_cannot_execute_the_workload() {
+    use nixfied_runtime::registry::{Registry, RegistryIdentity};
+    use nixfied_runtime::service::{
+        RunContext, record_run_created, run_dependent_task_cancellable,
+    };
+    use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
+    let root = TempDir::new();
+    let counter = root.path.join("must-not-execute");
+    let mut value = test_child_manifest(23180, 23180);
+    value["tasks"]["smoke"]["requires"] = serde_json::json!([]);
+    let program = value["tasks"]["smoke"]["invocation"]["run"][0].clone();
+    value["tasks"]["smoke"]["invocation"]["run"] =
+        serde_json::json!([program, "output", "occurrence", counter, "0"]);
+    let manifest: nixfied_manifest::Manifest = serde_json::from_value(value).unwrap();
+    let admission = fixture_admission(&manifest, &root.path);
+    let placement = derive_host_placement(&manifest, "gated-task", &root.path).unwrap();
+    materialize_run_roots(&placement).unwrap();
+    let mut registry = Registry::open_or_create(
+        registry_guard(&placement),
+        &RegistryIdentity::default_slot(
+            &manifest.project.project_id,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
+        ),
+    )
+    .unwrap();
+    record_run_created(&mut registry, "gated-task", &admission, &placement).unwrap();
+    registry.connection().execute_batch("CREATE TRIGGER deny_task_registration BEFORE INSERT ON events WHEN NEW.event_type = 'task.running' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap();
+    let error = run_dependent_task_cancellable(
+        &placement,
+        &mut registry,
+        RunContext::new(
+            &runtime_binary(),
+            &admission,
+            "gated-task",
+            &placement.state_root,
+            &nixfied_runtime::redaction::Redactor::empty(),
+        ),
+        &[],
+        "smoke",
+        0,
+        admission
+            .common()
+            .execution_manifest()
+            .leaf("smoke")
+            .unwrap(),
+        &nixfied_runtime::cancellation::CancellationToken::new(),
+        nixfied_runtime::output::EvidenceMode::CaptureOnly,
+    )
+    .expect_err("registration must fail");
+    assert_eq!(
+        error.error().code,
+        nixfied_runtime::ErrorCode::RegistryCorrupt
+    );
+    assert!(!counter.exists());
+    assert_eq!(
+        registry
+            .connection()
+            .query_row("SELECT count(*) FROM processes", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        registry
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_type='task.running'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    registry.close().unwrap();
+}

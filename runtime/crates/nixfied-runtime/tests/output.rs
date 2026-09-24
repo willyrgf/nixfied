@@ -721,6 +721,47 @@ fn service_exit_interrupts_a_task_without_deadline() {
 }
 
 #[test]
+fn services_with_exec_probes_keep_distinct_capture_files() {
+    let port = available_port_window(2);
+    let mut manifest = task_manifest_at(&["exit".into(), "0".into()], port);
+    manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
+    let invocation = manifest["tasks"]["smoke"]["invocation"].clone();
+    manifest["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "kind": "exec", "invocation": invocation,
+        "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 1
+    });
+    let mut later = manifest["services"]["synthetic"].clone();
+    later["connectsTo"] = json!(["synthetic"]);
+    for operation in ["start", "ready", "health", "stop", "clean"] {
+        later["lifecycle"][operation]["operationId"] = json!(format!("later.{operation}"));
+    }
+    manifest["services"]["later"] = later;
+    manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
+    let fixture = RuntimeFixture::new(manifest);
+    let output = run(&fixture, &["--task", "smoke", "--output", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for service in ["synthetic", "later"] {
+        assert!(
+            common::find_named(
+                &fixture.state_base,
+                &format!("lifecycle.{service}.ready.probe.0.stdout.log")
+            )
+            .is_some()
+        );
+    }
+    let registry = rusqlite::Connection::open(
+        common::find_named(&fixture.state_base, "registry.sqlite3").unwrap(),
+    )
+    .unwrap();
+    let probes: i64 = registry.query_row("SELECT count(*) FROM processes WHERE role='probe' AND status='succeeded' AND execution_outcome='succeeded'", [], |row| row.get(0)).unwrap();
+    assert_eq!(probes, 2);
+}
+
+#[test]
 fn service_failure_interrupts_another_services_exec_probe() {
     for phase in ["ready", "health"] {
         for victim in ["synthetic", "later"] {
@@ -768,7 +809,7 @@ fn service_failure_interrupts_another_services_exec_probe() {
             .unwrap();
             let pid: i32 = registry
                 .query_row(
-                    "SELECT p.pid FROM processes p WHERE p.service_name = ?1",
+                    "SELECT p.pid FROM processes p WHERE p.service_name = ?1 AND p.role = 'service'",
                     [victim],
                     |row| row.get(0),
                 )

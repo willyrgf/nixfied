@@ -384,8 +384,8 @@ fn purge_still_refuses_active_registry_refs() {
         .execute_batch(
             "INSERT INTO processes (
                process_key, environment, slot, pid, pgid, start_identity, command_json,
-               run_id, status
-             ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running')",
+               run_id, status, role
+             ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task')",
         )
         .expect("active process should be inserted");
 
@@ -459,8 +459,8 @@ fn cleanup_refuses_active_registry_refs() {
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO processes (
            process_key, environment, slot, pid, pgid, start_identity, command_json,
-           run_id, status
-         ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running')",
+           run_id, status, role
+         ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task')",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO ports (
@@ -583,11 +583,11 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, service_name
+              run_id, service_instance_id, status, service_name, role
             ) VALUES (
               'process-stale', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale', 'service-stale', 'running', 'synthetic'
+              'run-stale', 'service-stale', 'running', 'synthetic', 'service'
             );
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
@@ -765,11 +765,11 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, service_name
+              run_id, service_instance_id, status, service_name, role
             ) VALUES (
               'process-stale-port', 'dev', 0, 999998, 999998,
               '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale-port', 'service-stale-port', 'stopped', 'synthetic'
+              'run-stale-port', 'service-stale-port', 'stopped', 'synthetic', 'service'
             );
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
