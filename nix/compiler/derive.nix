@@ -68,20 +68,15 @@ let
   # A package-shaped tool synthesizes a closure: its executable anchors the
   # PATH root (the bin dir) and run[0] resolution; effects default to the
   # weakest attestation (per-tool effects granularity is deferred).
-  toolClosureId = package: "tool-${lib.getName package}";
+  # Labels are not identities: versions, overrides and selected outputs may
+  # share a name. Compare full identities on insertion even after hashing.
+  toolIdentity = package: {
+    storePath = "${package}";
+    executable = "${package}/bin/${toolMainProgram package}";
+  };
+  toolClosureId =
+    package: "tool-${builtins.hashString "sha256" (builtins.toJSON (toolIdentity package))}";
   toolMainProgram = package: package.meta.mainProgram or (lib.getName package);
-  synthesizedClosureOf =
-    package:
-    construct "ClosureSpec" {
-      kind = "executable";
-      storePath = "${package}";
-      executable = "${package}/bin/${toolMainProgram package}";
-      targetSystem = target.closureSystem;
-      operationBindings = derivedBindings (toolClosureId package);
-      requiresExecutable = true;
-      effects = [ "process" ];
-    };
-
   # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §5.1),
   # declared only to override.
   leafOperationId =
@@ -125,12 +120,28 @@ let
   packageTools = lib.concatMap (
     position: builtins.filter (tool: !(builtins.isString tool)) position.invocation.tools
   ) invocationPositions;
-  synthesizedClosures = builtins.listToAttrs (
-    map (package: {
-      name = toolClosureId package;
-      value = synthesizedClosureOf package;
-    }) packageTools
-  );
+  synthesizedIdentities = lib.foldl' (
+    identities: package:
+    let
+      id = toolClosureId package;
+      identity = toolIdentity package;
+    in
+    assert lib.assertMsg (
+      !(identities ? ${id}) || identities.${id} == identity
+    ) "unequal synthesized tool identities collide at ${id}";
+    identities // { ${id} = identity; }
+  ) { } packageTools;
+  synthesizedClosures = mapAttrs (
+    id: identity:
+    construct "ClosureSpec" {
+      kind = "executable";
+      inherit (identity) storePath executable;
+      targetSystem = target.closureSystem;
+      operationBindings = derivedBindings id;
+      requiresExecutable = true;
+      effects = [ "process" ];
+    }
+  ) synthesizedIdentities;
   collidingToolIds = builtins.filter (id: declaredClosures ? ${id}) (
     builtins.attrNames synthesizedClosures
   );
