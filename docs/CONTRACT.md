@@ -526,3 +526,43 @@ preflight, plan/apply and transaction ownership remain native continuations.
 These commands do not accept equals-form options, positional operands, short
 clusters or an option terminator. Hidden manifest/state arguments remain documented
 for framework and test integration; generated app wrappers supply the manifest.
+
+## Internal workload gate
+
+The private `__workload-gate <fd>` mode dispatches before ordinary runtime
+admission, signal ownership, or output projection. It accepts a connected Unix
+stream descriptor numbered at least 3; invalid invocation exits 125 silently.
+It is not an adopter app or a manifest command. The owner must bootstrap it with
+an empty environment, safe cwd, intended workload stdio, and no inherited slot,
+database, or unrelated control descriptors.
+
+The sole execution request is `NXG1`, a four-byte unsigned big-endian payload
+length, then at most 1,048,576 bytes of JSON, terminated by write-half closure.
+A ten-second absolute startup deadline includes the frame and terminator.
+The exact JSON fields are `executable`, `args`, `env`, and `cwd`; strings are
+arrays of Unix bytes, arguments are arrays of byte strings, and environment is
+an array of name/value pairs. Executable and cwd must be absolute and NUL-free;
+arguments and environment must be NUL-free. Environment names must be nonempty,
+unique, and contain no equals sign. Unknown fields, malformed or partial frames,
+trailing bytes, and invalid values reject before applying cwd or environment.
+
+A valid request replaces the launcher with the executable, preserving PID,
+process group, and workload stdin. The startup socket closes across exec. The
+launcher clears the signal mask and restores standard workload signal dispositions.
+A failed launch exits 125 and attempts one nonblocking failure byte on the socket:
+1 for framing/deadline, 2 for invalid request, 3 for setup, or 4 for exec.
+It prints no request values. Socket EOF alone proves neither successful exec nor
+workload success; the owner must retain child-exit observation and startup errors.
+
+The owner primitive validates and bounds the request before child creation,
+requires an absolute launcher executable and held slot authority, and starts the
+bootstrap from `/` with an empty environment. Only the selected child's descriptor
+flags change to pass the socket; the parent's descriptors remain close-on-exec.
+Its consuming registration-and-release operation calls the registration callback
+before sending bytes, checks cancellation during bounded delivery/response waits,
+and returns the child with any registration, delivery, or exec failure. Abandoning
+an inert pending launch returns the child for checked reaping without permission.
+
+The callback must commit process ownership and establish supervision. Workload-path
+integration is still pending: ordinary workload startup retains its existing
+spawn-before-registration behavior until every role uses this primitive.

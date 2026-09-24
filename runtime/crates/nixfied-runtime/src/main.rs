@@ -327,6 +327,10 @@ impl RunOutputMode {
 }
 
 fn main() {
+    let native_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(exit) = nixfied_runtime::launch::dispatch(&native_args) {
+        std::process::exit(exit);
+    }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let exit = match ProcessSignalGuard::install() {
         Ok(signals) => {

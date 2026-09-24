@@ -389,6 +389,7 @@ acceptance evidence for later changes.
 | Native options and shared invocation fragment | `option-metadata.nix`: mounted suboptions, overrides, bounds, lazy defaults and context |
 | Publication metadata and actual exports | `publications.nix`, final flake audits, poisoned bindings and downstream app-set checks |
 | Structural fields and closed inventory vocabularies | `structure.nix`, `coverage.nix`, compiled projection fixtures, raw `wire_presence.rs` and independent Nix/Rust derivation vectors |
+| Native internal workload-gate protocol | `tests/launch.rs`: independent raw frames, rejection before effects, signal/descriptor hygiene, Unix bytes, and bounded waiting |
 | Native output/error views | `output_structure.rs`, main/output/registry/process tests and real redaction/write boundaries |
 | Shared command facts and native parsers | `syntax.nix`, seven exact helps, native parser/encoding tests and packaged upgrade parser |
 | Static revision-bound reference | `reference.nix`, downstream source switching, context/closure isolation and exact queries |
