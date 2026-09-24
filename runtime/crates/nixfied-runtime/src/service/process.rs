@@ -1,10 +1,8 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use nixfied_manifest::{ContainmentRequirement, LoopbackHost, StopSignal};
@@ -47,7 +45,6 @@ use crate::template::{EndpointSelector, Piece, Template};
 use super::TrackedProcessIdentity;
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
-const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
 
 fn stop_signal_number(signal: StopSignal) -> i32 {
     match signal {
@@ -255,6 +252,9 @@ impl ReadyService {
         self.info().selected_endpoint()
     }
     pub fn check_liveness(&self) -> RuntimeResult<()> {
+        if let Some(error) = self.owned.escape_error() {
+            return Err(error);
+        }
         self.info().check_liveness()
     }
     pub fn check_health(
@@ -309,7 +309,7 @@ impl std::fmt::Debug for ReadyService {
 struct OwnedService {
     info: ServiceInfo,
     child: Option<Child>,
-    monitor: ProcessMonitor,
+    descendants: DescendantTracker,
     service: ExecService,
     ready_probe: PreparedProbe,
     health_probe: PreparedProbe,
@@ -594,7 +594,7 @@ impl OwnedService {
         registry: &Registry,
         fallback: RuntimeError,
     ) -> RuntimeError {
-        let tracked_processes = self.monitor.known_descendants();
+        let tracked_processes = self.descendants.known_descendants();
         self.override_with_observation(
             registry,
             fallback,
@@ -880,7 +880,6 @@ impl OwnedService {
                 &self.info.computed_manifest_hash,
                 &payload,
             )?;
-            self.monitor.stop();
             mark_service_canceled(
                 registry,
                 &self.info.run_id,
@@ -897,7 +896,6 @@ impl OwnedService {
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
-        self.monitor.stop();
         mark_service_stopped(
             registry,
             &self.info.run_id,
@@ -909,11 +907,10 @@ impl OwnedService {
     }
 
     fn escape_error(&self) -> Option<RuntimeError> {
-        let monitor = &self.monitor;
+        let descendants = &self.descendants;
         // Refresh at the decision boundary so shutdown cannot signal the
-        // foreground group before the asynchronous monitor records a child
-        // that has already escaped it.
-        if let Err(error) = monitor.refresh(
+        // foreground group before recording a child that has already escaped it.
+        if let Err(error) = descendants.refresh(
             self.info.pid,
             self.info.pgid,
             matches!(
@@ -923,7 +920,7 @@ impl OwnedService {
         ) {
             return Some(error);
         }
-        let escaped = monitor.escaped_descendants();
+        let escaped = descendants.escaped_descendants();
         if escaped.is_empty() {
             return None;
         }
@@ -1025,10 +1022,10 @@ impl OwnedService {
 
     /// Failure cleanup is stronger than the declared steady-state containment:
     /// once a strict process-group service has demonstrated an escape, every
-    /// descendant captured by the monitor must also be killed and identity-
+    /// descendant captured by the owner must also be killed and identity-
     /// checked before ports can be released.
     fn terminate_after_failure(&self, timeout_ms: u64) -> RuntimeResult<()> {
-        let monitored = self.monitor.known_descendants();
+        let monitored = self.descendants.known_descendants();
         terminate_process_tree_with_snapshot(
             self.info.pid,
             self.info.pgid,
@@ -1052,7 +1049,7 @@ impl OwnedService {
                 self.info.pgid,
                 signal,
                 timeout_ms,
-                &self.monitor.known_descendants(),
+                &self.descendants.known_descendants(),
             ),
             ContainmentRequirement::ProcessTree => {
                 terminate_process_tree_signal(self.info.pid, self.info.pgid, signal, timeout_ms)
@@ -1078,7 +1075,6 @@ impl OwnedService {
             (Ok(()), result) | (result, Ok(())) => result,
             (Err(error), Err(reap)) => Err(error.with_cause(reap)),
         };
-        self.monitor.stop();
         let capture = self.shutdown_capture();
         (containment, capture)
     }
@@ -1098,8 +1094,7 @@ impl OwnedService {
     }
 
     fn escape_start_identity(&mut self) -> String {
-        self.monitor.stop();
-        let known = self.monitor.known_descendants();
+        let known = self.descendants.known_descendants();
         process_escape_start_identity(
             self.info.pid,
             self.info.pgid,
@@ -1298,7 +1293,6 @@ impl Drop for OwnedService {
                 let _ = wait_for_child_exit(child, 1000);
             }
         }
-        self.monitor.stop();
         let _ = self.shutdown_capture();
     }
 }
@@ -1623,8 +1617,7 @@ pub(super) fn start_service_with_lock_root(
         process_key: Some(process_key.clone()),
         computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
-    let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
-    let monitor = spawn_process_monitor(pid, pgid, strict_process_group);
+    let descendants = DescendantTracker::default();
     let (child, launch_error) = match pending.register_and_release(
         |_| {
             record_service_start(
@@ -1675,7 +1668,7 @@ pub(super) fn start_service_with_lock_root(
                 primary_endpoint: service.primary_endpoint.clone(),
             },
             child: Some(child),
-            monitor,
+            descendants,
             service: service.clone(),
             ready_probe,
             health_probe,
@@ -1691,10 +1684,14 @@ pub(super) fn start_service_with_lock_root(
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
-    if let Err(error) = ensure_foreground_child_alive(&mut started.owned) {
-        let error = started
-            .owned
-            .override_after_primary_exit_with_endpoint_evidence(registry, error);
+    if let Err(error) = ensure_foreground_child_alive(&mut started.owned, cancellation) {
+        let error = if error.code == ErrorCode::Canceled {
+            error
+        } else {
+            started
+                .owned
+                .override_after_primary_exit_with_endpoint_evidence(registry, error)
+        };
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
@@ -2443,8 +2440,20 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
     process_group_has_live_member_impl(pgid)
 }
 
-fn ensure_foreground_child_alive(service: &mut OwnedService) -> RuntimeResult<()> {
-    thread::sleep(FOREGROUND_GRACE);
+fn ensure_foreground_child_alive(
+    service: &mut OwnedService,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<()> {
+    let deadline = Instant::now() + FOREGROUND_GRACE;
+    while Instant::now() < deadline {
+        cancellation.check()?;
+        if let Some(error) = service.escape_error() {
+            return Err(error);
+        }
+        thread::sleep(
+            super::OBSERVATION_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
     match service.child_mut().try_wait().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -2517,7 +2526,7 @@ pub(crate) fn terminate_process_tree_with_snapshot(
     // process-tree child may reparent to init and move to its own group after the
     // supervisor exits, making it invisible to a descendant/pgid scan; the
     // snapshot keeps it tracked, and the identity makes the tracking pid-reuse
-    // safe (a recycled pid has a different start identity). The monitor's
+    // safe (a recycled pid has a different start identity). The owner's
     // earlier snapshot also covers a strict-group escape that has already been
     // reparented and is no longer discoverable below the foreground child.
     let mut snapshot_by_pid = descendant_pids(pid)
@@ -2689,114 +2698,48 @@ pub(crate) fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> 
 }
 
 #[derive(Default)]
-struct ProcessMonitorState {
-    known_descendants: BTreeMap<u32, TrackedProcessIdentity>,
-    escaped_descendants: BTreeMap<u32, TrackedProcessIdentity>,
+struct DescendantEvidence {
+    known: BTreeMap<u32, TrackedProcessIdentity>,
+    escaped: BTreeMap<u32, TrackedProcessIdentity>,
 }
 
-struct ProcessMonitor {
-    state: Arc<Mutex<ProcessMonitorState>>,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
+/// Execution-thread-owned evidence; no independent scanner or liveness owner.
+#[derive(Default)]
+struct DescendantTracker {
+    evidence: RefCell<DescendantEvidence>,
 }
 
-impl ProcessMonitor {
+impl DescendantTracker {
     fn refresh(
         &self,
         pid: u32,
         expected_pgid: i32,
         strict_process_group: bool,
     ) -> RuntimeResult<()> {
-        collect_process_tree(pid, expected_pgid, strict_process_group, &self.state)
+        let descendants = descendant_pids(pid)?;
+        let mut evidence = self.evidence.borrow_mut();
+        for descendant in descendants {
+            let escaped = strict_process_group
+                && process_group(descendant)?.is_some_and(|pgid| pgid != expected_pgid);
+            let observed = monitored_process(descendant);
+            evidence
+                .known
+                .entry(descendant)
+                .or_insert_with(|| observed.clone());
+            if escaped {
+                evidence.escaped.insert(descendant, observed);
+            }
+        }
+        Ok(())
     }
 
     fn escaped_descendants(&self) -> Vec<TrackedProcessIdentity> {
-        self.state
-            .lock()
-            .map(|state| state.escaped_descendants.values().cloned().collect())
-            .unwrap_or_default()
+        self.evidence.borrow().escaped.values().cloned().collect()
     }
 
     fn known_descendants(&self) -> Vec<TrackedProcessIdentity> {
-        self.state
-            .lock()
-            .map(|state| state.known_descendants.values().cloned().collect())
-            .unwrap_or_default()
+        self.evidence.borrow().known.values().cloned().collect()
     }
-
-    fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-impl Drop for ProcessMonitor {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-fn spawn_process_monitor(
-    pid: u32,
-    expected_pgid: i32,
-    strict_process_group: bool,
-) -> ProcessMonitor {
-    let state = Arc::new(Mutex::new(ProcessMonitorState::default()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_state = Arc::clone(&state);
-    let thread_stop = Arc::clone(&stop);
-    let handle = thread::spawn(move || {
-        while !thread_stop.load(Ordering::SeqCst) {
-            let _ = collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
-            thread::sleep(MONITOR_INTERVAL);
-        }
-        let _ = collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
-    });
-    ProcessMonitor {
-        state,
-        stop,
-        handle: Some(handle),
-    }
-}
-
-fn collect_process_tree(
-    pid: u32,
-    expected_pgid: i32,
-    strict_process_group: bool,
-    state: &Arc<Mutex<ProcessMonitorState>>,
-) -> RuntimeResult<()> {
-    let descendants = descendant_pids(pid)?;
-    // Under process-tree containment, supervised children may form their own
-    // process groups; that is not an escape. Strict process-group services still
-    // flag any descendant that leaves the owned group.
-    let mut escaped = Vec::new();
-    if strict_process_group {
-        for descendant in &descendants {
-            if let Ok(Some(pgid)) = process_group(*descendant)
-                && pgid != expected_pgid
-            {
-                escaped.push(monitored_process(*descendant));
-            }
-        }
-    }
-    let mut state = state.lock().map_err(|_| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            "process monitor state lock is poisoned",
-        )
-    })?;
-    for descendant in descendants {
-        state
-            .known_descendants
-            .entry(descendant)
-            .or_insert_with(|| monitored_process(descendant));
-    }
-    for process in escaped {
-        state.escaped_descendants.insert(process.pid, process);
-    }
-    Ok(())
 }
 
 fn monitored_process(pid: u32) -> TrackedProcessIdentity {

@@ -1831,6 +1831,53 @@ fn setsid_descendant_is_identity_killed_before_failed_settlement() {
 }
 
 #[test]
+fn ready_service_checkpoint_detects_new_escape_before_leader_exit() {
+    let root = TempDir::new();
+    let request = root.path.join("request");
+    let armed = root.path.join("armed");
+    let detached = root.path.join("detached");
+    let mut fixture = endpoint_less_fixture_from(test_child_fixture_value(
+        &[
+            "detached-sleeper",
+            "after-marker",
+            request.to_str().unwrap(),
+            armed.to_str().unwrap(),
+            detached.to_str().unwrap(),
+        ],
+        23180,
+    ));
+    let service = fixture
+        .start_endpoint_less("run-checkpoint-escape")
+        .unwrap()
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
+        .unwrap();
+    service.check_liveness().unwrap();
+    assert!(wait_for_path(&armed, Duration::from_secs(3)));
+    fs::write(&request, []).unwrap();
+    assert!(wait_for_path(&detached, Duration::from_secs(3)));
+    assert_eq!(unsafe { libc::kill(service.info().pid as i32, 0) }, 0);
+    assert_eq!(
+        service.check_liveness().unwrap_err().code,
+        ErrorCode::ProcEscape
+    );
+    assert_eq!(
+        service.stop(&mut fixture.registry, 1000).unwrap_err().code,
+        ErrorCode::ProcEscape
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM processes WHERE role='service' AND status='failed'",
+            []
+        ),
+        1
+    );
+}
+
+#[test]
 fn stop_terminates_delayed_setsid_escape_and_records_failure() {
     let request = temp_marker("nixfied-stop-escape-request");
     let armed = temp_marker("nixfied-stop-escape-armed");
@@ -3123,13 +3170,14 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
 }
 
 fn endpoint_less_fixture() -> ServiceFixture {
-    let mut value = fixture_manifest(&test_sleep(), &["30"], 23180);
+    endpoint_less_fixture_from(fixture_manifest(&test_sleep(), &["30"], 23180))
+}
+
+fn endpoint_less_fixture_from(mut value: Value) -> ServiceFixture {
     // Endpoint-less: no listener attestation either (effects coherence).
     value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
     value["services"]["synthetic"]["endpoints"] = json!(null);
     value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
-    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
-        json!(["sleep", "30"]);
     add_probe_shell_closure(&mut value);
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
