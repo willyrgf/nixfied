@@ -5,6 +5,28 @@ use serde_json::{Map, Value};
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCause {
+    pub code: ErrorCode,
+    pub exit_class: ExitClass,
+    pub message: String,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeError {
+    pub code: ErrorCode,
+    pub exit_class: ExitClass,
+    pub message: String,
+    pub details: serde_json::Value,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub causes: Box<Vec<RuntimeCause>>,
+    pub manifest_path: Option<PathBuf>,
+    pub computed_manifest_hash: Option<String>,
+}
+
 include!("generated/error.rs");
 
 impl RuntimeCause {

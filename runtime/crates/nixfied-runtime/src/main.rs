@@ -33,6 +33,73 @@ use serde_json::Value;
 #[path = "main_tests.rs"]
 mod tests;
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckOutput {
+    manifest_path: PathBuf,
+    computed_manifest_hash: String,
+    raw_len: usize,
+    project_id: String,
+    runtime_abi: String,
+    toolchain_id: String,
+    target_system: String,
+    environment: String,
+    slot: u32,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceRunOutput {
+    service_id: String,
+    service_instance_id: String,
+    process_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_endpoint: Option<SelectedEndpoint>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResult {
+    node_id: String,
+    task_id: String,
+    success: bool,
+    exit_code: Option<i32>,
+    duration_ms: u64,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    summary_path: PathBuf,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunOutput {
+    run_id: String,
+    manifest_path: PathBuf,
+    computed_manifest_hash: String,
+    duration_ms: u64,
+    services: Vec<ServiceRunOutput>,
+    tasks: Vec<TaskRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<TaskRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    nodes: Vec<NodeResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_summary_path: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunSummaryOutput<'a> {
+    run_id: &'a str,
+    success: bool,
+    duration_ms: u64,
+    services: &'a [ServiceRunOutput],
+    nodes: &'a [NodeResult],
+    tasks: &'a [TaskRun],
+}
+
 include!("generated/main.rs");
 include!("generated/commands.rs");
 

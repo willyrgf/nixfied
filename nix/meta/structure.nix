@@ -151,8 +151,6 @@ let
       && derivesValid (rust.derives or null)
       && builtins.elem (rust.emission or null) [
         "Owned"
-        "Borrowed"
-        "MemberNamesOnly"
       ]
     ) "invalid Rust record binding" rust;
   normalizeVocabulary =
@@ -380,17 +378,17 @@ let
       policy = policies.${kind} or (fail "unsupported field presence");
       rust = {
         name = snake field.name;
-        visibility = record.rust.visibility;
-        storage = "Direct";
+        visibility = if record ? rust then record.rust.visibility else "private";
       }
-      // field.rust;
+      // (field.rust or { });
       normalized =
         field
         // policy
         // {
-          inherit value rust;
+          inherit value;
           nixEncode = field.nixEncode or "NotProduced";
-        };
+        }
+        // lib.optionalAttrs (record ? rust) { inherit rust; };
     in
     require (
       exact (
@@ -399,8 +397,8 @@ let
           "description"
           "value"
           "presence"
-          "rust"
         ]
+        ++ lib.optional (record ? rust && field ? rust) "rust"
         ++ lib.optional record.produced "nixEncode"
       ) field
       && nonBlank field.name
@@ -419,14 +417,10 @@ let
         || (value.kind == "Enum" && builtins.elem presence.member vocabularyMap.${value.coordinate}.members)
       )
       && (kind != "OmitEmpty" || record.decoder == "NoDecoder")
-      && exact [ "name" "visibility" "storage" ] rust
-      && ident rust.name
-      && visibility rust.visibility
-      && builtins.elem rust.storage [
-        "Direct"
-        "Box"
-      ]
-      && (record.rust.emission == "Owned" || rust.storage == "Direct")
+      && (
+        !(record ? rust)
+        || (exact [ "name" "visibility" ] rust && ident rust.name && visibility rust.visibility)
+      )
       && (
         !record.produced
         || (
@@ -452,14 +446,16 @@ let
     declaration:
     let
       id = identity declaration.identity;
-      rust = binding declaration.rust;
-      record = declaration // {
-        inherit id rust;
-        produced = declaration.producer == "Nix";
-      };
+      record =
+        declaration
+        // lib.optionalAttrs (declaration ? rust) { rust = binding declaration.rust; }
+        // {
+          inherit id;
+          produced = declaration.producer == "Nix";
+        };
       fields = map (normalizeField record) declaration.fields;
       names = map (field: field.name) fields;
-      rustNames = map (field: field.rust.name) fields;
+      rustNames = if record ? rust then map (field: field.rust.name) fields else names;
       members =
         if declaration.identity.kind == "Inventory" then
           map (lib.removeSuffix "?") inventory.${declaration.identity.coordinate}
@@ -468,7 +464,16 @@ let
     in
     require
       (
-        exact [ "identity" "description" "decoder" "producer" "fields" "rust" ] declaration
+        exact (
+          [
+            "identity"
+            "description"
+            "decoder"
+            "producer"
+            "fields"
+          ]
+          ++ lib.optional (declaration ? rust) "rust"
+        ) declaration
         && builtins.elem declaration.producer [
           "Nix"
           "None"
@@ -484,8 +489,7 @@ let
           "IgnoreUnknown"
           "NoDecoder"
         ]
-        && (rust.emission == "Owned" || declaration.decoder == "NoDecoder")
-        && (rust.emission != "MemberNamesOnly" || builtins.length fields == 1)
+        && (!record.produced || record ? rust)
       )
       "invalid record or inventory coverage"
       (
@@ -567,30 +571,19 @@ let
             let
               target = recordMap.${id};
             in
-            require (
-              target.rust.emission != "MemberNamesOnly"
-              && (record.rust.emission != "Owned" || target.rust.emission == "Owned")
-            ) "invalid record storage reference" (checkGraph (trail ++ [ record.id ]) target)
+            require (!(record ? rust) || target ? rust) "invalid record storage reference" (
+              checkGraph (trail ++ [ record.id ]) target
+            )
           )
         ) (refs field.value)
       ) record.fields
     );
-  checkBorrowed =
-    record:
-    record.rust.emission != "Borrowed"
-    || builtins.all (
-      field:
-      builtins.all (
-        v: !collection v || builtins.all (id: recordMap.${id}.rust.emission == "Owned") (refs v)
-      ) (walk (v: [ v ]) field.value)
-    ) record.fields;
   # Functions in native domain predicates are deliberately not deep-forced.
   metadata = map (record: {
     inherit (record)
       id
       description
       decoder
-      rust
       produced
       ;
     fields = map (
@@ -610,7 +603,7 @@ let
     ) record.fields;
   }) recordList;
   bindingNames = map (r: builtins.toJSON { inherit (r.rust) file name; }) (
-    recordList ++ vocabularyList
+    (builtins.filter (record: record ? rust) recordList) ++ vocabularyList
   );
   valid =
     require
@@ -623,9 +616,7 @@ let
       (
         builtins.deepSeq metadata (
           builtins.deepSeq vocabularyList (
-            require (
-              builtins.all (checkGraph [ ]) recordList && builtins.all checkBorrowed recordList
-            ) "unsupported borrowed collection projection" true
+            require (builtins.all (checkGraph [ ]) recordList) "invalid structural references" true
           )
         )
       );

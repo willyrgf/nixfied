@@ -68,6 +68,49 @@ pub(crate) fn stdin_for(policy: StdinPolicy) -> Stdio {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedEndpoint {
+    pub endpoint_id: String,
+    pub host: LoopbackHost,
+    pub port: u16,
+}
+
+const PORT_CONFLICT_KEY: &str = "portConflict";
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortConflictEndpoint<'a> {
+    transport: &'a str,
+    family: &'a str,
+    #[serde(rename = "address")]
+    host: &'a LoopbackHost,
+    port: u16,
+    endpoint_id: &'a str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortConflictDetails<'a> {
+    reason: PortConflictReason,
+    project_id: &'a str,
+    endpoint: PortConflictEndpoint<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nixfied_owner: Option<&'a NixfiedOwner>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NixfiedOwner {
+    project_id: String,
+    environment: String,
+    slot: u32,
+    run_id: String,
+    service_id: String,
+    service_instance_id: String,
+    process_key: String,
+}
+
 include!("../generated/process.rs");
 
 /// Runtime evidence shared by owning and borrowing handles. Callers receive an

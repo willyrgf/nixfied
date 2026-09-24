@@ -4,7 +4,15 @@ use serde_json::{Value, json};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
-include!("../generated/registry_identity.rs");
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryIdentityDiagnostic<'a> {
+    project_id: &'a str,
+    environment: &'a str,
+    slot: i64,
+    runtime_abi: &'a str,
+    toolchain_id: &'a str,
+}
 
 pub const SCHEMA_VERSION: i64 = 7;
 

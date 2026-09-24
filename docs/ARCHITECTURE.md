@@ -121,19 +121,18 @@ machinery has four responsibilities:
 | Command syntax | Tokens, value domains, literal defaults and help | Native parsers, encoding, precedence, contextual defaults and effects |
 | Publications | Exported names, descriptions and lazy bindings | Native functions, modules, apps and packages |
 
-Manifest, result and error records share one structural vocabulary and Rust
-renderer. `NativeDomain` binds an existing scalar representation and preserves
-its validation and serialization; it cannot hide an entire record. Native IDs,
-LoopbackHost, paths and unique collections retain their native guarantees.
-Algorithms, cross-field checks, host observations and lifecycle decisions do not
-become declaration interpreters. Covering a public behavior in the reference
-does not justify generating its implementation or adding another semantic seam.
+Manifest records and closed wire vocabularies generate boundary types.
+Output records share wire field descriptions and coverage checks with the
+reference, while Rust owns their definitions and serialization views. Borrowing,
+lifetimes, visibility and boxed storage of runtime records are native Rust
+choices; they do not require schema edits. `NativeDomain` binds scalar wire
+meaning to existing validation and serialization, not whole private records.
 
-Owned definitions remain in their native Rust module scopes alongside native
-imports and implementations. Borrowed views temporarily project other native
-data; they do not create another mutable object graph or convert through JSON
-to reconstruct one. Generated views enter the existing conversion, redaction,
-formatting and write boundaries, preserving native failure and path behavior.
+Native structs remain in their owning Rust modules alongside conversion,
+redaction, formatting and write logic. Borrowed views project existing evidence
+without creating another mutable data graph or converting through JSON.
+Raw-wire and behavioral tests independently check those serialization boundaries;
+generation is not a substitute for native validation or output tests.
 
 Native bindings and presentation independently consume the same definitions.
 Module evaluation receives its arguments directly from their native providers;

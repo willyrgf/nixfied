@@ -1,5 +1,5 @@
-# Public runtime data, included in its existing native owner scopes. Acquisition,
-# redaction, failure selection, formatting and persistence remain native.
+# Wire descriptions for native Rust output records. No Rust storage, borrowing,
+# visibility or type declarations are generated from these records.
 { lib }:
 let
   d = import ./declarations.nix;
@@ -33,33 +33,12 @@ let
   optional = name: value: field name value { kind = "Optional"; };
   omitted = name: value: field name value { kind = "OptionalOmitted"; };
   omitEmpty = name: value: field name value { kind = "OmitEmpty"; };
-  boxed =
-    field:
-    field
-    // {
-      rust = field.rust // {
-        storage = "Box";
-      };
-    };
-  renamed =
-    name: field:
-    field
-    // {
-      rust = field.rust // {
-        inherit name;
-      };
-    };
   owner = file: { file = "crates/nixfied-runtime/src/generated/${file}.rs"; };
   main = owner "main";
-  control = owner "control";
-  cleanup = owner "cleanup";
-  task = owner "task";
   process = owner "process";
   error = owner "error";
-  projection = owner "output";
-  registry = owner "registry_identity";
   status = owner "status";
-  record = identity: name: owner: visibility: derives: emission: decoder: description: fields: {
+  record = identity: decoder: description: fields: {
     inherit
       identity
       description
@@ -67,21 +46,7 @@ let
       fields
       ;
     producer = "None";
-    rust = owner // {
-      inherit
-        name
-        visibility
-        derives
-        emission
-        ;
-    };
   };
-  comparable = [
-    "Debug"
-    "Clone"
-    "PartialEq"
-    "Eq"
-  ];
   copy = [
     "Debug"
     "Clone"
@@ -119,7 +84,7 @@ let
 in
 {
   records = [
-    (record (local "CheckOutput") "CheckOutput" main "private" [ "Debug" ] "Owned" "NoDecoder"
+    (record (local "CheckOutput") "NoDecoder"
       "Successful native manifest admission, without executing the declared task."
       [
         (required "manifestPath" path "Admitted manifest file path.")
@@ -133,7 +98,7 @@ in
         (required "slot" u32 "Validated selected slot.")
       ]
     )
-    (record (output "run-service") "ServiceRunOutput" main "private" [ "Debug" ] "Owned" "NoDecoder"
+    (record (output "run-service") "NoDecoder"
       "Service evidence selected for the run, including an endpoint only when addressable."
       [
         (required "serviceId" text "Declared service identity.")
@@ -144,20 +109,17 @@ in
         )) "Primary selected endpoint; absent for endpoint-less services.")
       ]
     )
-    (record (output "run-node") "NodeResult" main "private" [ "Debug" "Clone" ] "Owned" "NoDecoder"
-      "One flattened task node's outcome and evidence links."
-      (
-        [
-          (required "nodeId" text "Flattened node identity.")
-          (required "taskId" text "Declared leaf task identity.")
-          (required "success" boolean "Native success classification.")
-          (optional "exitCode" i32 "Observed child code, or explicit null when unavailable.")
-          (required "durationMs" u64 "Observed node duration in milliseconds.")
-        ]
-        ++ evidencePaths
-      )
-    )
-    (record (output "run-json") "RunOutput" main "private" [ "Debug" ] "Owned" "NoDecoder"
+    (record (output "run-node") "NoDecoder" "One flattened task node's outcome and evidence links." (
+      [
+        (required "nodeId" text "Flattened node identity.")
+        (required "taskId" text "Declared leaf task identity.")
+        (required "success" boolean "Native success classification.")
+        (optional "exitCode" i32 "Observed child code, or explicit null when unavailable.")
+        (required "durationMs" u64 "Observed node duration in milliseconds.")
+      ]
+      ++ evidencePaths
+    ))
+    (record (output "run-json") "NoDecoder"
       "Native run JSON, converted to Value, redacted and formatted at the existing output boundary."
       [
         (required "runId" text "Native run evidence identity.")
@@ -176,7 +138,7 @@ in
         (omitted "runSummaryPath" path "Aggregate run summary path, when written.")
       ]
     )
-    (record (output "run-summary-json") "RunSummaryOutput" main "private" [ ] "Borrowed" "NoDecoder"
+    (record (output "run-summary-json") "NoDecoder"
       "Aggregate run summary combining overall success with service, node and task evidence."
       [
         (required "runId" text "Native run evidence identity.")
@@ -187,7 +149,7 @@ in
         (required "tasks" (list (ref (output "run-task"))) "Completed task evidence.")
       ]
     )
-    (record (output "run-task") "TaskRun" task "pub" comparable "Owned" "IgnoreUnknown"
+    (record (output "run-task") "IgnoreUnknown"
       "Evidence for one task execution: its outcome, timeout or cancellation, duration and paths to captured output."
       (
         [
@@ -205,7 +167,7 @@ in
         ++ evidencePaths
       )
     )
-    (record (output "selected-endpoint") "SelectedEndpoint" process "pub" comparable "Owned" "NoDecoder"
+    (record (output "selected-endpoint") "NoDecoder"
       "Native slot-plan endpoint selected for service execution."
       [
         (required "endpointId" text "Declared endpoint identity.")
@@ -213,13 +175,13 @@ in
         (required "port" u16 "Native planned TCP port.")
       ]
     )
-    (record (output "ps-json") "PsReport" control "pub" comparable "Owned" "NoDecoder"
+    (record (output "ps-json") "NoDecoder"
       "Native reconciled process observations; serialization performs no liveness checks."
       [
         (required "processes" (list (ref (output "ps-process"))) "Observed rows in native query order.")
       ]
     )
-    (record (output "ps-process") "ProcessObservation" control "pub" comparable "Owned" "NoDecoder"
+    (record (output "ps-process") "NoDecoder"
       "Registry and host facts assembled by native reconciliation."
       [
         (required "processKey" text "Registry process key.")
@@ -234,42 +196,34 @@ in
         (required "live" boolean "Native host liveness observation.")
       ]
     )
-    (record (local "DownReport") "DownReport" control "pub" comparable "Owned" "NoDecoder"
-      "Native down result after reconciliation and termination."
+    (record (local "DownReport") "NoDecoder" "Native down result after reconciliation and termination."
       [
         (required "stopped" (list text) "Process keys stopped by native control.")
         (required "stale" (list text) "Process keys classified stale by native reconciliation.")
       ]
     )
-    (record (local "CleanupOutcome") "CleanupOutcome" cleanup "pub" comparable "Owned" "NoDecoder"
-      "Result of successful marker-gated native cleanup."
-      [
-        (required "cleanupId" text "Recorded cleanup identity.")
-        (required "deletedPath" path "Native deleted state path.")
-      ]
-    )
-    (record (output "runtime-error-cause") "RuntimeCause" error "pub" [ "Debug" "Clone" ] "Owned"
-      "NoDecoder"
+    (record (local "CleanupOutcome") "NoDecoder" "Result of successful marker-gated native cleanup." [
+      (required "cleanupId" text "Recorded cleanup identity.")
+      (required "deletedPath" path "Native deleted state path.")
+    ])
+    (record (output "runtime-error-cause") "NoDecoder"
       "Non-recursive safe cause; native selection and allowlisting remove unsafe infrastructure text."
       errorFields
     )
-    (record (output "runtime-error") "RuntimeError" error "pub" [ "Debug" ] "Owned" "NoDecoder"
+    (record (output "runtime-error") "NoDecoder"
       "The one owned runtime error representation; native constructors retain phase, class, message and detail policy."
       (
         errorFields
         ++ [
-          (boxed (
-            omitEmpty "causes" (list (
-              ref (output "runtime-error-cause")
-            )) "Native ordered non-recursive causes; empty list omitted."
-          ))
+          (omitEmpty "causes" (list (
+            ref (output "runtime-error-cause")
+          )) "Native ordered non-recursive causes; empty list omitted.")
           (optional "manifestPath" path "Associated manifest path or explicit null.")
           (optional "computedManifestHash" text "Associated computed hash or explicit null.")
         ]
       )
     )
-    (record (output "runtime-error-projection") "ProjectionDiagnostic" projection "pub" [ ] "Borrowed"
-      "NoDecoder"
+    (record (output "runtime-error-projection") "NoDecoder"
       "A failure while reading or writing an output projection: the affected stream, operation, redaction-safe error kind, display path and committed byte count."
       [
         (required "stream" (native "OutputStream" text
@@ -283,9 +237,7 @@ in
         (required "bytesWritten" u64 "Committed byte count before the failure.")
       ]
     )
-    (record (output "runtime-error-port-conflict") "PORT_CONFLICT_KEY" process "private" [ ]
-      "MemberNamesOnly"
-      "NoDecoder"
+    (record (output "runtime-error-port-conflict") "NoDecoder"
       "The portConflict member of error details identifies the contended endpoint and any verified Nixfied owner."
       [
         (required "portConflict" (ref (
@@ -293,20 +245,17 @@ in
         )) "Structured conflict evidence inserted through the existing serialization-failure fallback.")
       ]
     )
-    (record (output "port-conflict-endpoint") "PortConflictEndpoint" process "private" [ ] "Borrowed"
-      "NoDecoder"
+    (record (output "port-conflict-endpoint") "NoDecoder"
       "Borrowed endpoint evidence for a proven host conflict."
       [
         (required "transport" text "Native transport spelling, currently tcp.")
         (required "family" text "Native address-family classification.")
-        (renamed "host" (
-          required "address" host "Validated loopback address serialized by its native scalar type."
-        ))
+        (required "address" host "Validated loopback address serialized by its native scalar type.")
         (required "port" u16 "Contended planned port.")
         (required "endpointId" text "Declared endpoint id.")
       ]
     )
-    (record (output "port-conflict") "PortConflictDetails" process "private" [ ] "Borrowed" "NoDecoder"
+    (record (output "port-conflict") "NoDecoder"
       "Native lock/listener conflict evidence; no ownership or liveness decision is generated."
       [
         (required "reason" (enum "enum PortConflictReason") "Native choice of the proven conflict fact.")
@@ -317,7 +266,7 @@ in
         )) "Present only when native ownership proof identifies a Nixfied owner.")
       ]
     )
-    (record (output "nixfied-owner") "NixfiedOwner" process "private" [ "Debug" ] "Owned" "NoDecoder"
+    (record (output "nixfied-owner") "NoDecoder"
       "Owner identity assembled only from native verified registry/host evidence."
       [
         (required "projectId" text "Owning project id.")
@@ -329,9 +278,7 @@ in
         (required "processKey" text "Owning registry process key.")
       ]
     )
-    (record (local "RegistryIdentityDiagnostic") "RegistryIdentityDiagnostic" registry "private" [ ]
-      "Borrowed"
-      "NoDecoder"
+    (record (local "RegistryIdentityDiagnostic") "NoDecoder"
       "Expected or found registry identity diagnostic; observed slot stays signed so corrupt negative values remain reportable."
       [
         (required "projectId" text "Expected or observed project id.")

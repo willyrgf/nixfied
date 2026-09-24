@@ -16,14 +16,6 @@ fn required_open_json_rejects_missing() {
 }
 
 #[test]
-fn borrowed_no_decoder_omits_empty_without_a_default() {
-    assert_eq!(serde_json::to_string(&BorrowedFixture { values: &[] }).unwrap(), "{}");
-    let values = ["one".to_owned()];
-    assert_eq!(serde_json::to_string(&BorrowedFixture { values: &values }).unwrap(),
-        r#"{"values":["one"]}"#);
-}
-
-#[test]
 fn unusual_wire_name_uses_rust_escaping_and_preserves_json_bytes() {
     let value = EscapingFixture { ordinary: "value".to_owned() };
     let expected = r#"{"wire\u0001\b\f\r\n\t\"\\b\\u0001 λ":"value"}"#;

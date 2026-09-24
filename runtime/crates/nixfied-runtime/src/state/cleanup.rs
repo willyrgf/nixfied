@@ -12,7 +12,12 @@ use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
 
-include!("../generated/cleanup.rs");
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupOutcome {
+    pub cleanup_id: String,
+    pub deleted_path: PathBuf,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupMode {

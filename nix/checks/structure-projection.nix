@@ -32,7 +32,6 @@ let
             rust = {
               name = "ordinary";
               visibility = "private";
-              storage = "Direct";
             };
           }
         )
@@ -44,13 +43,7 @@ let
           description = "Open test details.";
         } "Required")
       ])
-      (record "BorrowedFixture" "Borrowed" "NoDecoder" [
-        (field "values" {
-          kind = "List";
-          element = text;
-          unique = false;
-        } "OmitEmpty")
-      ])
+
     ];
   };
   generated = import ../meta/generated.nix {

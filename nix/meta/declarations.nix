@@ -69,6 +69,5 @@ rec {
       presence
       description
       ;
-    rust = { };
   };
 }

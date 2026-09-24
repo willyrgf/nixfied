@@ -20,7 +20,33 @@ use crate::service::{
 };
 use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
-include!("generated/control.rs");
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PsReport {
+    pub processes: Vec<ProcessObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessObservation {
+    pub process_key: String,
+    pub run_id: String,
+    pub service_instance_id: Option<String>,
+    pub pid: u32,
+    pub pgid: i32,
+    pub registry_status: String,
+    pub reconciled_status: String,
+    pub service_lifetime: Option<String>,
+    pub borrower_count: i64,
+    pub live: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownReport {
+    pub stopped: Vec<String>,
+    pub stale: Vec<String>,
+}
 
 /// A reconciled observation is evidence at a moment, not authority to signal.
 pub struct ReconciledProcess {
