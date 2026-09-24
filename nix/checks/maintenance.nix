@@ -30,7 +30,6 @@ let
         nixEncode = "RequiredPresent";
         rust = {
           visibility = "pub";
-          storage = "Direct";
         };
       }
     ];

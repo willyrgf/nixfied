@@ -39,7 +39,15 @@ pub enum ProjectionOperation {
     Join,
 }
 
-include!("generated/output.rs");
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectionDiagnostic<'a> {
+    pub stream: &'a OutputStream,
+    pub operation: &'a ProjectionOperation,
+    pub kind: &'a str,
+    pub path: &'a str,
+    pub bytes_written: u64,
+}
 
 /// A redaction-safe description of one replay failure.
 ///

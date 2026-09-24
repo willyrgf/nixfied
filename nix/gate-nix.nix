@@ -177,7 +177,7 @@ rm -rf "$work"
         chmod -R u+w "$framework"
         case "$variant" in
           topic) sed -i 's/^  manifest = {/  renamed-manifest = {/' "$framework/nix/docs/topics.nix" ;;
-          output) sed -i 's/storage = "Box"/storage = "InvalidStorage"/' "$framework/nix/meta/outputs.nix" ;;
+          output) sed -i 's/producer = "None"/producer = "InvalidProducer"/' "$framework/nix/meta/outputs.nix" ;;
         esac
         nix build --no-link --impure --expr "
           let f = builtins.getFlake (\"path:$framework\");
@@ -190,7 +190,7 @@ rm -rf "$work"
         " >"$work/docs-$variant" 2>"$work/error-$variant"; then
           fail "compilation isolation: $variant did not reject reference construction"
         fi
-        grep -Eq 'missing or wrong-kind reference|invalid field|invalid or colliding vocabulary|storage' "$work/error-$variant" \
+        grep -Eq 'missing or wrong-kind reference|invalid field|invalid or colliding vocabulary|invalid record' "$work/error-$variant" \
           || fail "compilation isolation: $variant failed for an unrelated reason"
         if nix eval --impure --raw --expr "
           let f = builtins.getFlake (\"path:$framework\");
@@ -233,7 +233,7 @@ for variant in baseline cli runtime manifest generated runtime-generated cli-gen
     runtime) printf '\n// Runtime source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/main.rs" ;;
     manifest) printf '\n// Native manifest source variation.\n' >> "$work/$variant/runtime/crates/nixfied-manifest/src/types.rs" ;;
     generated) printf '\n// Generated manifest source variation.\n' >> "$work/$variant/runtime/crates/nixfied-manifest/src/generated/types.rs" ;;
-    runtime-generated) printf '\n// Generated output source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/generated/output.rs" ;;
+    runtime-generated) printf '\n// Generated output source variation.\n' >> "$work/$variant/runtime/crates/nixfied-runtime/src/generated/error.rs" ;;
     cli-generated) printf '\n// Generated CLI source variation.\n' >> "$work/$variant/runtime/crates/nixfied-cli/src/generated/commands.rs" ;;
     child) printf '\n// Test child source variation.\n' >> "$work/$variant/runtime/crates/nixfied-test-child/src/main.rs" ;;
     reference) printf '\nReference variation\n' >> "$work/$variant/docs/GUIDE.md" ;;

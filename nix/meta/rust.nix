@@ -28,33 +28,12 @@ let
       "BTreeMap<String, ${owned value.value}>"
     else
       "${if value.unique then "UniqueVec" else "Vec"}<${owned value.element}>";
-  borrowed =
-    value:
-    if value.kind == "Text" then
-      "&'a str"
-    else if value.kind == "List" && !value.unique then
-      "&'a [${owned value.element}]"
-    else if value.kind == "RecordRef" && checked.recordMap.${value.id}.rust.emission == "Borrowed" then
-      "${owned value}<'a>"
-    else if
-      builtins.elem value.kind [
-        "NativeDomain"
-        "OpenJson"
-        "List"
-        "Map"
-        "RecordRef"
-      ]
-    then
-      "&'a ${owned value}"
-    else
-      owned value;
   fieldType =
     record: field:
     let
-      base = (if record.rust.emission == "Borrowed" then borrowed else owned) field.value;
-      nullable = if optional field then "Option<${base}>" else base;
+      base = owned field.value;
     in
-    if field.rust.storage == "Box" then "Box<${nullable}>" else nullable;
+    if optional field then "Option<${base}>" else base;
   helperName = record: field: "__default${checked.snake record.rust.name}_${field.rust.name}";
   helper =
     record: field:
@@ -63,11 +42,7 @@ let
     else if field.presence.kind == "EnumDefault" then
       ''
         fn ${helperName record field}() -> ${fieldType record field} {
-            ${
-              lib.optionalString (field.rust.storage == "Box") "Box::new("
-            }${owned field.value}::${checked.variant field.presence.member}${
-              lib.optionalString (field.rust.storage == "Box") ")"
-            }
+            ${owned field.value}::${checked.variant field.presence.member}
         }
       ''
     else if field.decode.kind == "Required" && field.value.kind == "OpenJson" then
@@ -107,8 +82,6 @@ let
                   "BTreeMap::is_empty"
                 else if field.value.unique then
                   "UniqueVec::is_empty"
-                else if record.rust.emission == "Borrowed" then
-                  "<[${owned field.value.element}]>::is_empty"
                 else
                   "Vec::is_empty"
               )
@@ -125,31 +98,24 @@ let
       attrs = rename ++ decode ++ omit;
     in
     lib.optionalString (attrs != [ ]) "#[serde(${lib.concatStringsSep ", " attrs})]\n";
-  renderRecord =
-    record:
-    if record.rust.emission == "MemberNamesOnly" then
-      "${visibility record.rust.visibility}const ${record.rust.name}: &str = ${quote (builtins.head record.fields).name};\n"
-    else
-      ''
-        #[derive(${
-          lib.concatStringsSep ", " (
-            record.rust.derives
-            ++ [ "serde::Serialize" ]
-            ++ lib.optional (record.decoder != "NoDecoder") "serde::Deserialize"
-          )
-        })]
-        #[serde(rename_all = "camelCase"${
-          lib.optionalString (record.decoder == "RejectUnknown") ", deny_unknown_fields"
-        })]
-        ${visibility record.rust.visibility}struct ${record.rust.name}${
-          lib.optionalString (record.rust.emission == "Borrowed") "<'a>"
-        } {
-        ${lib.concatMapStrings (field: ''
-          ${attributes record field}${visibility field.rust.visibility}${field.rust.name}: ${fieldType record field},
-        '') record.fields}
-        }
-        ${lib.concatMapStrings (helper record) record.fields}
-      '';
+  renderRecord = record: ''
+    #[derive(${
+      lib.concatStringsSep ", " (
+        record.rust.derives
+        ++ [ "serde::Serialize" ]
+        ++ lib.optional (record.decoder != "NoDecoder") "serde::Deserialize"
+      )
+    })]
+    #[serde(rename_all = "camelCase"${
+      lib.optionalString (record.decoder == "RejectUnknown") ", deny_unknown_fields"
+    })]
+    ${visibility record.rust.visibility}struct ${record.rust.name} {
+    ${lib.concatMapStrings (field: ''
+      ${attributes record field}${visibility field.rust.visibility}${field.rust.name}: ${fieldType record field},
+    '') record.fields}
+    }
+    ${lib.concatMapStrings (helper record) record.fields}
+  '';
   renderVocabulary =
     vocabulary:
     if lib.hasPrefix "status " vocabulary.coordinate then
@@ -182,7 +148,7 @@ let
     map (record: {
       file = record.rust.file;
       body = renderRecord record;
-    }) checked.records
+    }) (builtins.filter (record: record ? rust) checked.records)
     ++ map (vocabulary: {
       file = vocabulary.rust.file;
       body = renderVocabulary vocabulary;

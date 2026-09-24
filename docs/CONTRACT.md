@@ -67,7 +67,7 @@ when the manifest/runtime contract changes.
 - **NIX-API-1:** typed Nix modules are the public integration and correctness
   layer. Project behavior compiles into generic primitives. Compilation consumes
   native bindings and validates executable intent independently of documentation
-  references and unrelated output storage metadata. Invalid presentation rejects
+  references and unrelated output wire metadata. Invalid presentation rejects
   reference construction and release checks, without blocking valid manifest
   compilation. Release checks require both consumers and whole-inventory coverage.
 - **SHELL-1 / NIX-1:** shell cannot own graph, validation, registry, liveness,
@@ -350,6 +350,9 @@ select failure precedence or retry behavior.
 
 Error `details` is open JSON and may be explicitly null. Fixed nested diagnostic
 shapes have separate structural definitions.
+Runtime output structs, borrowed views and private storage are authored in Rust;
+shared declarations describe wire fields and vocabularies. Independent literal
+serialization tests preserve those bytes and native failure behavior.
 Native producers place task evidence under `taskRun`, projection issues under
 `projections`, and verified endpoint/owner evidence under `portConflict`.
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic

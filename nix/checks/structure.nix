@@ -25,7 +25,13 @@ let
     bundle: name: f:
     bundle
     // {
-      records = map (r: if r.rust.name == name then f r else r) bundle.records;
+      records = map (
+        r:
+        if (if r ? rust then r.rust.name else r.identity.coordinate or r.identity.name) == name then
+          f r
+        else
+          r
+      ) bundle.records;
     };
   changeField =
     bundle: record: name: f:
@@ -414,17 +420,13 @@ let
       expected = { };
     };
     outputFieldProducer = {
-      expr = badOutput "TaskRun" (
+      expr = badOutput "output-schema run-task" (
         r: r // { fields = map (f: f // { nixEncode = "RequiredPresent"; }) r.fields; }
       );
       expected = true;
     };
-    borrowedOutputDecoder = {
-      expr = badOutput "ProjectionDiagnostic" (r: r // { decoder = "IgnoreUnknown"; });
-      expected = true;
-    };
-    borrowedBox = {
-      expr = badOutput "PortConflictDetails" (
+    outputRejectsPrivateStorage = {
+      expr = badOutput "output-schema port-conflict" (
         r:
         r
         // {
@@ -432,7 +434,7 @@ let
             f:
             f
             // {
-              rust = f.rust // {
+              rust = {
                 storage = "Box";
               };
             }
@@ -441,46 +443,11 @@ let
       );
       expected = true;
     };
-    ownedBorrowedRef = {
-      expr = badOutput "RuntimeError" (
-        r:
-        r
-        // {
-          fields = map (
-            f:
-            if f.name == "message" then
-              f // { value = d.ref (d.inventory "output-schema runtime-error-projection"); }
-            else
-              f
-          ) r.fields;
-        }
-      );
-      expected = true;
-    };
-    borrowedCollection = {
-      expr = badOutput "PortConflictDetails" (
-        r:
-        r
-        // {
-          fields = map (f: if f.name == "endpoint" then f // { value = d.list f.value; } else f) r.fields;
-        }
-      );
-      expected = true;
-    };
-    memberKeyRef = {
-      expr = badOutput "RuntimeError" (
-        r:
-        r
-        // {
-          fields = map (
-            f:
-            if f.name == "message" then
-              f // { value = d.ref (d.inventory "output-schema runtime-error-port-conflict"); }
-            else
-              f
-          ) r.fields;
-        }
-      );
+
+    nativeOutputsHaveNoRustLayout = {
+      expr = builtins.all (
+        record: !(record ? rust) && builtins.all (field: !(field ? rust)) record.fields
+      ) (check outputs).records;
       expected = true;
     };
     errorAnnotations = {

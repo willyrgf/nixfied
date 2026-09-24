@@ -22,7 +22,22 @@ use crate::service::registry::{
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
 
-include!("../generated/task.rs");
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskRun {
+    pub task_id: String,
+    pub step_path: String,
+    pub process_key: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub canceled: bool,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub stdout_path: PathBuf,
+    pub stderr_path: PathBuf,
+    pub summary_path: PathBuf,
+}
 
 #[derive(Debug)]
 pub enum CompletedEvidence {
