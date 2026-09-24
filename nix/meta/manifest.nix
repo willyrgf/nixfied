@@ -249,7 +249,7 @@ in
       ]
     )
     (record "ClosureSpec"
-      "Realised executable contract; native lowering derives bindings and executable selection."
+      "Realised executable contract; native lowering validates executable selection."
       [
         (field "kind" (enum "ClosureKind") required "RequiredPresent" "Declared closure role.")
         (field "storePath" text required "RequiredPresent"
@@ -257,9 +257,6 @@ in
         )
         (field "executable" text required "RequiredPresent" "Absolute declared executable path.")
         (field "targetSystem" text required "RequiredPresent" "Declared closure platform.")
-        (field "operationBindings" (unique (
-          id "OperationId"
-        )) required "RequiredPresent" "Independently re-derived operation authorization set.")
         (field "requiresExecutable" boolean required "RequiredPresent"
           "Whether admission verifies executable permission."
         )
@@ -406,9 +403,6 @@ in
         )
         (field "requires" (unique (id "ServiceId")) emptyOmitted "PreserveSupplied"
           "Direct leaf dependencies in authored order; the first supplies bare endpoint placeholders."
-        )
-        (field "servicesRequired" (unique (id "ServiceId")) empty "RequiredPresent"
-          "Independently re-derived, sorted transitive service closure; Nix must always supply it."
         )
         (field "exitPolicy" (ref "ExitPolicy") omitted "PreserveSupplied"
           "Leaf success-code policy; composites omit it."

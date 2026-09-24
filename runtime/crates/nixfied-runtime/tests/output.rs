@@ -22,7 +22,7 @@ fn leaf_task_manifest(args: &[String]) -> Value {
     // Unused service metadata needs no host port observation.
     let mut manifest = task_manifest_at(args, 23180);
     manifest["tasks"]["smoke"]["requires"] = json!([]);
-    manifest["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     manifest
 }
 
@@ -359,7 +359,7 @@ fn composite_selection_uses_its_metadata_default_not_a_child_default() {
         "kind": "composite",
         "defaultOutput": "summary",
         "serviceLifetime": "run-scoped",
-        "servicesRequired": ["synthetic"],
+
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
     let fixture = RuntimeFixture::new(manifest);
@@ -664,7 +664,7 @@ fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
-        "servicesRequired": ["synthetic"],
+
         "steps": { "only": { "task": "smoke" } }
     });
     let fixture = RuntimeFixture::new(manifest);

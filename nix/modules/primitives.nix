@@ -289,10 +289,10 @@ let
         type = types.nullOr (types.listOf types.str);
         default = null;
         description = ''
-          Optional narrowing gate: the operation ids this closure may be
-          dispatched against. The manifest carries the *derived* bindings (from
-          the invocation graph); declaring a list additionally requires the
-          derived set to be a subset of it.
+          Optional authoring restriction: the operation ids this closure may be
+          dispatched against. Nix derives bindings from the invocation graph and
+          requires them to be a subset of this list. No binding set is emitted
+          into the manifest.
         '';
       };
       effects = mkOption {

@@ -2,7 +2,7 @@
 use super::lower::Rejection;
 use super::types::{ExecutableTask, ExecutionManifest, PortWindow, Program};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use nixfied_manifest::{Manifest, NodeId, ServiceId, ServiceLifetime, TaskId};
+use nixfied_manifest::{NodeId, ServiceId, ServiceLifetime, TaskId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
@@ -128,30 +128,6 @@ pub(super) fn prove_graph(program: &Program) -> RuntimeResult<GraphFacts> {
         .map(|(task, base)| (task, close_union(base, &edges)))
         .collect();
     Ok(GraphFacts { required })
-}
-
-pub(super) fn prove_carried_services(facts: &GraphFacts, manifest: &Manifest) -> RuntimeResult<()> {
-    for (task_id, task) in &manifest.tasks {
-        let derived: Vec<_> = facts.required[task_id.as_str()]
-            .iter()
-            .map(ServiceId::as_str)
-            .collect();
-        let carried: Vec<_> = task
-            .services_required
-            .iter()
-            .map(ServiceId::as_str)
-            .collect();
-        if carried != derived {
-            return Err(Rejection::DerivedFactMismatch {
-                owner: format!("task {task_id}"),
-                fact: "servicesRequired",
-                carried: carried.join(", "),
-                derived: derived.join(", "),
-            }
-            .into());
-        }
-    }
-    Ok(())
 }
 
 fn capacity(window: PortWindow, slot: u32, endpoints: usize, services: usize) -> RuntimeResult<()> {

@@ -125,10 +125,7 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
                 "storePath": store_path,
                 "executable": options.executable,
                 "targetSystem": options.system,
-                "operationBindings": [
-                    "service.synthetic.start",
-                    "task.smoke.run"
-                ],
+
                 "requiresExecutable": true,
                 "effects": ["process", "network-listener"]
             }
@@ -178,7 +175,7 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),
                 "requires": ["synthetic"],
-                "servicesRequired": ["synthetic"],
+
                 "exitPolicy": {
                     "successCodes": [0]
                 },

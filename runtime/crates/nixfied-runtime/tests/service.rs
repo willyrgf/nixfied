@@ -434,7 +434,6 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     other_manifest.services.insert("other".into(), other);
     let task = other_manifest.tasks.get_mut("smoke").unwrap();
     task.requires = serde_json::from_value(json!(["other"])).unwrap();
-    task.services_required = task.requires.clone();
     let other_admission = fixture_admission(&other_manifest, &fixture._tmp.path);
     let selected =
         select_slot(other_admission.common().manifest(), None).expect("default slot should select");
@@ -841,7 +840,7 @@ fn exec_probe_fixture_value(
     probe_attempts: u32,
 ) -> Value {
     let mut value = fixture_manifest(executable, start_args, port);
-    add_probe_shell_closure(&mut value, "service.synthetic.ready");
+    add_probe_shell_closure(&mut value);
     let mut run = vec![json!("sh")];
     run.extend(probe_args.as_array().expect("probe args").iter().cloned());
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
@@ -851,15 +850,15 @@ fn exec_probe_fixture_value(
     value
 }
 
-/// A realised shell closure for invocation probes, bound to the given op.
-fn add_probe_shell_closure(value: &mut Value, operation: &str) {
+/// A realised shell closure selected by invocation probes.
+fn add_probe_shell_closure(value: &mut Value) {
     let target = value["target"]["closureSystem"].clone();
     let shell = test_shell();
     let store_path = closure_root_for_store_executable(Path::new(&shell)).unwrap();
     value["closures"]["probe-shell"] = json!({
         "kind": "executable", "storePath": store_path, "executable": shell,
         "targetSystem": target,
-        "operationBindings": [operation],
+
         "requiresExecutable": true, "effects": ["process"]
     });
 }
@@ -1041,7 +1040,7 @@ fn exec_health_probe_failure_records_failed() {
         // The service is ready (tcp) but never healthy: the failed run must leave
         // service.failed evidence, not a clean stopped/completed registry state.
         let mut value = test_child_listener_value(port);
-        add_probe_shell_closure(&mut value, "service.synthetic.health");
+        add_probe_shell_closure(&mut value);
         value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
             "kind": "exec",
             "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
@@ -1562,12 +1561,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     let mut invocation = value["services"]["synthetic"]["lifecycle"]["start"]["invocation"].clone();
     let program = invocation["run"][0].clone();
     invocation["run"] = json!([program, "output", "hex-block", "", "", request_arg]);
-    let tool = invocation["tools"][0].as_str().unwrap().to_owned();
-    value["closures"][&tool]["operationBindings"] = json!([
-        "service.synthetic.ready",
-        "service.synthetic.start",
-        "task.smoke.run"
-    ]);
+
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "kind": "exec", "invocation": invocation,
         "timeoutMs": 1000, "retryIntervalMs": 20, "maxAttempts": 1
@@ -3274,7 +3268,7 @@ fn task_child_environment_is_hermetic() {
     // This leaf declares no acquired service and needs no listening port.
     let mut value = test_child_listener_value(23180);
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     value["tasks"]["smoke"]["invocation"]["env"] = json!({
         "DECLARED": "yes",
         "CARGO_TARGET_DIR": "target/verification"
@@ -3333,7 +3327,7 @@ fn task_child_environment_is_hermetic() {
 fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
     let mut value = test_child_listener_value(23180);
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     value["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": {
@@ -3475,14 +3469,13 @@ fn endpoint_less_fixture() -> ServiceFixture {
     value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
         json!(["sleep", "30"]);
-    add_probe_shell_closure(&mut value, "service.synthetic.ready");
+    add_probe_shell_closure(&mut value);
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
         "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
     });
     // Health stays tcp in the fixture; make it an invocation probe too.
-    value["closures"]["probe-shell"]["operationBindings"] =
-        json!(["service.synthetic.health", "service.synthetic.ready"]);
+
     value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
         "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
         "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
@@ -4264,7 +4257,7 @@ fn composite_run_keys_evidence_by_step_path() {
 
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     set_task_run_args(&mut value, &["exit", "0"]);
     value["tasks"]["twice"] = json!({
         "kind": "composite",
@@ -4356,12 +4349,12 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     let port = available_port_window(1);
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     set_task_run_args(&mut value, &["term-tree", &started_arg, &marker_arg]);
     value["tasks"]["inner"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
-        "servicesRequired": [],
+
         "steps": {
             "wait": { "task": "smoke" }
         }
@@ -4369,7 +4362,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     value["tasks"]["outer"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
-        "servicesRequired": [],
+
         "steps": {
             "inner": { "task": "inner" }
         }
@@ -4455,23 +4448,18 @@ fn repeated_prepares_and_root_keep_distinct_occurrence_evidence() {
             ],
         );
         value["tasks"]["smoke"]["requires"] = json!(["synthetic", "worker"]);
-        value["tasks"]["smoke"]["servicesRequired"] = json!(["synthetic", "worker"]);
+
         let mut prep = value["tasks"]["smoke"].clone();
         prep["requires"] = json!([]);
-        prep["servicesRequired"] = json!([]);
+
         prep["operationId"] = json!("task.prep.run");
         value["tasks"]["prep"] = prep;
         value["tasks"]["pipeline"] = json!({
             "kind": "composite", "serviceLifetime": "run-scoped",
-            "servicesRequired": ["synthetic", "worker"],
+
             "steps": {"again": {"task": "prep"}, "final": {"task": "smoke", "dependsOn": ["again"]}}
         });
-        value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-            "service.synthetic.start",
-            "service.worker.start",
-            "task.prep.run",
-            "task.smoke.run"
-        ]);
+
         let manifest = tmp.path.join("manifest.json");
         let state = tmp.path.join("state");
         fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -4550,13 +4538,13 @@ fn completed_prepare_evidence_survives_success_and_later_failures() {
             let mut task = value["tasks"]["smoke"].clone();
             task["operationId"] = json!(format!("task.{name}.run"));
             task["requires"] = json!([]);
-            task["servicesRequired"] = json!([]);
+
             let program = task["invocation"]["run"][0].clone();
             task["invocation"]["run"] = json!([program, "exit", code.to_string()]);
             value["tasks"][name] = task;
         }
         value["tasks"]["prep"] = json!({
-            "kind": "composite", "serviceLifetime": "run-scoped", "servicesRequired": [],
+            "kind": "composite", "serviceLifetime": "run-scoped",
             "steps": {
                 "first": {"task": "before"},
                 "second": {"task": "after", "dependsOn": ["first"]}
@@ -4564,12 +4552,7 @@ fn completed_prepare_evidence_survives_success_and_later_failures() {
         });
         value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({"task": "prep"});
         value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["maxAttempts"] = json!(2);
-        value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-            "service.synthetic.start",
-            "task.after.run",
-            "task.before.run",
-            "task.smoke.run"
-        ]);
+
         let tmp = TempDir::new();
         let manifest_path = tmp.path.join("manifest.json");
         let state_base = tmp.path.join("state");
@@ -4627,12 +4610,6 @@ fn composite_starts_full_service_union_before_first_node() {
     let worker_port_arg = worker_port.to_string();
     let mut value = test_child_listener_value(port);
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(worker_port);
-    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-        "service.synthetic.start",
-        "service.worker.start",
-        "task.needs-worker.run",
-        "task.smoke.run"
-    ]);
 
     let mut worker = value["services"]["synthetic"].clone();
     worker["lifecycle"]["start"]["operationId"] = json!("service.worker.start");
@@ -4655,7 +4632,7 @@ fn composite_starts_full_service_union_before_first_node() {
     let program = needs_worker["invocation"]["run"][0].clone();
     needs_worker["operationId"] = json!("task.needs-worker.run");
     needs_worker["requires"] = json!(["worker"]);
-    needs_worker["servicesRequired"] = json!(["worker"]);
+
     needs_worker["logRefs"] = json!(["task.needs-worker"]);
     needs_worker["invocation"]["run"] = Value::Array(vec![
         program,
@@ -4668,7 +4645,7 @@ fn composite_starts_full_service_union_before_first_node() {
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
-        "servicesRequired": ["synthetic", "worker"],
+
         "steps": {
             "first": { "task": "smoke" },
             "second": { "task": "needs-worker", "dependsOn": ["first"] }
@@ -4713,7 +4690,7 @@ fn task_only_run_records_a_durable_runs_row() {
     let mut value = test_child_listener_value(port);
     // The environment starts no services and runs only the service-less task.
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     set_task_run_args(&mut value, &["exit", "0"]);
     let manifest: Manifest =
         serde_json::from_value(value).expect("task-only manifest should parse");
@@ -4780,7 +4757,7 @@ fn inherit_stdin_reaches_a_task_process() {
 
     let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     set_task_run_args(&mut value, &["output", "stdin"]);
     value["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
     let manifest: Manifest =
@@ -4865,7 +4842,7 @@ fn failed_composite_run_writes_failure_summary() {
     // A 0-service composite whose single node fails: the run must leave the
     // same aggregate evidence a success does, linked from the error.
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
     set_task_run_args(&mut value, &["exit", "3"]);
     value["tasks"]["wf"] = json!({
         "kind": "composite",
@@ -5009,7 +4986,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
         // probe with zero node results — the summary must still record failure.
         let mut value = if fail_health {
             let mut value = test_child_listener_value(port);
-            add_probe_shell_closure(&mut value, "service.synthetic.health");
+            add_probe_shell_closure(&mut value);
             value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
                 "kind": "exec",
                 "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
@@ -5022,7 +4999,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
         value["tasks"]["wf"] = json!({
             "kind": "composite",
             "serviceLifetime": "run-scoped",
-            "servicesRequired": ["synthetic"],
+
             "steps": {
                 "never-runs": { "task": "smoke" }
             }
@@ -5171,16 +5148,12 @@ fn service_fixture_with_prepare(
 fn service_manifest_with_prepare(executable: &str, start_args: &[&str], port: u16) -> Manifest {
     let mut value = fixture_manifest(executable, start_args, port);
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
-    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-        "service.synthetic.start",
-        "task.endpoint-prepare.run",
-        "task.smoke.run"
-    ]);
+
     let mut prepare = value["tasks"]["smoke"].clone();
     prepare["serviceLifetime"] = json!("run-scoped");
     prepare["operationId"] = json!("task.endpoint-prepare.run");
     prepare["requires"] = json!([]);
-    prepare["servicesRequired"] = json!([]);
+
     prepare["logRefs"] = json!(["task.endpoint-prepare"]);
     prepare["invocation"]["run"] = json!([
         Path::new(executable)

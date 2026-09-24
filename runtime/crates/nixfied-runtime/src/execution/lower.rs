@@ -50,7 +50,6 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
     let mut resolver = InvocationResolver {
         closures,
         secrets: &manifest.secrets,
-        bindings: BTreeMap::new(),
     };
     let lowered_services = services
         .iter()
@@ -95,8 +94,6 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
         slot_windows,
     };
     let facts = super::plan::prove_graph(&program)?;
-    prove_derived_operation_bindings(manifest, &resolver.bindings)?;
-    super::plan::prove_carried_services(&facts, manifest)?;
     super::plan::prove_capacity(&program, facts)?;
     Ok(ExecutionManifest { program })
 }
@@ -154,8 +151,7 @@ fn lower_service(
     // Effects coherence, both directions: a listening service's start closure
     // must attest `network-listener`; an endpoint-less service's must not — it
     // would announce a listener the planner cannot reserve.
-    let (start_exec, closure_id, closure) =
-        resolver.resolve(&owner, &start.invocation, &start.operation_id, &scope)?;
+    let (start_exec, closure_id, closure) = resolver.resolve(&owner, &start.invocation, &scope)?;
     {
         let listens = closure
             .effects
@@ -184,25 +180,11 @@ fn lower_service(
     };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: lower_probe(
-            name,
-            "ready",
-            &ready.probe,
-            &ready.operation_id,
-            &scope,
-            resolver,
-        )?,
+        probe: lower_probe(name, "ready", &ready.probe, &scope, resolver)?,
     };
     let health = HealthOp {
         meta: op_meta(&health.operation_id, &health.terminal),
-        probe: lower_probe(
-            name,
-            "health",
-            &health.probe,
-            &health.operation_id,
-            &scope,
-            resolver,
-        )?,
+        probe: lower_probe(name, "health", &health.probe, &scope, resolver)?,
     };
     let stop = lower_stop(stop);
     let clean = CleanOp {
@@ -254,9 +236,6 @@ fn lower_task(
         operation_id,
         invocation,
         requires,
-        // Re-derived and compared against the carried value at admission
-        // (DERIVE-1); the executor reads the derived union via the planner.
-        services_required: _,
         exit_policy,
         steps,
         artifact_refs: _,
@@ -281,7 +260,7 @@ fn lower_task(
     let exit_policy = exit_policy
         .as_ref()
         .expect("validated leaf has an exit policy");
-    let operation_id = operation_id
+    operation_id
         .as_ref()
         .expect("validated leaf has an operation id");
     let requires: Vec<_> = requires.iter().cloned().collect();
@@ -313,7 +292,7 @@ fn lower_task(
         own_endpoints: BTreeSet::new(),
         services: named,
     };
-    let (exec, _, _) = resolver.resolve(&owner, invocation, operation_id, &scope)?;
+    let (exec, _, _) = resolver.resolve(&owner, invocation, &scope)?;
     Ok(ExecutableTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
         service_lifetime: *service_lifetime,
@@ -352,7 +331,6 @@ fn lower_probe(
     service: &str,
     class: &'static str,
     probe: &ProbeSpec,
-    operation_id: &OperationId,
     scope: &Scope<'_>,
     resolver: &mut InvocationResolver<'_>,
 ) -> RuntimeResult<Probe> {
@@ -398,7 +376,7 @@ fn lower_probe(
                 .into());
             };
             let owner = || format!("service {service} {class} probe");
-            let (exec, _, _) = resolver.resolve(&owner, invocation, operation_id, scope)?;
+            let (exec, _, _) = resolver.resolve(&owner, invocation, scope)?;
             Ok(Probe::Exec(ExecProbe {
                 exec,
                 policy: ProbePolicy {
@@ -412,12 +390,10 @@ fn lower_probe(
     }
 }
 
-/// This accumulator exists only during lowering. Selection, effect checks and
-/// derived operation bindings share the same chosen closure.
+/// Selection and effect checks use the same chosen closure during lowering.
 struct InvocationResolver<'a> {
     closures: &'a BTreeMap<String, ClosureSpec>,
     secrets: &'a BTreeMap<String, nixfied_manifest::SecretDescriptor>,
-    bindings: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl<'a> InvocationResolver<'a> {
@@ -430,7 +406,6 @@ impl<'a> InvocationResolver<'a> {
         &mut self,
         owner: &impl Fn() -> String,
         invocation: &InvocationSpec,
-        operation_id: &OperationId,
         scope: &Scope<'_>,
     ) -> RuntimeResult<(ResolvedInvocation, &'a str, &'a ClosureSpec)> {
         let InvocationSpec {
@@ -494,10 +469,6 @@ impl<'a> InvocationResolver<'a> {
             }
             .into());
         }
-        self.bindings
-            .entry(closure_id.to_string())
-            .or_default()
-            .insert(operation_id.to_string());
         Ok((
             ResolvedInvocation {
                 executable: executable.clone(),
@@ -578,12 +549,6 @@ pub enum Rejection {
         service: String,
         class: &'static str,
     },
-    DerivedFactMismatch {
-        owner: String,
-        fact: &'static str,
-        carried: String,
-        derived: String,
-    },
 }
 
 impl Rejection {
@@ -637,16 +602,6 @@ impl Rejection {
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no invocation")
             }
-            Rejection::DerivedFactMismatch {
-                owner,
-                fact,
-                carried,
-                derived,
-            } => {
-                format!(
-                    "{owner} carries {fact} [{carried}] but the graph derives [{derived}] (DERIVE-1)"
-                )
-            }
         }
     }
 }
@@ -666,7 +621,7 @@ fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
 
 /// Check cross-reference membership and operation identity before local invocation
 /// resolution. Graph algorithms consume these facts without repeating membership
-/// checks; cycles and carried derivations are proved after local resolution.
+/// checks; cycles and capacity are proved after local resolution.
 fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
     let codebase_ids = manifest
         .codebases
@@ -761,39 +716,6 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
     Ok(())
 }
 
-/// Re-derive each closure's operation bindings (docs/DERIVATION_SPEC.md §4):
-/// the byte-sorted operation ids of every invocation position whose run[0]
-/// resolves to the closure. The carried `operationBindings` must equal the
-/// derivation exactly — the eval-side narrowing gate has already been applied
-/// there, and the emitted value is the derived set.
-fn prove_derived_operation_bindings(
-    manifest: &Manifest,
-    bindings: &BTreeMap<String, BTreeSet<String>>,
-) -> Result<(), Rejection> {
-    for (closure_id, closure) in &manifest.closures {
-        let derived: Vec<&str> = bindings
-            .get(closure_id)
-            .into_iter()
-            .flatten()
-            .map(String::as_str)
-            .collect();
-        let carried: Vec<&str> = closure
-            .operation_bindings
-            .iter()
-            .map(|binding| binding.as_str())
-            .collect();
-        if derived != carried {
-            return Err(Rejection::DerivedFactMismatch {
-                owner: format!("closure {closure_id}"),
-                fact: "operationBindings",
-                carried: carried.join(", "),
-                derived: derived.join(", "),
-            });
-        }
-    }
-    Ok(())
-}
-
 /// The operation id of each lifecycle op, in canonical order. Prepare is a
 /// task reference and carries no operation id.
 fn lifecycle_op_ids(lifecycle: &Lifecycle) -> [&str; 5] {
@@ -859,13 +781,13 @@ mod tests {
                 "c": {
                     "kind": "executable", "storePath": "/nix/store/c", "executable": "/nix/store/c/bin/svc",
                     "targetSystem": "x86_64-linux",
-                    "operationBindings": ["svc.start"],
+
                     "requiresExecutable": true, "effects": ["process", "network-listener"]
                 },
                 "ct": {
                     "kind": "executable", "storePath": "/nix/store/ct", "executable": "/nix/store/ct/bin/task",
                     "targetSystem": "x86_64-linux",
-                    "operationBindings": ["task.t.run"],
+
                     "requiresExecutable": true, "effects": ["process"]
                 }
             },
@@ -886,7 +808,7 @@ mod tests {
                         "timeoutMs": 1000
                     },
                     "requires": ["svc"],
-                    "servicesRequired": ["svc"],
+
                     "exitPolicy": { "successCodes": [0] },
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }
@@ -964,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn first_tool_selection_owns_effects_and_operation_bindings() {
+    fn first_tool_selection_owns_executable_and_effects() {
         for first in ["c", "alternate"] {
             let mut value = manifest_value();
             value["closures"]["alternate"] = value["closures"]["c"].clone();
@@ -976,7 +898,7 @@ mod tests {
             value["services"]["svc"]["lifecycle"]["start"]["invocation"]["executable"] =
                 value["closures"][first]["executable"].clone();
             value["closures"][other]["effects"] = json!(["process"]);
-            value["closures"][other]["operationBindings"] = json!([]);
+
             let execution = lower(&manifest_from(value.clone())).unwrap();
             assert_eq!(
                 execution.services()["svc"].start.exec.executable,
@@ -995,11 +917,10 @@ mod tests {
     }
 
     #[test]
-    fn local_invocation_errors_precede_cycles_and_carried_facts() {
+    fn local_invocation_errors_precede_cycles() {
         let mut value = manifest_value();
         value["services"]["svc"]["connectsTo"] = json!(["svc"]);
-        value["closures"]["c"]["operationBindings"] = json!([]);
-        value["tasks"]["t"]["servicesRequired"] = json!([]);
+
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"]["PATH"] =
             json!("forbidden");
         let error = lower(&manifest_from(value.clone())).unwrap_err();
@@ -1178,30 +1099,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn carried_bindings_must_equal_the_derivation() {
-        // The carried bindings list an operation the graph never dispatches
-        // against this closure — a derived-fact mismatch (DERIVE-1).
-        let mut value = manifest_value();
-        value["closures"]["c"]["operationBindings"] = json!(["svc.start", "task.t.run"]);
-        let error = lower(&manifest_from(value)).unwrap_err();
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("operationBindings"));
-    }
-
-    #[test]
-    fn missing_carried_bindings_are_a_derived_fact_mismatch() {
-        // The closure is dispatched against svc.start but carries no binding
-        // for it.
-        let mut value = manifest_value();
-        value["closures"]["c"]["operationBindings"] = json!([]);
-        let error = lower(&manifest_from(value)).unwrap_err();
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("operationBindings"));
-    }
-
     fn planned_services(document: &ValidatedManifest, task: &str) -> Vec<String> {
-        let execution = lower(document).expect("literal carried facts must match");
+        let execution = lower(document).expect("graph inputs must admit");
         let plan = super::super::plan::plan(&execution, &TaskId::new(task), 0).unwrap();
         let mut services: Vec<_> = plan
             .services
@@ -1225,25 +1124,25 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+
         let manifest = manifest_from(value);
         assert_eq!(planned_services(&manifest, "t"), vec!["dep", "svc"]);
     }
 
     #[test]
-    fn operation_bindings_vector_v5_run0_closure_binds_tools_do_not() {
+    fn executable_selection_vector_v5_tools_supply_path() {
         let mut value = manifest_value();
         value["closures"]["gitC"] = json!({
             "kind": "executable", "storePath": "/nix/store/git", "executable": "/nix/store/git/bin/git",
-            "targetSystem": "x86_64-linux", "operationBindings": [],
+            "targetSystem": "x86_64-linux",
             "requiresExecutable": true, "effects": ["process"]
         });
         value["closures"]["probeC"] = json!({
             "kind": "executable", "storePath": "/nix/store/probe", "executable": "/nix/store/probe/bin/probe",
-            "targetSystem": "x86_64-linux", "operationBindings": ["svc.ready"],
+            "targetSystem": "x86_64-linux",
             "requiresExecutable": true, "effects": ["process"]
         });
         value["tasks"]["t"]["invocation"]["tools"] = json!(["ct", "gitC"]);
@@ -1255,14 +1154,25 @@ mod tests {
             "invocation": probe_invocation,
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        lower(&manifest_from(value))
-            .expect("tool-only closure and probe binding vector should lower");
+        let execution = lower(&manifest_from(value)).unwrap();
+        let ExecutableTask::Leaf(task) = &execution.program.tasks["t"] else {
+            panic!("leaf")
+        };
+        assert_eq!(task.exec.executable, "/nix/store/ct/bin/task");
+        assert_eq!(
+            task.exec.tool_roots,
+            vec!["/nix/store/ct/bin", "/nix/store/git/bin"]
+        );
+        let Probe::Exec(probe) = &execution.services()["svc"].ready.probe else {
+            panic!("exec probe")
+        };
+        assert_eq!(probe.exec.executable, "/nix/store/probe/bin/probe");
     }
 
     #[test]
-    fn operation_bindings_vector_v6_override_and_v7_multiple_leaves() {
+    fn operation_identity_vector_v6_override_and_v7_multiple_leaves() {
         let mut value = manifest_value();
-        value["closures"]["ct"]["operationBindings"] = json!(["task.custom.odd", "task.t.run"]);
+
         value["tasks"]["odd"] = json!({
             "kind": "leaf",
             "serviceLifetime": "run-scoped",
@@ -1274,10 +1184,23 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": [],
-            "servicesRequired": [],
+
             "exitPolicy": { "successCodes": [0] }
         });
-        lower(&manifest_from(value)).expect("override operation id should participate in bindings");
+        let execution = lower(&manifest_from(value.clone())).unwrap();
+        for id in ["t", "odd"] {
+            let ExecutableTask::Leaf(task) = &execution.program.tasks[id] else {
+                panic!("leaf")
+            };
+            assert_eq!(task.exec.executable, "/nix/store/ct/bin/task");
+        }
+        value["tasks"]["odd"]["operationId"] = json!("task.t.run");
+        assert_eq!(
+            reject_reason(value),
+            Rejection::DuplicateOperationId {
+                id: "task.t.run".into()
+            }
+        );
     }
 
     #[test]
@@ -1286,10 +1209,9 @@ mod tests {
         add_named_service(&mut value, "db", &[]);
         add_named_service(&mut value, "a", &["db"]);
         add_named_service(&mut value, "b", &["db"]);
-        value["closures"]["c"]["operationBindings"] =
-            json!(["a.start", "b.start", "db.start", "svc.start"]);
+
         value["tasks"]["t"]["requires"] = json!(["a", "b"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["a", "b", "db"]);
+
         let manifest = manifest_from(value);
         assert_eq!(planned_services(&manifest, "t"), vec!["a", "b", "db"]);
         lower(&manifest).expect("diamond service graph should lower");
@@ -1299,9 +1221,7 @@ mod tests {
     fn services_required_vector_v9_prepare_task_may_be_composite() {
         let mut value = manifest_value();
         add_named_service(&mut value, "dep", &[]);
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
-        value["closures"]["ct"]["operationBindings"] =
-            json!(["task.migrate.run", "task.seed.run", "task.t.run"]);
+
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
             "serviceLifetime": "run-scoped",
@@ -1313,7 +1233,7 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": ["dep"],
-            "servicesRequired": ["dep"],
+
             "exitPolicy": { "successCodes": [0] }
         });
         value["tasks"]["seed"] = json!({
@@ -1327,7 +1247,7 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": [],
-            "servicesRequired": [],
+
             "exitPolicy": { "successCodes": [0] }
         });
         value["tasks"]["prep"] = json!({
@@ -1337,10 +1257,10 @@ mod tests {
                 "migrate": { "task": "migrate" },
                 "seed": { "task": "seed", "dependsOn": ["migrate"] }
             },
-            "servicesRequired": ["dep"]
+
         });
         value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "prep" });
-        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+
         let manifest = manifest_from(value);
         assert_eq!(planned_services(&manifest, "t"), vec!["dep", "svc"]);
         lower(&manifest).expect("composite prepare task should lower");
@@ -1353,15 +1273,9 @@ mod tests {
         add_named_service(&mut value, "worker", &["db"]);
         add_named_service(&mut value, "db", &["cache"]);
         add_named_service(&mut value, "cache", &[]);
-        value["closures"]["c"]["operationBindings"] = json!([
-            "api.start",
-            "cache.start",
-            "db.start",
-            "svc.start",
-            "worker.start"
-        ]);
+
         value["tasks"]["t"]["requires"] = json!(["api"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["api", "cache", "db", "worker"]);
+
         let manifest = manifest_from(value);
         assert_eq!(
             planned_services(&manifest, "t"),
@@ -1371,31 +1285,12 @@ mod tests {
     }
 
     #[test]
-    fn services_required_mismatch_is_rejected_naming_both_values() {
-        let mut value = manifest_value();
-        value["tasks"]["t"]["servicesRequired"] = json!([]);
-        let error = lower(&manifest_from(value)).expect_err("derived-fact mismatch must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(
-            error.message.contains("servicesRequired"),
-            "{}",
-            error.message
-        );
-        assert!(
-            error.message.contains("[svc]") || error.message.contains("svc"),
-            "{}",
-            error.message
-        );
-        assert!(error.message.contains("DERIVE-1"), "{}", error.message);
-    }
-
-    #[test]
     fn service_less_task_lowers() {
         // A task may require zero services (e.g. a lint/test task) as long as it
         // does not reference a service-derived placeholder.
         let mut value = manifest_value();
         value["tasks"]["t"]["requires"] = json!([]);
-        value["tasks"]["t"]["servicesRequired"] = json!([]);
+
         value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
         let em = lower(&manifest_from(value)).expect("a service-less task lowers");
         assert!(em.leaf("t").unwrap().requires.is_empty());
@@ -1407,7 +1302,7 @@ mod tests {
         // it, admission must reject rather than admit-then-fail.
         let mut value = manifest_value();
         value["tasks"]["t"]["requires"] = json!([]);
-        value["tasks"]["t"]["servicesRequired"] = json!([]);
+
         let error = lower(&manifest_from(value))
             .expect_err("a service-less task using ${port} must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
@@ -1419,7 +1314,7 @@ mod tests {
         // otherwise run with the literal placeholder in the environment.
         let mut value = manifest_value();
         value["tasks"]["t"]["requires"] = json!([]);
-        value["tasks"]["t"]["servicesRequired"] = json!([]);
+
         value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
         value["tasks"]["t"]["invocation"]["env"] = json!({ "PORT": "${port}" });
         let error = lower(&manifest_from(value))
@@ -1435,8 +1330,6 @@ mod tests {
             "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        // Carried bindings are the byte-sorted derived set.
-        value["closures"]["c"]["operationBindings"] = json!(["svc.ready", "svc.start"]);
     }
 
     #[test]
@@ -1482,18 +1375,6 @@ mod tests {
     }
 
     #[test]
-    fn exec_probe_op_must_be_bound_by_its_closure() {
-        let mut value = manifest_value();
-        with_exec_ready_probe(&mut value);
-        // Remove the binding again: the carried bindings no longer cover the
-        // ready operation the graph dispatches against the closure.
-        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
-        let error = lower(&manifest_from(value)).expect_err("unbound probe op must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("DERIVE-1"), "{}", error.message);
-    }
-
-    #[test]
     fn exec_probe_named_ref_outside_connects_to_is_rejected() {
         let mut value = manifest_value();
         with_exec_ready_probe(&mut value);
@@ -1510,7 +1391,7 @@ mod tests {
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
             "serviceLifetime": "until-idle",
-            "servicesRequired": ["svc"],
+
             "steps": {
                 "first": { "task": "t" },
                 "second": { "task": "t", "dependsOn": ["first"] }
@@ -1557,7 +1438,7 @@ mod tests {
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
             "serviceLifetime": "run-scoped",
-            "servicesRequired": ["svc"],
+
             "steps": { "only": { "task": "t", "dependsOn": ["ghost"] } }
         });
         let error = lower(&manifest_from(value)).expect_err("dangling dependsOn must reject");
@@ -1590,22 +1471,20 @@ mod tests {
 
     #[test]
     fn lowering_rejects_cycles_before_exposing_execution() {
-        for (steps, required, diagnostic) in [
+        for (steps, diagnostic) in [
             (
                 json!({"again": {"task": "pipeline"}}),
-                json!([]),
                 "task reference cycle",
             ),
             (
                 json!({"a": {"task": "t", "dependsOn": ["b"]},
                     "b": {"task": "t", "dependsOn": ["a"]}}),
-                json!(["svc"]),
                 "step dependency cycle",
             ),
         ] {
             let mut value = manifest_value();
             value["tasks"]["pipeline"] = json!({"kind": "composite", "serviceLifetime": "run-scoped",
-                "steps": steps, "servicesRequired": required});
+                "steps": steps, });
             let error =
                 lower(&manifest_from(value)).expect_err("lower must prove graph feasibility");
             assert!(error.message.contains(diagnostic), "{}", error.message);
@@ -1654,7 +1533,7 @@ mod tests {
         value["closures"]["cw"] = json!({
             "kind": "executable", "storePath": "/nix/store/cw", "executable": "/nix/store/cw/bin/worker",
             "targetSystem": "x86_64-linux",
-            "operationBindings": ["worker.health", "worker.ready", "worker.start"],
+
             "requiresExecutable": true, "effects": ["process"]
         });
         let worker_invocation = |run: Value| {
@@ -1690,7 +1569,6 @@ mod tests {
             "stateRefs": [], "logRefs": [],
             "containment": "process-group"
         });
-        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
     }
 
     #[test]
@@ -1711,8 +1589,7 @@ mod tests {
             "kind": "tcp", "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
         // The tcp probe carries no invocation, so the closure's derived
-        // bindings shrink with it.
-        value["closures"]["cw"]["operationBindings"] = json!(["worker.health", "worker.start"]);
+
         let error =
             lower(&manifest_from(value)).expect_err("tcp probe without endpoint must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
@@ -1741,7 +1618,7 @@ mod tests {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
         value["services"]["svc"]["connectsTo"] = json!(["worker"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
             json!(["svc", "serve", "--peer", "${port:worker}"]);
         let error =
@@ -1758,7 +1635,7 @@ mod tests {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
         value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+
         value["tasks"]["t"]["invocation"]["run"] =
             json!(["task", "--port", "${port}", "--peer", "${port:worker}"]);
         let error =
@@ -1775,7 +1652,7 @@ mod tests {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
         value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
-        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+
         let em = lower(&manifest_from(value)).expect("requiring an endpoint-less service is legal");
         assert_eq!(em.leaf("t").unwrap().requires.len(), 2);
     }
@@ -1827,12 +1704,12 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+
         value["services"]["dep"] = dep;
         value["closures"]["cm"] = json!({
             "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/migrate",
             "targetSystem": "x86_64-linux",
-            "operationBindings": ["task.migrate.run"],
+
             "requiresExecutable": true, "effects": ["process"]
         });
         value["tasks"]["migrate"] = json!({
@@ -1846,12 +1723,12 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": ["dep"],
-            "servicesRequired": ["dep"],
+
             "exitPolicy": { "successCodes": [0] }
         });
         value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "migrate" });
         // Task t requires svc; svc's prepare requires dep -> union closes over it.
-        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+
         let em = lower(&manifest_from(value)).expect("cross-service prepare lowers");
         assert_eq!(
             em.services()
@@ -1876,13 +1753,13 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+
         dep["connectsTo"] = json!(["svc"]);
         value["services"]["dep"] = dep;
         value["closures"]["cm"] = json!({
             "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/migrate",
             "targetSystem": "x86_64-linux",
-            "operationBindings": ["task.migrate.run"],
+
             "requiresExecutable": true, "effects": ["process"]
         });
         value["tasks"]["migrate"] = json!({
@@ -1896,7 +1773,7 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": ["dep"],
-            "servicesRequired": ["dep"],
+
             "exitPolicy": { "successCodes": [0] }
         });
         value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "migrate" });
@@ -1920,7 +1797,7 @@ mod tests {
         value["closures"]["cm"] = json!({
             "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/selfinit",
             "targetSystem": "x86_64-linux",
-            "operationBindings": ["task.selfinit.run"],
+
             "requiresExecutable": true, "effects": ["process"]
         });
         value["tasks"]["selfinit"] = json!({
@@ -1934,7 +1811,7 @@ mod tests {
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
             },
             "requires": ["svc"],
-            "servicesRequired": ["svc"],
+
             "exitPolicy": { "successCodes": [0] }
         });
         value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "selfinit" });
@@ -1974,7 +1851,7 @@ mod tests {
     fn task_bare_placeholders_do_not_skip_endpoint_less_first_requirement() {
         let mut value = manifest_value();
         with_endpoint_less_worker(&mut value);
-        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+
         value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
         lower(&manifest_from(value.clone()))
             .expect("addressable first dependency accepts bare port");
@@ -2013,12 +1890,12 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
         // Task t requires svc; svc now connectsTo dep, so the derived union
         // closes over it.
-        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
             json!(["svc", "serve", "--db", "${host:dep}:${port:dep}"]);
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] =

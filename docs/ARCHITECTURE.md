@@ -212,10 +212,11 @@ layout. Custom apps and later description overrides remain outside its scope.
 It adds nothing to the manifest algebra or runtime ABI. Environment
 **membership does not exist**: running a task brings up exactly the services
 its leaves require —
-`servicesRequired`, `operationBindings`, and operation ids are **derived**
-from the graph (DERIVE-1), computed identically by the Nix compiler and the
-runtime's lowering against one normative source
-(`docs/DERIVATION_SPEC.md`), and compared fail-closed at admission.
+runtime admission derives its execution graph from declared inputs under
+`docs/DERIVATION_SPEC.md`. Nix independently checks graph feasibility and
+binding restrictions, but neither derived service sets nor derived binding
+sets cross the manifest seam. Independent vectors and runtime behavior tests
+check conformance rather than comparing two carried answers at admission.
 Hand-declaration is reserved for *choices* (surface verbs) and *attestations*
 (effects). Child environments are **hermetic**: declared env plus the
 runtime-owned PATH assembled from the tool roots, nothing inherited.

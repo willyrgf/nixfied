@@ -377,7 +377,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let tmp = common::TempDir::new();
         let mut value = common::test_child_manifest(20000, 20000);
         value["tasks"]["smoke"]["requires"] = json!([]);
-        value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
         let program = value["tasks"]["smoke"]["invocation"]["run"][0].clone();
         let counter = tmp.path.join("child-counter");
         value["tasks"]["smoke"]["invocation"]["run"] =

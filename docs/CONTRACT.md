@@ -84,11 +84,14 @@ when the manifest/runtime contract changes.
 - **STATIC-1:** composites are fully applied static DAGs. Parameters,
   conditionals, retries, and loops belong in Nix-side expansion or inside an
   opaque leaf, not in the runtime contract.
-- **DERIVE-1:** graph facts such as `servicesRequired`, `operationBindings`, and
-  operation IDs are derived according to `DERIVATION_SPEC.md`. Nix and Rust
-  compute them independently and admission compares them fail-closed.
-  Hand-declaration is reserved for choices such as exported verbs and
-  attestations such as effects.
+- **DERIVE-1:** admission derives service requirements and execution ordering
+  from graph inputs according to `DERIVATION_SPEC.md` before child effects.
+  The manifest carries neither `servicesRequired` nor `operationBindings`.
+  Nix independently checks graph feasibility and authored binding restrictions;
+  those restrictions reject at authoring, not through a runtime authorization
+  list. Operation IDs remain explicit inputs with native uniqueness checks.
+  Independent vectors and behavioral tests prove derivation, replacing
+  per-manifest equality checks. Effects remain authored attestations.
 - **CACHE-1:** cache is neither a semantic kind nor a runtime resource. Nixfied
   does not identify, place, create, lock, report, retain, or selectively clean
   cache artifacts. Child tools and projects own those concerns through ordinary

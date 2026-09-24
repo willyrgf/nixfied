@@ -1,7 +1,7 @@
 # The pure derivation algorithms of docs/DERIVATION_SPEC.md (§3–§5), shared by
 # the compiler (nix/compiler/derive.nix) and unit-tested against the spec's
 # golden vectors (the `derive-facts-vectors` flake check). The runtime lowering
-# re-derives the same facts at admission and fails closed on mismatch
+# derives its execution graph at admission; independent vectors prove conformance
 # (DERIVE-1).
 { lib }:
 rec {

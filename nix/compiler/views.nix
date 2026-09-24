@@ -1,14 +1,22 @@
-{ manifest }:
+{ manifest, lib }:
+let
+  required = (import ../lib/derive-facts.nix { inherit lib; }).servicesRequired {
+    inherit (manifest) tasks services;
+    prepareTaskOf =
+      name:
+      if manifest.services.${name}.lifecycle ? prepare then
+        manifest.services.${name}.lifecycle.prepare.task
+      else
+        null;
+  };
+in
 
 let
   inherit (builtins) attrNames concatStringsSep;
 
   inlineList =
     values:
-    if values == [ ] then
-      "none"
-    else
-      concatStringsSep ", " (map (value: "`${toString value}`") values);
+    if values == [ ] then "none" else concatStringsSep ", " (map (value: "`${toString value}`") values);
 
   taskDocs =
     taskId:
@@ -23,7 +31,7 @@ let
         "- kind: `${task.kind}`"
         "- default output: `${task.defaultOutput}`"
         "- service lifetime: `${task.serviceLifetime}`"
-        "- services required: ${inlineList task.servicesRequired}"
+        "- services required: ${inlineList (required taskId)}"
         "- artifact refs: ${inlineList (task.artifactRefs or [ ])}"
         "- log refs: ${inlineList (task.logRefs or [ ])}"
         "- summary refs: ${inlineList (task.summaryRefs or [ ])}"
@@ -86,9 +94,7 @@ let
       let
         placement = manifest.placement.slotPlacements.${slotName};
       in
-      "  - slot `${toString placement.slot}`: `${toString placement.candidatePorts.start}` through `${
-        toString placement.candidatePorts.end
-      }`"
+      "  - slot `${toString placement.slot}`: `${toString placement.candidatePorts.start}` through `${toString placement.candidatePorts.end}`"
     ) slotNames
   );
 in

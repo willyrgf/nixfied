@@ -70,11 +70,6 @@ assert builtins.length (builtins.attrNames manifest.closures) == 3;
 assert (invocation "first").executable == "${first}/bin/identity-tool";
 assert (invocation "second").executable == "${second}/bin/identity-tool";
 assert (invocation "alternate").executable == "${first}/bin/alternate";
-assert
-  manifest.closures.${id "first"}.operationBindings == [
-    "task.again.run"
-    "task.first.run"
-  ];
 assert !(builtins.tryEval (builtins.deepSeq collision true)).success;
 pkgs.runCommand "tool-identity" { } ''
   test "$(${lib.escapeShellArg (invocation "first").executable})" = first
