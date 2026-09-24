@@ -1831,6 +1831,70 @@ fn setsid_descendant_is_identity_killed_before_failed_settlement() {
 }
 
 #[test]
+fn ready_service_checkpoint_reaps_exit_and_teardown_retains_failure() {
+    let mut fixture = endpoint_less_fixture();
+    let service = fixture
+        .start_endpoint_less("run-reap-at-checkpoint")
+        .unwrap()
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
+        .unwrap();
+    let pid = service.info().pid as i32;
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    // Observe exit without reaping: the runtime checkpoint must consume it.
+    let mut exited: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as _,
+                &mut exited,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match service.check_liveness() {
+            Ok(()) => {
+                assert!(Instant::now() < deadline, "service must exit");
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => {
+                assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+                break;
+            }
+        }
+    }
+    let mut status = 0;
+    assert_eq!(
+        unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD)
+    );
+    assert_eq!(
+        service.check_liveness().unwrap_err().code,
+        ErrorCode::DependencyUnavailable
+    );
+    let error = service.stop(&mut fixture.registry, 1000).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ProcEscape);
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM processes WHERE role='service' AND status='failed'",
+            []
+        ),
+        1
+    );
+}
+
+#[test]
 fn ready_service_checkpoint_detects_new_escape_before_leader_exit() {
     let root = TempDir::new();
     let request = root.path.join("request");

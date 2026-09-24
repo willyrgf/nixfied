@@ -127,22 +127,6 @@ pub struct ServiceInfo {
 }
 
 impl ServiceInfo {
-    fn check_liveness(&self) -> RuntimeResult<()> {
-        if !process_is_live_with_identity(
-            self.pid,
-            self.pgid,
-            self.platform_start_identity.as_deref(),
-        )? {
-            return Err(RuntimeError::new(
-                ErrorCode::DependencyUnavailable,
-                format!(
-                    "service {} exited while session work was running",
-                    self.service_name()
-                ),
-            ));
-        }
-        Ok(())
-    }
     pub fn service_name(&self) -> &str {
         &self.service_name
     }
@@ -253,10 +237,7 @@ impl ReadyService {
         self.info().selected_endpoint()
     }
     pub fn check_liveness(&self) -> RuntimeResult<()> {
-        if let Some(error) = self.owned.escape_error() {
-            return Err(error);
-        }
-        self.info().check_liveness()
+        self.owned.check_liveness()
     }
     pub fn check_health(
         &mut self,
@@ -323,6 +304,35 @@ struct OwnedService {
 }
 
 impl OwnedService {
+    fn check_liveness(&self) -> RuntimeResult<()> {
+        if let Some(error) = self.escape_error() {
+            return Err(error);
+        }
+        let info = &self.info;
+        let observed = self.child.observe().map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to observe service child: {error}"),
+            )
+        })?;
+        if observed.is_some()
+            || !process_is_live_with_identity(
+                info.pid,
+                info.pgid,
+                info.platform_start_identity.as_deref(),
+            )?
+        {
+            return Err(RuntimeError::new(
+                ErrorCode::DependencyUnavailable,
+                format!(
+                    "service {} exited while session work was running",
+                    info.service_name()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn wait_for_probe_ready_cancellable(
         &mut self,
         registry: &mut Registry,
@@ -490,10 +500,7 @@ impl OwnedService {
                     cancellation,
                     &mut || {
                         checkpoint()?;
-                        if let Some(error) = self.escape_error() {
-                            return Err(error);
-                        }
-                        self.info.check_liveness()
+                        self.check_liveness()
                     },
                 )
             }
@@ -522,10 +529,7 @@ impl OwnedService {
                     cancellation,
                     &mut || {
                         checkpoint()?;
-                        if let Some(error) = self.escape_error() {
-                            return Err(error);
-                        }
-                        self.info.check_liveness()
+                        self.check_liveness()
                     },
                 )
             }

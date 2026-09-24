@@ -314,7 +314,9 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   consumes the OS handle on exit; later observations return retained evidence,
   and direct kill cannot target the reaped alternative. Service and invocation
   cleanup share this owner while retaining separate containment and capture
-  obligations.
+  obligations. Ready-service and probe checkpoints observe this same child owner,
+  retaining its exit status before teardown; service metadata has no separate
+  liveness implementation.
 - **Descendant evidence stays on the execution thread.** Service checkpoints
   refresh retained descendant identities and escape evidence directly. There is
   no background scanner, shared monitor mutex, or ignored monitor join. Ready
