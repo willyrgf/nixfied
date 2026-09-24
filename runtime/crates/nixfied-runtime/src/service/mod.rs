@@ -3,7 +3,10 @@ mod identity;
 mod process;
 mod readiness;
 mod registry;
+mod socket;
 mod task;
+
+const OBSERVATION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

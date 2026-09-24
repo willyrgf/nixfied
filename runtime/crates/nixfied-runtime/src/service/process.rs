@@ -578,7 +578,7 @@ impl OwnedService {
                     thread::sleep(
                         retry_interval
                             .saturating_sub(waiting.elapsed())
-                            .min(Duration::from_millis(10)),
+                            .min(super::OBSERVATION_INTERVAL),
                     );
                 }
             }
@@ -621,7 +621,19 @@ impl OwnedService {
                         "tcp probe on a service with no selected endpoint",
                     )
                 })?;
-                tcp_probe_attempt(probe, endpoint.host, endpoint.port, cancellation)
+                tcp_probe_attempt(
+                    probe,
+                    endpoint.host,
+                    endpoint.port,
+                    cancellation,
+                    &mut || {
+                        checkpoint()?;
+                        if let Some(error) = self.escape_error() {
+                            return Err(error);
+                        }
+                        self.info.check_liveness()
+                    },
+                )
             }
             PreparedProbe::Exec { policy, command } => exec_probe_attempt(
                 policy,
@@ -1709,7 +1721,7 @@ pub(super) fn start_service_with_lock_root(
             };
         let mut command = configured_command(&exec.executable, &args, &env, &command_cwd, exec.stdin);
         command.stdout(stdout).stderr(stderr);
-        let spawned = cancellation.check().and_then(|()| command.spawn().map_err(|error| {
+        let spawned = cancellation.check().and_then(|()| crate::spawn::command(&mut command).map_err(|error| {
             RuntimeError::new(ErrorCode::ProcEscape, format!("failed to spawn service {service_name}: {error}"))
         }));
         drop(command);
@@ -2443,7 +2455,7 @@ pub(crate) fn spawn_captured_exec(spec: &CapturedExec<'_>) -> RuntimeResult<Owne
     let mut command =
         configured_command(spec.executable, spec.args, spec.env, spec.cwd, spec.stdin);
     command.stdout(output.stdout).stderr(output.stderr);
-    let spawned = command.spawn();
+    let spawned = crate::spawn::command(&mut command);
     // Command retains pipe writers even after spawn failure.
     drop(command);
     match spawned {
@@ -2519,7 +2531,7 @@ impl OwnedCapturedChild {
             {
                 break Ok(CapturedExecOutcome::TimedOut);
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(super::OBSERVATION_INTERVAL);
         };
         // Intent is synchronous and precedes every signal, even if recording fails.
         let intent = match &observed {

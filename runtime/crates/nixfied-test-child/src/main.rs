@@ -24,6 +24,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
         return Err("missing command".into());
     };
     match command.as_str() {
+        "assert-fd-closed" => {
+            let [fd] = args else {
+                return Err("assert-fd-closed expects FD".into());
+            };
+            let fd: libc::c_int = fd.parse().map_err(|_| "invalid FD")?;
+            if unsafe { libc::fcntl(fd, libc::F_GETFD) } != -1
+                || io::Error::last_os_error().raw_os_error() != Some(libc::EBADF)
+            {
+                return Err("unexpected inherited descriptor".into());
+            }
+            Ok(())
+        }
         "prepare" => prepare(args),
         "listen" => listen(args),
         "connect" => connect(args),
