@@ -235,8 +235,23 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    // Isolate raw fork proofs from other guard fixtures in this harness.
-    static LOCK_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A concurrent harness fork can briefly inherit any live fixture lock until
+    // exec. Each authority proof runs alone so only its intended child can hold
+    // the descriptor; no retries conceal an actual inheritance failure.
+    fn run_isolated_authority_test(name: &str) -> bool {
+        const ISOLATED: &str = "NIXFIED_TEST_ISOLATED_AUTHORITY";
+        let exact = format!("state::ownership::tests::{name}");
+        if std::env::var(ISOLATED).as_deref() == Ok(exact.as_str()) {
+            return false;
+        }
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &exact, "--nocapture"])
+            .env(ISOLATED, &exact)
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated authority proof failed: {name}");
+        true
+    }
     static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Fixture {
         root: PathBuf,
@@ -276,7 +291,11 @@ mod tests {
 
     #[test]
     fn independent_opens_contend_and_release_preserves_the_lock_inode() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test(
+            "independent_opens_contend_and_release_preserves_the_lock_inode",
+        ) {
+            return;
+        }
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let path = fixture.placement.registry_dir.join("slot.lock");
@@ -298,7 +317,9 @@ mod tests {
 
     #[test]
     fn anchor_aliases_contend_and_unwind_closes_authority() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test("anchor_aliases_contend_and_unwind_closes_authority") {
+            return;
+        }
         let fixture = Fixture::new();
         let alias = fixture.root.with_extension("alias");
         std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
@@ -322,7 +343,9 @@ mod tests {
 
     #[test]
     fn unsafe_lock_objects_and_managed_symlinks_are_rejected() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test("unsafe_lock_objects_and_managed_symlinks_are_rejected") {
+            return;
+        }
         for kind in ["symlink", "hardlink", "fifo", "mode", "directory"] {
             let fixture = Fixture::new();
             fixture.acquire().unwrap().release().unwrap();
@@ -358,7 +381,9 @@ mod tests {
 
     #[test]
     fn replacement_and_cancellation_fail_closed() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test("replacement_and_cancellation_fail_closed") {
+            return;
+        }
         let fixture = Fixture::new();
         let token = CancellationToken::new();
         token.cancel();
@@ -375,7 +400,10 @@ mod tests {
     }
     #[test]
     fn changed_ancestry_is_detected_and_missing_anchor_is_private() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test("changed_ancestry_is_detected_and_missing_anchor_is_private")
+        {
+            return;
+        }
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let registry = fixture.root.join("registry");
@@ -406,24 +434,11 @@ mod tests {
 
     #[test]
     fn production_spawn_closes_authority_even_without_close_on_exec() {
-        const ISOLATED: &str = "NIXFIED_TEST_ISOLATED_AUTHORITY_SPAWN";
-        if std::env::var_os(ISOLATED).is_none() {
-            // Other harness threads can fork while this guard exists, retaining
-            // its lock briefly until exec. Isolate the proof from that documented
-            // fork window so only the intended child can retain this authority.
-            let status = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "state::ownership::tests::production_spawn_closes_authority_even_without_close_on_exec",
-                    "--nocapture",
-                ])
-                .env(ISOLATED, "1")
-                .status()
-                .unwrap();
-            assert!(status.success());
+        if run_isolated_authority_test(
+            "production_spawn_closes_authority_even_without_close_on_exec",
+        ) {
             return;
         }
-        let _isolated = LOCK_TEST.lock().unwrap();
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let inherited = guard.file.as_raw_fd();
@@ -468,7 +483,11 @@ mod tests {
 
     #[test]
     fn child_authority_close_failure_refuses_exec_without_unlocking_parent() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test(
+            "child_authority_close_failure_refuses_exec_without_unlocking_parent",
+        ) {
+            return;
+        }
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let inherited = guard.file.as_raw_fd();
@@ -495,7 +514,11 @@ mod tests {
 
     #[test]
     fn forked_child_closes_inherited_authority_without_unlocking_parent() {
-        let _isolated = LOCK_TEST.lock().unwrap();
+        if run_isolated_authority_test(
+            "forked_child_closes_inherited_authority_without_unlocking_parent",
+        ) {
+            return;
+        }
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let inherited = guard.file.as_raw_fd();
