@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use nixfied_manifest::{
     ClosureSpec, InvocationSpec, Lifecycle, Manifest, OperationId, ProbeKind, ProbeSpec, ServiceId,
-    ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
-    TerminalSemantics, ValidatedManifest,
+    ServiceSpec, StepSpec, StopSpec, TaskId, TaskKind, TaskSpec, TerminalSemantics,
+    ValidatedManifest,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -41,7 +41,7 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
         environments: _,
         slot_policy: _,
         placement,
-        state,
+        state: _,
         closures,
         services,
         tasks,
@@ -56,14 +56,7 @@ pub fn lower(document: &ValidatedManifest) -> RuntimeResult<ExecutionManifest> {
         .map(|(name, service)| {
             Ok((
                 ServiceId::new(name),
-                lower_service(
-                    name,
-                    service,
-                    services,
-                    &mut resolver,
-                    state,
-                    &manifest.target,
-                )?,
+                lower_service(name, service, services, &mut resolver)?,
             ))
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
@@ -103,8 +96,6 @@ fn lower_service(
     service: &ServiceSpec,
     all_services: &BTreeMap<String, ServiceSpec>,
     resolver: &mut InvocationResolver<'_>,
-    state: &StatePolicy,
-    target: &Target,
 ) -> RuntimeResult<ExecService> {
     let ServiceSpec {
         lifecycle,
@@ -203,7 +194,6 @@ fn lower_service(
         primary_endpoint: primary_endpoint.clone(),
         connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
-        identity: crate::service::compute_service_identity(service, state, target),
     })
 }
 
@@ -232,7 +222,6 @@ fn lower_task(
     let TaskSpec {
         kind,
         default_output: _,
-        service_lifetime,
         operation_id,
         invocation,
         requires,
@@ -244,11 +233,7 @@ fn lower_task(
     } = task;
     match kind {
         TaskKind::Composite => {
-            return Ok(ExecutableTask::Composite(lower_composite(
-                task_id,
-                *service_lifetime,
-                steps,
-            )));
+            return Ok(ExecutableTask::Composite(lower_composite(task_id, steps)));
         }
         TaskKind::Leaf => {}
     }
@@ -295,7 +280,6 @@ fn lower_task(
     let (exec, _, _) = resolver.resolve(&owner, invocation, &scope)?;
     Ok(ExecutableTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
-        service_lifetime: *service_lifetime,
         timeout: invocation
             .timeout_ms
             .map(|timeout| Duration::from_millis(timeout.get())),
@@ -306,14 +290,9 @@ fn lower_task(
 }
 
 /// References were checked before resolution; the planner owns cycle proof.
-fn lower_composite(
-    task_id: &str,
-    service_lifetime: nixfied_manifest::ServiceLifetime,
-    steps: &BTreeMap<String, StepSpec>,
-) -> ExecComposite {
+fn lower_composite(task_id: &str, steps: &BTreeMap<String, StepSpec>) -> ExecComposite {
     ExecComposite {
         task_id: TaskId::new(task_id),
-        service_lifetime,
         steps: steps
             .iter()
             .map(|(name, step)| ExecStep {
@@ -776,7 +755,7 @@ mod tests {
                 }
             },
             "state": {
-                "markerIdentity": "nixfied-state", "stateEpoch": "1",
+                "markerIdentity": "nixfied-state",
                 "cleanupPolicy": "delete-on-clean", "persistence": "run-scoped"
             },
             "closures": {
@@ -797,7 +776,6 @@ mod tests {
             "tasks": {
                 "t": {
                     "kind": "leaf",
-                    "serviceLifetime": "run-scoped",
                     "operationId": "task.t.run",
                     "invocation": {
                         "tools": ["ct"],
@@ -881,10 +859,6 @@ mod tests {
         assert_eq!(task.success_codes, vec![0]);
         assert_eq!(task.exec.tool_roots, vec!["/nix/store/ct/bin"]);
         assert_eq!(task.requires, vec![ServiceId::new("svc")]);
-        assert_eq!(
-            task.service_lifetime,
-            nixfied_manifest::ServiceLifetime::RunScoped
-        );
     }
 
     #[test]
@@ -983,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptive_refs_change_manifest_bytes_but_not_service_reuse_identity() {
+    fn descriptive_refs_change_manifest_bytes_but_not_lowered_service() {
         let baseline = manifest_value();
         let baseline_execution = lower(&manifest_from(baseline.clone())).unwrap();
         for labels in [
@@ -1008,8 +982,8 @@ mod tests {
             );
             let execution = lower(&manifest).expect("descriptive strings remain accepted");
             assert_eq!(
-                execution.services()["svc"].identity,
-                baseline_execution.services()["svc"].identity
+                format!("{:?}", execution.services()["svc"]),
+                format!("{:?}", baseline_execution.services()["svc"])
             );
             assert_eq!(
                 execution.services()["svc"].start.exec.args,
@@ -1177,7 +1151,6 @@ mod tests {
 
         value["tasks"]["odd"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.custom.odd",
             "invocation": {
                 "tools": ["ct"],
@@ -1226,7 +1199,6 @@ mod tests {
 
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["ct"],
@@ -1240,7 +1212,6 @@ mod tests {
         });
         value["tasks"]["seed"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.seed.run",
             "invocation": {
                 "tools": ["ct"],
@@ -1254,7 +1225,6 @@ mod tests {
         });
         value["tasks"]["prep"] = json!({
             "kind": "composite",
-            "serviceLifetime": "run-scoped",
             "steps": {
                 "migrate": { "task": "migrate" },
                 "seed": { "task": "seed", "dependsOn": ["migrate"] }
@@ -1392,8 +1362,6 @@ mod tests {
         let mut value = manifest_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
-            "serviceLifetime": "until-idle",
-
             "steps": {
                 "first": { "task": "t" },
                 "second": { "task": "t", "dependsOn": ["first"] }
@@ -1404,10 +1372,6 @@ mod tests {
             panic!("composite lowered")
         };
         assert_eq!(composite.steps.len(), 2);
-        assert_eq!(
-            composite.service_lifetime,
-            nixfied_manifest::ServiceLifetime::UntilIdle
-        );
         assert_eq!(composite.steps[0].name, "first");
         assert_eq!(composite.steps[1].depends_on, vec!["first"]);
         assert!(em.leaf("pipeline").is_none());
@@ -1426,7 +1390,6 @@ mod tests {
         let mut value = manifest_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
-            "serviceLifetime": "run-scoped",
             "steps": { "only": { "task": "ghost" } }
         });
         let error = lower(&manifest_from(value)).expect_err("dangling step task must reject");
@@ -1439,8 +1402,6 @@ mod tests {
         let mut value = manifest_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
-            "serviceLifetime": "run-scoped",
-
             "steps": { "only": { "task": "t", "dependsOn": ["ghost"] } }
         });
         let error = lower(&manifest_from(value)).expect_err("dangling dependsOn must reject");
@@ -1485,8 +1446,7 @@ mod tests {
             ),
         ] {
             let mut value = manifest_value();
-            value["tasks"]["pipeline"] = json!({"kind": "composite", "serviceLifetime": "run-scoped",
-                "steps": steps, });
+            value["tasks"]["pipeline"] = json!({"kind": "composite", "steps": steps, });
             let error =
                 lower(&manifest_from(value)).expect_err("lower must prove graph feasibility");
             assert!(error.message.contains(diagnostic), "{}", error.message);
@@ -1716,7 +1676,6 @@ mod tests {
         });
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["cm"],
@@ -1766,7 +1725,6 @@ mod tests {
         });
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["cm"],
@@ -1804,7 +1762,6 @@ mod tests {
         });
         value["tasks"]["selfinit"] = json!({
             "kind": "leaf",
-            "serviceLifetime": "run-scoped",
             "operationId": "task.selfinit.run",
             "invocation": {
                 "tools": ["cm"],

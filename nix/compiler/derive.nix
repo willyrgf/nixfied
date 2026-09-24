@@ -373,7 +373,6 @@ let
         construct "TaskSpec" {
           kind = "composite";
           defaultOutput = task.defaultOutput;
-          serviceLifetime = task.serviceLifetime;
           steps = mapAttrs (
             _stepName: step:
             construct "StepSpec" {
@@ -386,7 +385,6 @@ let
         construct "TaskSpec" {
           kind = "leaf";
           defaultOutput = task.defaultOutput;
-          serviceLifetime = task.serviceLifetime;
           operationId = leafOperationId name task;
           invocation = resolveInvocation "task ${name}" task.invocation;
           requires = task.requires;
@@ -441,7 +439,6 @@ in
           state = construct "StatePolicy" {
             inherit (config.nixfied.state)
               markerIdentity
-              stateEpoch
               cleanupPolicy
               persistence
               ;

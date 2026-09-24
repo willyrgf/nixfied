@@ -108,9 +108,6 @@ in
     (vocabulary "TaskDefaultOutput" true
       "Default output for a directly selected task; native Default remains Summary."
     )
-    (vocabulary "ServiceLifetime" true
-      "Service lifetime applied to the selected task's derived dependency closure."
-    )
     (vocabulary "SecretSourceKind" true
       "Runtime secret resolver kind; no secret values are serialized."
     )
@@ -197,16 +194,15 @@ in
         "Declared fingerprint policy; native validation enforces the supported choice."
       )
     ])
-    (record "StatePolicy" "Native state-marker compatibility and cleanup policy." [
+    (record "StatePolicy" "State-marker ownership and data retention policy." [
       (field "markerIdentity" text required "RequiredPresent"
         "Required marker identity for adopting or cleaning state."
       )
-      (field "stateEpoch" text required "RequiredPresent" "Project-selected compatibility epoch.")
       (field "cleanupPolicy" (enum "CleanupPolicy") required "RequiredPresent"
         "Ordinary cleanup permission."
       )
       (field "persistence" (enum "PersistencePolicy") required "RequiredPresent"
-        "Persistence permission; independent from task service lifetime."
+        "Application-data retention, independent of process lifetime."
       )
     ])
     (record "SecretDescriptor" "A reference to runtime-resolved secret material." [
@@ -300,7 +296,7 @@ in
           id "ServiceId"
         )) required "RequiredPresent" "Direct service dependencies and named-addressing scope.")
         (field "stateRefs" (list text) required "RequiredPresent"
-          "Descriptive labels; execution lowering discards them, including for service reuse identity."
+          "Descriptive labels; execution lowering discards them, including for the lowered service contract."
         )
         (field "logRefs" (list text) required "RequiredPresent"
           "Descriptive log labels, not evidence path selectors."
@@ -391,9 +387,6 @@ in
         (field "kind" (enum "TaskKind") required "RequiredPresent" "Leaf or composite discriminator.")
         (field "defaultOutput" (enum "TaskDefaultOutput") (enumDefault "summary") "RequiredPresent"
           "Default for direct selection; its serde literal is independent of native Default."
-        )
-        (field "serviceLifetime" (enum "ServiceLifetime") required "RequiredPresent"
-          "Lifetime for the task's full required-service closure."
         )
         (field "operationId" (id "OperationId") omitted "PreserveSupplied"
           "Leaf operation identity; composites omit it."

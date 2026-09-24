@@ -92,13 +92,13 @@ fn endpoints_default_to_empty_but_null_and_invalid_hosts_reject() {
 
 #[test]
 fn task_defaults_and_unique_lists_keep_distinct_wire_policies() {
-    let input = json!({"kind":"composite","serviceLifetime":"run-scoped"});
+    let input = json!({"kind":"composite"});
     let parsed: TaskSpec = serde_json::from_value(input.clone()).unwrap();
     assert_eq!(parsed.default_output, TaskDefaultOutput::Summary);
     assert_eq!(TaskDefaultOutput::default(), TaskDefaultOutput::Summary);
     assert_eq!(
         serde_json::to_string(&parsed).unwrap(),
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped"}"#
+        r#"{"kind":"composite","defaultOutput":"summary"}"#
     );
     for field in ["defaultOutput", "steps", "requires", "artifactRefs"] {
         let mut invalid = input.clone();

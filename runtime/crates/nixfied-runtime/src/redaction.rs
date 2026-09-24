@@ -157,12 +157,6 @@ pub struct RedactedLogRelays {
 }
 
 impl RedactedLogRelays {
-    /// Transfer live service relays to persistent operation without waiting for EOF.
-    pub(crate) fn detach_for_persistent(self) {
-        self.stdout.detach_for_persistent();
-        self.stderr.detach_for_persistent();
-    }
-
     pub fn shutdown(self, deadline: Instant) -> RuntimeResult<()> {
         // Publish to both before joining either: progress never extends the budget.
         self.stdout.shutdown_at(deadline);
@@ -191,31 +185,19 @@ impl CapturedStream {
     }
 }
 
-enum CaptureControl {
-    Shutdown(Instant),
-    Persistent,
-}
 enum CaptureMode {
     Owned,
     Shutdown(Instant),
-    Persistent,
 }
 impl CaptureMode {
-    fn aborted(&mut self, control: &Receiver<CaptureControl>) -> bool {
-        if matches!(self, Self::Persistent) {
-            return false;
-        }
+    fn aborted(&mut self, control: &Receiver<Instant>) -> bool {
         loop {
             match control.try_recv() {
-                Ok(CaptureControl::Shutdown(deadline)) => {
+                Ok(deadline) => {
                     *self = Self::Shutdown(match self {
                         Self::Shutdown(existing) => deadline.min(*existing),
-                        Self::Owned | Self::Persistent => deadline,
+                        Self::Owned => deadline,
                     });
-                }
-                Ok(CaptureControl::Persistent) => {
-                    *self = Self::Persistent;
-                    return false;
                 }
                 Err(TryRecvError::Disconnected) => return true,
                 Err(TryRecvError::Empty) => break,
@@ -232,13 +214,13 @@ enum CaptureCompletion {
 
 struct CaptureWorker {
     stream: CapturedStream,
-    control: Sender<CaptureControl>,
-    // Taken only by consuming join/transfer; never an authored lifecycle state.
+    control: Sender<Instant>,
+    // Taken only by consuming join; never an authored lifecycle state.
     handle: Option<JoinHandle<RuntimeResult<CaptureCompletion>>>,
 }
 impl CaptureWorker {
     fn shutdown_at(&self, deadline: Instant) {
-        let _ = self.control.send(CaptureControl::Shutdown(deadline));
+        let _ = self.control.send(deadline);
     }
     fn join(mut self) -> RuntimeResult<()> {
         match self
@@ -254,11 +236,6 @@ impl CaptureWorker {
                 "redaction relay panicked before proving captured output was scrubbed",
             )),
         }
-    }
-    fn detach_for_persistent(mut self) {
-        // A named transfer is required: bare channel disconnection means abort.
-        let _ = self.control.send(CaptureControl::Persistent);
-        drop(self.handle.take());
     }
 }
 impl Drop for CaptureWorker {
@@ -382,7 +359,7 @@ fn redact_stream(
     reader: File,
     writer: File,
     redactor: Redactor,
-    control: Receiver<CaptureControl>,
+    control: Receiver<Instant>,
 ) -> RuntimeResult<CaptureCompletion> {
     redact_stream_with_poll(reader, writer, redactor, control, |fd, timeout| unsafe {
         libc::poll(fd, 1, timeout)
@@ -393,7 +370,7 @@ fn redact_stream_with_poll(
     mut reader: File,
     mut writer: File,
     redactor: Redactor,
-    control: Receiver<CaptureControl>,
+    control: Receiver<Instant>,
     mut poll: impl FnMut(&mut libc::pollfd, i32) -> i32,
 ) -> RuntimeResult<CaptureCompletion> {
     let mut pending = Vec::new();
@@ -411,7 +388,7 @@ fn redact_stream_with_poll(
                 }
                 (deadline - now).min(Duration::from_millis(10))
             }
-            CaptureMode::Owned | CaptureMode::Persistent => Duration::from_millis(10),
+            CaptureMode::Owned => Duration::from_millis(10),
         };
         let mut pollfd = libc::pollfd {
             fd: reader.as_raw_fd(),
@@ -598,9 +575,7 @@ mod tests {
             |fd, timeout| {
                 // Queue expiry after the loop's initial control check and make
                 // real EOF readable. The production post-poll check must win.
-                sender
-                    .send(CaptureControl::Shutdown(Instant::now()))
-                    .unwrap();
+                sender.send(Instant::now()).unwrap();
                 drop(peer.take().expect("capture must stop after the first poll"));
                 let ready = unsafe { libc::poll(fd, 1, timeout) };
                 assert_eq!(ready, 1);
@@ -642,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_transfer_keeps_redacting_after_control_owner_is_gone() {
+    fn owned_capture_joins_and_preserves_redacted_eof_tail() {
         let fixture = CaptureFixture::new();
         let (worker, mut writer, path) = fixture.worker(
             CapturedStream::Stdout,
@@ -651,21 +626,10 @@ mod tests {
             },
             true,
         );
-        worker.detach_for_persistent();
         writer.write_all(b"secretsecret-tail").unwrap();
         drop(writer);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let bytes = std::fs::read(&path).unwrap();
-            if bytes == b"[REDACTED][REDACTED]-tail" {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "persistent transfer must preserve EOF tail handling: {bytes:?}"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        worker.join().unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"[REDACTED][REDACTED]-tail");
     }
 
     #[test]

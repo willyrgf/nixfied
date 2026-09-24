@@ -1,5 +1,6 @@
 pub mod cleanup;
 pub mod marker;
+pub mod ownership;
 pub mod placement;
 pub mod upgrade;
 

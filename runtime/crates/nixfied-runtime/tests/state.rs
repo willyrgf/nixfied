@@ -56,11 +56,10 @@ fn materializes_m0_roots_and_slot_marker() {
         serde_json::from_slice(&fs::read(marker_path).expect("marker should be readable"))
             .expect("marker should parse");
     assert_eq!(marker.compare(&fixture.identity), MarkerComparison::Match);
-    assert_eq!(marker.marker_version, 1);
+    assert_eq!(marker.marker_version, 2);
     assert_eq!(marker.project_id, "runtime-test");
     assert_eq!(marker.environment, "dev");
     assert_eq!(marker.slot, 0);
-    assert_eq!(marker.state_epoch, "1");
     assert_eq!(marker.cleanup_policy, CleanupPolicy::DeleteOnClean);
     assert_eq!(marker.persistence, PersistencePolicy::RunScoped);
 }
@@ -383,12 +382,12 @@ fn purge_still_refuses_active_registry_refs() {
     registry
         .connection_mut()
         .execute_batch(
-            "INSERT INTO run_leases (
-               run_id, environment, slot, service_instance_id, owner_token, heartbeat_at,
-               expires_at, status
-             ) VALUES ('run-1', 'dev', 0, 'service-1', 'owner', 'now', 'later', 'active')",
+            "INSERT INTO processes (
+               process_key, environment, slot, pid, pgid, start_identity, command_json,
+               run_id, status
+             ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running')",
         )
-        .expect("active lease should be inserted");
+        .expect("active process should be inserted");
 
     let error = clean_marked_state(
         &fixture.layout.state_base,
@@ -458,12 +457,6 @@ fn cleanup_unlinks_tree_symlinks_without_following() {
 #[test]
 fn cleanup_refuses_active_registry_refs() {
     assert_cleanup_refused_with_active_ref(
-        "INSERT INTO run_leases (
-           run_id, environment, slot, service_instance_id, owner_token, heartbeat_at, expires_at,
-           status
-         ) VALUES ('run-1', 'dev', 0, 'service-1', 'owner', 'now', 'later', 'active')",
-    );
-    assert_cleanup_refused_with_active_ref(
         "INSERT INTO processes (
            process_key, environment, slot, pid, pgid, start_identity, command_json,
            run_id, status
@@ -473,7 +466,7 @@ fn cleanup_refuses_active_registry_refs() {
         "INSERT INTO ports (
            endpoint_key, environment, slot, service_instance_id, address, port,
            status, owner_process_key
-         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 23080, 'reserved', NULL)",
+         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 23080, 'reserved', 'process-1')",
     );
 }
 
@@ -573,38 +566,34 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
+              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
-              'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-manifest/manifest.json',
+              'run-stale', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             ",
         )
         .expect("stale run should be inserted");
-    insert_registry_service(
-        &mut registry,
-        &RegistryServiceRow::synthetic("service-stale", "/tmp/stale"),
-    );
     registry
         .connection_mut()
         .execute_batch(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status
+              run_id, service_instance_id, status, service_name
             ) VALUES (
               'process-stale', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale', 'service-stale', 'running'
+              'run-stale', 'service-stale', 'running', 'synthetic'
             );
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
             ) VALUES (
-              'endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 23190,
+              'service-stale:endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 23190,
               'active', 'process-stale'
             );
             ",
@@ -633,7 +622,7 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
     let port_status: String = registry
         .connection()
         .query_row(
-            "SELECT status FROM ports WHERE endpoint_key = 'endpoint-stale'",
+            "SELECT status FROM ports WHERE endpoint_key = 'service-stale:endpoint-stale'",
             [],
             |row| row.get(0),
         )
@@ -759,32 +748,28 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
+              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
-              'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-manifest/manifest.json',
+              'run-stale-port', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             ",
         )
         .expect("stale-port run should be inserted");
-    insert_registry_service(
-        &mut registry,
-        &RegistryServiceRow::synthetic("service-stale-port", "/tmp/stale-port"),
-    );
     registry
         .connection_mut()
         .execute_batch(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status
+              run_id, service_instance_id, status, service_name
             ) VALUES (
               'process-stale-port', 'dev', 0, 999998, 999998,
               '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale-port', 'service-stale-port', 'stopped'
+              'run-stale-port', 'service-stale-port', 'stopped', 'synthetic'
             );
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
@@ -910,7 +895,7 @@ impl StateFixture {
 
     fn registry(&self) -> Registry {
         Registry::open_or_create(
-            self.layout.registry_path(),
+            registry_guard(&self.layout),
             &RegistryIdentity::for_slot(
                 &self.identity.project_id,
                 &self.identity.environment,

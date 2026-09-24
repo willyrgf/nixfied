@@ -8,14 +8,13 @@ use common::*;
 
 /// Kill-and-recover: the runtime is SIGKILL'd while postgres is still
 /// running, leaving an orphaned service process. The next run of the same
-/// manifest must reconcile the evidence, stop the orphan, adopt the pgdata
-/// cluster, and complete smoke-query against the live cluster. Clean then
-/// removes the state root.
+/// manifest must stop the orphan, start a fresh process against retained
+/// persistent pgdata, and complete smoke-query. Explicit purge then removes data.
 ///
 /// Skipped when `NIXFIED_TEST_POSTGRES_MANIFEST` is not set — only the
 /// nix-wrapped test runner (`.#test`) provides it.
 #[test]
-fn interrupt_and_recover_adopts_orphaned_postgres() {
+fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
     let manifest_dir = match std::env::var("NIXFIED_TEST_POSTGRES_MANIFEST") {
         Ok(v) => v,
         Err(_) => return,
@@ -32,7 +31,6 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
 
     let tmp = TempDir::new();
     let state_base = tmp.path.join("state");
-    std::fs::create_dir_all(&state_base).expect("state base should be created");
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
@@ -128,34 +126,23 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         "interrupted run should leave at least one live orphaned process: {ps_json}"
     );
 
-    // Stop the orphaned postgres process group so run_has_live_process returns
-    // false, then directly expire the stale run lease so recovery can acquire a
-    // new lease immediately without waiting for the 30s TTL (white-box test).
-    let mut seen_pgids = std::collections::BTreeSet::new();
-    for process in &live_processes {
-        if let Some(pgid) = process["pgid"].as_i64()
-            && pgid > 0
-            && seen_pgids.insert(pgid)
-        {
-            let _ = unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
-        }
-    }
-    thread::sleep(Duration::from_millis(500));
-
-    let expire = Command::new("sqlite3")
-        .arg(&registry_path)
-        .arg(
-            "UPDATE run_leases SET expires_at = '2000-01-01T00:00:00.000Z' \
-             WHERE status IN ('active', 'canceling')",
+    let (predecessor_run, predecessor_outcome): (String, Option<String>) = {
+        let connection = rusqlite::Connection::open_with_flags(
+            &registry_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
-        .output()
-        .expect("sqlite3 must be on PATH — nixfied test environment provides pkgs.sqlite");
-    assert!(
-        expire.status.success(),
-        "sqlite3 lease expiry update failed: {}",
-        String::from_utf8_lossy(&expire.stderr)
-    );
+        .unwrap();
+        connection
+            .query_row("SELECT run_id, execution_outcome FROM runs", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+    };
+    let sentinel = state_base.join("data/postgres-example/dev/0/retained-sentinel");
+    std::fs::write(&sentinel, b"retained application data").unwrap();
 
+    // The next owner must recover the live orphan itself, without fixture
+    // signaling, lease expiry, or adoption into the new session.
     let recovery = Command::new(runtime_binary())
         .arg("run")
         .arg("--manifest")
@@ -173,14 +160,57 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         String::from_utf8_lossy(&recovery.stderr)
     );
 
-    let pgdata = state_base.join("data/postgres-example/dev/0/pgdata/PG_VERSION");
-    assert!(
-        pgdata.exists(),
-        "recovery run should have adopted the existing pgdata cluster"
+    let connection = rusqlite::Connection::open_with_flags(
+        &registry_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (processes, runs, starts): (i64, i64, i64) = connection.query_row(
+        "SELECT (SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL),
+                (SELECT count(DISTINCT run_id) FROM processes WHERE service_instance_id IS NOT NULL),
+                (SELECT count(*) FROM events WHERE event_type = 'service.starting')",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        (processes, runs, starts),
+        (2, 2, 2),
+        "recovery must start a fresh service"
     );
+    assert_eq!(
+        std::fs::read(&sentinel).unwrap(),
+        b"retained application data"
+    );
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "completed recovery session must stop postgres"
+    );
+    let recovered_outcome: String = connection
+        .query_row(
+            "SELECT execution_outcome FROM runs WHERE run_id = ?1",
+            [&predecessor_run],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        recovered_outcome,
+        predecessor_outcome.unwrap_or_else(|| "interrupted".into())
+    );
+    let new_outcome: String = connection
+        .query_row(
+            "SELECT execution_outcome FROM runs WHERE run_id != ?1",
+            [&predecessor_run],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(new_outcome, "succeeded");
+    drop(connection);
+
+    let pgdata = state_base.join("data/postgres-example/dev/0/pgdata/PG_VERSION");
+    assert!(pgdata.exists(), "recovery must retain persistent pgdata");
 
     let clean = Command::new(runtime_binary())
         .arg("clean")
+        .arg("--purge")
         .arg("--manifest")
         .arg(&manifest_path)
         .env("NIXFIED_STATE_DIR", &state_base)

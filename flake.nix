@@ -329,10 +329,11 @@
             }
           );
           minimalManifest = nixfiedLib.compileManifest ./examples/minimal/nixfied.nix;
-          persistentEndpointManifest = nixfiedLib.compileManifest (
+          sessionEndpointManifest = nixfiedLib.compileManifest (
             { pkgs, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.state.persistence = "persistent";
               nixfied.tasks.endpoint-prepare = {
                 invocation = {
                   tools = [
@@ -351,16 +352,16 @@
               };
               nixfied.services.synthetic.lifecycle.prepare.task = "endpoint-prepare";
               nixfied.tasks.keep-up = {
-                serviceLifetime = "persistent-until-down";
                 invocation = {
-                  tools = [ "synthetic-helper" ];
+                  tools = [ pkgs.bash pkgs.coreutils ];
                   run = [
-                    "nixfied-synthetic-helper"
-                    "task"
-                    "--host"
-                    "127.0.0.1"
-                    "--port"
-                    "\${port}"
+                    "bash"
+                    "-c"
+                    ''
+                      set -euo pipefail
+                      touch "''${stateDir}/session-active"
+                      exec sleep 3600
+                    ''
                   ];
                 };
                 requires = [ "synthetic" ];
@@ -385,6 +386,7 @@
             {
               imports = [ ./examples/postgres/nixfied.nix ];
               nixfied.placement.ports.base = lib.mkForce 25580;
+              nixfied.state.persistence = lib.mkForce "persistent";
             }
           );
           compositeManifest = nixfiedLib.compileManifest ./examples/composite/nixfied.nix;
@@ -407,7 +409,7 @@
           toolchainManifest = nixfiedLib.compileManifest ./examples/toolchain/nixfied.nix;
           # Gate-only variants of the example manifests, for the state lifecycle
           # shard: a provenance-only delta (same identity, new manifest hash), an
-          # epoch bump (declared state-compatibility boundary), and a postgres
+          # retained-data configuration change, and a postgres
           # whose smoke query sleeps long enough to interrupt mid-run.
           minimalManifestB = nixfiedLib.compileManifest (
             { lib, ... }:
@@ -416,11 +418,11 @@
               nixfied.project.name = lib.mkForce "Minimal B";
             }
           );
-          minimalManifestEpoch2 = nixfiedLib.compileManifest (
-            { ... }:
+          minimalManifestChangedState = nixfiedLib.compileManifest (
+            { lib, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
-              nixfied.state.stateEpoch = "2";
+              nixfied.project.name = lib.mkForce "Minimal changed configuration";
             }
           );
           # A deterministically failing composite (its leaf dials a closed
@@ -490,15 +492,15 @@
               nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
               nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
               nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MANIFEST = toString minimalManifestB;
-              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MANIFEST =
-                toString minimalManifestEpoch2;
-              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MANIFEST =
-                toString minimalManifestEpoch2;
-              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_ENDPOINT_MANIFEST =
-                toString persistentEndpointManifest;
+              nixfied.tasks.lifecycle-change-preserves-data.invocation.env.MINIMAL_CHANGED_STATE_MANIFEST =
+                toString minimalManifestChangedState;
+              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_CHANGED_STATE_MANIFEST =
+                toString minimalManifestChangedState;
+              nixfied.tasks.lifecycle-session-ownership.invocation.env.SESSION_ENDPOINT_MANIFEST =
+                toString sessionEndpointManifest;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MANIFEST = toString purgeMinimalManifest;
-              nixfied.tasks.endpoint-cross-root.invocation.env.PERSISTENT_ENDPOINT_MANIFEST =
-                toString persistentEndpointManifest;
+              nixfied.tasks.endpoint-cross-root.invocation.env.SESSION_ENDPOINT_MANIFEST =
+                toString sessionEndpointManifest;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;
               nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamSlotsManifest;

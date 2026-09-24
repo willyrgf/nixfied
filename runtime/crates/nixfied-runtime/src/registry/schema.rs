@@ -14,7 +14,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
@@ -22,11 +22,6 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
         PRAGMA busy_timeout = 5000;
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
-        -- A run's heartbeat thread opens its own connection and writes the lease
-        -- concurrently with the main thread. WAL still serializes writers, so
-        -- without a busy timeout a transient collision returns SQLITE_BUSY, which
-        -- the runtime maps to REGISTRY_CORRUPT and would fail an otherwise healthy
-        -- run. Wait instead of erroring.
         ",
     )
     .map_err(sql_error)?;
@@ -89,7 +84,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               run_id TEXT PRIMARY KEY,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
-              status TEXT NOT NULL,
+              execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
+              finalization TEXT NOT NULL DEFAULT 'unfinished' CHECK (finalization IN ('unfinished', 'complete')),
               manifest_path TEXT NOT NULL,
               computed_manifest_hash TEXT NOT NULL,
               runtime_abi TEXT NOT NULL,
@@ -97,21 +93,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               generator_json TEXT NOT NULL,
               target_json TEXT NOT NULL,
               source_json TEXT NOT NULL,
-              summary_path TEXT
-            );
-
-            CREATE TABLE services (
-              service_instance_id TEXT PRIMARY KEY,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
-              service_name TEXT NOT NULL,
-              service_address_hash TEXT NOT NULL,
-              endpoint_identity_hash TEXT NOT NULL,
-              state_identity_hash TEXT NOT NULL,
-              runtime_compatibility_hash TEXT NOT NULL,
-              target_identity_hash TEXT NOT NULL,
-              service_lifetime TEXT NOT NULL,
-              state_root TEXT NOT NULL
+              summary_path TEXT,
+              CHECK (finalization != 'complete' OR execution_outcome IS NOT NULL)
             );
 
             CREATE TABLE processes (
@@ -124,7 +107,14 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               command_json TEXT NOT NULL,
               run_id TEXT NOT NULL,
               service_instance_id TEXT,
-              status TEXT NOT NULL
+              service_name TEXT,
+              execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
+              exit_code INTEGER,
+              status TEXT NOT NULL,
+              CHECK ((service_instance_id IS NULL) = (service_name IS NULL)),
+              CHECK (service_name IS NULL OR length(service_name) > 0),
+              CHECK (execution_outcome IS NOT NULL OR exit_code IS NULL),
+              CHECK (execution_outcome != 'succeeded' OR exit_code IS NOT NULL)
             );
 
             CREATE TABLE ports (
@@ -135,21 +125,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               address TEXT NOT NULL,
               port INTEGER NOT NULL,
               status TEXT NOT NULL,
-              owner_process_key TEXT
-            );
-
-            -- One lease row per (run, service): a multi-service run reserves each
-            -- service independently, so each carries its own cross-run lease.
-            CREATE TABLE run_leases (
-              run_id TEXT NOT NULL,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
-              service_instance_id TEXT NOT NULL,
-              owner_token TEXT NOT NULL,
-              heartbeat_at TEXT NOT NULL,
-              expires_at TEXT NOT NULL,
-              status TEXT NOT NULL,
-              PRIMARY KEY (run_id, service_instance_id)
+              owner_process_key TEXT NOT NULL
             );
 
             CREATE TABLE cleanups (
@@ -195,14 +171,21 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
     for (table, columns) in [
         ("events", &["environment", "slot"][..]),
-        ("runs", &["environment", "slot"][..]),
-        ("services", &["environment", "slot", "service_lifetime"][..]),
-        ("processes", &["environment", "slot"][..]),
-        ("ports", &["environment", "slot"][..]),
         (
-            "run_leases",
-            &["environment", "slot", "service_instance_id", "status"][..],
+            "runs",
+            &["environment", "slot", "execution_outcome", "finalization"][..],
         ),
+        (
+            "processes",
+            &[
+                "environment",
+                "slot",
+                "execution_outcome",
+                "exit_code",
+                "service_name",
+            ][..],
+        ),
+        ("ports", &["environment", "slot"][..]),
         ("cleanups", &["environment", "slot", "purge"][..]),
     ] {
         let mut statement = conn
@@ -324,4 +307,20 @@ fn user_table_count(conn: &Connection) -> RuntimeResult<i64> {
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
+}
+
+/// Validate an existing registry without repairing, initializing or changing its
+/// journal settings. The caller holds a coherent SQLite read transaction.
+pub(crate) fn verify_existing(conn: &Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
+    let version = conn
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map_err(sql_error)?;
+    if version != SCHEMA_VERSION {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("expected registry user_version {SCHEMA_VERSION}, got {version}"),
+        ));
+    }
+    verify_required_columns(conn)?;
+    verify_identity(conn, identity)
 }

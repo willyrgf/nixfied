@@ -8,9 +8,9 @@ fn select(task: &FixtureTaskSpec) -> bool {
 #[test]
 fn required_boolean_rejects_missing_null_and_wrong_type() {
     for raw in [
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped"}"#,
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":null}"#,
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":"true"}"#,
+        r#"{"kind":"composite","defaultOutput":"summary"}"#,
+        r#"{"kind":"composite","defaultOutput":"summary","fixtureEnabled":null}"#,
+        r#"{"kind":"composite","defaultOutput":"summary","fixtureEnabled":"true"}"#,
     ] {
         assert!(serde_json::from_str::<FixtureTaskSpec>(raw).is_err());
     }
@@ -20,11 +20,11 @@ fn required_boolean_rejects_missing_null_and_wrong_type() {
 fn added_boolean_is_constructed_serialized_and_consumed_natively() {
     for (raw, expected) in [
         (
-            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":true}"#,
+            r#"{"kind":"composite","defaultOutput":"summary","fixtureEnabled":true}"#,
             true,
         ),
         (
-            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":false}"#,
+            r#"{"kind":"composite","defaultOutput":"summary","fixtureEnabled":false}"#,
             false,
         ),
     ] {

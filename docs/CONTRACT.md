@@ -32,7 +32,7 @@ when the manifest/runtime contract changes.
   hatch, not an adopter path.
 - **MANIFEST-CONTRACT-1:** the manifest carries the complete admission contract:
   generator and toolchain identity, runtime ABI, target, source policy, closure
-  metadata, the inputs needed to derive layered service identity, state policy,
+  metadata, declared service contracts, state policy,
   and secret descriptors. Secret descriptors are references; secret values are
   never manifest data.
 - **HASH-1:** the runtime computes `computedManifestHash` as SHA-256 over the raw
@@ -75,6 +75,16 @@ when the manifest/runtime contract changes.
   liveness, reconciliation, registry mutation, or cleanup.
 
 ## Task and service algebra
+
+- A session owns every service it starts through final teardown. Tasks in its
+  graph share those services; completion of one leaf does not release them.
+  Services stop when the session finishes, independently of application-data
+  retention. There is no standing service handoff or cross-session borrowing.
+  `serviceLifetime` is not a manifest field; authored legacy values reject.
+- A writable registry owns the exclusive slot guard. Competing owners reject
+  before application-state mutation or child spawn. `ps` reads a coherent
+  registry snapshot and observes process liveness without acquiring ownership
+  or changing stored records. An absent registry yields an empty process list.
 
 - Task invocation `timeoutMs` is optional. Absence (or explicit null) has no
   finite default; a supplied value must be a positive `u64`. Nix emits absent
@@ -200,8 +210,8 @@ when the manifest/runtime contract changes.
   `sourceIdentity`, independent of the current working directory.
 - Host-absolute placement never enters `manifest.json`; Rust materialises host paths
   during admission and execution.
-- **SVC-ID-1:** service reuse requires exact service address, endpoint identity,
-  state identity, runtime compatibility hash, and target identity.
+- **SVC-ID-1:** service process ownership belongs to one session; later sessions
+  start fresh processes after interrupted-predecessor cleanup.
 - **PORT-1:** when a service declares endpoints, startup is serialized by a host
   endpoint lock and readiness requires exact kernel-observed ownership of every
   endpoint. Exact-bind preflight uses `SO_REUSEADDR` so compatible TCP
@@ -209,8 +219,7 @@ when the manifest/runtime contract changes.
   exact or wildcard listener snapshot even when bind succeeds. An open port
   alone is insufficient; a wildcard listener never satisfies an exact endpoint.
 - Endpoint acquisition never signals an existing service to resolve collision or
-  ownership mismatch. A live service that is not exactly reusable requires an
-  explicit `down` before replacement.
+  ownership mismatch. A conflicting listener rejects startup.
 - An endpoint-less service makes no addressability claim. Placeholders toward it
   are invalid in every scope, its probes must be invocations, and its start
   closure must not attest `network-listener`. This is the deliberate scope limit
@@ -222,11 +231,47 @@ when the manifest/runtime contract changes.
   owns durable shared mutable state and a total per-slot event order. Endpoint
   locks are transient startup coordination, not another registry or semantic
   authority. Liveness is reconciled against OS process identity before it is
-  reported; registry evidence alone is not a liveness oracle.
+  reported; registry evidence alone is not a liveness oracle. There are no
+  service leases, heartbeat or expiry transitions, owner tokens, or borrower
+  counts. Startup intent is recorded before prepare; endpoint rows are recorded
+  atomically with their owning process, never as ownerless reservations. The
+  declared service name belongs to its process record; there is no reusable
+  service table or mutable service identity registry. A service-instance
+  reference identifies one run and declared service name; it does not hash
+  endpoint, state, runtime, or target configuration. Startup rejects unresolved
+  predecessor process evidence before prepare. Slot cleanup lifecycle events
+  identify the declared service without inventing a process instance.
+- Session execution outcome has one live writer: the session finalizer records
+  `succeeded`, `failed`, or `canceled` before output delivery and resource
+  finalization. Task and service transitions record only local evidence. A
+  known execution outcome is immutable; late delivery, teardown, or cancellation
+  failures do not rewrite it. An exclusive recovery successor records
+  `interrupted` only for an unknown predecessor outcome. Recovery validates all
+  session records before writing any interruption evidence.
+- A task's observed execution outcome and exit code commit atomically with its
+  observation event before containment and capture settlement. That observation
+  does not grant completed output evidence or replay. A later capture failure
+  preserves the observed result; if it prevents remaining graph nodes from
+  executing, the enclosing session fails. Repeated or mismatched observations
+  reject without rewriting the prior result.
+- Application-data compatibility belongs to the application and user. There is
+  no `stateEpoch` declaration, manifest field, or marker field. Configuration
+  changes update provenance without deleting data; application startup failure
+  does not authorize deletion. Marker version 2 rejects old marker shapes.
+  Existing persistent or protected retention cannot be silently weakened during
+  state preparation. Exact framework ABI and schema checks remain mandatory.
+- Exclusive predecessor recovery precedes state preparation regardless of
+  manifest provenance. State preparation rejects unsettled process or endpoint
+  evidence before marker inspection or mutation and never signals processes.
+  Recovery does not exempt processes whose manifest hash matches the new run.
+- Finalization is distinct from execution outcome and output sealing. A complete
+  finalization requires a known outcome; a known outcome alone leaves finalization
+  unfinished. Failed result/event transactions publish neither fact. Resource
+  completion requires independent process, capture, and data-cleanup proof.
 - **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined,
-  marker-gated, lease-gated, process-gated, and policy-gated. Explicit purge
+  marker-gated, slot-owned, process-gated, and policy-gated. Explicit purge
   relaxes only the protected/persistent policy gate; confinement, marker,
-  live-lease/process, and registry gates remain unconditional. The cleanup target
+  live-process, slot-ownership, and registry gates remain unconditional. The cleanup target
   itself cannot be a symlink; symlink entries inside an owned tree are unlinked
   without being followed.
 - **PROC-1..3 / PROC-CAP-1:** every spawned process belongs to a runtime-owned
@@ -249,10 +294,9 @@ when the manifest/runtime contract changes.
   endpoint evidence retains its existing failure precedence.
 - Startup guards remain owned through a failed readiness transition and its
   cleanup. Initial health failure after committed readiness retains failed-service
-  output and uses failed-start settlement. A failed standing commit also attempts
-  owned failure cleanup; a settlement error takes precedence and retains the
-  lifecycle failure as its cause. Only a successful standing commit relinquishes
-  local child teardown ownership. Borrower finalization releases only its lease.
+  output and uses failed-start settlement. A settlement error takes precedence
+  and retains the lifecycle failure as its cause. Readiness transfers the owned
+  starting handle into an owned ready handle; neither transition detaches the child.
 - **REDACT-1:** runtime-owned persistent output is redacted before write,
   including captured child output, summaries, registry payloads, and runtime
   error JSON. Resolved secrets exist only in runtime memory and hermetic child
@@ -312,7 +356,7 @@ when the manifest/runtime contract changes.
   The two streams replay concurrently with bounded buffers, preserving each
   stream's bytes and order but not cross-stream interleaving. Replay occurs for
   success, task failure, timeout, and cancellation, before service teardown,
-  lease release, aggregate summary, footer, or final error projection. Cleanup
+  slot release, aggregate summary, footer, or final error projection. Cleanup
   and finalization continue after a replay failure.
 - Bounded task/probe capture always uses pipes, including without secrets. After
   containment and reap attempts, both stream workers receive one absolute
@@ -329,7 +373,7 @@ when the manifest/runtime contract changes.
   Containment/reap failure remains primary; capture errors follow in stdout then
   stderr order, before subordinate task outcomes. Capture failure outranks task
   and projection outcomes. Terminal service cleanup uses the same bounded
-  shutdown; successful standing explicitly transfers persistent relay ownership.
+  shutdown; service capture remains owned until its workers settle.
 - Task and probe child completion share containment, reaping, and capture
   ordering. Tasks record their process after spawn and before completion; a
   recording failure still consumes the child through cleanup. Cancellation and
@@ -339,7 +383,7 @@ when the manifest/runtime contract changes.
   use typed redaction-safe `details.projections` entries, whose fields are
   rendered by `nix run .#docs -- api record output-schema/runtime-error-projection`.
   Captured bytes, secrets, and raw OS messages are never serialized.
-  Containment, registry, lease, and state failures take precedence over
+  Containment, registry, ownership, and state failures take precedence over
   `OUTPUT_PROJECTION_FAILED`, which takes
   precedence over task outcomes. Post-admission failures use lifecycle,
   registry, state, or selection codes; `MANIFEST_ADMISSION` is never a late phase
@@ -350,7 +394,7 @@ when the manifest/runtime contract changes.
   previous primary's causes and safe root cause. Finalization records its own
   cancellation observation at most once across replay and teardown checkpoints;
   distinct errors may still carry distinct cancellation causes. Late cancellation
-  continues service teardown, lease release, and terminal registry settlement.
+  continues service teardown and terminal registry settlement before slot release.
 - JSON fields, text projection tokens, error codes, and exit classes are public
   for the current exact ABI. Their authoritative inventory is the capability
   descriptor, and the runtime tests enforce agreement with the typed Rust enums.

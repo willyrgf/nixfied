@@ -1,9 +1,12 @@
+use nixfied_runtime::registry::session::{
+    ExecutionOutcome, record_execution_outcome, record_interrupted_sessions,
+};
 use std::fmt::Display;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use nixfied_manifest::{ServiceLifetime, TaskDefaultOutput};
+use nixfied_manifest::TaskDefaultOutput;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::{RuntimeCause, error_code_wire};
 use nixfied_runtime::execution::{PlanNode, plan};
@@ -12,16 +15,15 @@ use nixfied_runtime::output::{
     output_projection_io_error,
 };
 use nixfied_runtime::redaction::Redactor;
-use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
+use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
-    PrepareRunner, RunContext, SelectedEndpoint, ServiceSelection, StartedService, TaskExecution,
-    TaskExecutionError, TaskRun, mark_run_completed, mark_run_failed, record_run_created,
-    run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
+    PrepareRunner, ReadyService, RunContext, SelectedEndpoint, ServiceSelection, TaskExecution,
+    TaskExecutionError, TaskRun, record_run_created, run_dependent_task_cancellable,
+    run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, derive_host_placement_for_slot, materialize_registry_root, prepare_slot_state,
-    state_base_from_env,
+    StateIdentity, derive_host_placement_for_slot, prepare_slot_state, state_base_from_env,
 };
 use nixfied_runtime::{
     AdmissionContext, ControlAdmission, RunAdmission, RuntimeError, StoreOriginPolicy,
@@ -112,11 +114,9 @@ struct RunSession<'a> {
     run_id: &'a str,
     run_started: Instant,
     registry: Registry,
-    started: Vec<StartedService>,
+    started: Vec<ReadyService>,
     extra_services: Vec<ServiceRunOutput>,
-    service_lifetime: ServiceLifetime,
     direct_selected: bool,
-    lease: Option<RunLeaseHeartbeat>,
     evidence: RunEvidence,
     diagnostic_failures: Vec<RuntimeError>,
 }
@@ -181,7 +181,19 @@ fn failure_priority(code: nixfied_runtime::ErrorCode) -> u8 {
 }
 
 impl<'a> RunSession<'a> {
-    fn finalize(mut self, initial_error: Option<RuntimeError>) -> Result<RunOutput, RuntimeError> {
+    fn finalize(
+        mut self,
+        initial_error: Option<RuntimeError>,
+        observed: Option<ExecutionOutcome>,
+    ) -> Result<RunOutput, RuntimeError> {
+        let execution_outcome = observed.unwrap_or_else(|| match initial_error.as_ref() {
+            Some(error) if error.code == nixfied_runtime::ErrorCode::Canceled => {
+                ExecutionOutcome::Canceled
+            }
+            Some(_) => ExecutionOutcome::Failed,
+            None if self.cancellation.is_canceled() => ExecutionOutcome::Canceled,
+            None => ExecutionOutcome::Succeeded,
+        });
         let had_initial_outcome = initial_error.is_some();
         let mut cancellation_recorded = initial_error
             .as_ref()
@@ -192,6 +204,14 @@ impl<'a> RunSession<'a> {
         }
         if !had_initial_outcome {
             record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
+        }
+        if let Err(error) = record_execution_outcome(
+            &mut self.registry,
+            self.run_id,
+            self.admission.common().computed_manifest_hash(),
+            execution_outcome,
+        ) {
+            failures.push(error);
         }
         for error in self.diagnostic_failures.drain(..) {
             failures.push(error);
@@ -209,7 +229,7 @@ impl<'a> RunSession<'a> {
             services.extend(services_output(&self.started));
             services
         };
-        let mut canceled = self.cancellation.is_canceled()
+        let canceled = self.cancellation.is_canceled()
             || failures
                 .primary
                 .as_ref()
@@ -220,40 +240,18 @@ impl<'a> RunSession<'a> {
                 service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
             } else if had_initial_failure {
                 service.stop(&mut self.registry, self.options.timeout_ms)
-            } else if self.service_lifetime == ServiceLifetime::RunScoped {
+            } else {
                 service.stop_cancellable(
                     &mut self.registry,
                     self.options.timeout_ms,
                     self.cancellation,
                 )
-            } else {
-                service.stand(&mut self.registry, self.options.timeout_ms)
             };
             if let Err(error) = result {
                 failures.push(error);
             }
         }
-        if let Some(lease) = self.lease.take()
-            && let Err(error) = lease.stop()
-        {
-            failures.push(error);
-        }
         record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
-        canceled |= self.cancellation.is_canceled()
-            || failures
-                .primary
-                .as_ref()
-                .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
-
-        let registry_result = if failures.is_empty() {
-            mark_run_completed(&mut self.registry, self.run_id)
-        } else {
-            mark_run_failed(&mut self.registry, self.run_id, canceled)
-        };
-        if let Err(error) = registry_result {
-            failures.push(error);
-        }
-
         let duration_ms = elapsed_ms(self.run_started);
         let run_succeeded = failures.is_empty();
         let node_results = self.evidence.nodes();
@@ -304,6 +302,9 @@ impl<'a> RunSession<'a> {
             nodes: node_results,
             run_summary_path: run_summary_path.clone(),
         };
+        if let Err(error) = self.registry.close() {
+            failures.push(error);
+        }
         match failures.finish(output) {
             Ok(output) => Ok(output),
             Err(error) => Err(with_failure_summary(error, run_summary_path)),
@@ -702,13 +703,12 @@ fn run_m0_placed(
     let manifest = admission.common().manifest();
     let run_started = Instant::now();
     let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
-    // The registry opens before the marker decision: when the slot was last
-    // used by a different manifest build, the upgrade path needs registry evidence
-    // to tear down what that build left running.
-    materialize_registry_root(placement)?;
+    // Exclusive recovery settles every predecessor before the state marker
+    // decision, independently of manifest provenance.
+    let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(placement, cancellation)?;
     let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
     let mut registry = Registry::open_or_create(
-        placement.registry_path(),
+        guard,
         &RegistryIdentity::for_slot(
             &manifest.project.project_id,
             selected_slot.environment,
@@ -718,20 +718,16 @@ fn run_m0_placed(
         ),
     )?;
     registry.set_redactor(redactor.clone());
-    let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
-    let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
+    record_interrupted_sessions(&mut registry)?;
+    nixfied_runtime::control::down_owned_process_groups(&mut registry, options.timeout_ms)?;
+    let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
     if upgrade.upgraded
         && options.output_mode.emit_summary()
         && let Err(error) = write_diagnostic(
             options.output_mode,
             format_args!(
-                "  upgraded slot state from manifest {} (state {})",
+                "  updated slot provenance from manifest {} (data retained)",
                 upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
-                if upgrade.cleaned {
-                    "cleaned: state epoch changed"
-                } else {
-                    "preserved"
-                }
             ),
         )
     {
@@ -785,9 +781,7 @@ fn run_m0_placed(
         registry,
         started: Vec::new(),
         extra_services: Vec::new(),
-        service_lifetime: plan.service_lifetime,
         direct_selected,
-        lease: None,
         evidence: RunEvidence::default(),
         diagnostic_failures,
     };
@@ -795,7 +789,7 @@ fn run_m0_placed(
         ($error:expr, $extra_services:expr) => {{
             let error = $error;
             session.extra_services = $extra_services;
-            return session.finalize(Some(error));
+            return session.finalize(Some(error), None);
         }};
     }
     for binding in &plan.services {
@@ -830,7 +824,8 @@ fn run_m0_placed(
                             diagnostics,
                             node,
                             NodeRole::Prepare,
-                        )?;
+                        )
+                        .map_err(|failure| *failure.error)?;
                     }
                     Ok(())
                 }) as PrepareRunner<'_>
@@ -844,7 +839,6 @@ fn run_m0_placed(
             selected_slot,
             ServiceSelection {
                 service_name,
-                service_lifetime: plan.service_lifetime,
                 endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
                 run_timeout_ms: options.timeout_ms,
@@ -857,14 +851,6 @@ fn run_m0_placed(
                 finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
-        if session.lease.is_none() {
-            session.lease = Some(RunLeaseHeartbeat::start(
-                placement.registry_path().to_path_buf(),
-                session.registry.identity().clone(),
-                current_service.info().run_id.clone(),
-                current_service.info().owner_token.clone(),
-            ));
-        }
         let mut checkpoint = || {
             for service in &session.started {
                 service.check_liveness()?;
@@ -928,8 +914,8 @@ fn run_m0_placed(
         cancellation,
         output_mode: options.output_mode,
     };
-    for node in &plan.nodes {
-        if let Err(error) = execute_node(
+    for (index, node) in plan.nodes.iter().enumerate() {
+        if let Err(failure) = execute_node(
             &context,
             &mut session.registry,
             &mut session.evidence,
@@ -938,17 +924,21 @@ fn run_m0_placed(
             node,
             NodeRole::Root { direct_selected },
         ) {
-            finish_run!(error, Vec::new());
+            let observed = match failure.observed {
+                Some(ExecutionOutcome::Succeeded) if index + 1 == plan.nodes.len() => {
+                    Some(ExecutionOutcome::Succeeded)
+                }
+                Some(ExecutionOutcome::Succeeded) => Some(ExecutionOutcome::Failed),
+                outcome => outcome,
+            };
+            return session.finalize(Some(*failure.error), observed);
         }
     }
 
-    if cancellation.is_canceled() {
-        finish_run!(nixfied_runtime::cancellation::canceled_error(), Vec::new());
-    }
-    session.finalize(None)
+    session.finalize(None, Some(ExecutionOutcome::Succeeded))
 }
 
-fn services_output(services: &[StartedService]) -> Vec<ServiceRunOutput> {
+fn services_output(services: &[ReadyService]) -> Vec<ServiceRunOutput> {
     services
         .iter()
         .map(|service| service_output(service.info()))
@@ -1032,6 +1022,21 @@ enum NodeRole {
     Root { direct_selected: bool },
 }
 
+#[derive(Debug)]
+struct NodeFailure {
+    error: Box<RuntimeError>,
+    observed: Option<ExecutionOutcome>,
+}
+
+impl From<RuntimeError> for NodeFailure {
+    fn from(error: RuntimeError) -> Self {
+        Self {
+            error: Box::new(error),
+            observed: None,
+        }
+    }
+}
+
 struct NodeContext<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
     run: RunContext<'a>,
@@ -1043,11 +1048,11 @@ fn execute_node(
     context: &NodeContext<'_>,
     registry: &mut Registry,
     evidence: &mut RunEvidence,
-    started: &[StartedService],
+    started: &[ReadyService],
     diagnostic_failures: &mut Vec<RuntimeError>,
     node: &PlanNode<'_>,
     role: NodeRole,
-) -> Result<(), RuntimeError> {
+) -> Result<(), NodeFailure> {
     let decorate = |error: RuntimeError| match role {
         NodeRole::Prepare => error,
         NodeRole::Root { .. } => error.with_detail("failedNodeId", node.node_id.as_str()),
@@ -1103,10 +1108,23 @@ fn execute_node(
     let (completed, error) = match result {
         Ok(TaskExecution::Succeeded(completed)) => (completed, None),
         Ok(TaskExecution::Failed { error, evidence }) => (evidence, Some(error)),
-        Err(TaskExecutionError::BeforeTerminal(error)) => return Err(decorate(*error)),
+        Err(TaskExecutionError::BeforeTerminal(error)) => return Err(decorate(*error).into()),
+        Err(TaskExecutionError::ObservedWithoutEvidence { error, outcome }) => {
+            return Err(NodeFailure {
+                error: Box::new(decorate(*error)),
+                observed: Some(outcome),
+            });
+        }
         Err(TaskExecutionError::AfterTerminal { error, evidence }) => (*evidence, Some(*error)),
     };
     let (task_run, ticket) = completed.into_task_and_replay();
+    let observed = if task_run.canceled {
+        ExecutionOutcome::Canceled
+    } else if task_run.success {
+        ExecutionOutcome::Succeeded
+    } else {
+        ExecutionOutcome::Failed
+    };
     let index = EvidenceIndex(evidence.tasks.len());
     evidence.tasks.push(task_run);
     evidence.replay = ticket.or(evidence.replay.take());
@@ -1153,10 +1171,13 @@ fn execute_node(
         }
     }
     match error {
-        Some(error) => Err(decorate(attach_task_evidence(
-            error,
-            &evidence.tasks[index.0],
-        ))),
+        Some(error) => Err(NodeFailure {
+            error: Box::new(decorate(attach_task_evidence(
+                error,
+                &evidence.tasks[index.0],
+            ))),
+            observed: Some(observed),
+        }),
         None => Ok(()),
     }
 }
@@ -1422,31 +1443,52 @@ fn run_control_admitted(
         derive_host_placement_for_slot(manifest, &selected_slot, "control", &options.state_base)
             .map_err(post_admission_error)?;
     let result = (|| {
-        let mut registry = Registry::open_or_create(
-            placement.registry_path(),
-            &RegistryIdentity::for_slot(
-                &manifest.project.project_id,
-                selected_slot.environment,
-                selected_slot.slot,
-                &manifest.runtime_abi,
-                &manifest.toolchain_id,
-            ),
+        let identity = RegistryIdentity::for_slot(
+            &manifest.project.project_id,
+            selected_slot.environment,
+            selected_slot.slot,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
+        );
+        if matches!(command, ControlCommand::Ps) {
+            let report = match RegistryReader::open_existing(&placement.registry_path(), &identity)?
+            {
+                Some(reader) => nixfied_runtime::control::ps(&reader)?,
+                None => nixfied_runtime::control::PsReport {
+                    processes: Vec::new(),
+                },
+            };
+            return print_json(&report);
+        }
+        let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
+            &placement,
+            &CancellationToken::new(),
         )?;
-        match command {
-            ControlCommand::Ps => print_json(&nixfied_runtime::control::ps(&mut registry)?),
-            ControlCommand::Down => {
-                print_json(&nixfied_runtime::control::down_owned_process_groups(
+        let mut registry = Registry::open_or_create(guard, &identity)?;
+        let operation = (|| {
+            record_interrupted_sessions(&mut registry)?;
+            match command {
+                ControlCommand::Ps => unreachable!("read-only command returned before acquisition"),
+                ControlCommand::Down => {
+                    print_json(&nixfied_runtime::control::down_owned_process_groups(
+                        &mut registry,
+                        options.timeout_ms,
+                    )?)
+                }
+                ControlCommand::Clean => print_json(&run_slot_clean(
+                    admission,
+                    &placement,
                     &mut registry,
-                    options.timeout_ms,
-                )?)
+                    &selected_slot,
+                    options.cleanup_mode,
+                )?),
             }
-            ControlCommand::Clean => print_json(&run_slot_clean(
-                admission,
-                &placement,
-                &mut registry,
-                &selected_slot,
-                options.cleanup_mode,
-            )?),
+        })();
+        let release = registry.close();
+        match (operation, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(release)) => Err(error.with_cause(release)),
         }
     })();
     result.map_err(|error| enrich_placed_error(error, &placement, &selected_slot))
@@ -1784,8 +1826,6 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::ProcEscape => 25,
         nixfied_runtime::ErrorCode::ReadinessTimeout => 26,
         nixfied_runtime::ErrorCode::Canceled => 27,
-        nixfied_runtime::ErrorCode::LeaseStale => 28,
-        nixfied_runtime::ErrorCode::LeaseConflict => 29,
         nixfied_runtime::ErrorCode::TaskFailed => 30,
         nixfied_runtime::ErrorCode::LifecycleFailed => 31,
         nixfied_runtime::ErrorCode::DependencyUnavailable => 32,

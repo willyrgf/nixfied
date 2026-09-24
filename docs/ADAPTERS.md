@@ -44,7 +44,7 @@ rewrite).
 - **State layout**: all service state lives under `${stateDir}/<service>` (e.g.
   `${stateDir}/pgdata`, `${stateDir}/reth`), where `${stateDir}` is the
   runtime-materialised slot state root — so marker-gated `clean` owns it and an
-  epoch upgrade can rebuild it.
+  explicit cleanup can remove it.
 - **Prepare is a task**: bind `lifecycle.prepare.task` to a declared task
   (leaf or composite) — full task semantics, ordinary task evidence, and
   cross-service `requires` for typed initialization (the combined

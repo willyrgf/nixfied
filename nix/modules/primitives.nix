@@ -246,16 +246,16 @@ let
           Descriptive state labels, defaulting to `[ "slot" ]`; any strings are
           accepted, not an enum of storage backends or selectable roots.
           Execution lowering discards these labels: changing them does not select
-          a state directory or change service reuse identity. They remain in
+          a state directory or change the lowered service contract. They remain in
           manifest.json and its generated view, so changing them changes the raw
           manifest hash. ''${stateDir} names the runtime-owned slot root; state
-          policy controls its compatibility and cleanup.
+          policy controls retention and cleanup.
         '';
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity.";
+        description = "Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change the lowered service contract.";
       };
       containment = mkOption {
         type = types.enum vocabulary."enum ContainmentRequirement".members;
@@ -378,11 +378,6 @@ let
         type = types.nullOr types.nonEmptyStr;
         default = null;
         description = "Globally unique task operation identifier (leaf only); derived (`task.<name>.run`) unless overridden.";
-      };
-      serviceLifetime = mkOption {
-        type = types.enum vocabulary."enum ServiceLifetime".members;
-        default = "run-scoped";
-        description = "Lifetime policy applied to the task's full servicesRequired closure.";
       };
       invocation = mkOption {
         type = types.nullOr invocationType;

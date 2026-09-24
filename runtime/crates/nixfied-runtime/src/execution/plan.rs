@@ -2,12 +2,11 @@
 use super::lower::Rejection;
 use super::types::{ExecutableTask, ExecutionManifest, PortWindow, Program};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use nixfied_manifest::{NodeId, ServiceId, ServiceLifetime, TaskId};
+use nixfied_manifest::{NodeId, ServiceId, TaskId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
 pub struct RunPlan<'a> {
-    pub service_lifetime: ServiceLifetime,
     pub services: Vec<ServiceBinding<'a>>,
     pub nodes: Vec<PlanNode<'a>>,
 }
@@ -24,7 +23,6 @@ pub struct PlanNode<'a> {
 }
 
 struct LogicalPlan<'a> {
-    service_lifetime: ServiceLifetime,
     services: Vec<(&'a super::types::ExecService, Vec<PlanNode<'a>>)>,
     nodes: Vec<PlanNode<'a>>,
     slot_windows: &'a BTreeMap<u32, PortWindow>,
@@ -178,16 +176,6 @@ fn plan_program<'a>(program: &'a Program, task: &TaskId, slot: u32) -> RuntimeRe
 }
 
 fn logical_plan<'a>(program: &'a Program, task: &TaskId) -> RuntimeResult<LogicalPlan<'a>> {
-    let service_lifetime = match program.tasks.get(task) {
-        Some(ExecutableTask::Leaf(task)) => task.service_lifetime,
-        Some(ExecutableTask::Composite(task)) => task.service_lifetime,
-        None => {
-            return Err(RuntimeError::new(
-                ErrorCode::ManifestAdmission,
-                format!("task {task} is missing"),
-            ));
-        }
-    };
     let nodes = flatten(program, task)?;
     let mut bases = BTreeMap::new();
     for prepare in program
@@ -229,7 +217,6 @@ fn logical_plan<'a>(program: &'a Program, task: &TaskId) -> RuntimeResult<Logica
         started.insert(id.clone());
     }
     Ok(LogicalPlan {
-        service_lifetime,
         services,
         nodes,
         slot_windows: &program.slot_windows,
@@ -281,7 +268,6 @@ fn bind_slot(logical: LogicalPlan<'_>, slot: u32) -> RuntimeResult<RunPlan<'_>> 
         })
         .collect();
     Ok(RunPlan {
-        service_lifetime: logical.service_lifetime,
         services,
         nodes: logical.nodes,
     })
@@ -411,11 +397,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_manifest::{
-        ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId,
-    };
-
-    use crate::execution::ServiceIdentity;
+    use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, TaskId};
 
     fn op_meta(id: &str) -> OpMeta {
         OpMeta {
@@ -479,12 +461,6 @@ mod tests {
             primary_endpoint: Some("e".to_string()),
             connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
-            identity: ServiceIdentity {
-                endpoint_identity_hash: "e".to_string(),
-                state_identity_hash: "s".to_string(),
-                runtime_compatibility_hash: "r".to_string(),
-                target_identity_hash: "t".to_string(),
-            },
         }
     }
 
@@ -594,7 +570,6 @@ mod tests {
         ExecTask {
             timeout: Some(Duration::from_millis(1000)),
             task_id: TaskId::new(name),
-            service_lifetime: ServiceLifetime::RunScoped,
             exec: resolved_exec(),
             requires: Vec::new(),
             success_codes: vec![0],
@@ -604,7 +579,6 @@ mod tests {
     fn composite(name: &str, steps: Vec<(&str, &str, Vec<&str>)>) -> ExecComposite {
         ExecComposite {
             task_id: TaskId::new(name),
-            service_lifetime: ServiceLifetime::RunScoped,
             steps: steps
                 .into_iter()
                 .map(|(step, task, deps)| ExecStep {
@@ -691,12 +665,10 @@ mod tests {
     }
 
     #[test]
-    fn selected_task_lifetime_applies_to_service_union() {
+    fn leaf_and_composite_selection_resolve_service_union() {
         let mut leaf = leaf_task("smoke");
-        leaf.service_lifetime = ServiceLifetime::PersistentUntilDown;
         leaf.requires = vec![ServiceId::new("db")];
-        let mut composite = composite("stack", vec![("smoke", "smoke", vec![])]);
-        composite.service_lifetime = ServiceLifetime::UntilIdle;
+        let composite = composite("stack", vec![("smoke", "smoke", vec![])]);
         let mut em = manifest(vec!["db"], vec![], vec![(0, 23080, 23090)]);
         em.tasks = BTreeMap::from([
             (TaskId::new("smoke"), ExecutableTask::Leaf(leaf)),
@@ -704,10 +676,6 @@ mod tests {
         ]);
 
         let direct = plan_program(&em, &TaskId::new("smoke"), 0).expect("leaf plan exists");
-        assert_eq!(
-            direct.service_lifetime,
-            ServiceLifetime::PersistentUntilDown
-        );
         assert_eq!(
             direct
                 .services
@@ -718,7 +686,6 @@ mod tests {
         );
 
         let nested = plan_program(&em, &TaskId::new("stack"), 0).expect("composite plan exists");
-        assert_eq!(nested.service_lifetime, ServiceLifetime::UntilIdle);
         assert_eq!(
             nested
                 .services

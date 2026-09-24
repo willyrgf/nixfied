@@ -34,10 +34,6 @@ pub enum ErrorCode {
     ReadinessTimeout,
     #[serde(rename = "CANCELED")]
     Canceled,
-    #[serde(rename = "LEASE_STALE")]
-    LeaseStale,
-    #[serde(rename = "LEASE_CONFLICT")]
-    LeaseConflict,
     #[serde(rename = "TASK_FAILED")]
     TaskFailed,
     #[serde(rename = "LIFECYCLE_FAILED")]

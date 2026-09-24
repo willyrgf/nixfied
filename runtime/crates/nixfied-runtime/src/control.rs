@@ -2,21 +2,18 @@ use crate::registry::records::{StoredEndpoint as PortRow, read_open_endpoints};
 use crate::registry::sqlite::RegistryContext;
 use std::path::Path;
 
-use nixfied_manifest::ServiceLifetime;
 use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
-use crate::registry::status::{
-    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
-};
+use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
+use crate::registry::{Registry, RegistryReader};
 use crate::service::{
     ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
-    mark_service_stopped, mark_task_finished, parse_service_lifetime,
-    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, release_unresolved_escape_ports, service_lifetime_as_str,
-    terminate_process_group, terminate_process_tree_with_snapshot,
+    mark_service_stopped, mark_task_finished, process_escape_start_identity,
+    process_group_has_live_member, process_is_live_with_identity,
+    process_is_live_with_start_identity, release_unresolved_escape_ports, terminate_process_group,
+    terminate_process_tree_with_snapshot,
 };
 use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
@@ -36,8 +33,6 @@ pub struct ProcessObservation {
     pub pgid: i32,
     pub registry_status: String,
     pub reconciled_status: String,
-    pub service_lifetime: Option<String>,
-    pub borrower_count: i64,
     pub live: bool,
 }
 
@@ -51,42 +46,46 @@ pub struct DownReport {
 /// A reconciled observation is evidence at a moment, not authority to signal.
 pub struct ReconciledProcess {
     row: ProcessRow,
-    live: bool,
-    borrower_count: i64,
 }
 
-pub fn ps(registry: &mut Registry) -> RuntimeResult<PsReport> {
-    let processes = reconcile_registry(registry)?
+pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
+    let processes = process_rows(registry.connection())?
         .into_iter()
-        .map(|observed| {
-            let row = observed.row;
-            let reconciled_status = if status::PROCESS_ACTIVE.contains(&row.status) && observed.live
-            {
-                ProcessStatus::Running
+        .map(|row| {
+            let active = status::PROCESS_ACTIVE.contains(&row.status);
+            let live = if active || row.unresolved_escape {
+                row.reconciled_liveness()?
+            } else {
+                false
+            };
+            let observed_status = if active {
+                if live {
+                    ProcessStatus::Running
+                } else {
+                    ProcessStatus::Stale
+                }
             } else {
                 row.status
             };
-            ProcessObservation {
+            Ok(ProcessObservation {
                 process_key: row.process_key,
                 run_id: row.run_id,
                 service_instance_id: row.service_instance_id,
                 pid: row.pid,
                 pgid: row.pgid,
                 registry_status: row.status.as_str().to_string(),
-                reconciled_status: reconciled_status.as_str().to_string(),
-                service_lifetime: row
-                    .service_lifetime
-                    .map(|lifetime| service_lifetime_as_str(lifetime).to_string()),
-                borrower_count: observed.borrower_count,
-                live: observed.live,
-            }
+                reconciled_status: observed_status.as_str().to_string(),
+                live,
+            })
         })
-        .collect();
+        .collect::<RuntimeResult<Vec<_>>>()?;
     Ok(PsReport { processes })
 }
 
 pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<Vec<ReconciledProcess>> {
-    let rows = process_rows(registry)?;
+    registry.authority().validate()?;
+    read_open_endpoints(registry.connection(), None)?;
+    let rows = process_rows(registry.connection())?;
     for row in rows {
         let active = status::PROCESS_ACTIVE.contains(&row.status);
         let live = if active || row.unresolved_escape {
@@ -100,90 +99,50 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<Vec<Reconcil
             reconcile_unresolved_escape(registry, &row)?;
         }
     }
-    reconcile_expired_run_leases(registry)?;
-    let rows = process_rows(registry)?;
+    let rows = process_rows(registry.connection())?;
     reconcile_stale_port_reservations(registry, &rows)?;
-    reconcile_until_idle_services(registry, &rows)?;
 
-    let rows = process_rows(registry)?;
-    let mut observations = Vec::with_capacity(rows.len());
-    for row in rows {
-        let active = status::PROCESS_ACTIVE.contains(&row.status);
-        let live = if active || row.unresolved_escape {
-            row.reconciled_liveness()?
-        } else {
-            false
-        };
-        let borrower_count = match row.service_instance_id.as_deref() {
-            Some(service_instance_id) => {
-                active_borrower_count(registry, service_instance_id, &row.run_id)?
-            }
-            None => 0,
-        };
-        observations.push(ReconciledProcess {
-            row,
-            live,
-            borrower_count,
-        });
-    }
-    Ok(observations)
+    Ok(process_rows(registry.connection())?
+        .into_iter()
+        .map(|row| ReconciledProcess { row })
+        .collect())
 }
 
-/// Which registry processes a teardown acts on.
-#[derive(Debug, Clone, Copy)]
-pub enum ProcessFilter<'a> {
-    All,
-    /// Only processes started by a run of a different manifest hash — the
-    /// upgrade path's teardown of what an older manifest build left running.
-    ManifestHashNot(&'a str),
-}
-
-impl ProcessFilter<'_> {
-    fn matches(&self, row: &ProcessRow) -> bool {
-        match self {
-            ProcessFilter::All => true,
-            ProcessFilter::ManifestHashNot(hash) => row.computed_manifest_hash != *hash,
-        }
+/// State preparation never performs teardown. The slot owner must first settle
+/// all recorded process and endpoint obligations through recovery.
+pub(crate) fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
+    registry.authority().validate()?;
+    let processes = process_rows(registry.connection())?;
+    let endpoints = read_open_endpoints(registry.connection(), None)?;
+    if processes
+        .iter()
+        .any(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
+        || !endpoints.is_empty()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::CleanupRefused,
+            "state preparation requires settled predecessor processes and endpoints",
+        ));
     }
+    Ok(())
 }
 
 pub fn down_owned_process_groups(
     registry: &mut Registry,
     timeout_ms: u64,
 ) -> RuntimeResult<DownReport> {
-    down_processes(registry, timeout_ms, ProcessFilter::All)
-}
-
-pub fn down_processes(
-    registry: &mut Registry,
-    timeout_ms: u64,
-    filter: ProcessFilter<'_>,
-) -> RuntimeResult<DownReport> {
-    // Reconciliation marks dead rows stale regardless of the teardown filter;
-    // the filter only scopes which live processes are signaled.
     let reconciled = reconcile_registry(registry)?;
     let mut stale = reconciled
         .into_iter()
         .filter(|process| process.row.status == ProcessStatus::Stale)
         .map(|process| process.row.process_key)
         .collect::<Vec<_>>();
-    let rows = process_rows(registry)?;
+    let rows = process_rows(registry.connection())?;
     let mut stopped = Vec::new();
-    for row in rows.into_iter().filter(|row| {
-        (status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
-            && filter.matches(row)
-    }) {
-        if let Some(service_instance_id) = row.service_instance_id.as_deref() {
-            let borrower_count = active_borrower_count(registry, service_instance_id, &row.run_id)?;
-            if borrower_count > 0 && !row.unresolved_escape {
-                return Err(RuntimeError::new(
-                    ErrorCode::LeaseConflict,
-                    format!(
-                        "service instance {service_instance_id} has {borrower_count} active borrower lease(s)"
-                    ),
-                ));
-            }
-        }
+    for row in rows
+        .into_iter()
+        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
+    {
         if !row.reconciled_liveness()? {
             if row.unresolved_escape {
                 reconcile_unresolved_escape(registry, &row)?;
@@ -249,19 +208,7 @@ struct ProcessRow {
     service_instance_id: Option<String>,
     status: ProcessStatus,
     computed_manifest_hash: String,
-    service_lifetime: Option<ServiceLifetime>,
     unresolved_escape: bool,
-}
-
-#[derive(Debug)]
-struct RunLeaseRow {
-    run_id: String,
-    service_instance_id: String,
-    owner_token: String,
-    heartbeat_at: String,
-    expires_at: String,
-    status: String,
-    computed_manifest_hash: String,
 }
 
 impl ProcessRow {
@@ -349,20 +296,17 @@ fn settle_control_escape(
     }
 }
 
-fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
-    let mut statement = registry
-        .connection()
+fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessRow>> {
+    let mut statement = connection
         .prepare(&format!(
             "
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
               p.run_id, p.service_instance_id, p.status, r.computed_manifest_hash,
-              s.service_lifetime,
               CASE WHEN {escaped_process}
                    THEN 1 ELSE 0 END
             FROM processes p
             LEFT JOIN runs r ON r.run_id = p.run_id
-            LEFT JOIN services s ON s.service_instance_id = p.service_instance_id
             ORDER BY p.process_key
             ",
             escaped_process = status::unresolved_escape_sql(),
@@ -381,8 +325,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, i64>(10)? != 0,
+                row.get::<_, i64>(9)? != 0,
             ))
         })
         .map_err(sql_error)?
@@ -400,7 +343,6 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 service_instance_id,
                 status,
                 computed_manifest_hash,
-                service_lifetime,
                 unresolved_escape,
             )| {
                 let start_identity = serde_json::from_str::<StoredProcessIdentity>(
@@ -422,10 +364,6 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                     service_instance_id,
                     status: ProcessStatus::parse_db(&status)?,
                     computed_manifest_hash,
-                    service_lifetime: service_lifetime
-                        .as_deref()
-                        .map(parse_service_lifetime)
-                        .transpose()?,
                     unresolved_escape,
                 })
             },
@@ -438,7 +376,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
         connection,
         identity,
         redactor,
-    } = registry.context();
+    } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -486,13 +424,6 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     Ok(())
 }
 
-fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
-    for lease in expired_run_leases(registry)? {
-        mark_expired_lease_stale(registry, &lease)?;
-    }
-    Ok(())
-}
-
 fn reconcile_stale_port_reservations(
     registry: &mut Registry,
     processes: &[ProcessRow],
@@ -523,248 +454,11 @@ fn reconcile_stale_port_reservations(
     Ok(())
 }
 
-fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
-    let mut statement = registry
-        .connection()
-        .prepare(&format!(
-            "
-            SELECT l.run_id, l.service_instance_id, l.owner_token, l.heartbeat_at,
-                   l.expires_at, l.status, r.computed_manifest_hash
-            FROM run_leases l
-            JOIN runs r ON r.run_id = l.run_id
-            WHERE l.status IN ({})
-              AND l.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
-            ORDER BY l.run_id
-            ",
-            status::sql_in_list(status::LEASE_OPEN)
-        ))
-        .map_err(sql_error)?;
-    statement
-        .query_map([], |row| {
-            Ok(RunLeaseRow {
-                run_id: row.get(0)?,
-                service_instance_id: row.get(1)?,
-                owner_token: row.get(2)?,
-                heartbeat_at: row.get(3)?,
-                expires_at: row.get(4)?,
-                status: row.get(5)?,
-                computed_manifest_hash: row.get(6)?,
-            })
-        })
-        .map_err(sql_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_error)
-}
-
-fn reconcile_until_idle_services(
-    registry: &mut Registry,
-    rows: &[ProcessRow],
-) -> RuntimeResult<()> {
-    for row in rows
-        .iter()
-        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status))
-        .filter(|row| row.service_lifetime == Some(ServiceLifetime::UntilIdle))
-    {
-        let Some(service_instance_id) = row.service_instance_id.as_deref() else {
-            continue;
-        };
-        if run_lease_is_open(registry, service_instance_id, &row.run_id)? {
-            continue;
-        }
-        if active_borrower_count(registry, service_instance_id, &row.run_id)? > 0 {
-            continue;
-        }
-        if !row.is_live()? {
-            mark_process_stale(registry, row)?;
-            continue;
-        }
-        let escape_start_identity = process_escape_start_identity(
-            row.pid,
-            row.pgid,
-            row.start_identity.platform_start.as_deref(),
-            &row.start_identity.tracked_processes,
-        );
-        if let Err(error) = terminate_process_group(row.pgid, 1000) {
-            return Err(settle_control_escape(
-                registry,
-                row,
-                Some(&escape_start_identity),
-                error,
-            ));
-        }
-        mark_stopped(registry, row)?;
-    }
-    Ok(())
-}
-
-fn active_borrower_count(
-    registry: &Registry,
-    service_instance_id: &str,
-    owner_run_id: &str,
-) -> RuntimeResult<i64> {
-    active_borrower_count_conn(registry.connection(), service_instance_id, owner_run_id)
-}
-
-fn run_lease_is_open(
-    registry: &Registry,
-    service_instance_id: &str,
-    run_id: &str,
-) -> RuntimeResult<bool> {
-    let count: i64 = registry
-        .connection()
-        .query_row(
-            &format!(
-                "
-            SELECT count(*)
-            FROM run_leases
-            WHERE service_instance_id = ?1
-              AND run_id = ?2
-              AND status IN ({})
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            params![service_instance_id, run_id],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    Ok(count > 0)
-}
-
-fn active_borrower_count_conn(
-    conn: &rusqlite::Connection,
-    service_instance_id: &str,
-    owner_run_id: &str,
-) -> RuntimeResult<i64> {
-    conn.query_row(
-        &format!(
-            "
-        SELECT count(*)
-        FROM run_leases
-        WHERE service_instance_id = ?1
-          AND run_id != ?2
-          AND status IN ({})
-        ",
-            status::sql_in_list(status::LEASE_OPEN)
-        ),
-        params![service_instance_id, owner_run_id],
-        |row| row.get(0),
-    )
-    .map_err(sql_error)
-}
-
 impl PortRow {
     fn is_owned_by_process(&self, process: &ProcessRow) -> bool {
-        if let Some(owner_process_key) = self.owner_process_key.as_deref() {
-            return owner_process_key == process.process_key;
-        }
-        process.service_instance_id.as_deref() == Some(self.service_instance_id.as_str())
+        self.owner_process_key == process.process_key
+            && process.service_instance_id.as_deref() == Some(self.service_instance_id.as_str())
     }
-}
-
-fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context();
-    let transaction = connection
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
-    let changed = transaction
-        .execute(
-            &format!(
-                "
-                UPDATE run_leases
-                SET status = ?3
-                WHERE run_id = ?1 AND service_instance_id = ?2
-                  AND status IN ({open_leases})
-                  AND expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM processes p
-                    WHERE p.run_id = ?1
-                      AND p.service_instance_id = ?2
-                      AND ({actionable})
-                  )
-                ",
-                open_leases = status::sql_in_list(status::LEASE_OPEN),
-                actionable = status::actionable_process_sql(),
-            ),
-            params![
-                lease.run_id.as_str(),
-                lease.service_instance_id.as_str(),
-                RunLeaseStatus::Stale.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed == 0 {
-        transaction.commit().map_err(sql_error)?;
-        return Ok(());
-    }
-    transaction
-        .execute(
-            &format!(
-                "
-                UPDATE runs
-                SET status = ?2
-                WHERE run_id = ?1
-                  AND status NOT IN ({terminal_runs})
-                  AND NOT EXISTS (
-                    SELECT 1 FROM run_leases
-                    WHERE run_id = ?1 AND status IN ({open_leases})
-                  )
-                ",
-                terminal_runs = status::sql_in_list(status::RUN_TERMINAL),
-                open_leases = status::sql_in_list(status::LEASE_OPEN),
-            ),
-            params![lease.run_id.as_str(), RunStatus::Stale.as_str()],
-        )
-        .map_err(sql_error)?;
-    // Release only owner-less ports reserved before a process row existed (a
-    // crash between `reserve_service_start` and `record_service_start`). A
-    // borrower lease names the owner's service too, but can never release the
-    // owner's process-bound port evidence.
-    transaction
-        .execute(
-            &format!(
-                "
-            UPDATE ports
-            SET status = ?2
-            WHERE service_instance_id = ?1
-              AND owner_process_key IS NULL
-              AND status IN ({})
-            ",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            params![
-                lease.service_instance_id.as_str(),
-                PortStatus::Stale.as_str()
-            ],
-        )
-        .map_err(sql_error)?;
-    let payload_json = serde_json::json!({
-        "serviceInstanceId": lease.service_instance_id.as_str(),
-        "ownerToken": lease.owner_token.as_str(),
-        "heartbeatAt": lease.heartbeat_at.as_str(),
-        "expiresAt": lease.expires_at.as_str(),
-        "previousStatus": lease.status.as_str(),
-    })
-    .to_string();
-    insert_event(
-        &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type: "run.lease-stale",
-            run_id: Some(&lease.run_id),
-            service_instance_id: Some(&lease.service_instance_id),
-            process_key: None,
-            computed_manifest_hash: Some(&lease.computed_manifest_hash),
-            payload_json: &payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
 }
 
 fn mark_port_stale(
@@ -776,7 +470,7 @@ fn mark_port_stale(
         connection,
         identity,
         redactor,
-    } = registry.context();
+    } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -797,7 +491,7 @@ fn mark_port_stale(
         "address": port.address.as_str(),
         "port": port.port,
         "previousStatus": port.status.as_str(),
-        "ownerProcessKey": port.owner_process_key.as_deref(),
+        "ownerProcessKey": port.owner_process_key.as_str(),
     })
     .to_string();
     insert_event(

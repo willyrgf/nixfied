@@ -85,17 +85,6 @@ macro_rules! db_status {
 
 include!("../generated/status.rs");
 
-/// Lease statuses that keep a reservation open (not yet terminal).
-pub const LEASE_OPEN: &[RunLeaseStatus] = &[RunLeaseStatus::Active, RunLeaseStatus::Canceling];
-
-/// Lease statuses that release ownership for the run owner.
-pub const LEASE_TERMINAL: &[RunLeaseStatus] = &[
-    RunLeaseStatus::Completed,
-    RunLeaseStatus::Canceled,
-    RunLeaseStatus::Failed,
-    RunLeaseStatus::Stale,
-];
-
 /// Port statuses that keep a reservation open.
 pub const PORT_OPEN: &[PortStatus] = &[PortStatus::Reserved, PortStatus::Active];
 
@@ -104,14 +93,6 @@ pub const PROCESS_ACTIVE: &[ProcessStatus] = &[
     ProcessStatus::Starting,
     ProcessStatus::Running,
     ProcessStatus::Ready,
-];
-
-/// Run statuses that are already terminal (a stale sweep must skip them).
-pub const RUN_TERMINAL: &[RunStatus] = &[
-    RunStatus::Canceled,
-    RunStatus::TaskFailed,
-    RunStatus::ServiceFailed,
-    RunStatus::ProcEscaped,
 ];
 
 /// Cleanup statuses a prior-cleanup lookup considers.

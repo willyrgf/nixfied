@@ -1805,7 +1805,7 @@ positive integer, meaning >0
 
 
 
-Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change service reuse identity\.
+Descriptive log labels retained in the manifest and generated view, then discarded by execution lowering; they do not select log paths or change the lowered service contract\.
 
 
 
@@ -1852,10 +1852,10 @@ null
 Descriptive state labels, defaulting to ` [ "slot" ] `; any strings are
 accepted, not an enum of storage backends or selectable roots\.
 Execution lowering discards these labels: changing them does not select
-a state directory or change service reuse identity\. They remain in
+a state directory or change the lowered service contract\. They remain in
 manifest\.json and its generated view, so changing them changes the raw
 manifest hash\. ${stateDir} names the runtime-owned slot root; state
-policy controls its compatibility and cleanup\.
+policy controls retention and cleanup\.
 
 
 
@@ -1994,27 +1994,6 @@ one of “run-scoped”, “persistent”
 
 ```nix
 "run-scoped"
-```
-
-
-
-## nixfied\.state\.stateEpoch
-
-
-
-Project-chosen state compatibility epoch; a mismatch must pass the declared cleanup policy before admission\.
-
-
-
-*Type:*
-non-empty string
-
-
-
-*Default:*
-
-```nix
-"1"
 ```
 
 
@@ -2409,27 +2388,6 @@ list of string
 
 ```nix
 [ ]
-```
-
-
-
-## nixfied\.tasks\.\<name>\.serviceLifetime
-
-
-
-Lifetime policy applied to the task’s full servicesRequired closure\.
-
-
-
-*Type:*
-one of “run-scoped”, “until-idle”, “persistent-until-down”
-
-
-
-*Default:*
-
-```nix
-"run-scoped"
 ```
 
 

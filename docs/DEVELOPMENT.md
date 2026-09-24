@@ -67,7 +67,7 @@ It is fail-fast and runs these local stages:
 3. `.#gate` — the runtime-shaped gate followed by the Nix-layer gate.
 
 Use `.#test` for the complete Cargo floor. It injects the realised Postgres manifest
-required by `interrupt_and_recover_adopts_orphaned_postgres`; a raw
+required by `interrupt_and_recover_stops_orphan_and_starts_fresh_postgres`; a raw
 `cargo test --workspace` without `NIXFIED_TEST_POSTGRES_MANIFEST` intentionally
 skips that case.
 
@@ -246,7 +246,7 @@ from one to two changes native acceptance and both mounted type descriptions;
 literal expected values independently assert the result. The publication check
 similarly adds supported descriptors without extending the checker or a name
 registry. Runtime lowering separately proves descriptive refs remain serialized
-but do not change service reuse identity.
+but do not change the lowered service contract.
 
 ## Gate composition
 
@@ -318,7 +318,7 @@ Dirty mode uses a path pin and therefore re-derives the downstream closure.
 `nix run .#ci` is the canonical full local gate, not a byte-for-byte copy of the
 hosted workflow. `.github/workflows/checks.yml` separately runs the raw Cargo
 floor, flake checks, and gate; it also runs macOS runtime unit, endpoint, service,
-and output tests (including bounded capture and persistent-service ownership)
+and output tests (including bounded capture and session-owned service processes)
 and builds the public CLI, installer, and optimized release runtime as a final
 safety net:
 

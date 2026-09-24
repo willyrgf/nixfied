@@ -49,6 +49,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-minimal-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke --timeout-ms 60000 --output json \
@@ -96,6 +97,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-postgres-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime run --manifest "$POSTGRES_MANIFEST/manifest.json" --task smoke-query --timeout-ms 60000 --output json \
@@ -132,6 +134,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-composite-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
             nixfied-runtime run --manifest "$COMPOSITE_MANIFEST/manifest.json" --task pipeline --timeout-ms 60000 --output json \
@@ -177,6 +180,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-polyglot-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
             nixfied-runtime run --manifest "$POLYGLOT_MANIFEST/manifest.json" --task all --timeout-ms 60000 --output json \
@@ -200,6 +204,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-downstream-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" --task release --timeout-ms 60000 --output json \
@@ -223,6 +228,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-reth-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime run --manifest "$RETH_MANIFEST/manifest.json" --task reth-smoke --timeout-ms 60000 --output json \
@@ -246,6 +252,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-toolchain-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime run --manifest "$TOOLCHAIN_MANIFEST/manifest.json" --task ci --timeout-ms 60000 --output json \
@@ -272,6 +279,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           inner="''${stateDir}/task-output-inner"
           artifacts="''${stateDir}/gate-artifacts/task-output"
           mkdir -p "$artifacts"
@@ -382,6 +390,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner" \
              nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --output json \
@@ -407,6 +416,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/negative-inner"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner" \
              nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task does-not-exist \
@@ -431,6 +441,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner/identity"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner/identity" \
              nixfied-runtime run --manifest "$NEGATIVE_FAIL_MANIFEST/manifest.json" --task failing --output json \
@@ -467,6 +478,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/lifecycle-inner-state"
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke >/dev/null
@@ -492,6 +504,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
@@ -519,13 +532,14 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_B_MANIFEST/manifest.json" --task smoke >/dev/null
           [ -e "$root/sentinel" ] \
-            || { echo "lifecycle: same-epoch upgrade cleaned the state root" >&2; exit 1; }
+            || { echo "lifecycle: manifest change cleaned the state root" >&2; exit 1; }
           hash2=$(jq -r .computedManifestHash "$marker")
           [ "$hash2" != "$hash1" ] \
             || { echo "lifecycle: upgrade did not rewrite provenance" >&2; exit 1; }
@@ -535,7 +549,7 @@
     };
   };
 
-  nixfied.tasks.lifecycle-upgrade-epoch = {
+  nixfied.tasks.lifecycle-change-preserves-data = {
     invocation = {
       tools = [
         pkgs.bash
@@ -548,14 +562,15 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_EPOCH2_MANIFEST/manifest.json" --task smoke >/dev/null
-          [ ! -e "$root/sentinel" ] \
-            || { echo "lifecycle: epoch upgrade preserved state across the declared boundary" >&2; exit 1; }
-          [ "$(jq -r .stateEpoch "$marker")" = "2" ] \
-            || { echo "lifecycle: epoch upgrade did not record the new epoch" >&2; exit 1; }
+            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke >/dev/null
+          [ -e "$root/sentinel" ] \
+            || { echo "lifecycle: configuration change deleted retained application data" >&2; exit 1; }
+          [ "$(jq -r .markerVersion "$marker")" = "2" ] \
+            || { echo "lifecycle: unexpected state marker version" >&2; exit 1; }
         ''
       ];
     };
@@ -574,12 +589,13 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           marker="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0/.nixfied-state.json"
           mkdir -p "''${stateDir}/gate-artifacts"
           jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
           code=0
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_EPOCH2_MANIFEST/manifest.json" --task smoke \
+            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke \
             >/dev/null 2>"''${stateDir}/gate-artifacts/lifecycle-tamper-owner.json" || code=$?
           [ "$code" -eq 21 ] \
             || { echo "lifecycle: tampered ownership exited $code, want 21 (STATE_UNOWNED)" >&2; exit 1; }
@@ -587,7 +603,7 @@
             "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
           code=0
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_EPOCH2_MANIFEST/manifest.json" --task smoke \
+            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke \
             >/dev/null 2>"''${stateDir}/gate-artifacts/lifecycle-tamper-abi.json" || code=$?
           [ "$code" -eq 21 ] \
             || { echo "lifecycle: tampered runtime ABI exited $code, want 21 (STATE_UNOWNED)" >&2; exit 1; }
@@ -596,7 +612,7 @@
     };
   };
 
-  nixfied.tasks.lifecycle-service-lifetime = {
+  nixfied.tasks.lifecycle-session-ownership = {
     invocation = {
       tools = [
         pkgs.bash
@@ -609,52 +625,31 @@
         "-c"
         ''
           set -euo pipefail
-          inner="''${stateDir}/service-lifetime-inner"
-          mkdir -p "''${stateDir}/gate-artifacts" "$inner"
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-              --task keep-up --timeout-ms 60000 --output json \
-            > "''${stateDir}/gate-artifacts/service-lifetime-up.json"
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-            > "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json"
-          jq -e '.processes[] | select((has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
-            "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json" >/dev/null
-
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-              --task smoke --timeout-ms 60000 --output json \
-            > "''${stateDir}/gate-artifacts/service-lifetime-borrow.json"
-          owner_instance=$(jq -r '.services[0].serviceInstanceId' \
-            "''${stateDir}/gate-artifacts/service-lifetime-up.json")
-          owner_process=$(jq -r '.services[0].processKey' \
-            "''${stateDir}/gate-artifacts/service-lifetime-up.json")
-          borrower_instance=$(jq -r '.services[0].serviceInstanceId' \
-            "''${stateDir}/gate-artifacts/service-lifetime-borrow.json")
-          borrower_process=$(jq -r '.services[0].processKey' \
-            "''${stateDir}/gate-artifacts/service-lifetime-borrow.json")
-          [ "$borrower_instance" = "$owner_instance" ] \
-            || { echo "service lifetime: borrower did not reuse the standing service instance" >&2; exit 1; }
-          [ "$borrower_process" = "$owner_process" ] \
-            || { echo "service lifetime: borrower did not reuse the standing process" >&2; exit 1; }
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-            > "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json"
-          jq -e --arg id "$owner_instance" \
-            '.processes[] | select(.serviceInstanceId == $id and (has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
-            "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json" >/dev/null
-
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime down --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-            > "''${stateDir}/gate-artifacts/service-lifetime-down.json"
-          jq -e '.stopped | length == 1' \
-            "''${stateDir}/gate-artifacts/service-lifetime-down.json" >/dev/null
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-            > "''${stateDir}/gate-artifacts/service-lifetime-ps-stopped.json"
-          jq -e --arg id "$owner_instance" \
-            '[.processes[] | select(.serviceInstanceId == $id and .live == true)] | length == 0' \
-            "''${stateDir}/gate-artifacts/service-lifetime-ps-stopped.json" >/dev/null
+          umask 077
+          inner="''${stateDir}/session-ownership-inner"
+          artifacts="''${stateDir}/gate-artifacts"
+          mkdir -p "$artifacts" "$inner"
+          for occurrence in first second; do
+            NIXFIED_STATE_DIR="$inner" \
+              nixfied-runtime run --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
+                --task smoke --timeout-ms 60000 --output json \
+              > "$artifacts/session-$occurrence.json"
+            NIXFIED_STATE_DIR="$inner" \
+              nixfied-runtime ps --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
+              > "$artifacts/session-$occurrence-ps.json"
+            jq -e '[.processes[] | select(.live == true)] | length == 0' \
+              "$artifacts/session-$occurrence-ps.json" >/dev/null
+          done
+          first_process=$(jq -r '.services[0].processKey' "$artifacts/session-first.json")
+          second_process=$(jq -r '.services[0].processKey' "$artifacts/session-second.json")
+          first_instance=$(jq -r '.services[0].serviceInstanceId' "$artifacts/session-first.json")
+          second_instance=$(jq -r '.services[0].serviceInstanceId' "$artifacts/session-second.json")
+          [ "$first_process" != "$second_process" ] && [ "$first_instance" != "$second_instance" ] \
+            || { echo "session ownership: later run reused service process evidence" >&2; exit 1; }
+          jq -e '[.processes[] | select(.serviceInstanceId != null and .registryStatus == "stopped")] | length == 2' \
+            "$artifacts/session-second-ps.json" >/dev/null
+          [ -f "$inner/data/minimal/dev/0/endpoint-prepare-sentinel" ] \
+            || { echo "session ownership: retained application data missing" >&2; exit 1; }
         ''
       ];
     };
@@ -673,6 +668,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           inner="''${stateDir}/purge-inner"
           mkdir -p "''${stateDir}/gate-artifacts" "$inner"
           NIXFIED_STATE_DIR="$inner" \
@@ -717,29 +713,38 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           root_a="''${stateDir}/endpoint-root-a"
           root_b="''${stateDir}/endpoint-root-b"
           artifacts="''${stateDir}/gate-artifacts"
           mkdir -p "$root_a" "$root_b" "$artifacts"
-          cleanup_endpoint_roots() {
-            NIXFIED_STATE_DIR="$root_a" \
-              nixfied-runtime down --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-              >/dev/null 2>&1 || true
-            NIXFIED_STATE_DIR="$root_b" \
-              nixfied-runtime down --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-              >/dev/null 2>&1 || true
+          owner_pid=""
+          cleanup_endpoint_owner() {
+            if [ -n "$owner_pid" ]; then
+              kill -TERM "$owner_pid" 2>/dev/null || true
+              wait "$owner_pid" 2>/dev/null || true
+            fi
           }
-          trap cleanup_endpoint_roots EXIT
-
+          trap cleanup_endpoint_owner EXIT
+          rm -f "$root_a/data/minimal/dev/0/session-active"
           NIXFIED_STATE_DIR="$root_a" \
-            nixfied-runtime run --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
+            nixfied-runtime run --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
               --task keep-up --timeout-ms 60000 --output json \
-            > "$artifacts/endpoint-root-a.json"
+            > "$artifacts/endpoint-root-a.json" 2> "$artifacts/endpoint-root-a.err" &
+          owner_pid=$!
+          for attempt in $(seq 1 500); do
+            [ ! -f "$root_a/data/minimal/dev/0/session-active" ] || break
+            kill -0 "$owner_pid" 2>/dev/null \
+              || { cat "$artifacts/endpoint-root-a.err" >&2; exit 1; }
+            sleep 0.02
+          done
+          [ -f "$root_a/data/minimal/dev/0/session-active" ] \
+            || { echo "endpoint: root A session never reached its task" >&2; exit 1; }
           [ "$(find "$root_a" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
             || { echo "endpoint: root A prepare sentinel missing" >&2; exit 1; }
 
           if NIXFIED_STATE_DIR="$root_b" \
-             nixfied-runtime run --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
+             nixfied-runtime run --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
                --task keep-up --timeout-ms 60000 --output json \
              >/dev/null 2>"$artifacts/endpoint-root-b-conflict.json"; then
             echo "endpoint: independent root B took root A's live listener" >&2
@@ -754,16 +759,21 @@
           [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 0 ] \
             || { echo "endpoint: root B prepared before conflict refusal" >&2; exit 1; }
 
-          NIXFIED_STATE_DIR="$root_a" \
-            nixfied-runtime down --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" >/dev/null
+          kill -TERM "$owner_pid"
+          owner_status=0
+          wait "$owner_pid" || owner_status=$?
+          owner_pid=""
+          [ "$owner_status" -eq 27 ] \
+            || { echo "endpoint: owner did not finish canceled teardown" >&2; exit 1; }
           NIXFIED_STATE_DIR="$root_b" \
-            nixfied-runtime run --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" \
-               --task keep-up --timeout-ms 60000 --output json \
+            nixfied-runtime run --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
+               --task smoke --timeout-ms 60000 --output json \
             > "$artifacts/endpoint-root-b.json"
           [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
-            || { echo "endpoint: root B did not prepare after root A went down" >&2; exit 1; }
+            || { echo "endpoint: root B did not prepare after root A stopped" >&2; exit 1; }
           NIXFIED_STATE_DIR="$root_b" \
-            nixfied-runtime down --manifest "$PERSISTENT_ENDPOINT_MANIFEST/manifest.json" >/dev/null
+            nixfied-runtime ps --manifest "$SESSION_ENDPOINT_MANIFEST/manifest.json" \
+            | jq -e '[.processes[] | select(.live == true)] | length == 0' >/dev/null
           trap - EXIT
         ''
       ];
@@ -784,6 +794,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" \
@@ -806,6 +817,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" \
@@ -829,6 +841,7 @@
         "-c"
         ''
           set -euo pipefail
+          umask 077
           s0="''${stateDir}/gate-artifacts/slots-0.json"
           s1="''${stateDir}/gate-artifacts/slots-1.json"
           disjoint() {
@@ -898,9 +911,9 @@
       "lifecycle-first-run"
       "lifecycle-second-run"
       "lifecycle-upgrade-preserve"
-      "lifecycle-upgrade-epoch"
+      "lifecycle-change-preserves-data"
       "lifecycle-tamper-refusal"
-      "lifecycle-service-lifetime"
+      "lifecycle-session-ownership"
       "lifecycle-purge"
     ];
   };

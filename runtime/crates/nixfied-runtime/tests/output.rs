@@ -84,91 +84,148 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
             }
         }
     }
-    for activity in ["idle", "continuous"] {
-        for secret in [false, true] {
-            let markers = TempDir::new();
-            let pid_path = markers.path.join("pid");
-            let acknowledgement = markers.path.join("ack");
-            let prefix = if secret {
-                b"safe-data-abc".as_slice()
-            } else {
-                b"safe-data".as_slice()
-            };
-            let args = vec![
-                "output".into(),
-                "escaped-writer".into(),
-                activity.into(),
-                pid_path.to_string_lossy().into_owned(),
-                acknowledgement.to_string_lossy().into_owned(),
-                hex(prefix),
-                hex(prefix),
-            ];
-            let mut manifest = leaf_task_manifest(&args);
-            if secret {
-                manifest["secrets"]["token"] = json!({"secretId":"token","source":{
-                    "kind":"env-var","envVar":"NIXFIED_CAPTURE_SECRET"
-                }});
-                manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
-            }
-            let fixture = RuntimeFixture::new(manifest);
-            let child = fixture
-                .command("run", &["--task", "smoke", "--output", "task-output"])
-                .env("NIXFIED_CAPTURE_SECRET", "abcdef")
-                .spawn()
-                .unwrap();
-            assert!(wait_for_path(&pid_path, Duration::from_secs(5)));
-            let survivor = Survivor(
-                fs::read_to_string(&pid_path)
-                    .unwrap()
-                    .trim()
-                    .parse()
-                    .unwrap(),
-            );
-            assert_eq!(
-                unsafe { libc::getpgid(survivor.0) },
-                survivor.0,
-                "fixture must have escaped into its own group"
-            );
-            let started = std::time::Instant::now();
-            fs::write(acknowledgement, b"release parent").unwrap();
-            let output = wait_for_child_output(child, Duration::from_secs(8));
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "capture must not wait for escaped writers"
-            );
-            assert!(!output.status.success());
-            assert!(
-                output.stdout.is_empty(),
-                "incomplete capture must not replay safe prefix files"
-            );
-            assert_eq!(
-                unsafe { libc::kill(survivor.0, 0) },
-                0,
-                "capture timeout is not proof of process death"
-            );
-            let text = String::from_utf8_lossy(&output.stderr);
-            assert!(text.contains("SECRET_LEAK_BLOCKED"), "{text}");
-            // Task-output emits human diagnostics. Inspect the durable aggregate summary
-            // and files directly: no completed node or task summary may be published.
-            let runs = fixture.state_base.join("registry/runtime-test/dev/0/runs");
-            let run = fs::read_dir(runs).unwrap().next().unwrap().unwrap().path();
-            let summary: Value =
-                serde_json::from_slice(&fs::read(run.join("artifacts/run-summary.json")).unwrap())
+    for accepted in [false, true] {
+        for composite in [false, true] {
+            for activity in ["idle", "continuous"] {
+                for secret in [false, true] {
+                    let markers = TempDir::new();
+                    let pid_path = markers.path.join("pid");
+                    let acknowledgement = markers.path.join("ack");
+                    let prefix = if secret {
+                        b"safe-data-abc".as_slice()
+                    } else {
+                        b"safe-data".as_slice()
+                    };
+                    let args = vec![
+                        "output".into(),
+                        "escaped-writer".into(),
+                        activity.into(),
+                        pid_path.to_string_lossy().into_owned(),
+                        acknowledgement.to_string_lossy().into_owned(),
+                        hex(prefix),
+                        hex(prefix),
+                    ];
+                    let mut manifest = leaf_task_manifest(&args);
+                    if accepted {
+                        manifest["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([7]);
+                    }
+                    if secret {
+                        manifest["secrets"]["token"] = json!({"secretId":"token","source":{
+                            "kind":"env-var","envVar":"NIXFIED_CAPTURE_SECRET"
+                        }});
+                        manifest["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] =
+                            json!("${secret:token}");
+                    }
+                    let later = markers.path.join("later-task");
+                    if composite {
+                        let mut after = manifest["tasks"]["smoke"].clone();
+                        let program = after["invocation"]["run"][0].clone();
+                        after["invocation"]["run"] = json!([program, "prepare", later]);
+                        after["operationId"] = json!("task.after.run");
+                        manifest["tasks"]["after"] = after;
+                        manifest["tasks"]["pipeline"] = json!({
+                            "kind": "composite", "defaultOutput": "summary", "steps": {
+                                "first": {"task":"smoke"}, "after": {"task":"after", "dependsOn":["first"]}
+                            }
+                        });
+                    }
+                    let fixture = RuntimeFixture::new(manifest);
+                    let child = fixture
+                        .command(
+                            "run",
+                            &[
+                                "--task",
+                                if composite { "pipeline" } else { "smoke" },
+                                "--output",
+                                if composite { "json" } else { "task-output" },
+                            ],
+                        )
+                        .env("NIXFIED_CAPTURE_SECRET", "abcdef")
+                        .spawn()
+                        .unwrap();
+                    assert!(wait_for_path(&pid_path, Duration::from_secs(5)));
+                    let survivor = Survivor(
+                        fs::read_to_string(&pid_path)
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap(),
+                    );
+                    assert_eq!(
+                        unsafe { libc::getpgid(survivor.0) },
+                        survivor.0,
+                        "fixture must have escaped into its own group"
+                    );
+                    let started = std::time::Instant::now();
+                    fs::write(acknowledgement, b"release parent").unwrap();
+                    let output = wait_for_child_output(child, Duration::from_secs(8));
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "capture must not wait for escaped writers"
+                    );
+                    assert!(!output.status.success());
+                    assert!(
+                        output.stdout.is_empty(),
+                        "incomplete capture must not replay safe prefix files"
+                    );
+                    assert_eq!(
+                        unsafe { libc::kill(survivor.0, 0) },
+                        0,
+                        "capture timeout is not proof of process death"
+                    );
+                    let text = String::from_utf8_lossy(&output.stderr);
+                    assert!(text.contains("SECRET_LEAK_BLOCKED"), "{text}");
+                    // Task-output emits human diagnostics. Inspect the durable aggregate summary
+                    // and files directly: no completed node or task summary may be published.
+                    let runs = fixture.state_base.join("registry/runtime-test/dev/0/runs");
+                    let run = fs::read_dir(runs).unwrap().next().unwrap().unwrap().path();
+                    let summary: Value = serde_json::from_slice(
+                        &fs::read(run.join("artifacts/run-summary.json")).unwrap(),
+                    )
                     .unwrap();
-            assert_eq!(summary["nodes"], json!([]));
-            assert!(!run.join("summary.0.json").exists());
-            for stream in ["stdout", "stderr"] {
-                let path = run.join(format!("logs/task.0.{stream}.log"));
-                let before = fs::read(&path).unwrap();
-                assert!(!before.is_empty());
-                if secret && activity == "idle" {
-                    assert_eq!(before, b"safe-dat");
+                    assert_eq!(summary["nodes"], json!([]));
+                    assert!(!run.join("summary.0.json").exists());
+                    for stream in ["stdout", "stderr"] {
+                        let path = run.join(format!("logs/task.0.{stream}.log"));
+                        let before = fs::read(&path).unwrap();
+                        assert!(!before.is_empty());
+                        if secret && activity == "idle" {
+                            assert_eq!(before, b"safe-dat");
+                        }
+                        // The survivor remains alive with writers. Returned evidence is closed.
+                        std::thread::sleep(Duration::from_millis(30));
+                        assert_eq!(fs::read(path).unwrap(), before);
+                    }
+                    let connection = rusqlite::Connection::open_with_flags(
+                        fixture
+                            .state_base
+                            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .unwrap();
+                    let observed: (String, i32) = connection.query_row(
+                "SELECT execution_outcome, exit_code FROM processes WHERE service_instance_id IS NULL",
+                [], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+                    assert_eq!(
+                        observed,
+                        (if accepted { "succeeded" } else { "failed" }.into(), 7)
+                    );
+                    assert_eq!(
+                        stored_execution_outcome(&fixture),
+                        if accepted && !composite {
+                            "succeeded"
+                        } else {
+                            "failed"
+                        }
+                    );
+                    assert!(
+                        !later.exists(),
+                        "capture failure must stop further graph execution"
+                    );
+                    drop(survivor);
                 }
-                // The survivor remains alive with writers. Returned evidence is closed.
-                std::thread::sleep(Duration::from_millis(30));
-                assert_eq!(fs::read(path).unwrap(), before);
             }
-            drop(survivor);
         }
     }
 }
@@ -358,8 +415,6 @@ fn composite_selection_uses_its_metadata_default_not_a_child_default() {
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "defaultOutput": "summary",
-        "serviceLifetime": "run-scoped",
-
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
     let fixture = RuntimeFixture::new(manifest);
@@ -475,6 +530,7 @@ fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_replay() {
     let diagnostic = String::from_utf8_lossy(&output.stderr);
     assert!(diagnostic.contains("OUTPUT_PROJECTION_FAILED"));
     assert!(diagnostic.contains("broken-pipe"));
+    assert_eq!(stored_execution_outcome(&fixture), "succeeded");
 }
 
 #[test]
@@ -499,6 +555,7 @@ fn task_failure_replays_captured_bytes_and_preserves_status() {
         "task failure should remain the public status: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(stored_execution_outcome(&fixture), "failed");
 }
 
 #[test]
@@ -566,6 +623,7 @@ fn timeout_replays_output_before_reporting_task_failure() {
         "timeout should remain a task failure"
     );
     assert!(wait_for_path(&marker, Duration::from_secs(1)));
+    assert_eq!(stored_execution_outcome(&fixture), "failed");
 }
 
 #[test]
@@ -606,6 +664,7 @@ fn task_without_deadline_survives_former_default_and_remains_cancelable() {
     assert_eq!(output.stdout, stdout);
     assert_stream_contains(&output.stderr, stderr, "stderr");
     assert!(String::from_utf8_lossy(&output.stderr).contains("CANCELED"));
+    assert_eq!(stored_execution_outcome(&fixture), "canceled");
 }
 
 #[test]
@@ -632,8 +691,7 @@ fn service_exit_interrupts_a_task_without_deadline() {
             manifest["tasks"]["first"] = first;
             manifest["tasks"]["smoke"]["requires"] = json!([]);
             manifest["tasks"]["pipeline"] = json!({
-                "kind": "composite", "defaultOutput": "summary", "serviceLifetime": "run-scoped",
-                "steps": {"first": {"task": "first", "dependsOn": []}, "second": {"task": "smoke", "dependsOn": ["first"]}}
+                "kind": "composite", "defaultOutput": "summary", "steps": {"first": {"task": "first", "dependsOn": []}, "second": {"task": "smoke", "dependsOn": ["first"]}}
             });
             "pipeline"
         } else {
@@ -658,6 +716,7 @@ fn service_exit_interrupts_a_task_without_deadline() {
         let output = wait_for_child_output(child, Duration::from_secs(6));
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("DEPENDENCY_UNAVAILABLE"));
+        assert_eq!(stored_execution_outcome(&fixture), "failed");
     }
 }
 
@@ -707,10 +766,13 @@ fn service_failure_interrupts_another_services_exec_probe() {
                 common::find_named(&fixture.state_base, "registry.sqlite3").unwrap(),
             )
             .unwrap();
-            let pid: i32 = registry.query_row(
-                "SELECT p.pid FROM processes p JOIN services s ON s.service_instance_id = p.service_instance_id WHERE s.service_name = ?1",
-                [victim], |row| row.get(0)
-            ).unwrap();
+            let pid: i32 = registry
+                .query_row(
+                    "SELECT p.pid FROM processes p WHERE p.service_name = ?1",
+                    [victim],
+                    |row| row.get(0),
+                )
+                .unwrap();
             assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
             // A 30s probe cannot explain completion inside this bound. The marker
             // proves the failure occurred while its child was actually running.
@@ -779,7 +841,6 @@ fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
     let unfinished: i64 = registry
         .query_row(
             "SELECT (SELECT count(*) FROM processes WHERE status IN ('starting','running','ready'))
-              + (SELECT count(*) FROM run_leases WHERE status IN ('active','canceling'))
               + (SELECT count(*) FROM ports WHERE status IN ('reserved','active'))",
             [],
             |row| row.get(0),
@@ -787,7 +848,12 @@ fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
         .unwrap();
     assert_eq!(
         unfinished, 0,
-        "cancellation must continue service and lease cleanup"
+        "cancellation must continue process and endpoint cleanup"
+    );
+    assert_eq!(
+        stored_execution_outcome(&fixture),
+        "succeeded",
+        "late cancellation must not rewrite completed execution"
     );
 }
 
@@ -796,8 +862,6 @@ fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
     let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
-        "serviceLifetime": "run-scoped",
-
         "steps": { "only": { "task": "smoke" } }
     });
     let fixture = RuntimeFixture::new(manifest);
@@ -966,4 +1030,264 @@ fn optional_host_ephemeral_observation_warns_without_executing_children() {
         bounds[0], bounds[1]
     )));
     assert!(!fixture.state_base.exists());
+}
+
+#[test]
+fn slot_ownership_ps_absence_has_no_filesystem_effects() {
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "0".into()]));
+    let output = fixture.command("ps", &[]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!({"processes": []})
+    );
+    assert!(!fixture.state_base.exists());
+}
+
+#[test]
+fn slot_ownership_rejects_competing_mutations_but_allows_read_only_ps() {
+    let tmp = TempDir::new();
+    let started = tmp.path.join("started");
+    let release = tmp.path.join("release");
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&[
+        "prepare".into(),
+        started.to_str().unwrap().into(),
+        release.to_str().unwrap().into(),
+    ]));
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&started, Duration::from_secs(5)));
+    let registry = fixture
+        .state_base
+        .join("registry/runtime-test/dev/0/registry.sqlite3");
+    let counts = || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &registry,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        conn.query_row(
+            "SELECT (SELECT count(*) FROM runs), (SELECT count(*) FROM events), (SELECT count(*) FROM processes)",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+        )
+        .unwrap()
+    };
+    // The child marker may precede durable process registration. Establish a
+    // committed owner baseline before attributing later writes to contenders.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let before = loop {
+        let snapshot = counts();
+        if snapshot.2 == 1 {
+            break snapshot;
+        }
+        if std::time::Instant::now() >= deadline {
+            fs::write(&release, b"").unwrap();
+            let _ = wait_for_child_output(owner, Duration::from_secs(5));
+            panic!("owner did not commit its process evidence");
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let ps = fixture.command("ps", &[]).output().unwrap();
+    let competitor = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .output()
+        .unwrap();
+    let clean = fixture.command("clean", &[]).output().unwrap();
+    let after = counts();
+    // Release before assertions so failure cannot leave the admitted child waiting.
+    fs::write(&release, b"").unwrap();
+    let owner = wait_for_child_output(owner, Duration::from_secs(5));
+    assert!(
+        owner.status.success(),
+        "{}",
+        String::from_utf8_lossy(&owner.stderr)
+    );
+    assert!(
+        ps.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ps.stderr)
+    );
+    let report: Value = serde_json::from_slice(&ps.stdout).unwrap();
+    let processes = report["processes"].as_array().unwrap();
+    assert_eq!(processes.len(), 1);
+    assert_eq!(processes[0]["live"], true);
+    assert!(processes[0].get("borrowerCount").is_none());
+    assert!(processes[0].get("serviceLifetime").is_none());
+    assert!(!competitor.status.success());
+    assert!(!clean.status.success());
+    assert_eq!(
+        before, after,
+        "read-only ps and losing commands cannot mutate registry evidence"
+    );
+    assert_eq!(before.0, 1);
+}
+
+#[test]
+fn removed_state_epoch_rejects_before_slot_or_child_effects() {
+    for epoch in [json!("1"), Value::Null] {
+        let mut manifest = leaf_task_manifest(&["exit".into(), "0".into()]);
+        manifest["state"]["stateEpoch"] = epoch;
+        let fixture = RuntimeFixture::new(manifest);
+        let result = run(&fixture, &["--task", "smoke", "--output", "json"]);
+        assert!(!result.status.success());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("MANIFEST_INVALID"), "{error}");
+        assert!(error.contains("stateEpoch"), "{error}");
+        assert!(!fixture.state_base.exists());
+    }
+}
+
+#[test]
+fn changed_service_startup_failure_preserves_persistent_data() {
+    let mut manifest = task_manifest(&["exit".into(), "0".into()]);
+    manifest["state"]["persistence"] = json!("persistent");
+    let fixture = RuntimeFixture::new(&manifest);
+    let first = run(&fixture, &["--task", "smoke", "--output", "json"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let data = fixture.state_base.join("data/runtime-test/dev/0");
+    let sentinel = data.join("application-format");
+    fs::write(&sentinel, b"application-owned format").unwrap();
+    let marker: Value =
+        serde_json::from_slice(&fs::read(data.join(".nixfied-state.json")).unwrap()).unwrap();
+    assert!(marker.get("stateEpoch").is_none());
+    let program =
+        manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0].clone();
+    manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
+        json!([program, "exit", "7"]);
+    fs::write(
+        &fixture.manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let failed = run(&fixture, &["--task", "smoke", "--output", "json"]);
+    assert!(!failed.status.success());
+    assert_eq!(fs::read(&sentinel).unwrap(), b"application-owned format");
+    let connection = rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (starts, cleanups): (i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM events WHERE event_type = 'service.starting'),
+                (SELECT count(*) FROM cleanups)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        starts, 2,
+        "changed configuration must reach application startup"
+    );
+    assert_eq!(cleanups, 0, "startup failure grants no deletion authority");
+}
+
+#[test]
+fn removed_service_lifetime_rejects_before_slot_or_child_effects() {
+    for obsolete in ["run-scoped", "until-idle", "persistent-until-down"] {
+        let mut value = leaf_task_manifest(&["exit".into(), "0".into()]);
+        value["tasks"]["smoke"]["serviceLifetime"] = json!(obsolete);
+        let fixture = RuntimeFixture::new(value);
+        let output = fixture
+            .command("run", &["--task", "smoke", "--output", "json"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("MANIFEST_INVALID"), "{error}");
+        assert!(error.contains("serviceLifetime"), "{error}");
+        assert!(!fixture.state_base.exists());
+    }
+}
+
+#[test]
+fn session_owns_and_stops_services_before_the_next_run() {
+    let fixture = RuntimeFixture::new(task_manifest(&["exit".into(), "0".into()]));
+    let mut keys = Vec::new();
+    for _ in 0..2 {
+        let output = fixture
+            .command("run", &["--task", "smoke", "--output", "json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let services = report["services"].as_array().unwrap();
+        assert_eq!(services.len(), 1);
+        keys.push(services[0]["processKey"].as_str().unwrap().to_string());
+        let port = services[0]["selectedEndpoint"]["port"].as_u64().unwrap() as u16;
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "completed session retains a listener"
+        );
+        let ps = fixture.command("ps", &[]).output().unwrap();
+        assert!(ps.status.success());
+        let rows: Value = serde_json::from_slice(&ps.stdout).unwrap();
+        assert!(
+            rows["processes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["live"] == false)
+        );
+    }
+    assert_ne!(
+        keys[0], keys[1],
+        "separate sessions must own separate service processes"
+    );
+    let connection = rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let stopped: i64 = connection.query_row("SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL AND status = 'stopped'", [], |row| row.get(0)).unwrap();
+    assert_eq!(stopped, 2);
+    let successful_sessions: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM runs WHERE execution_outcome = 'succeeded'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        successful_sessions, 2,
+        "successor recovery must preserve the first outcome"
+    );
+    let outcomes_before_teardown: i64 = connection.query_row(
+        "SELECT count(*) FROM events outcome JOIN events stopped ON stopped.run_id = outcome.run_id
+         WHERE outcome.event_type = 'run.execution-settled' AND stopped.event_type = 'service.stopped'
+           AND outcome.seq < stopped.seq", [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(outcomes_before_teardown, 2);
+}
+
+fn stored_execution_outcome(fixture: &RuntimeFixture) -> String {
+    let connection = rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    connection
+        .query_row("SELECT execution_outcome FROM runs", [], |row| row.get(0))
+        .unwrap()
 }

@@ -12,12 +12,13 @@ use crate::output::{EvidenceMode, ReplayTicket};
 use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
-    CapturedExec, CapturedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService,
-    TerminationReason, platform_start_identity, resolve_exec_cwd, spawn_captured_exec,
+    CapturedExec, CapturedExecOutcome, CapturedExecTransition, ExecSubstitution, ReadyService,
+    SlotEndpoints, TerminationReason, platform_start_identity, resolve_exec_cwd,
+    spawn_captured_exec,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
-    record_task_canceling, record_task_started,
+    record_task_canceling, record_task_observed, record_task_started,
 };
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
@@ -72,6 +73,10 @@ pub enum TaskExecution {
 #[derive(Debug)]
 pub enum TaskExecutionError {
     BeforeTerminal(Box<RuntimeError>),
+    ObservedWithoutEvidence {
+        error: Box<RuntimeError>,
+        outcome: crate::registry::session::ExecutionOutcome,
+    },
     AfterTerminal {
         error: Box<RuntimeError>,
         evidence: Box<CompletedEvidence>,
@@ -92,7 +97,9 @@ impl TaskExecutionError {
 
     pub fn error(&self) -> &RuntimeError {
         match self {
-            Self::BeforeTerminal(error) | Self::AfterTerminal { error, .. } => error,
+            Self::BeforeTerminal(error)
+            | Self::AfterTerminal { error, .. }
+            | Self::ObservedWithoutEvidence { error, .. } => error,
         }
     }
 }
@@ -135,7 +142,7 @@ pub fn run_dependent_task_cancellable(
     placement: &HostPlacement,
     registry: &mut Registry,
     run_context: RunContext<'_>,
-    dependencies: &[&StartedService],
+    dependencies: &[&ReadyService],
     node_id: &str,
     occurrence: u64,
     task: &ExecTask,
@@ -259,8 +266,19 @@ pub fn run_dependent_task_cancellable(
         .complete(
             cancellation,
             || check_services_live(dependencies),
-            |reason| {
-                record_task_cancellation_intent(
+            |transition| match transition {
+                CapturedExecTransition::Observed(outcome) => {
+                    let (exit_code, terminal) = task_terminal(task, outcome);
+                    record_task_observed(
+                        registry,
+                        run_context.run_id,
+                        &process_key,
+                        run_context.admission.common().computed_manifest_hash(),
+                        execution_outcome(terminal),
+                        exit_code,
+                    )
+                }
+                CapturedExecTransition::Terminating(reason) => record_task_cancellation_intent(
                     registry,
                     &TaskCancellationContext {
                         run_id: run_context.run_id,
@@ -277,7 +295,7 @@ pub fn run_dependent_task_cancellable(
                         TerminationReason::TimedOut => "task timeout",
                         TerminationReason::ObservationFailed => "session observation failed",
                     },
-                )
+                ),
             },
         )
         .map_err(|failure| {
@@ -287,6 +305,10 @@ pub fn run_dependent_task_cancellable(
                 if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
                     error = error.with_cause(outcome_error);
                 }
+                return TaskExecutionError::ObservedWithoutEvidence {
+                    error: Box::new(error),
+                    outcome: execution_outcome(terminal),
+                };
             }
             TaskExecutionError::before(error)
         })?;
@@ -361,6 +383,15 @@ pub fn run_dependent_task_cancellable(
     }
 }
 
+fn execution_outcome(terminal: TaskTerminalStatus) -> crate::registry::session::ExecutionOutcome {
+    use crate::registry::session::ExecutionOutcome;
+    match terminal {
+        TaskTerminalStatus::Succeeded => ExecutionOutcome::Succeeded,
+        TaskTerminalStatus::Failed | TaskTerminalStatus::TimedOut => ExecutionOutcome::Failed,
+        TaskTerminalStatus::Canceled => ExecutionOutcome::Canceled,
+    }
+}
+
 fn task_terminal(
     task: &ExecTask,
     outcome: &CapturedExecOutcome,
@@ -420,7 +451,7 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-fn check_services_live(services: &[&StartedService]) -> RuntimeResult<()> {
+fn check_services_live(services: &[&ReadyService]) -> RuntimeResult<()> {
     for service in services {
         service.check_liveness()?;
     }
@@ -432,7 +463,7 @@ fn check_services_live(services: &[&StartedService]) -> RuntimeResult<()> {
 fn ensure_task_dependencies(
     registry: &Registry,
     task: &ExecTask,
-    dependencies: &[&StartedService],
+    dependencies: &[&ReadyService],
 ) -> RuntimeResult<()> {
     for service_name in &task.requires {
         let service = dependencies
@@ -530,7 +561,10 @@ mod tests {
         ));
         std::fs::create_dir(&root).unwrap();
         let mut registry = Registry::open_or_create(
-            root.join("registry.sqlite3"),
+            crate::state::ownership::fixture_guard(
+                &root,
+                &RegistryIdentity::default_slot("test", "abi", "toolchain"),
+            ),
             &RegistryIdentity::default_slot("test", "abi", "toolchain"),
         )
         .unwrap();

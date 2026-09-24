@@ -17,7 +17,6 @@ pub struct StateIdentity {
     pub project_id: String,
     pub environment: String,
     pub slot: u32,
-    pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
     pub manifest_path: PathBuf,
@@ -46,7 +45,6 @@ impl StateIdentity {
             project_id: manifest.project.project_id.clone(),
             environment: environment.to_string(),
             slot,
-            state_epoch: manifest.state.state_epoch.clone(),
             cleanup_policy: manifest.state.cleanup_policy.clone(),
             persistence: manifest.state.persistence.clone(),
             manifest_path: admission.manifest_path().to_path_buf(),
@@ -68,7 +66,6 @@ pub struct StateMarker {
     pub slot: u32,
     pub state_kind: StateKind,
     pub service_instance_id: Option<String>,
-    pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
     pub manifest_path: PathBuf,
@@ -81,14 +78,13 @@ pub struct StateMarker {
 impl StateMarker {
     pub fn slot(identity: &StateIdentity) -> Self {
         Self {
-            marker_version: 1,
+            marker_version: 2,
             marker_identity: identity.marker_identity.clone(),
             project_id: identity.project_id.clone(),
             environment: identity.environment.clone(),
             slot: identity.slot,
             state_kind: StateKind::Slot,
             service_instance_id: None,
-            state_epoch: identity.state_epoch.clone(),
             cleanup_policy: identity.cleanup_policy.clone(),
             persistence: identity.persistence.clone(),
             manifest_path: identity.manifest_path.clone(),
@@ -104,7 +100,7 @@ impl StateMarker {
     /// deliberately blind to which manifest build last used the root — a manifest
     /// evolves, its slot does not.
     pub fn matches_ownership(&self, identity: &StateIdentity) -> bool {
-        self.marker_version == 1
+        self.marker_version == 2
             && self.marker_identity == identity.marker_identity
             && self.project_id == identity.project_id
             && self.environment == identity.environment
@@ -113,12 +109,9 @@ impl StateMarker {
             && self.service_instance_id.is_none()
     }
 
-    /// Classify this marker against the requested identity. Ownership and
-    /// runtime ABI gate access; everything else is provenance — a difference
-    /// there means the same slot was last used by another manifest build and
-    /// must be upgraded in place, not refused. A state-epoch difference is the
-    /// manifest's declared state-compatibility boundary, so it upgrades with a
-    /// state clean.
+    /// Ownership, framework ABI, and existing retention authorization gate
+    /// access. Other differences update provenance without declaring application
+    /// data compatibility or authorizing deletion.
     pub fn compare(&self, identity: &StateIdentity) -> MarkerComparison {
         if !self.matches_ownership(identity) {
             return MarkerComparison::RefuseOwnership;
@@ -126,8 +119,12 @@ impl StateMarker {
         if self.runtime_abi != identity.runtime_abi {
             return MarkerComparison::RefuseAbi;
         }
-        if self.state_epoch != identity.state_epoch {
-            return MarkerComparison::UpgradeEpoch;
+        if (self.persistence == PersistencePolicy::Persistent
+            && identity.persistence != PersistencePolicy::Persistent)
+            || (self.cleanup_policy == CleanupPolicy::Protected
+                && identity.cleanup_policy != CleanupPolicy::Protected)
+        {
+            return MarkerComparison::RefuseRetention;
         }
         let provenance_matches = self.manifest_path == identity.manifest_path
             && self.computed_manifest_hash == identity.computed_manifest_hash
@@ -147,7 +144,7 @@ impl StateMarker {
 pub enum MarkerComparison {
     Match,
     UpgradeProvenance,
-    UpgradeEpoch,
+    RefuseRetention,
     RefuseOwnership,
     RefuseAbi,
 }
@@ -159,13 +156,8 @@ pub enum MarkerDecision {
     Fresh,
     /// The marker matches the requested identity exactly.
     Adopt(StateMarker),
-    /// Same owner, different manifest build: tear down what the old manifest left
-    /// behind, clean the state root when the state epoch changed, and rewrite
-    /// the marker.
-    Upgrade {
-        clean_state: bool,
-        existing: StateMarker,
-    },
+    /// Same owner and retention authorization, different recorded provenance.
+    Upgrade { existing: StateMarker },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,14 +198,11 @@ pub fn evaluate_slot_marker(
     let existing = read_marker(&placement.state_root)?;
     match existing.compare(identity) {
         MarkerComparison::Match => Ok(MarkerDecision::Adopt(existing)),
-        MarkerComparison::UpgradeProvenance => Ok(MarkerDecision::Upgrade {
-            clean_state: false,
-            existing,
-        }),
-        MarkerComparison::UpgradeEpoch => Ok(MarkerDecision::Upgrade {
-            clean_state: true,
-            existing,
-        }),
+        MarkerComparison::UpgradeProvenance => Ok(MarkerDecision::Upgrade { existing }),
+        MarkerComparison::RefuseRetention => Err(RuntimeError::new(
+            ErrorCode::CleanupRefused,
+            "state preparation cannot weaken existing retention authorization",
+        )),
         MarkerComparison::RefuseOwnership => Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             "existing state marker is owned by a different project/environment/slot identity",
