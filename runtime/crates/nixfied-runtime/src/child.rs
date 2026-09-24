@@ -1,11 +1,14 @@
 //! Sole owner of direct-child wait operations. Containment and capture remain
 //! separate obligations after the process has been reaped.
 
+use std::cell::RefCell;
 use std::io;
 use std::process::{Child, ExitStatus};
 
+/// Shared checkpoint references may observe this owner on the execution thread.
+/// The cell is not Sync and never lends the raw OS child to callers.
 pub(crate) struct OwnedChild {
-    state: ChildState,
+    state: RefCell<ChildState>,
 }
 
 enum ChildState {
@@ -16,28 +19,29 @@ enum ChildState {
 impl From<Child> for OwnedChild {
     fn from(child: Child) -> Self {
         Self {
-            state: ChildState::Unreaped(child),
+            state: RefCell::new(ChildState::Unreaped(child)),
         }
     }
 }
 
 impl OwnedChild {
     pub(crate) fn id(&self) -> u32 {
-        match &self.state {
+        match &*self.state.borrow() {
             ChildState::Unreaped(child) => child.id(),
             ChildState::Reaped { pid, .. } => *pid,
         }
     }
 
-    pub(crate) fn observe(&mut self) -> io::Result<Option<ExitStatus>> {
-        match &mut self.state {
+    pub(crate) fn observe(&self) -> io::Result<Option<ExitStatus>> {
+        let mut state = self.state.borrow_mut();
+        match &mut *state {
             ChildState::Reaped { status, .. } => Ok(Some(*status)),
             ChildState::Unreaped(child) => {
                 let pid = child.id();
                 match child.try_wait()? {
                     None => Ok(None),
                     Some(status) => {
-                        self.state = ChildState::Reaped { pid, status };
+                        *state = ChildState::Reaped { pid, status };
                         Ok(Some(status))
                     }
                 }
@@ -45,11 +49,12 @@ impl OwnedChild {
         }
     }
 
-    pub(crate) fn kill(&mut self) -> io::Result<()> {
+    pub(crate) fn kill(&self) -> io::Result<()> {
         // Observe first: a completed child's numeric PID is no longer signaling
         // authority. The reaped alternative contains no OS child handle.
         self.observe()?;
-        match &mut self.state {
+        let mut state = self.state.borrow_mut();
+        match &mut *state {
             ChildState::Unreaped(child) => child.kill(),
             ChildState::Reaped { .. } => Ok(()),
         }
@@ -72,7 +77,7 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut owned = OwnedChild::from(child);
+        let owned = OwnedChild::from(child);
         let pid = owned.id();
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {
@@ -95,6 +100,6 @@ mod tests {
         owned.kill().unwrap();
         assert_eq!(owned.id(), pid);
         assert_eq!(owned.observe().unwrap().unwrap().code(), Some(7));
-        assert!(matches!(owned.state, ChildState::Reaped { .. }));
+        assert!(matches!(*owned.state.borrow(), ChildState::Reaped { .. }));
     }
 }
