@@ -309,6 +309,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   startup guards and child resources; committed readiness consumes a starting
   handle into a ready owner. Failure settlement consumes that ownership, and
   session finalization stops every remaining service and settles its capture.
+- **Direct-child reaping has one implementation.** A private child owner holds
+  either the unreaped OS child or its immutable PID and exit status. Observation
+  consumes the OS handle on exit; later observations return retained evidence,
+  and direct kill cannot target the reaped alternative. Service and invocation
+  cleanup share this owner while retaining separate containment and capture
+  obligations.
 - **Descendant evidence stays on the execution thread.** Service checkpoints
   refresh retained descendant identities and escape evidence directly. There is
   no background scanner, shared monitor mutex, or ignored monitor join. Ready

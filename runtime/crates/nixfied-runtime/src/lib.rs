@@ -3,6 +3,7 @@ compile_error!("nixfied-runtime supports only Linux and macOS");
 
 pub mod admission;
 pub mod cancellation;
+mod child;
 pub mod control;
 pub mod error;
 pub mod execution;

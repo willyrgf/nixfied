@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::admission::secrets::ResolvedSecrets;
 use crate::admission::{ControlAdmission, RunAdmission};
 use crate::cancellation::{CancellationToken, canceled_error};
+use crate::child::OwnedChild;
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
@@ -308,7 +309,7 @@ impl std::fmt::Debug for ReadyService {
 /// move-out during consuming teardown.
 struct OwnedService {
     info: ServiceInfo,
-    child: Option<Child>,
+    child: OwnedChild,
     descendants: DescendantTracker,
     service: ExecService,
     ready_probe: PreparedProbe,
@@ -322,12 +323,6 @@ struct OwnedService {
 }
 
 impl OwnedService {
-    fn child_mut(&mut self) -> &mut Child {
-        self.child
-            .as_mut()
-            .expect("owned child is present until consuming teardown")
-    }
-
     pub fn wait_for_probe_ready_cancellable(
         &mut self,
         registry: &mut Registry,
@@ -541,7 +536,7 @@ impl OwnedService {
         if let Some(error) = self.escape_error() {
             return Err(error);
         }
-        if let Some(status) = self.child_mut().try_wait().map_err(|error| {
+        if let Some(status) = self.child.observe().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
                 format!("failed to inspect foreground service child: {error}"),
@@ -817,7 +812,7 @@ impl OwnedService {
         if let Err(error) = record_lifecycle_started(registry, &context, &stop_record) {
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
-        let observed = match self.child_mut().try_wait() {
+        let observed = match self.child.observe() {
             Ok(observed) => observed,
             Err(error) => {
                 return Err(self.settle_failed_service(
@@ -1067,10 +1062,7 @@ impl OwnedService {
         &mut self,
         containment: RuntimeResult<()>,
     ) -> (RuntimeResult<()>, RuntimeResult<()>) {
-        let reaped = match self.child.as_mut() {
-            Some(child) => reap_owned_child(child),
-            None => Ok(()),
-        };
+        let reaped = reap_owned_child(&mut self.child);
         let containment = match (containment, reaped) {
             (Ok(()), result) | (result, Ok(())) => result,
             (Err(error), Err(reap)) => Err(error.with_cause(reap)),
@@ -1283,10 +1275,8 @@ fn endpoint_failure_error(
 
 impl Drop for OwnedService {
     fn drop(&mut self) {
-        let Some(child) = &mut self.child else {
-            return;
-        };
-        if child.try_wait().ok().flatten().is_none() {
+        let child = &mut self.child;
+        if child.observe().ok().flatten().is_none() {
             let _ = signal_process_group(self.info.pgid, libc::SIGTERM);
             if wait_for_child_exit(child, 100).ok() != Some(true) {
                 let _ = signal_process_group(self.info.pgid, libc::SIGKILL);
@@ -1559,7 +1549,7 @@ pub(super) fn start_service_with_lock_root(
     // Before the start record commits, cleanup owns the child and capture, but
     // may settle startup only after proving containment.
     let mut fail_unrecorded = |registry: &mut Registry,
-                               child: &mut Child,
+                               child: &mut OwnedChild,
                                context: &LifecycleEventContext,
                                pgid,
                                error: RuntimeError| {
@@ -1597,7 +1587,7 @@ pub(super) fn start_service_with_lock_root(
     let (pgid, platform_start) = match observed {
         Ok(identity) => identity,
         Err(error) => {
-            let mut child = pending.abort();
+            let mut child = OwnedChild::from(pending.abort());
             return Err(fail_unrecorded(
                 registry,
                 &mut child,
@@ -1642,7 +1632,7 @@ pub(super) fn start_service_with_lock_root(
             (failure.child, Some(*failure.error))
         }
         Err(failure) => {
-            let mut child = failure.child;
+            let mut child = OwnedChild::from(failure.child);
             return Err(fail_unrecorded(
                 registry,
                 &mut child,
@@ -1667,7 +1657,7 @@ pub(super) fn start_service_with_lock_root(
                 service_name: service.name.to_string(),
                 primary_endpoint: service.primary_endpoint.clone(),
             },
-            child: Some(child),
+            child: child.into(),
             descendants,
             service: service.clone(),
             ready_probe,
@@ -1788,7 +1778,7 @@ fn settle_reserved_failure(
 }
 
 fn terminate_unrecorded_child(
-    child: &mut Child,
+    child: &mut OwnedChild,
     observed_pgid: Option<i32>,
     service: &ExecService,
     run_timeout_ms: u64,
@@ -1982,10 +1972,10 @@ pub(crate) enum CapturedExecOutcome {
     Canceled,
 }
 
-/// A task records its process between spawn and consuming completion. Probes
-/// proceed directly to completion. This owner has no registry dependency.
+/// Capture and containment obligations survive direct-child reaping. Tasks and
+/// probes both register before entering this owner; it has no registry dependency.
 pub(crate) struct OwnedCapturedChild {
-    child: Child,
+    child: OwnedChild,
     capture: Option<RedactedLogRelays>,
     timeout: Option<Duration>,
     label: String,
@@ -2039,7 +2029,7 @@ impl PendingCapturedChild {
 
     fn owned(&mut self, child: Child) -> OwnedCapturedChild {
         OwnedCapturedChild {
-            child,
+            child: child.into(),
             capture: self.capture.take(),
             timeout: self.timeout,
             label: std::mem::take(&mut self.label),
@@ -2109,7 +2099,7 @@ impl OwnedCapturedChild {
             if let Err(error) = checkpoint() {
                 break Err(error);
             }
-            match self.child.try_wait() {
+            match self.child.observe() {
                 Ok(Some(status)) => break Ok(CapturedExecOutcome::Exited(status)),
                 Ok(None) => {}
                 Err(error) => {
@@ -2225,7 +2215,7 @@ fn completion_error(
 
 /// Finish an owned bounded child, including descendants left after direct exit.
 /// Reaping is attempted even if group containment fails; it cannot erase that failure.
-pub(crate) fn terminate_and_reap(child: &mut Child, pgid: i32) -> RuntimeResult<()> {
+pub(crate) fn terminate_and_reap(child: &mut OwnedChild, pgid: i32) -> RuntimeResult<()> {
     let containment = terminate_process_group(pgid, 1000);
     let reaped = reap_owned_child(child);
     match (containment, reaped) {
@@ -2234,7 +2224,7 @@ pub(crate) fn terminate_and_reap(child: &mut Child, pgid: i32) -> RuntimeResult<
     }
 }
 
-fn reap_owned_child(child: &mut Child) -> RuntimeResult<()> {
+fn reap_owned_child(child: &mut OwnedChild) -> RuntimeResult<()> {
     if wait_for_child_exit(child, 1000)? {
         return Ok(());
     }
@@ -2454,7 +2444,7 @@ fn ensure_foreground_child_alive(
             super::OBSERVATION_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
         );
     }
-    match service.child_mut().try_wait().map_err(|error| {
+    match service.child.observe().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("failed to inspect service child: {error}"),
@@ -2667,11 +2657,11 @@ pub(crate) fn wait_until_process_group_empty(pgid: i32, timeout_ms: u64) -> Runt
     }
 }
 
-pub(crate) fn wait_for_child_exit(child: &mut Child, timeout_ms: u64) -> RuntimeResult<bool> {
+pub(crate) fn wait_for_child_exit(child: &mut OwnedChild, timeout_ms: u64) -> RuntimeResult<bool> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     while Instant::now() < deadline {
         if child
-            .try_wait()
+            .observe()
             .map_err(|error| RuntimeError::new(ErrorCode::ProcEscape, error.to_string()))?
             .is_some()
         {
