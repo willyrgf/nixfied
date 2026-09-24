@@ -662,6 +662,78 @@ fn service_exit_interrupts_a_task_without_deadline() {
 }
 
 #[test]
+fn service_failure_interrupts_another_services_exec_probe() {
+    for phase in ["ready", "health"] {
+        for victim in ["synthetic", "later"] {
+            let probe_marker = tempfile_marker("probe-observation");
+            let task_marker = tempfile_marker("unreleased-task");
+            let port = available_port_window(2);
+            let mut manifest = task_manifest_at(
+                &["prepare".into(), task_marker.to_string_lossy().into_owned()],
+                port,
+            );
+            manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
+            let mut later = manifest["services"]["synthetic"].clone();
+            later["connectsTo"] = json!(["synthetic"]);
+            for operation in ["start", "ready", "health", "stop", "clean"] {
+                later["lifecycle"][operation]["operationId"] = json!(format!("later.{operation}"));
+            }
+            let mut probe_invocation = manifest["tasks"]["smoke"]["invocation"].clone();
+            let program = probe_invocation["run"][0].clone();
+            probe_invocation["run"] = json!([
+                program,
+                "output",
+                "hex-block",
+                "",
+                "",
+                probe_marker.to_string_lossy()
+            ]);
+            later["lifecycle"][phase]["probe"] = json!({
+                "kind": "exec", "invocation": probe_invocation,
+                "timeoutMs": 30000, "retryIntervalMs": 100, "maxAttempts": 1
+            });
+            manifest["services"]["later"] = later;
+            manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
+            let fixture = RuntimeFixture::new(manifest);
+            let child = fixture
+                .command("run", &["--task", "smoke", "--output", "json"])
+                .spawn()
+                .unwrap();
+            assert!(
+                wait_for_path(&probe_marker, Duration::from_secs(5)),
+                "{phase} probe did not start"
+            );
+            let registry = rusqlite::Connection::open(
+                common::find_named(&fixture.state_base, "registry.sqlite3").unwrap(),
+            )
+            .unwrap();
+            let pid: i32 = registry.query_row(
+                "SELECT p.pid FROM processes p JOIN services s ON s.service_instance_id = p.service_instance_id WHERE s.service_name = ?1",
+                [victim], |row| row.get(0)
+            ).unwrap();
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+            // A 30s probe cannot explain completion inside this bound. The marker
+            // proves the failure occurred while its child was actually running.
+            let output = wait_for_child_output(child, Duration::from_secs(6));
+            assert!(!output.status.success());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains(if victim == "later" {
+                    "PROC_ESCAPE"
+                } else {
+                    "DEPENDENCY_UNAVAILABLE"
+                }),
+                "{error}"
+            );
+            assert!(
+                !task_marker.exists(),
+                "no task may start after observed service failure"
+            );
+        }
+    }
+}
+
+#[test]
 fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
     use std::io::Read;
     let count = 1024 * 1024;

@@ -31,6 +31,8 @@ primitive HealthSpec: operationId probe terminal
 primitive StopSpec: operationId signal timeoutMs terminal
 primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
+# Exec-probe waits and retry delays observe the current service and all started
+# session services; observation failure stops further work before ready commit.
 primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
 primitive TaskSpec: kind defaultOutput serviceLifetime operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs

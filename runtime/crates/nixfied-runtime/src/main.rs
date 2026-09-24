@@ -865,20 +865,31 @@ fn run_m0_placed(
                 current_service.info().owner_token.clone(),
             ));
         }
-        let mut current_service = match current_service.ready(&mut session.registry, cancellation) {
-            Ok(service) => service,
-            Err(failure) => {
-                let (service, error) = failure.into_parts();
-                let failed_service_output = service_output(service.info());
-                let error =
-                    service.finalize_failed_start(&mut session.registry, options.timeout_ms, error);
-                finish_run!(
-                    error.with_detail("failedService", service_name),
-                    vec![failed_service_output]
-                );
+        let mut checkpoint = || {
+            for service in &session.started {
+                service.check_liveness()?;
             }
+            Ok(())
         };
-        let startup_result = current_service.check_health(&mut session.registry, cancellation);
+        let mut current_service =
+            match current_service.ready(&mut session.registry, cancellation, &mut checkpoint) {
+                Ok(service) => service,
+                Err(failure) => {
+                    let (service, error) = failure.into_parts();
+                    let failed_service_output = service_output(service.info());
+                    let error = service.finalize_failed_start(
+                        &mut session.registry,
+                        options.timeout_ms,
+                        error,
+                    );
+                    finish_run!(
+                        error.with_detail("failedService", service_name),
+                        vec![failed_service_output]
+                    );
+                }
+            };
+        let startup_result =
+            current_service.check_health(&mut session.registry, cancellation, &mut checkpoint);
         if let Err(error) = startup_result {
             let failed_service_output = service_output(current_service.info());
             let error = current_service.finalize_failed_start(
