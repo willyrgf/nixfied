@@ -6,6 +6,7 @@ pub mod cancellation;
 pub mod control;
 pub mod error;
 pub mod execution;
+mod filesystem;
 pub mod manifest_loader;
 pub mod output;
 pub mod redaction;
