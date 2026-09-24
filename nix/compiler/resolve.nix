@@ -5,10 +5,10 @@
   module,
 }:
 let
-  authoring = import ../meta/authoring.nix { inherit lib pkgs system; };
+  providers = import ../modules/providers.nix { inherit lib pkgs system; };
 in
 lib.evalModules {
-  specialArgs = authoring.specialArgs;
+  specialArgs = providers.bindings;
   modules = [
     ../modules/default.nix
     module

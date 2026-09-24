@@ -77,7 +77,7 @@ let
 in
 assert (checked.project "function" "library").identity 42 == 42;
 assert builtins.length checked.entries == 4;
-assert rejects
+assert
   (
     (assemble [
       function
@@ -85,8 +85,36 @@ assert rejects
     ]).project
     "function"
     "library"
-  ).identity;
+  ).identity
+    42 == 42;
+assert
+  (
+    (assemble [
+      (
+        function
+        // {
+          references = [
+            {
+              kind = "topic";
+              id = "missing";
+            }
+          ];
+        }
+      )
+    ]).project
+    "function"
+    "library"
+  ).identity
+    42 == 42;
 
+assert rejects (
+  (assemble [
+    function
+    function
+  ]).project
+    "function"
+    "library"
+);
 assert checked.names "app" "project" == [ "inspect" ];
 assert (checked.project "app" "root").inspect.meta.description == "Inspect static content.";
 assert rejects

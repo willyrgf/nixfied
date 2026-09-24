@@ -135,12 +135,15 @@ data; they do not create another mutable object graph or convert through JSON
 to reconstruct one. Generated views enter the existing conversion, redaction,
 formatting and write boundaries, preserving native failure and path behavior.
 
-Each declaration assembly normalizes and checks static metadata before exposing
-projections. This forces malformed declarations without forcing configured
-values, native defaults, package bindings or host inputs. Declaration-only option
-evaluation uses the same raw lazy providers as normal compilation, before the
-checked publication facade exists. Independent audits observe final exports;
-the projections never depend on their own audits.
+Native bindings and presentation independently consume the same definitions.
+Module evaluation receives its arguments directly from their native providers;
+publication reference validation is not a compilation dependency. Manifest
+constructors validate only manifest structure, without unrelated runtime output
+storage or documentation topics. Presentation checks metadata and references
+when constructing the reference. Release checks require both consumers and
+whole-inventory coverage; native projections reject duplicate binding names.
+Configured values, defaults and executable string context retain their native
+owners and laziness.
 
 The reference is built from those facts and existing authored documents at the
 supplying framework revision. Its lookup index is disposable presentation data.
