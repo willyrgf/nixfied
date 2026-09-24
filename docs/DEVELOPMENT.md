@@ -170,10 +170,15 @@ native `types.ints.positive`, making its bound visible in the reference.
 
 Publication descriptors own actual library, adapter, injected-argument, app,
 package, check and shell names and descriptions. `nix/meta/publications.nix`
-checks the complete metadata assembly and references before projecting lazy
-native bindings. `nix/modules/providers.nix` supplies the same raw bindings to
-declaration-only evaluation before the checked facade exists. Final-export
-name audits run through `rust-workspace`, never as projection dependencies.
+checks the complete metadata assembly and references for documentation and
+release audits. Native binding projections independently check binding kinds
+and duplicate names. `nix/modules/providers.nix` supplies module arguments
+directly to evaluation; declaration-only presentation uses that same evaluator.
+`nix/meta/manifest-structure.nix` validates the manifest bundle for compilation;
+`nix/meta/default.nix` validates all bundles for generation and reference checks.
+Final-export name audits run through `rust-workspace`. The Nix gate poisons a
+documentation topic and private output storage separately, requiring valid
+PostgreSQL compilation while documentation and release checks reject each fault.
 
 This replaces the direct option-constructor imports in the four declaration
 modules, the adapter export attrset, the compiler's hand-maintained reserved-app

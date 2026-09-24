@@ -1,4 +1,4 @@
-# Checked publication metadata; native bindings remain lazy until selected.
+# Native bindings and checked presentation independently consume declarations.
 { lib }:
 {
   declarations,
@@ -136,19 +136,21 @@ let
         builtins.all validReference entry.references
       ) entries
     );
-  namespaces = builtins.mapAttrs (
-    _: scoped:
-    builtins.mapAttrs (
-      _: declarations:
-      builtins.listToAttrs (
-        map (d: {
-          name = d.name;
-          value = d;
-        }) declarations
-      )
-    ) (lib.groupBy (d: d.scope) scoped)
-  ) (lib.groupBy (d: d.kind) declarations);
-  select = kind: scope: namespaces.${kind}.${scope} or { };
+  select =
+    kind: scope:
+    let
+      selected = builtins.filter (d: d.kind == kind && d.scope == scope) declarations;
+      names = map (d: d.name) selected;
+    in
+    assert lib.assertMsg (
+      lib.unique names == names
+    ) "Nixfied publication: duplicate native binding (${kind}/${scope})";
+    builtins.listToAttrs (
+      map (declaration: {
+        name = declaration.name;
+        value = declaration;
+      }) selected
+    );
   bound =
     declaration:
     let
@@ -178,12 +180,13 @@ let
     else
       value;
 in
-builtins.seq valid {
-  inherit entries;
+{
+  entries = builtins.seq valid entries;
   project = kind: scope: builtins.mapAttrs (_: bound) (select kind scope);
   names = kind: scope: builtins.attrNames (select kind scope);
   audit =
     kind: scope: actual:
+    assert valid;
     assert lib.assertMsg (
       builtins.attrNames actual == builtins.attrNames (select kind scope)
     ) "Nixfied publication: final exports differ from descriptors (${kind}/${scope})";

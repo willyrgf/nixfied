@@ -1,7 +1,7 @@
 { lib, ... }:
 let
   inherit (lib) types;
-  vocabulary = (import ../meta/default.nix { inherit lib; }).vocabularyMap;
+  vocabulary = (import ../meta/manifest-structure.nix { inherit lib; }).vocabularyMap;
   inherit (import ../meta/options.nix { inherit lib; }) mkOption;
   positiveInt = types.ints.positive;
   port = types.addCheck types.int (value: value >= 1 && value <= 65535);

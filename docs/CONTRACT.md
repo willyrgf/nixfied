@@ -65,7 +65,11 @@ when the manifest/runtime contract changes.
   runtime need signals a missing generic primitive, not permission to specialize
   the runtime.
 - **NIX-API-1:** typed Nix modules are the public integration and correctness
-  layer. Project behavior compiles into generic primitives.
+  layer. Project behavior compiles into generic primitives. Compilation consumes
+  native bindings and validates executable intent independently of documentation
+  references and unrelated output storage metadata. Invalid presentation rejects
+  reference construction and release checks, without blocking valid manifest
+  compilation. Release checks require both consumers and whole-inventory coverage.
 - **SHELL-1 / NIX-1:** shell cannot own graph, validation, registry, liveness,
   summary, or cleanup semantics. Nix cannot own live supervision, cancellation,
   liveness, reconciliation, registry mutation, or cleanup.

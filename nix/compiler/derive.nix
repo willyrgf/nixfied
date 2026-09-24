@@ -8,7 +8,7 @@
 
 let
   inherit (lib) mapAttrs mapAttrsToList;
-  constructors = (import ../meta/default.nix { inherit lib; }).constructors;
+  constructors = (import ../meta/manifest-structure.nix { inherit lib; }).constructors;
   construct = name: constructors.${"primitive/" + name};
   targetLib = import ../lib/target.nix { inherit lib; };
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };

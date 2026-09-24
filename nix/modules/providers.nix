@@ -1,5 +1,4 @@
-# One lazy provider source for native evaluation and publication. No checked
-# facade is imported here, so declaration-only evaluation cannot recurse into it.
+# Native module arguments and their presentation descriptors share definitions.
 {
   lib,
   pkgs,
@@ -57,7 +56,7 @@ let
 in
 {
   inherit declarations adapters;
-  raw = builtins.listToAttrs (
+  bindings = builtins.listToAttrs (
     map (entry: {
       inherit (entry) name;
       value = entry.binding;

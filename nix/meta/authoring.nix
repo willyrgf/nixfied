@@ -1,4 +1,4 @@
-# Bootstrap raw native declarations, then expose checked provider projections.
+# Presentation consumes the same native module evaluation and definitions.
 {
   lib,
   pkgs,
@@ -6,9 +6,9 @@
 }:
 let
   providers = import ../modules/providers.nix { inherit lib pkgs system; };
-  evaluated = lib.evalModules {
-    specialArgs = providers.raw;
-    modules = [ ../modules/default.nix ];
+  evaluated = import ../compiler/resolve.nix {
+    inherit lib pkgs system;
+    module = { };
   };
   options = (import ./options.nix { inherit lib; }).collect evaluated.options;
   topics = import ../docs/topics.nix;
@@ -36,5 +36,4 @@ builtins.seq options {
     declarations
     publication
     ;
-  specialArgs = publication.project "argument" "module-argument";
 }

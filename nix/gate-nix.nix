@@ -167,6 +167,42 @@ rm -rf "$work"
     t0=$SECONDS
     echo "  framework reference (pinned sources, invalid project, no runtime dependency)" >&2
     framework_reference
+    compilation_isolation() {
+      local work source variant framework
+      work=$(mktemp -d)
+      source=$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)
+      for variant in topic output; do
+        framework="$work/$variant"
+        cp -R "$source" "$framework"
+        chmod -R u+w "$framework"
+        case "$variant" in
+          topic) sed -i 's/^  manifest = {/  renamed-manifest = {/' "$framework/nix/docs/topics.nix" ;;
+          output) sed -i 's/storage = "Box"/storage = "InvalidStorage"/' "$framework/nix/meta/outputs.nix" ;;
+        esac
+        nix build --no-link --impure --expr "
+          let f = builtins.getFlake (\"path:$framework\");
+          in (builtins.getAttr builtins.currentSystem f.lib).compileManifest
+            ($framework/examples/postgres/nixfied.nix)
+        " || fail "compilation isolation: $variant poisoned valid compilation"
+        if nix eval --impure --raw --expr "
+          let f = builtins.getFlake (\"path:$framework\");
+          in (builtins.getAttr builtins.currentSystem f.packages).docs.drvPath
+        " >"$work/docs-$variant" 2>"$work/error-$variant"; then
+          fail "compilation isolation: $variant did not reject reference construction"
+        fi
+        grep -Eq 'missing or wrong-kind reference|invalid field|invalid or colliding vocabulary|storage' "$work/error-$variant" \
+          || fail "compilation isolation: $variant failed for an unrelated reason"
+        if nix eval --impure --raw --expr "
+          let f = builtins.getFlake (\"path:$framework\");
+          in (builtins.getAttr builtins.currentSystem f.checks).rust-workspace.drvPath
+        " >"$work/check-$variant" 2>"$work/check-error-$variant"; then
+          fail "compilation isolation: $variant escaped release checks"
+        fi
+      done
+      rm -rf "$work"
+    }
+    echo "  compilation isolation (invalid presentation cannot gate valid manifests)" >&2
+    compilation_isolation
     runtime_sources() {
       # Executable source-identity matrix. Only current checkout files are copied.
 local work source variant product
