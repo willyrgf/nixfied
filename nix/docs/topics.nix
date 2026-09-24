@@ -43,6 +43,7 @@ in
       (fragment ../../docs/ARCHITECTURE.md "## Correctness in four layers")
       (fragment ../../docs/ARCHITECTURE.md "## Identity & placement")
       (fragment ../../docs/ARCHITECTURE.md "## Registry and liveness")
+      (fragment ../../docs/CONTRACT.md "## Internal workload gate")
       (fragment ../../docs/ARCHITECTURE.md "## Ports, state, containment")
     ];
     related = [

@@ -21,6 +21,9 @@ let
     placement-components = "runtime";
     surface = "commands";
     surface-help = "commands";
+    internal-workload-gate = "runtime";
+    workload-gate-request = "runtime";
+    workload-gate-failure = "runtime";
     "output-schema run-task-output" = "outputs";
     "output-schema run-summary-text" = "outputs";
     "output-schema run-error-summary-text" = "outputs";

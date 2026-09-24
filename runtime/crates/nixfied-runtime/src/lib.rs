@@ -7,6 +7,7 @@ pub mod control;
 pub mod error;
 pub mod execution;
 mod filesystem;
+pub mod launch;
 pub mod manifest_loader;
 pub mod output;
 pub mod redaction;
