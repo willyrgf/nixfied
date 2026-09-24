@@ -107,12 +107,13 @@ when the manifest/runtime contract changes.
   for the runtime's admission-only `check` command. Every runtime-backed control
   and exported task app accepts `-h` and `--help`; that help completes before
   manifest admission, source resolution, state materialisation, or execution. The
-  generated `.#help` app is instead a Nix-only projection of final current-flake
-  app metadata, sorted by app name and rendered without a caller-relative flake
-  reference. It maps to no runtime command, admits or executes no manifest, and
-  stays outside `runtimeAbi`. `projectApps` requires project-root `flake.nix`,
-  `flake.lock`, and `nixfied.nix`; its help app is source-bound and rejects a
-  current-flake context that does not match that source.
+  generated `.#help` app prints a catalog constructed from the generated app
+  definitions, sorted by name. It includes framework controls and exported verbs;
+  separately merged apps and later metadata overrides are excluded. Catalog
+  construction rejects invalid descriptions. It invokes no Nix commands, admits
+  or executes no manifest, and stays outside `runtimeAbi`. `projectApps` accepts
+  ordinary Nix module paths, functions, and attribute sets without requiring
+  root-level declaration files; help works independently of the caller directory.
 - **Reference discovery:** the Nix-only `docs` app reads the authoring and API
   reference from the same supplying framework source as `projectApps`. Root and
   project apps use `packages.<system>.docs`, whose supported interfaces are

@@ -203,10 +203,10 @@ adopter named, exported to the flake surface through
 the presentation metadata for each generated app: its key is the task id and
 its value is the exact nonempty user-facing description. Exported verbs share
 a namespace with framework apps reserved by VERB-1 and derive only from
-adopter-exported task names. Contextual help is a source-bound, reference-neutral
-Nix projection of final current-flake metadata; a mismatched caller context
-fails instead of projecting another flake. It adds nothing to the manifest algebra
-or runtime ABI. Environment
+adopter-exported task names. Generated help is a Nix-only catalog built from the same app definitions.
+It does not inspect the caller's final flake or require a particular module
+layout. Custom apps and later description overrides remain outside its scope.
+It adds nothing to the manifest algebra or runtime ABI. Environment
 **membership does not exist**: running a task brings up exactly the services
 its leaves require —
 `servicesRequired`, `operationBindings`, and operation ids are **derived**

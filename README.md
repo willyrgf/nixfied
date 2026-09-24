@@ -49,7 +49,7 @@ path is immediately runnable. In a Git worktree, stage `flake.nix` and
 git add flake.nix nixfied.nix  # Git worktrees only: expose new sources to Nix
 nix flake lock                 # pin the declared inputs
 git add flake.lock             # Git worktrees only: include the pin in the commit
-nix run .#help              # list every runnable command and its purpose
+nix run .#help              # list Nixfied-generated commands and their purpose
 nix run .#docs              # read the reference at this project's Nixfied revision
 nix build .#manifest        # evaluate, validate, and compile the manifest
 nix run .#manifest-check    # admit it without executing a task

@@ -90,10 +90,9 @@ nix run .#docs -- option nixfied.surface.verbs
 ```
 
 Verb descriptions are Nix-only app metadata and do not enter the manifest.
-`projectApps` accepts only the project-local, root-level `./nixfied.nix` form shown above in a flake with
-`flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
-sourced modules are unsupported so help can bind its catalog to the defining
-source.
+`projectApps` accepts ordinary Nix modules: paths (including subdirectories),
+functions, and attribute sets with composed `imports`. The installer uses
+`./nixfied.nix` by convention; help imposes no project layout requirement.
 
 Existing custom apps remain ordinary flake apps. Merge disjoint names into the
 generated attrset rather than wrapping Nixfied in another interface:
@@ -111,8 +110,7 @@ apps.${system} =
 ```
 
 The right-hand side of `//` wins, so keep custom names distinct from every app
-returned by `projectApps`. Give every custom app a nonempty `meta.description`
-so contextual help can describe the complete surface.
+returned by `projectApps`. Custom apps remain outside the generated help catalog.
 
 ## Discover the project surface
 
@@ -128,18 +126,15 @@ Catalog entries are reference-neutral names and descriptions. Replace `#help`
 in the invocation you used with `#<name>`; local adopter discovery therefore
 stays local (`.#help` → `.#check`).
 
-`.#help` evaluates the current system's final flake app set, so it includes
-framework apps, exported verbs, and custom apps merged after `projectApps`.
-Descriptions come only from each app's `meta.description`; a missing or invalid
-description fails the whole catalog instead of producing partial help. This Nix
-evaluation neither admits nor executes the manifest and does not materialise
-runtime state, but declaration or app evaluation errors surface directly.
+`.#help` prints the Nixfied-generated framework controls and exported verbs.
+Their definitions supply the descriptions when the catalog is built. Custom
+apps merged afterward and later metadata overrides are excluded. Invalid
+generated descriptions reject catalog construction. The help program invokes
+no Nix commands, executes no manifest, and creates no runtime state or lock file.
 
-Generated adopter help is bound to its defining source and deliberately uses
-the current flake context, so only local `nix run .#help` is supported. An
-explicit remote or path adopter reference invoked from elsewhere fails instead
-of cataloging the caller. Per-app `--help` remains the exact runtime-flag
-reference.
+Explicit path or remote help references work from any caller directory and show
+the referenced project's generated catalog. Per-app `--help` remains the exact
+runtime-flag reference.
 
 Read the authoring and API reference at the project's pinned Nixfied revision:
 
@@ -167,7 +162,7 @@ Selecting a project app still evaluates its surrounding flake and exported task
 names. If broken authoring prevents that evaluation, invoke `#docs` on the exact
 supplying framework source from the project's lock, for example
 `nix run /nix/store/<supplying-source>#docs`. Do not substitute an unpinned latest
-source. Unlike contextual help, docs does not require the caller's directory to
+source. Like generated help, docs does not require the caller's directory to
 match the project.
 
 For project-specific manifest facts, build the existing manifest package:

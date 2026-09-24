@@ -105,7 +105,7 @@
             scope = "library";
             name = "projectApps";
             description = "Expose discovery, documentation, controls and explicitly exported project tasks.";
-            input = "Project-root ./nixfied.nix beside flake.nix and flake.lock.";
+            input = "A Nix module path, function, or attribute set.";
             result = "Native flake app attribute set with descriptions.";
             usage = "apps.${system} = nixfied.lib.${system}.projectApps ./nixfied.nix;";
             references = [
@@ -125,7 +125,6 @@
             binding =
               module:
               import ./nix/project-apps.nix {
-                inherit module;
                 inherit pkgs releaseRuntime system;
                 inherit (nixpkgs) lib;
                 docs = docsFor { inherit pkgs system; };
@@ -630,14 +629,22 @@
           };
         in
         [
-          (app "help" "List this flake's runnable commands"
-            "Evaluates final flake app metadata through Nix and verifies source context."
+          (app "help" "List Nixfied-generated commands"
+            "Prints the generated app catalog without caller-flake inspection."
             { topic = "discovery"; }
             (
               import ./nix/help-app.nix {
-                inherit pkgs system;
-                expectedFlakePath = self.outPath;
-                flakeRef = self.outPath;
+                inherit pkgs;
+                apps = builtins.listToAttrs (
+                  map
+                    (entry: {
+                      name = entry.name;
+                      value.meta.description = entry.description;
+                    })
+                    (appDeclarations {
+                      inherit pkgs system;
+                    })
+                );
               }
             )
           )

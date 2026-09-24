@@ -17,7 +17,7 @@ nix/docs/                      revision-bound reference and native query dispatc
 nix/meta/                      private option/publication checking machinery
 nix/packages/                  reproducible Rust builds and source checks
 nix/packages/runtime-source.nix package-specific filtered Cargo roots
-nix/help-*.nix                 private contextual app catalog
+nix/help-*.nix                 private generated app catalog
 nix/project-apps.nix           discovery/controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
 nix/gate-nix.nix               Nix compiler/install integration gate
@@ -247,7 +247,7 @@ but do not change service reuse identity.
 - `gate-runtime` is a first-class Nixfied manifest. It exercises example runs, the
   emitted manifest/docs contract, concurrent slot isolation, runtime-layer refusal
   cases, endpoint coordination, and the state/service lifecycle matrix.
-- `gate-nix` exercises the Nix compiler and install tooling: final-app
+- `gate-nix` exercises the Nix compiler and install tooling: generated-app
   discovery, evaluation negatives, immutable-source admission, and real
   install/upgrade adoption in throwaway repositories.
 
