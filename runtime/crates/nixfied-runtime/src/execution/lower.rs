@@ -296,7 +296,9 @@ fn lower_task(
     Ok(ExecutableTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
         service_lifetime: *service_lifetime,
-        timeout: Duration::from_millis(invocation.timeout_ms.get()),
+        timeout: invocation
+            .timeout_ms
+            .map(|timeout| Duration::from_millis(timeout.get())),
         exec,
         requires,
         success_codes: exit_policy.success_codes.iter().copied().collect(),

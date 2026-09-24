@@ -171,7 +171,7 @@ with no runtime equivalent (a *command*, a *toolchain*, a *pipeline*, a
 into the adopter's own flake. The accepted fix is a closed algebra of exactly
 **two semantic kinds** (KIND-2):
 
-- **task** — bounded, composable execution: a **leaf** (one inline
+- **task** — composable execution with an optional deadline: a **leaf** (one inline
   invocation + `requires` + exit policy) or a **composite** (a static
   named-step DAG over task references; STATIC-1 — no parameters,
   conditionals, retries, or loops in the contract).
@@ -396,7 +396,7 @@ Task and probe execution share a concrete child owner. Spawn returns that owner;
 tasks record their process before consuming it through completion, while probes
 complete directly. Cancellation/timeout intent precedes signaling. Every exit
 path attempts containment and reap, then shuts down both capture workers under
-one absolute deadline. Workers own evidence files, and bounded children receive only pipe
+one absolute deadline. Workers own evidence files, and captured children receive only pipe
 writers, including when no secrets are configured. Actual EOF alone completes
 capture; an incomplete stream cannot issue completed evidence or a replay ticket.
 Service terminal cleanup reuses bounded relay shutdown; services without secrets

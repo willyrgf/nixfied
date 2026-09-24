@@ -143,11 +143,14 @@ let
         builtins.all (timeoutMs: rejects (make "Invocation" (invocation // { inherit timeoutMs; })))
           [
             0
-            null
             (-1)
             "1"
           ];
       expected = true;
+    };
+    absentDeadline = {
+      expr = (make "Invocation" (invocation // { timeoutMs = null; })) ? timeoutMs;
+      expected = false;
     };
     missing = {
       expr = rejects (make "Invocation" (builtins.removeAttrs invocation [ "timeoutMs" ]));

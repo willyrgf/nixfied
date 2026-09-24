@@ -884,19 +884,19 @@ one of “null”, “inherit”
 
 
 
-Maximum invocation duration in milliseconds before cancellation\.
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
 
 
 
 *Type:*
-positive integer, meaning >0
+null or (positive integer, meaning >0)
 
 
 
 *Default:*
 
 ```nix
-30000
+null
 ```
 
 
@@ -1275,19 +1275,19 @@ one of “null”, “inherit”
 
 
 
-Maximum invocation duration in milliseconds before cancellation\.
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
 
 
 
 *Type:*
-positive integer, meaning >0
+null or (positive integer, meaning >0)
 
 
 
 *Default:*
 
 ```nix
-30000
+null
 ```
 
 
@@ -1566,19 +1566,19 @@ one of “null”, “inherit”
 
 
 
-Maximum invocation duration in milliseconds before cancellation\.
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
 
 
 
 *Type:*
-positive integer, meaning >0
+null or (positive integer, meaning >0)
 
 
 
 *Default:*
 
 ```nix
-30000
+null
 ```
 
 
@@ -2065,7 +2065,7 @@ system
 
 
 
-Declared bounded tasks, keyed by task id\.
+Declared tasks with optional invocation deadlines, keyed by task id\.
 
 
 
@@ -2294,19 +2294,19 @@ one of “null”, “inherit”
 
 
 
-Maximum invocation duration in milliseconds before cancellation\.
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
 
 
 
 *Type:*
-positive integer, meaning >0
+null or (positive integer, meaning >0)
 
 
 
 *Default:*
 
 ```nix
-30000
+null
 ```
 
 

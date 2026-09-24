@@ -319,7 +319,7 @@ assert
     "system"
   ]).default.text == "system";
 assert configured.config.nixfied.tasks.one.invocation.timeoutMs == 42;
-assert configured.config.nixfied.services.one.lifecycle.start.invocation.timeoutMs == 30000;
+assert configured.config.nixfied.services.one.lifecycle.start.invocation.timeoutMs == null;
 assert
   (find [
     "nixfied"
@@ -330,7 +330,7 @@ assert
     "probe"
     "invocation"
     "timeoutMs"
-  ]).default.text == "30000";
+  ]).default.text == "null";
 assert rejects
   (evaluate system { nixfied.tasks.bad.invocation.timeoutMs = 0; })
   .config.nixfied.tasks.bad.invocation.timeoutMs;
@@ -349,9 +349,9 @@ assert rejects
 assert accepts 1 1;
 assert !(accepts 2 1);
 assert accepts 2 2;
-assert (fixtureEntry 1 "task.timeoutMs").type == "integer >= 1";
-assert (fixtureEntry 2 "task.timeoutMs").type == "integer >= 2";
-assert (fixtureEntry 2 "services.<name>.start.timeoutMs").type == "integer >= 2";
+assert (fixtureEntry 1 "task.timeoutMs").type == "null or (integer >= 1)";
+assert (fixtureEntry 2 "task.timeoutMs").type == "null or (integer >= 2)";
+assert (fixtureEntry 2 "services.<name>.start.timeoutMs").type == "null or (integer >= 2)";
 assert (fixtureEntry 1 "task.note").default.text == ''"shared"'';
 assert
   (fixtureEntry 1 "services.<name>.start.note").description
@@ -360,7 +360,7 @@ assert extended.config.task.note == "overridden";
 assert extended.config.services.one.start.note == "shared";
 assert extended.config.services.one.probe.note == "probe override";
 assert (fixtureEntry 1 "services.<name>.probe.note").default.text == ''"shared"'';
-assert (fixtureEntry 2 "services.<name>.probe.timeoutMs").type == "integer >= 2";
+assert (fixtureEntry 2 "services.<name>.probe.timeoutMs").type == "null or (integer >= 2)";
 assert defaultOf "contextual" == "nativeContext";
 assert defaultOf "empty" == "{ }";
 assert !(lib.findFirst (entry: entry.name == "required") null lazyEntries ? default);

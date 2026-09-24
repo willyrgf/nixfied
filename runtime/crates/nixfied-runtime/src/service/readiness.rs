@@ -8,7 +8,7 @@ use crate::error::RuntimeResult;
 use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
-    BoundedExec, BoundedExecOutcome, RenderedInvocation, resolve_exec_cwd, run_bounded_exec,
+    CapturedExec, CapturedExecOutcome, RenderedInvocation, resolve_exec_cwd, run_captured_exec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,14 +55,14 @@ pub(crate) fn exec_probe_attempt(
     let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
     let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
     cancellation.check()?;
-    let outcome = run_bounded_exec(
-        &BoundedExec {
+    let outcome = run_captured_exec(
+        &CapturedExec {
             executable: &command.executable,
             args: &command.args,
             env: &command.env,
             cwd: &command_cwd,
             stdin: command.stdin,
-            timeout: probe.timeout,
+            timeout: Some(probe.timeout),
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,
             redactor,
@@ -72,9 +72,9 @@ pub(crate) fn exec_probe_attempt(
         cancellation,
     )?;
     Ok(match outcome {
-        BoundedExecOutcome::Canceled => return Err(canceled_error()),
-        BoundedExecOutcome::Exited(status) if status.success() => ProbeAttempt::Succeeded,
-        BoundedExecOutcome::Exited(status) => ProbeAttempt::Failed(format!(
+        CapturedExecOutcome::Canceled => return Err(canceled_error()),
+        CapturedExecOutcome::Exited(status) if status.success() => ProbeAttempt::Succeeded,
+        CapturedExecOutcome::Exited(status) => ProbeAttempt::Failed(format!(
             "probe {} exited with code {} (probe logs: {}, {})",
             probe.label,
             status
@@ -84,7 +84,7 @@ pub(crate) fn exec_probe_attempt(
             stdout_path.display(),
             stderr_path.display(),
         )),
-        BoundedExecOutcome::TimedOut => ProbeAttempt::Failed(format!(
+        CapturedExecOutcome::TimedOut => ProbeAttempt::Failed(format!(
             "probe {} timed out after {}ms (probe logs: {}, {})",
             probe.label,
             probe.timeout.as_millis(),

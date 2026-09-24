@@ -592,7 +592,7 @@ mod tests {
 
     fn leaf_task(name: &str) -> ExecTask {
         ExecTask {
-            timeout: Duration::from_millis(1000),
+            timeout: Some(Duration::from_millis(1000)),
             task_id: TaskId::new(name),
             service_lifetime: ServiceLifetime::RunScoped,
             exec: resolved_exec(),

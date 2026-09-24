@@ -308,6 +308,23 @@ impl StartedService {
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
+    pub(crate) fn check_liveness(&self) -> RuntimeResult<()> {
+        let info = self.info();
+        if !process_is_live_with_identity(
+            info.pid,
+            info.pgid,
+            info.platform_start_identity.as_deref(),
+        )? {
+            return Err(RuntimeError::new(
+                ErrorCode::DependencyUnavailable,
+                format!(
+                    "service {} exited while session work was running",
+                    self.service_name()
+                ),
+            ));
+        }
+        Ok(())
+    }
     pub fn check_health(
         &mut self,
         registry: &mut Registry,
@@ -2323,16 +2340,15 @@ fn prepare_probe(
     }
 }
 
-/// A fully-substituted short-lived command with its own kill-after deadline and
-/// capture paths: the shared spawn/wait core of lifecycle execs and exec probe
-/// attempts.
-pub(crate) struct BoundedExec<'a> {
+/// A fully-substituted task or probe command with captured streams and an
+/// optional deadline. Probe callers always supply their finite attempt limit.
+pub(crate) struct CapturedExec<'a> {
     pub executable: &'a str,
     pub args: &'a [String],
     pub env: &'a BTreeMap<String, String>,
     pub cwd: &'a Path,
     pub stdin: StdinPolicy,
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub stdout_path: &'a Path,
     pub stderr_path: &'a Path,
     pub redactor: &'a Redactor,
@@ -2341,7 +2357,7 @@ pub(crate) struct BoundedExec<'a> {
     pub label: &'a str,
 }
 
-pub(crate) enum BoundedExecOutcome {
+pub(crate) enum CapturedExecOutcome {
     Exited(std::process::ExitStatus),
     TimedOut,
     Canceled,
@@ -2349,24 +2365,25 @@ pub(crate) enum BoundedExecOutcome {
 
 /// A task records its process between spawn and consuming completion. Probes
 /// proceed directly to completion. This owner has no registry dependency.
-pub(crate) struct OwnedBoundedChild {
+pub(crate) struct OwnedCapturedChild {
     child: Child,
     capture: Option<RedactedLogRelays>,
-    timeout: Duration,
+    timeout: Option<Duration>,
     label: String,
 }
 
 pub(crate) enum TerminationReason {
     Canceled,
     TimedOut,
+    ObservationFailed,
 }
 
-pub(crate) struct BoundedFailure {
+pub(crate) struct CapturedExecFailure {
     pub error: Box<RuntimeError>,
-    pub outcome: Option<BoundedExecOutcome>,
+    pub outcome: Option<CapturedExecOutcome>,
 }
 
-pub(crate) fn spawn_bounded_exec(spec: &BoundedExec<'_>) -> RuntimeResult<OwnedBoundedChild> {
+pub(crate) fn spawn_captured_exec(spec: &CapturedExec<'_>) -> RuntimeResult<OwnedCapturedChild> {
     let output = child_output(
         spec.stdout_path,
         spec.stderr_path,
@@ -2380,7 +2397,7 @@ pub(crate) fn spawn_bounded_exec(spec: &BoundedExec<'_>) -> RuntimeResult<OwnedB
     // Command retains pipe writers even after spawn failure.
     drop(command);
     match spawned {
-        Ok(child) => Ok(OwnedBoundedChild {
+        Ok(child) => Ok(OwnedCapturedChild {
             child,
             capture: Some(output.relays),
             timeout: spec.timeout,
@@ -2417,7 +2434,7 @@ fn configured_command(
     command
 }
 
-impl OwnedBoundedChild {
+impl OwnedCapturedChild {
     pub fn pid(&self) -> u32 {
         self.child.id()
     }
@@ -2425,15 +2442,19 @@ impl OwnedBoundedChild {
     pub fn complete(
         mut self,
         cancellation: &CancellationToken,
+        mut checkpoint: impl FnMut() -> RuntimeResult<()>,
         mut before_termination: impl FnMut(TerminationReason) -> RuntimeResult<()>,
-    ) -> Result<BoundedExecOutcome, BoundedFailure> {
-        let deadline = Instant::now() + self.timeout;
+    ) -> Result<CapturedExecOutcome, CapturedExecFailure> {
+        let started = Instant::now();
         let observed = loop {
             if cancellation.is_canceled() {
-                break Ok(BoundedExecOutcome::Canceled);
+                break Ok(CapturedExecOutcome::Canceled);
+            }
+            if let Err(error) = checkpoint() {
+                break Err(error);
             }
             match self.child.try_wait() {
-                Ok(Some(status)) => break Ok(BoundedExecOutcome::Exited(status)),
+                Ok(Some(status)) => break Ok(CapturedExecOutcome::Exited(status)),
                 Ok(None) => {}
                 Err(error) => {
                     break Err(RuntimeError::new(
@@ -2442,23 +2463,33 @@ impl OwnedBoundedChild {
                     ));
                 }
             }
-            if Instant::now() >= deadline {
-                break Ok(BoundedExecOutcome::TimedOut);
+            if self
+                .timeout
+                .is_some_and(|timeout| started.elapsed() >= timeout)
+            {
+                break Ok(CapturedExecOutcome::TimedOut);
             }
             thread::sleep(Duration::from_millis(10));
         };
         // Intent is synchronous and precedes every signal, even if recording fails.
         let intent = match &observed {
-            Ok(BoundedExecOutcome::Canceled) => before_termination(TerminationReason::Canceled),
-            Ok(BoundedExecOutcome::TimedOut) => before_termination(TerminationReason::TimedOut),
-            _ => Ok(()),
+            Ok(CapturedExecOutcome::Canceled) => before_termination(TerminationReason::Canceled),
+            Ok(CapturedExecOutcome::TimedOut) => before_termination(TerminationReason::TimedOut),
+            Err(_) => before_termination(TerminationReason::ObservationFailed),
+            Ok(CapturedExecOutcome::Exited(_)) => Ok(()),
         };
         let (outcome, operation) = match observed {
             Ok(outcome) => (Some(outcome), intent.err()),
-            Err(error) => (None, Some(error)),
+            Err(error) => (
+                None,
+                Some(match intent {
+                    Ok(()) => error,
+                    Err(intent_error) => error.with_cause(intent_error),
+                }),
+            ),
         };
         match self.finish(operation) {
-            Some(error) => Err(BoundedFailure {
+            Some(error) => Err(CapturedExecFailure {
                 error: Box::new(error),
                 outcome,
             }),
@@ -2483,7 +2514,7 @@ impl OwnedBoundedChild {
     }
 }
 
-impl Drop for OwnedBoundedChild {
+impl Drop for OwnedCapturedChild {
     fn drop(&mut self) {
         if self.capture.is_some() {
             let _ = self.finish(None);
@@ -2522,12 +2553,12 @@ fn completion_error(
     primary
 }
 
-pub(crate) fn run_bounded_exec(
-    spec: &BoundedExec<'_>,
+pub(crate) fn run_captured_exec(
+    spec: &CapturedExec<'_>,
     cancellation: &CancellationToken,
-) -> RuntimeResult<BoundedExecOutcome> {
-    spawn_bounded_exec(spec)?
-        .complete(cancellation, |_| Ok(()))
+) -> RuntimeResult<CapturedExecOutcome> {
+    spawn_captured_exec(spec)?
+        .complete(cancellation, || Ok(()), |_| Ok(()))
         .map_err(|failure| *failure.error)
 }
 
@@ -3447,8 +3478,8 @@ mod tests {
         let secrets =
             ResolvedSecrets::from_values(BTreeMap::from([("token".into(), "secret".into())]));
         let redactor = Redactor::from_secrets(&secrets);
-        let outcome = run_bounded_exec(
-            &BoundedExec {
+        let outcome = run_captured_exec(
+            &CapturedExec {
                 executable: "/bin/sh",
                 args: &[
                     "-c".into(),
@@ -3459,7 +3490,7 @@ mod tests {
                 env: &BTreeMap::new(),
                 cwd: &root,
                 stdin: StdinPolicy::Null,
-                timeout: Duration::from_secs(5),
+                timeout: Some(Duration::from_secs(5)),
                 stdout_path: &stdout,
                 stderr_path: &stderr,
                 redactor: &redactor,
@@ -3472,7 +3503,7 @@ mod tests {
         let survived = marker.exists();
         let captured = std::fs::read_to_string(&stdout).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
-        assert!(matches!(outcome, BoundedExecOutcome::Exited(status) if status.success()));
+        assert!(matches!(outcome, CapturedExecOutcome::Exited(status) if status.success()));
         assert!(
             !survived,
             "relay completion must follow descendant containment, not natural expiry"
@@ -3495,25 +3526,25 @@ mod tests {
         let missing = root.join("missing-program");
         let stdout = root.join("stdout");
         let stderr = root.join("stderr");
-        let mut spec = BoundedExec {
+        let mut spec = CapturedExec {
             executable: missing.to_str().unwrap(),
             args: &["30".into()],
             env: &BTreeMap::new(),
             cwd: &root,
             stdin: StdinPolicy::Null,
-            timeout: Duration::from_secs(30),
+            timeout: Some(Duration::from_secs(30)),
             stdout_path: &stdout,
             stderr_path: &stderr,
             redactor: &Redactor::empty(),
             log_file_mode: LogFileMode::Replace,
             label: "task process",
         };
-        let error = spawn_bounded_exec(&spec).err().unwrap();
+        let error = spawn_captured_exec(&spec).err().unwrap();
         assert_eq!(error.code, ErrorCode::ProcEscape);
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
         spec.executable = &executable;
-        let child = spawn_bounded_exec(&spec).unwrap();
+        let child = spawn_captured_exec(&spec).unwrap();
         let pid = child.pid() as i32;
         let error = child.abort(RuntimeError::new(
             ErrorCode::RegistryCorrupt,

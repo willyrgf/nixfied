@@ -359,7 +359,7 @@ let
     };
   };
 
-  # A task is a leaf (one bounded invocation + orchestration) or a composite (a
+  # A task is a leaf (one invocation with an optional deadline) or a composite (a
   # static named-step DAG over task references). Kind/field coherence is
   # validated at eval; the runtime re-proves it at admission.
   taskType = types.submodule {
@@ -445,7 +445,7 @@ in
   options.nixfied.tasks = mkOption {
     type = types.attrsOf taskType;
     default = { };
-    description = "Declared bounded tasks, keyed by task id.";
+    description = "Declared tasks with optional invocation deadlines, keyed by task id.";
   };
 
   options.nixfied.secrets = mkOption {

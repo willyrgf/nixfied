@@ -18,7 +18,7 @@ primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem requiresExecutable effects
-primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs
+primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs?
 # endpoints/primaryEndpoint are optional: durable is not listening. An
 # endpoint-less service makes no addressability claim — invocation probes only,
 # nothing may address it, no port demand.

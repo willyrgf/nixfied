@@ -569,7 +569,7 @@ fn timeout_replays_output_before_reporting_task_failure() {
 }
 
 #[test]
-fn cancellation_replays_output_before_reporting_canceled() {
+fn task_without_deadline_survives_former_default_and_remains_cancelable() {
     let marker = tempfile_marker("cancel");
     let stdout = b"cancel stdout";
     let stderr = b"cancel stderr";
@@ -581,13 +581,21 @@ fn cancellation_replays_output_before_reporting_canceled() {
         marker.to_string_lossy().into_owned(),
     ];
     let mut manifest = leaf_task_manifest(&args);
-    manifest["tasks"]["smoke"]["invocation"]["timeoutMs"] = json!(30_000);
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
     let fixture = RuntimeFixture::new(manifest);
-    let child = fixture
+    let mut child = fixture
         .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .expect("runtime command should spawn");
     assert!(wait_for_path(&marker, Duration::from_secs(3)));
+    std::thread::sleep(Duration::from_secs(31));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "absent deadline must not reconstruct the former 30s default"
+    );
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
@@ -598,6 +606,59 @@ fn cancellation_replays_output_before_reporting_canceled() {
     assert_eq!(output.stdout, stdout);
     assert_stream_contains(&output.stderr, stderr, "stderr");
     assert!(String::from_utf8_lossy(&output.stderr).contains("CANCELED"));
+}
+
+#[test]
+fn service_exit_interrupts_a_task_without_deadline() {
+    for unrelated in [false, true] {
+        let marker = tempfile_marker("dependency-exit");
+        let args = vec![
+            "output".into(),
+            "hex-block".into(),
+            "".into(),
+            "".into(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        let mut manifest = task_manifest(&args);
+        manifest["tasks"]["smoke"]["invocation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("timeoutMs");
+        let selected = if unrelated {
+            let mut first = manifest["tasks"]["smoke"].clone();
+            first["operationId"] = json!("task.first.run");
+            let program = first["invocation"]["run"][0].clone();
+            first["invocation"]["run"] = json!([program, "exit", "0"]);
+            manifest["tasks"]["first"] = first;
+            manifest["tasks"]["smoke"]["requires"] = json!([]);
+            manifest["tasks"]["pipeline"] = json!({
+                "kind": "composite", "defaultOutput": "summary", "serviceLifetime": "run-scoped",
+                "steps": {"first": {"task": "first", "dependsOn": []}, "second": {"task": "smoke", "dependsOn": ["first"]}}
+            });
+            "pipeline"
+        } else {
+            "smoke"
+        };
+        let fixture = RuntimeFixture::new(manifest);
+        let child = fixture
+            .command("run", &["--task", selected, "--output", "json"])
+            .spawn()
+            .unwrap();
+        assert!(wait_for_path(&marker, Duration::from_secs(5)));
+        let database = common::find_named(&fixture.state_base, "registry.sqlite3").unwrap();
+        let registry = rusqlite::Connection::open(database).unwrap();
+        let pid: i32 = registry
+            .query_row(
+                "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        let output = wait_for_child_output(child, Duration::from_secs(6));
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("DEPENDENCY_UNAVAILABLE"));
+    }
 }
 
 #[test]

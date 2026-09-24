@@ -277,7 +277,7 @@ pub struct ProbePolicy {
 /// it runs, and its success codes.
 #[derive(Debug, Clone)]
 pub struct ExecTask {
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub task_id: TaskId,
     pub service_lifetime: ServiceLifetime,
     pub exec: ResolvedInvocation,

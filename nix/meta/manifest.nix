@@ -283,7 +283,7 @@ in
         (field "codebaseId" (id "CodebaseId") required "RequiredPresent" "Observed codebase reference.")
         (field "cwd" text required "RequiredPresent" "Confined relative working directory.")
         (field "stdin" (enum "StdinPolicy") required "RequiredPresent" "Child stdin policy.")
-        (field "timeoutMs" nz64 required "RequiredPresent" "Positive invocation timeout in milliseconds.")
+        (field "timeoutMs" nz64 omitted "RequiredOmitAbsent" "Optional positive task timeout in milliseconds; absence has no finite deadline.")
       ]
     )
     (record "ServiceSpec"
