@@ -79,7 +79,6 @@ fn validate_required_strings(manifest: &Manifest) -> Result<(), ValidationError>
     require_non_empty("target.arch", &manifest.target.arch)?;
     require_non_empty("target.closureSystem", &manifest.target.closure_system)?;
     require_non_empty("state.markerIdentity", &manifest.state.marker_identity)?;
-    require_non_empty("state.stateEpoch", &manifest.state.state_epoch)?;
     Ok(())
 }
 

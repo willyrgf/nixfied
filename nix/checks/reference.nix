@@ -250,7 +250,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" api app root/regenerate | grep -F 'nix run .#regenerate' > /dev/null
     "$docs" api package check/rust-workspace | grep -F 'Clippy' > /dev/null
     "$docs" api error > errors.txt
-    test "$(wc -l < errors.txt)" -eq 27
+    test "$(wc -l < errors.txt)" -eq 25
     "$docs" api error OUTPUT_PROJECTION_FAILED | grep -F 'docs topic outputs' > /dev/null
     "$docs" api record output-schema/runtime-error | grep -F 'open JSON' > /dev/null
     "$docs" api record local/RegistryIdentityDiagnostic | grep -F 'signed' > /dev/null
@@ -262,7 +262,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" api command upgrade | grep -F 'inverse update_lock' > /dev/null
     "$docs" api app project/run | grep -F 'See command run' > /dev/null
     "$docs" topic runtime > runtime-topic.txt
-    grep -Fq 'Open leases are replacement authority' runtime-topic.txt
+    grep -Fq 'Slot mutation has one owner' runtime-topic.txt
     grep -Fq 'Admission correctness (Rust)' runtime-topic.txt
     grep -Fq 'Execution correctness (Rust)' runtime-topic.txt
     grep -Fq 'docs topic state' runtime-topic.txt
@@ -352,7 +352,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       ],
       'runtime': [
           'projectId / environment / slot / runId',
-          'Service identity is layered',
+          'Service attribution belongs to process evidence',
           'Rust materialises *host-absolute* placement at admission',
       ],
       'adapters': [
@@ -495,7 +495,6 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     diff -u here.txt elsewhere.txt
     test ! -e "$TMPDIR/must-not-exist"
     test -s ${docs}/share/nixfied/reference/API.md
-    grep -Fq 'status RunLeaseStatus' ${docs}/share/nixfied/reference/API.md
     grep -Fxq '## Changing the contract' ${docs}/share/nixfied/reference/API.md
     grep -Fxq '#### V10 — servicesRequired: connectsTo closure is a fixpoint' ${docs}/share/nixfied/reference/API.md
     grep -Fxq '## Verification boundary' ${docs}/share/nixfied/reference/API.md

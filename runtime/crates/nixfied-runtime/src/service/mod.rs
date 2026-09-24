@@ -49,13 +49,11 @@ impl StoredProcessIdentity {
     }
 }
 
-pub use identity::{compute_service_identity, service_address_hash, service_instance_id};
 pub use process::{
-    AcquiredService, BorrowedService, PrepareRunner, ReadinessFailure, ReadyService,
-    SelectedEndpoint, ServiceInfo, ServiceSelection, SlotEndpoints, StartedService,
-    StartingService, run_slot_clean, start_service_for_slot,
+    PrepareRunner, ReadinessFailure, ReadyService, SelectedEndpoint, ServiceInfo, ServiceSelection,
+    SlotEndpoints, StartingService, run_slot_clean, start_service_for_slot,
 };
-pub use registry::{mark_run_completed, mark_run_failed, record_run_created};
+pub use registry::record_run_created;
 pub use task::{
     CompletedEvidence, RunContext, TaskExecution, TaskExecutionError, TaskRun,
     run_dependent_task_cancellable,
@@ -68,8 +66,7 @@ pub(crate) use process::{
 };
 pub(crate) use registry::{
     ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
-    mark_task_finished, parse_service_lifetime, release_unresolved_escape_ports,
-    service_lifetime_as_str,
+    mark_task_finished, release_unresolved_escape_ports,
 };
 
 #[cfg(test)]

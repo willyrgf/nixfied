@@ -65,7 +65,6 @@ pub struct SourcePolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatePolicy {
     pub marker_identity: String,
-    pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
 }
@@ -243,7 +242,6 @@ pub struct TaskSpec {
     pub kind: TaskKind,
     #[serde(default = "__default_task_spec_default_output")]
     pub default_output: TaskDefaultOutput,
-    pub service_lifetime: ServiceLifetime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,16 +327,6 @@ pub enum TaskDefaultOutput {
     Summary,
     #[serde(rename = "task-output")]
     TaskOutput,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ServiceLifetime {
-    #[serde(rename = "run-scoped")]
-    RunScoped,
-    #[serde(rename = "until-idle")]
-    UntilIdle,
-    #[serde(rename = "persistent-until-down")]
-    PersistentUntilDown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -44,9 +44,9 @@ The former `stateRefs` description incorrectly claimed participation in service
 identity. [primitives.nix](../nix/modules/primitives.nix) and the
 [state guide](GUIDE.md#services-slots-and-state) now explain its actual role:
 execution lowering discards it, while it remains serialized manifest data.
-The `descriptive_refs_change_manifest_bytes_but_not_service_reuse_identity` test in
+The `descriptive_refs_change_manifest_bytes_but_not_lowered_service` test in
 [execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
-independently proves changed manifest bytes with unchanged service reuse identity.
+independently proves changed manifest bytes with unchanged the lowered service contract.
 
 That specific documentation defect is resolved. It illustrates why shared
 structural declarations alone cannot establish complete behavioral parity.
@@ -65,7 +65,7 @@ and rejection phase for each covered promise, then establish:
 - Explicit treatment of fields affecting execution, identity, or output, and
   an explanation for intentional omission at a boundary.
 - Independent behavioral tests showing promised effects and non-effects. For
-  `stateRefs`, distinguish raw manifest hash changes from service reuse identity.
+  `stateRefs`, distinguish raw manifest hash changes from the lowered service contract.
 - Preservation of phase-specific rejection and existing independent graph
   derivation checks.
 

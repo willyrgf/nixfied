@@ -44,7 +44,7 @@ pub(crate) struct StoredEndpoint {
     pub(crate) host: nixfied_manifest::LoopbackHost,
     pub(crate) port: u16,
     pub(crate) status: super::status::PortStatus,
-    pub(crate) owner_process_key: Option<String>,
+    pub(crate) owner_process_key: String,
 }
 
 pub(crate) fn read_open_endpoints(
@@ -57,9 +57,12 @@ pub(crate) fn read_open_endpoints(
         |error: rusqlite::Error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string());
     let mut statement = connection
         .prepare(&format!(
-            "SELECT endpoint_key, address, port, status, owner_process_key, service_instance_id
-         FROM ports WHERE (?1 IS NULL OR service_instance_id = ?1) AND status IN ({})
-         ORDER BY endpoint_key",
+            "SELECT ep.endpoint_key, ep.address, ep.port, ep.status, ep.owner_process_key, ep.service_instance_id,
+                EXISTS (SELECT 1 FROM processes p WHERE p.process_key = ep.owner_process_key
+                    AND p.service_instance_id = ep.service_instance_id
+                    AND p.environment = ep.environment AND p.slot = ep.slot)
+         FROM ports ep WHERE (?1 IS NULL OR ep.service_instance_id = ?1) AND ep.status IN ({})
+         ORDER BY ep.endpoint_key",
             status::sql_in_list(status::PORT_OPEN)
         ))
         .map_err(sql_error)?;
@@ -70,15 +73,23 @@ pub(crate) fn read_open_endpoints(
                 row.get::<_, String>(1)?,
                 row.get::<_, u16>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, bool>(6)?,
             ))
         })
         .map_err(sql_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_error)?;
-    rows.into_iter().map(|(endpoint_key, address, port, status, owner_process_key, service_instance_id)| {
+    rows.into_iter().map(|(endpoint_key, address, port, status, owner_process_key, service_instance_id, has_owner)| {
         let status = PortStatus::parse_db(&status)?;
+        if !has_owner {
+            return Err(RuntimeError::new(ErrorCode::RegistryCorrupt,
+                format!("endpoint {endpoint_key} has no matching process owner in its slot")));
+        }
+        if owner_process_key.is_empty() {
+            return Err(RuntimeError::new(ErrorCode::RegistryCorrupt, "endpoint has no owning process"));
+        }
         let prefix = format!("{service_instance_id}:");
         let endpoint_id = endpoint_key.strip_prefix(&prefix).ok_or_else(|| RuntimeError::new(
             ErrorCode::RegistryCorrupt,

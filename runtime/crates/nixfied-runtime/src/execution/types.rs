@@ -9,22 +9,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 pub use crate::template::Template;
-use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
+use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, TaskId};
 pub use nixfied_manifest::{Endpoint, LoopbackHost, StdinPolicy, StopSignal};
-
-/// A service's reuse identity, computed by the lowering from the service's actual
-/// contract — never supplied by the manifest. The four components hash the endpoint,
-/// the state policy, the behavioral runtime contract (lifecycle/wiring/execs), and
-/// the build target; the runtime folds them with the slot address into the
-/// `service_instance_id` registry key, so the reuse boundary is a pure function of
-/// the contract the runtime executes, not of values the manifest carries.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceIdentity {
-    pub endpoint_identity_hash: String,
-    pub state_identity_hash: String,
-    pub runtime_compatibility_hash: String,
-    pub target_identity_hash: String,
-}
 
 /// A checked executable program. Only lowering constructs it; consumers receive
 /// shared references so graph validity cannot be invalidated after admission.
@@ -85,7 +71,6 @@ pub enum ExecutableTask {
 #[derive(Debug, Clone)]
 pub struct ExecComposite {
     pub task_id: TaskId,
-    pub service_lifetime: ServiceLifetime,
     pub steps: Vec<ExecStep>,
 }
 
@@ -150,7 +135,6 @@ pub struct ExecService {
     /// placeholder resolution and orders service startup.
     pub connects_to: Vec<ServiceId>,
     pub containment: ContainmentRequirement,
-    pub identity: ServiceIdentity,
 }
 
 /// Operation identity carried for durable lifecycle-event recording.
@@ -279,7 +263,6 @@ pub struct ProbePolicy {
 pub struct ExecTask {
     pub timeout: Option<Duration>,
     pub task_id: TaskId,
-    pub service_lifetime: ServiceLifetime,
     pub exec: ResolvedInvocation,
     pub requires: Vec<ServiceId>,
     pub success_codes: Vec<i32>,

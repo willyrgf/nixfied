@@ -295,7 +295,6 @@ fn lowering_failure_carries_manifest_provenance() {
     let mut manifest = fixture_manifest();
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
-        "serviceLifetime": "run-scoped",
         "steps": { "build": { "task": "missing-task" } }
     });
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);

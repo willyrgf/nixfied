@@ -1340,8 +1340,8 @@ mod tests {
         use crate::service::record_run_created;
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
+        use nixfied_manifest::Manifest;
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
-        use nixfied_manifest::{Manifest, ServiceLifetime};
         use serde_json::json;
 
         let unsafe_root = TestRoot::new();
@@ -1380,7 +1380,16 @@ mod tests {
         .unwrap();
         materialize_run_roots(&placement).unwrap();
         let mut registry = Registry::open_or_create(
-            placement.registry_path(),
+            crate::state::ownership::fixture_guard(
+                &placement.state_base,
+                &RegistryIdentity::for_slot(
+                    &manifest.project.project_id,
+                    selected.environment,
+                    selected.slot,
+                    &manifest.runtime_abi,
+                    &manifest.toolchain_id,
+                ),
+            ),
             &RegistryIdentity::for_slot(
                 &manifest.project.project_id,
                 selected.environment,
@@ -1406,10 +1415,8 @@ mod tests {
             &placement,
             &mut registry,
             "run-unsafe-lock-root",
-            &selected,
             ServiceSelection {
                 service_name: "synthetic",
-                service_lifetime: ServiceLifetime::RunScoped,
                 endpoint_ports: &endpoint_ports,
                 slot_endpoints: &std::collections::BTreeMap::new(),
                 run_timeout_ms: 5000,
@@ -1433,7 +1440,7 @@ mod tests {
         let mutations: i64 = registry
             .connection()
             .query_row(
-                "SELECT (SELECT count(*) FROM services) + (SELECT count(*) FROM processes)",
+                "SELECT (SELECT count(*) FROM sqlite_master WHERE name = 'services') + (SELECT count(*) FROM processes)",
                 [],
                 |row| row.get(0),
             )

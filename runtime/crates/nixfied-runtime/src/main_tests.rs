@@ -391,7 +391,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let placement = derive_host_placement(&manifest, "evidence-test", &tmp.path).unwrap();
         materialize_run_roots(&placement).unwrap();
         let mut registry = Registry::open_or_create(
-            placement.registry_path(),
+            common::registry_guard(&placement),
             &RegistryIdentity::default_slot(
                 &manifest.project.project_id,
                 &manifest.runtime_abi,
@@ -442,7 +442,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         )
         .unwrap_err();
         assert_eq!(
-            error.code,
+            error.error.code,
             if secret {
                 nixfied_runtime::ErrorCode::SecretLeakBlocked
             } else {
@@ -457,7 +457,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             assert!(evidence.replay.is_some());
             assert_eq!(std::fs::read_to_string(&counter).unwrap(), "1");
             assert_eq!(
-                error.details["taskRun"]["stdoutPath"],
+                error.error.details["taskRun"]["stdoutPath"],
                 json!(placement.logs_dir.join("task.0.stdout.log"))
             );
         } else {

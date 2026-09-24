@@ -291,24 +291,7 @@ fn refuse_cleanup_policy(
 }
 
 fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
-    let active_lease_count = registry
-        .connection()
-        .query_row(
-            &format!(
-                "SELECT count(*) FROM run_leases WHERE status IN ({})",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(sql_error)?;
-    if active_lease_count > 0 {
-        return Err(RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            "cleanup refused because active run leases exist",
-        ));
-    }
-
+    registry.authority().validate()?;
     let active_process_count = registry
         .connection()
         .query_row(
@@ -365,7 +348,7 @@ fn record_cleanup_intent(
         connection,
         identity,
         redactor,
-    } = registry.context();
+    } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -425,7 +408,7 @@ fn record_cleanup_terminal(
         connection,
         identity,
         redactor,
-    } = registry.context();
+    } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(

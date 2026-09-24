@@ -1,130 +1,7 @@
-use std::collections::BTreeMap;
-
-use nixfied_manifest::{
-    CleanupPolicy, ContainmentRequirement, Endpoint, Lifecycle, PersistencePolicy, ServiceId,
-    ServiceSpec, StatePolicy, Target, UniqueVec,
-};
-use serde::Serialize;
-use sha2::{Digest, Sha256};
-
-use crate::execution::ServiceIdentity;
-
-/// Compute a service's reuse identity from its actual lowered contract, replacing
-/// the hashes the manifest used to carry. The components mirror the wire contract a
-/// service reuse must be sensitive to — endpoint, state policy, behavioral runtime
-/// contract, and build target — but are derived here, so the `service_instance_id`
-/// registry key is a pure function of what the runtime executes. The values are
-/// only ever fed into `service_instance_id`; nothing compares them across the
-/// Nix/runtime boundary, so the runtime owns the scheme outright.
-pub fn compute_service_identity(
-    service: &ServiceSpec,
-    state: &StatePolicy,
-    target: &Target,
-) -> ServiceIdentity {
-    ServiceIdentity {
-        endpoint_identity_hash: hash_json(
-            "endpoint-identity",
-            &EndpointIdentityInputs {
-                endpoints: &service.endpoints,
-                primary_endpoint: &service.primary_endpoint,
-            },
-        ),
-        state_identity_hash: hash_json(
-            "state-identity",
-            &StateIdentityInputs {
-                state_epoch: &state.state_epoch,
-                cleanup_policy: &state.cleanup_policy,
-                persistence: &state.persistence,
-            },
-        ),
-        runtime_compatibility_hash: hash_json(
-            "runtime-compatibility",
-            &RuntimeIdentityInputs {
-                lifecycle: &service.lifecycle,
-                endpoints: &service.endpoints,
-                primary_endpoint: &service.primary_endpoint,
-                containment: &service.containment,
-                connects_to: &service.connects_to,
-            },
-        ),
-        target_identity_hash: hash_json("target-identity", target),
-    }
-}
-
-/// The endpoint inputs a reuse identity depends on: the full endpoint set and
-/// which one is primary, so adding, removing, or re-pointing an endpoint moves
-/// the identity.
-#[derive(Serialize)]
-struct EndpointIdentityInputs<'a> {
-    endpoints: &'a BTreeMap<String, Endpoint>,
-    primary_endpoint: &'a Option<String>,
-}
-
-/// The state inputs a reuse identity depends on: the epoch and the cleanup /
-/// persistence policies. The marker identity is deliberately excluded — it is a
-/// separate ownership concern, not part of the service contract.
-#[derive(Serialize)]
-struct StateIdentityInputs<'a> {
-    state_epoch: &'a str,
-    cleanup_policy: &'a CleanupPolicy,
-    persistence: &'a PersistencePolicy,
-}
-
-/// The behavioral contract a reuse identity depends on: the lifecycle (which
-/// now carries every invocation inline), endpoints, containment, and wiring.
-#[derive(Serialize)]
-struct RuntimeIdentityInputs<'a> {
-    lifecycle: &'a Lifecycle,
-    endpoints: &'a BTreeMap<String, Endpoint>,
-    primary_endpoint: &'a Option<String>,
-    containment: &'a ContainmentRequirement,
-    connects_to: &'a UniqueVec<ServiceId>,
-}
-
-/// Hash a serializable identity component under a domain tag. Serialization of
-/// these concrete inputs uses only strings, string-keyed maps, sequences, enums,
-/// booleans, and integers. Keep that restriction at this private helper's callers;
-/// a fallible native path or custom serializer would require a checked boundary.
-fn hash_json<T: Serialize>(tag: &str, value: &T) -> String {
-    let json =
-        serde_json::to_string(value).expect("service identity inputs must serialize to JSON");
-    hash_fields(&[tag, &json])
-}
-
-pub fn service_address_hash(
-    project_id: &str,
-    environment: &str,
-    slot: u32,
-    service_name: &str,
-) -> String {
-    let slot = slot.to_string();
-    hash_fields(&[
-        "service-address",
-        project_id,
-        environment,
-        &slot,
-        service_name,
-    ])
-}
-
-pub fn service_instance_id(service_address_hash: &str, identity: &ServiceIdentity) -> String {
-    hash_fields(&[
-        "service-instance",
-        service_address_hash,
-        &identity.endpoint_identity_hash,
-        &identity.state_identity_hash,
-        &identity.runtime_compatibility_hash,
-        &identity.target_identity_hash,
-    ])
-}
-
-fn hash_fields(fields: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    for field in fields {
-        hasher.update((field.len() as u64).to_be_bytes());
-        hasher.update(field.as_bytes());
-    }
-    hex::encode(hasher.finalize())
+/// A session-local service reference. Length framing keeps arbitrary run IDs
+/// distinct without hashing configuration or inventing reusable service identity.
+pub(crate) fn service_instance_id(run_id: &str, service_name: &str) -> String {
+    format!("{}:{run_id}{service_name}", run_id.len())
 }
 
 #[cfg(test)]
@@ -132,31 +9,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn component_hashes_preserve_literal_json_order_and_domain_framing() {
-        // Independent digests of the literal JSON below, prefixed by the domain;
-        // each UTF-8 field is framed by its eight-byte big-endian byte length.
-        // {"endpoints":{},"primary_endpoint":null}
-        assert_eq!(
-            hash_json(
-                "endpoint-identity",
-                &EndpointIdentityInputs {
-                    endpoints: &BTreeMap::new(),
-                    primary_endpoint: &None,
-                }
-            ),
-            "bed5fb8ec197df1a21f47c29dec448d0e3b7f8584b5d39048ce5015331b6a337"
+    fn session_service_references_preserve_both_components() {
+        assert_eq!(service_instance_id("run", "db"), "3:rundb");
+        assert_ne!(
+            service_instance_id("run", "db"),
+            service_instance_id("other", "db")
         );
-        // {"state_epoch":"epoch","cleanup_policy":"delete-on-clean","persistence":"run-scoped"}
-        assert_eq!(
-            hash_json(
-                "state-identity",
-                &StateIdentityInputs {
-                    state_epoch: "epoch",
-                    cleanup_policy: &CleanupPolicy::DeleteOnClean,
-                    persistence: &PersistencePolicy::RunScoped,
-                }
-            ),
-            "dedd7c1c2c8a89520eb57927455b8f7b27fcf59def70b941c847416242ec7030"
+        assert_ne!(
+            service_instance_id("run", "db"),
+            service_instance_id("run", "worker")
+        );
+        assert_ne!(
+            service_instance_id("a:b", "c"),
+            service_instance_id("a", "b:c")
+        );
+        assert_ne!(
+            service_instance_id("ab", "c"),
+            service_instance_id("a", "bc")
         );
     }
 }

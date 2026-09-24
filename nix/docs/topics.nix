@@ -42,7 +42,7 @@ in
       (fragment ../../docs/ARCHITECTURE.md "## The load-bearing decision: two tools, one seam")
       (fragment ../../docs/ARCHITECTURE.md "## Correctness in four layers")
       (fragment ../../docs/ARCHITECTURE.md "## Identity & placement")
-      (fragment ../../docs/ARCHITECTURE.md "## Registry, liveness, leases")
+      (fragment ../../docs/ARCHITECTURE.md "## Registry and liveness")
       (fragment ../../docs/ARCHITECTURE.md "## Ports, state, containment")
     ];
     related = [
@@ -110,12 +110,6 @@ in
         "tasks"
         "<name>"
         "requires"
-      ])
-      (option [
-        "nixfied"
-        "tasks"
-        "<name>"
-        "serviceLifetime"
       ])
       (option [
         "nixfied"
@@ -250,12 +244,6 @@ in
         "services"
         "<name>"
         "stateRefs"
-      ])
-      (option [
-        "nixfied"
-        "tasks"
-        "<name>"
-        "serviceLifetime"
       ])
       (entry "record" "primitive/StatePolicy")
       (entry "record" "primitive/SlotPolicy")

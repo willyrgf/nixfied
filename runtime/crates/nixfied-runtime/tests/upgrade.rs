@@ -1,6 +1,6 @@
 //! Marker upgrade semantics: a slot is owned by project/environment/slot, not
 //! by one manifest build. These tests drive `prepare_slot_state` through the
-//! second-run / changed-manifest / changed-epoch / interrupted-run matrix that
+//! second-run / changed-manifest / retention / interrupted-run matrix that
 //! first surfaced in MFM's v2 adoption.
 
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{CleanupPolicy, Manifest};
+use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
@@ -44,7 +44,7 @@ fn second_run_same_manifest_adopts_marker() {
 }
 
 #[test]
-fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
+fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
     let fixture = UpgradeFixture::new();
     fixture
         .prepare("run-1", &fixture.identity(false))
@@ -56,21 +56,19 @@ fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
         .expect("a changed manifest hash should upgrade, not refuse");
 
     assert!(report.upgraded);
-    assert!(!report.cleaned);
     assert_eq!(
         report.from_manifest_hash.as_deref(),
         Some(expected_hash(&fixture.manifest, false).as_str())
     );
     assert!(
         sentinel.exists(),
-        "same-epoch upgrade must preserve the state root"
+        "provenance changes must preserve the state root"
     );
     let marker = fixture.marker();
     assert_eq!(
         marker.computed_manifest_hash,
         expected_hash(&fixture.manifest, true)
     );
-    assert_eq!(marker.state_epoch, "1");
     assert_eq!(fixture.upgrade_event_count(), 1);
     let payload = fixture.last_upgrade_event_payload();
     assert_eq!(
@@ -81,48 +79,32 @@ fn changed_manifest_hash_same_epoch_upgrades_and_preserves_state_root() {
         payload["toManifestHash"],
         expected_hash(&fixture.manifest, true)
     );
-    assert_eq!(payload["cleaned"], false);
+    assert!(payload.get("cleaned").is_none());
 }
 
 #[test]
-fn changed_state_epoch_upgrades_and_cleans_state_root() {
-    let fixture = UpgradeFixture::new();
-    fixture
-        .prepare("run-1", &fixture.identity(false))
-        .expect("first run should prepare a fresh slot");
-    let sentinel = fixture.plant_sentinel();
-
-    let mut epoch2_value = fixture_manifest();
-    epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
-    let epoch2_manifest: Manifest =
-        serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
-    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
-    let epoch2_identity = StateIdentity::from_admission(epoch2_admission.common());
-
-    let report = fixture
-        .prepare("run-2", &epoch2_identity)
-        .expect("a changed state epoch should upgrade with a clean");
-
-    assert!(report.upgraded);
-    assert!(report.cleaned);
-    assert!(
-        !sentinel.exists(),
-        "epoch upgrade must clean the old state root"
-    );
-    assert!(
-        fixture.placement("run-2").registry_path().exists(),
-        "the registry must survive the upgrade clean"
-    );
-    let marker = fixture.marker();
-    assert_eq!(marker.state_epoch, "2");
-    assert_eq!(
-        marker.computed_manifest_hash,
-        expected_hash(&epoch2_manifest, true)
-    );
-    let payload = fixture.last_upgrade_event_payload();
-    assert_eq!(payload["fromEpoch"], "1");
-    assert_eq!(payload["toEpoch"], "2");
-    assert_eq!(payload["cleaned"], true);
+fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
+    for obsolete_epoch in [false, true] {
+        let fixture = UpgradeFixture::new();
+        fixture.prepare("run-1", &fixture.identity(false)).unwrap();
+        let sentinel = fixture.plant_sentinel();
+        let path = fixture.state_root().join(MARKER_FILE_NAME);
+        let mut value = serde_json::to_value(fixture.marker()).unwrap();
+        if obsolete_epoch {
+            value["stateEpoch"] = serde_json::json!("2");
+        } else {
+            value["markerVersion"] = serde_json::json!(1);
+        }
+        let bytes = serde_json::to_vec(&value).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let error = fixture
+            .prepare("run-2", &fixture.identity(true))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::StateUnowned);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(sentinel).unwrap(), b"keep");
+        assert_eq!(fixture.upgrade_event_count(), 0);
+    }
 }
 
 #[test]
@@ -195,84 +177,113 @@ fn runtime_abi_mismatch_refuses() {
 }
 
 #[test]
-fn epoch_change_on_protected_state_refuses_upgrade_clean() {
-    let fixture = UpgradeFixture::new();
-    fixture
-        .prepare("run-1", &fixture.identity(false))
-        .expect("first run should prepare a fresh slot");
-    let sentinel = fixture.plant_sentinel();
-    let mut marker = fixture.marker();
-    marker.cleanup_policy = CleanupPolicy::Protected;
-    fixture.rewrite_marker(&marker);
-
-    let mut epoch2_value = fixture_manifest();
-    epoch2_value["state"]["stateEpoch"] = serde_json::json!("2");
-    let epoch2_manifest: Manifest =
-        serde_json::from_value(epoch2_value).expect("epoch-2 manifest should parse");
-    let epoch2_admission = admission(&epoch2_manifest, &fixture.tmp.path, true);
-    let epoch2_identity = StateIdentity::from_admission(epoch2_admission.common());
-
-    let error = fixture
-        .prepare("run-2", &epoch2_identity)
-        .expect_err("protected state must not be deleted by an epoch upgrade");
-
-    assert_eq!(error.code, ErrorCode::CleanupRefused);
-    assert!(
-        sentinel.exists(),
-        "protected state must survive the refusal"
-    );
+fn changed_manifest_cannot_weaken_existing_retention() {
+    for persistent in [false, true] {
+        let fixture = UpgradeFixture::new();
+        let mut protected = fixture.identity(false);
+        if persistent {
+            protected.persistence = PersistencePolicy::Persistent;
+        } else {
+            protected.cleanup_policy = CleanupPolicy::Protected;
+        }
+        fixture.prepare("run-1", &protected).unwrap();
+        let sentinel = fixture.plant_sentinel();
+        let before = fixture.marker();
+        let error = fixture
+            .prepare("run-2", &fixture.identity(true))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::CleanupRefused);
+        assert_eq!(fixture.marker(), before);
+        assert_eq!(fs::read(sentinel).unwrap(), b"keep");
+        assert_eq!(fixture.upgrade_event_count(), 0);
+    }
 }
 
 #[test]
-fn live_old_manifest_service_is_torn_down_on_upgrade() {
-    let tmp = TempDir::new();
-    let manifest: Manifest = serde_json::from_value(synthetic_manifest(
-        &common::test_sleep(),
-        &["30"],
-        23980,
-        23990,
-    ))
-    .expect("manifest should parse");
-    let admission_a = admission(&manifest, &tmp.path, false);
-    let placement = derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
-    materialize_run_roots(&placement).expect("roots should materialize");
-    let identity_a = StateIdentity::from_admission(admission_a.common());
-    commit_slot_marker(&placement, &identity_a).expect("marker should be written");
-    let mut registry = open_registry(&placement, &manifest);
-    let service = start_fixture_service(
-        &admission_a,
-        &placement,
-        &mut registry,
-        "run-a",
-        &nixfied_runtime::slot::select_slot(&manifest, None).unwrap(),
-        23980,
-        nixfied_manifest::ServiceLifetime::RunScoped,
-    )
-    .expect("old-manifest service should start");
-    let pgid = service.info().pgid;
-    let process_key = service.info().process_key.clone();
-
-    let admission_b = admission(&manifest, &tmp.path, true);
-    let identity_b = StateIdentity::from_admission(admission_b.common());
-    let placement_b = derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
-    let report = prepare_slot_state(&placement_b, &identity_b, &mut registry, 5000)
-        .expect("upgrade should tear down the old manifest's live service");
-
-    assert!(report.upgraded);
-    assert!(
-        wait_for_group_exit(pgid, 5000),
-        "the old manifest's process group must be empty after the upgrade"
-    );
-    let process_status: String = registry
-        .connection()
-        .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            [&process_key],
-            |row| row.get(0),
+fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
+    for changed in [false, true] {
+        let tmp = TempDir::new();
+        let manifest: Manifest = serde_json::from_value(synthetic_manifest(
+            &common::test_sleep(),
+            &["30"],
+            23980,
+            23990,
+        ))
+        .expect("manifest should parse");
+        let admission_a = admission(&manifest, &tmp.path, false);
+        let placement =
+            derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
+        materialize_run_roots(&placement).expect("roots should materialize");
+        let identity_a = StateIdentity::from_admission(admission_a.common());
+        commit_slot_marker(&placement, &identity_a).expect("marker should be written");
+        let mut registry = open_registry(&placement, &manifest);
+        let service = start_fixture_service(
+            &admission_a,
+            &placement,
+            &mut registry,
+            "run-a",
+            &nixfied_runtime::slot::select_slot(&manifest, None).unwrap(),
+            23980,
         )
-        .expect("process row should exist");
-    assert_eq!(process_status, "stopped");
-    drop(service);
+        .expect("old-manifest service should start");
+        let pgid = service.info().pgid;
+        let process_key = service.info().process_key.clone();
+
+        let admission_b = admission(&manifest, &tmp.path, changed);
+        let identity_b = StateIdentity::from_admission(admission_b.common());
+        let placement_b =
+            derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
+        let marker_path = placement.state_root.join(MARKER_FILE_NAME);
+        let marker_before = fs::read(&marker_path).unwrap();
+        for (status, expected) in [
+            ("running", ErrorCode::CleanupRefused),
+            // Even terminal process evidence cannot hide the open endpoint.
+            ("stopped", ErrorCode::CleanupRefused),
+            ("invalid", ErrorCode::RegistryCorrupt),
+        ] {
+            registry
+                .connection()
+                .execute(
+                    "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+                    rusqlite::params![process_key, status],
+                )
+                .unwrap();
+            let error = prepare_slot_state(&placement_b, &identity_b, &mut registry).unwrap_err();
+            assert_eq!(error.code, expected);
+            assert!(
+                process_group_has_non_zombie_member(pgid),
+                "preparation must not signal a predecessor"
+            );
+            assert_eq!(fs::read(&marker_path).unwrap(), marker_before);
+        }
+        registry
+            .connection()
+            .execute(
+                "UPDATE processes SET status = 'running' WHERE process_key = ?1",
+                [&process_key],
+            )
+            .unwrap();
+        nixfied_runtime::control::down_owned_process_groups(&mut registry, 5000)
+            .expect("exclusive recovery settles all manifest provenances");
+        let report = prepare_slot_state(&placement_b, &identity_b, &mut registry)
+            .expect("preparation follows successful recovery");
+
+        assert_eq!(report.upgraded, changed);
+        assert!(
+            wait_for_group_exit(pgid, 5000),
+            "the predecessor process group must be empty after recovery"
+        );
+        let process_status: String = registry
+            .connection()
+            .query_row(
+                "SELECT status FROM processes WHERE process_key = ?1",
+                [&process_key],
+                |row| row.get(0),
+            )
+            .expect("process row should exist");
+        assert_eq!(process_status, "stopped");
+        drop(service);
+    }
 }
 
 #[test]
@@ -288,36 +299,35 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
+              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
             ) VALUES (
-              'run-interrupted', 'dev', 0, 'service-starting',
+              'run-interrupted', 'dev', 0, NULL,
               '/nix/store/manifest-a/manifest.json', 'hash-a', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             ",
         )
         .expect("interrupted run row should insert");
-    insert_registry_service(
-        &mut registry,
-        &RegistryServiceRow::synthetic("service-interrupted", "/tmp/interrupted"),
-    );
     registry
         .connection_mut()
         .execute_batch(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status
+              run_id, service_instance_id, status, service_name
             ) VALUES (
               'process-interrupted', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
-              'run-interrupted', 'service-interrupted', 'running'
+              'run-interrupted', 'service-interrupted', 'running', 'synthetic'
             );
             ",
         )
         .expect("interrupted process row should insert");
+    registry
+        .close()
+        .expect("interrupted predecessor releases slot authority");
 
     let report = fixture
         .prepare("run-2", &fixture.identity(true))
@@ -407,7 +417,8 @@ impl UpgradeFixture {
         let placement = self.placement(run_id);
         materialize_registry_root(&placement)?;
         let mut registry = open_registry(&placement, &self.manifest);
-        prepare_slot_state(&placement, identity, &mut registry, 1000)
+        nixfied_runtime::control::down_owned_process_groups(&mut registry, 1000)?;
+        prepare_slot_state(&placement, identity, &mut registry)
     }
 
     fn registry(&self) -> Registry {
@@ -469,7 +480,7 @@ impl UpgradeFixture {
 
 fn open_registry(placement: &HostPlacement, manifest: &Manifest) -> Registry {
     Registry::open_or_create(
-        placement.registry_path(),
+        registry_guard(placement),
         &RegistryIdentity::default_slot(
             &manifest.project.project_id,
             &manifest.runtime_abi,

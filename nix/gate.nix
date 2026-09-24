@@ -13,6 +13,7 @@ pkgs.writeShellApplication {
   name = "nixfied-gate";
   runtimeInputs = [ pkgs.coreutils ];
   text = ''
+    umask 077
     checkout="''${NIXFIED_GATE_CHECKOUT:-$PWD}"
     state="''${TMPDIR:-/tmp}/nixfied-gate"
     rm -rf "$state"

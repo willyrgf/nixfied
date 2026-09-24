@@ -1,3 +1,4 @@
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Component, Path, PathBuf};
 
 use nixfied_manifest::Manifest;
@@ -66,6 +67,23 @@ pub fn derive_host_placement_for_slot(
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
+    derive_slot_placement(
+        &manifest.project.project_id,
+        selected_slot.environment,
+        selected_slot.slot,
+        run_id,
+        state_base,
+    )
+}
+
+/// Native slot placement shared by admitted execution and registry ownership.
+pub fn derive_slot_placement(
+    project: &str,
+    environment: &str,
+    slot: u32,
+    run_id: &str,
+    state_base: impl AsRef<Path>,
+) -> RuntimeResult<HostPlacement> {
     let state_base = state_base.as_ref().to_path_buf();
     if state_base.as_os_str().is_empty() {
         return Err(RuntimeError::new(
@@ -73,13 +91,11 @@ pub fn derive_host_placement_for_slot(
             "state base cannot be empty",
         ));
     }
-    let project = normal_component("projectId", &manifest.project.project_id)?;
-    let environment = normal_component("environment", selected_slot.environment)?;
+    let project = normal_component("projectId", project)?;
+    let environment = normal_component("environment", environment)?;
     let run_id = normal_component("runId", run_id)?;
-    let slot_relative = project
-        .join(environment)
-        .join(selected_slot.slot.to_string());
-    let state_root = application_root(&state_base, project, environment, selected_slot.slot);
+    let slot_relative = project.join(environment).join(slot.to_string());
+    let state_root = application_root(&state_base, project, environment, slot);
     // Cleanup evidence survives deletion of the parallel slot state tree.
     let registry_dir = state_base.join("registry").join(&slot_relative);
     let run_dir = registry_dir.join("runs").join(run_id);
@@ -219,12 +235,16 @@ pub(crate) fn reject_existing_symlink_components(
 }
 
 fn create_dir(path: &Path) -> RuntimeResult<()> {
-    std::fs::create_dir_all(path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!("failed to create {}: {error}", path.display()),
-        )
-    })
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                format!("failed to create {}: {error}", path.display()),
+            )
+        })
 }
 
 fn canonicalize_materialized(label: &str, path: &Path) -> RuntimeResult<PathBuf> {

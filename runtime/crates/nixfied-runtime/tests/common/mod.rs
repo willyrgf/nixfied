@@ -173,10 +173,10 @@ pub fn test_child_manifest(port_start: u16, port_end: u16) -> Value {
 
 pub use nixfied_manifest::fixtures::{host_arch, host_os, host_system};
 
-use nixfied_manifest::{Manifest, ServiceLifetime};
+use nixfied_manifest::Manifest;
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
-    AcquiredService, ServiceSelection, SlotEndpoints, record_run_created, run_slot_clean,
+    ServiceSelection, SlotEndpoints, StartingService, record_run_created, run_slot_clean,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
@@ -207,77 +207,7 @@ pub fn fixture_admission(manifest: &Manifest, source_root: &Path) -> RunAdmissio
 /// `synthetic` name lives here in test support, not in the runtime.
 pub const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
 
-pub struct RegistryServiceRow<'a> {
-    pub service_instance_id: &'a str,
-    pub environment: &'a str,
-    pub slot: i64,
-    pub service_name: &'a str,
-    pub service_address_hash: &'a str,
-    pub endpoint_identity_hash: &'a str,
-    pub state_identity_hash: &'a str,
-    pub runtime_compatibility_hash: &'a str,
-    pub target_identity_hash: &'a str,
-    pub service_lifetime: ServiceLifetime,
-    pub state_root: &'a str,
-}
-
-impl<'a> RegistryServiceRow<'a> {
-    pub fn synthetic(service_instance_id: &'a str, state_root: &'a str) -> Self {
-        Self {
-            service_instance_id,
-            environment: "dev",
-            slot: 0,
-            service_name: SYNTHETIC_SERVICE_NAME,
-            service_address_hash: "address",
-            endpoint_identity_hash: "endpoint",
-            state_identity_hash: "state",
-            runtime_compatibility_hash: "runtime",
-            target_identity_hash: "target",
-            service_lifetime: ServiceLifetime::RunScoped,
-            state_root,
-        }
-    }
-}
-
-pub fn insert_registry_service(registry: &mut Registry, row: &RegistryServiceRow<'_>) {
-    registry
-        .connection_mut()
-        .execute(
-            "
-            INSERT INTO services (
-              service_instance_id, environment, slot, service_name,
-              service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime,
-              state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            params![
-                row.service_instance_id,
-                row.environment,
-                row.slot,
-                row.service_name,
-                row.service_address_hash,
-                row.endpoint_identity_hash,
-                row.state_identity_hash,
-                row.runtime_compatibility_hash,
-                row.target_identity_hash,
-                service_lifetime_wire(row.service_lifetime),
-                row.state_root,
-            ],
-        )
-        .expect("service row should insert");
-}
-
-fn service_lifetime_wire(lifetime: ServiceLifetime) -> &'static str {
-    match lifetime {
-        ServiceLifetime::RunScoped => "run-scoped",
-        ServiceLifetime::UntilIdle => "until-idle",
-        ServiceLifetime::PersistentUntilDown => "persistent-until-down",
-    }
-}
-
-/// Record a fixture run and start its `synthetic` service on the selected slot through the
-/// generic runtime API.
+/// Record a fixture run and start its service through the generic runtime API.
 pub fn start_fixture_service(
     admission: &RunAdmission,
     placement: &HostPlacement,
@@ -285,8 +215,7 @@ pub fn start_fixture_service(
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
-    service_lifetime: ServiceLifetime,
-) -> RuntimeResult<AcquiredService> {
+) -> RuntimeResult<StartingService> {
     let run_id = run_id.into();
     record_run_created(registry, &run_id, admission, placement)?;
     // The synthetic fixture binds a single endpoint, `synthetic-tcp`.
@@ -300,7 +229,6 @@ pub fn start_fixture_service(
         selected_slot,
         ServiceSelection {
             service_name: SYNTHETIC_SERVICE_NAME,
-            service_lifetime,
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
             run_timeout_ms: 5000,
@@ -343,6 +271,7 @@ impl TempDir {
             unique_suffix()
         ));
         fs::create_dir_all(&path).expect("temp dir should be created");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self { path }
     }
 }
@@ -466,4 +395,25 @@ pub fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+pub fn registry_guard(
+    placement: &nixfied_runtime::state::HostPlacement,
+) -> nixfied_runtime::state::ownership::SlotGuard {
+    nixfied_runtime::state::ownership::SlotGuard::acquire(
+        placement,
+        &nixfied_runtime::cancellation::CancellationToken::new(),
+    )
+    .expect("fixture slot authority")
+}
+
+pub fn observe_registry(
+    registry: &nixfied_runtime::registry::Registry,
+) -> nixfied_runtime::RuntimeResult<nixfied_runtime::control::PsReport> {
+    let reader = nixfied_runtime::registry::RegistryReader::open_existing(
+        registry.path(),
+        registry.identity(),
+    )?
+    .expect("fixture registry exists");
+    nixfied_runtime::control::ps(&reader)
 }

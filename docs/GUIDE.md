@@ -379,14 +379,13 @@ Services are generic foreground processes with prepare, start, readiness,
 health, stop, and clean semantics. A service may declare one endpoint, several
 named endpoints, or no endpoint. Every declared TCP endpoint receives a planned
 port and must be proven to belong to the process the runtime started; an open
-port alone is not readiness. A live service that is not exactly reusable must
-be stopped explicitly with `down` before replacement.
+port alone is not readiness. A conflicting listener rejects startup.
 
-Task service lifetime controls what happens after the borrower finishes:
-
-- `run-scoped` stops the task's services at the end of the run;
-- `until-idle` keeps them until reconciliation observes no live borrowers;
-- `persistent-until-down` keeps them until an explicit `down`.
+Each run owns its services until the entire session finishes, then stops them.
+Tasks in the same graph share services. A later run starts fresh service
+processes; application-data retention is controlled separately by state policy.
+There is no task `serviceLifetime` setting or cross-session service borrowing.
+Only one session may own a slot at a time; use different slots for concurrent runs.
 
 Slots isolate simultaneous copies of a project. Declare the accepted range and
 default in `nixfied.nix`:
@@ -408,7 +407,7 @@ nix run .#down -- --slot 2
 nix run .#clean -- --slot 2
 ```
 
-Each slot has its own state root, registry, leases, process records, and
+Each slot has its own state root, registry, process records, and
 deterministic candidate port window. `nixfied.placement.ports` controls the base,
 window size, and stride; the generated manifest view shows the resolved windows.
 
@@ -420,7 +419,7 @@ example in CI:
 NIXFIED_STATE_DIR=/tmp/my-project-state nix run .#check -- --slot 0
 ```
 
-`clean` is idempotent, path-confined, marker-gated, lease-gated, and
+`clean` is idempotent, path-confined, marker-gated, slot-owned, and
 process-gated. Run `down` first. A protected or persistent policy additionally
 requires `clean --purge`; purge relaxes only that policy gate, never the
 ownership, confinement, or live-process checks. Do not manually rewrite state
@@ -455,7 +454,7 @@ Read the declaration and default with
 `nix run .#docs -- option 'nixfied.services.<name>.stateRefs'`.
 These labels are not a storage-backend selector or a registry of state roots.
 Execution lowering discards these labels, so changing them does not move state
-or change service reuse identity. They remain serialized in `manifest.json` and
+or change runtime service identity. They remain serialized in `manifest.json` and
 shown in `views/docs.md`; changing them therefore changes the raw manifest hash.
 
 Service/task `logRefs`, task `artifactRefs`, and task `summaryRefs` are likewise
@@ -466,7 +465,7 @@ and cleanup retain their native behavior.
 Use `${stateDir}` in invocation arguments or environment values for the
 runtime-owned slot root. Child programs choose subdirectories beneath it (for
 example `${stateDir}/pgdata`); `stateRefs` does not create them. Configure state
-compatibility and cleanup with `nixfied.state`, and use `down`/`clean` for owned
+retention and cleanup with `nixfied.state`, and use `down`/`clean` for owned
 state as described above. Child-tool caches remain project-owned.
 
 ## Source and invocation context
@@ -589,9 +588,10 @@ nix run .#ps -- --slot 0
 nix run .#down -- --slot 0
 ```
 
-If the new declaration intentionally changes the state epoch, clean incompatible
-state with the old pin as well; add `--purge` only for state declared protected
-or persistent. Then update the input and verify the new manifest:
+Application-data compatibility and migration belong to the application and user.
+Changing a declaration does not authorize Nixfied to reset retained data. Purge
+only when you intend to delete it; existing persistent retention cannot silently
+change to run-scoped retention. Then update the input and verify the new manifest:
 
 ```sh
 nix run github:willyrgf/nixfied#upgrade -- --root . --plan > nixfied-upgrade.diff

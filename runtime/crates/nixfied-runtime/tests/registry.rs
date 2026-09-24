@@ -1,89 +1,103 @@
 use nixfied_runtime::ErrorCode;
-use nixfied_runtime::registry::leases::heartbeat_run_lease;
-use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity};
+use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity, RegistryReader};
 
 mod common;
 use common::*;
 
 #[test]
-fn concurrent_initializers_publish_one_complete_identity() {
-    for differing_identity in [false, true] {
-        let tmp = TempDir::new();
-        let path = tmp.path.join("registry.sqlite3");
-        // Fix WAL before the race: this test targets locked schema classification,
-        // independently of SQLite's journal-mode negotiation.
-        let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        drop(conn);
-        let start = std::sync::Barrier::new(2);
-        let identities = [identity(), {
-            let mut other = identity();
-            if differing_identity {
-                other.project_id = "other-project".into();
-            }
-            other
-        }];
-        let results = std::thread::scope(|scope| {
-            let creators: Vec<_> = identities
-                .iter()
-                .map(|identity| {
-                    scope.spawn(|| {
-                        start.wait();
-                        Registry::open_or_create(&path, identity)
-                    })
+fn competing_initializers_admit_one_writer_before_schema_creation() {
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let start = std::sync::Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let creators: Vec<_> = (0..2)
+            .map(|_| {
+                scope.spawn(|| {
+                    start.wait();
+                    let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
+                        &placement,
+                        &nixfied_runtime::cancellation::CancellationToken::new(),
+                    )?;
+                    Registry::open_or_create(guard, &identity())
                 })
-                .collect();
-            creators
-                .into_iter()
-                .map(|creator| creator.join().unwrap())
-                .collect::<Vec<_>>()
-        });
-        assert_eq!(
-            results.iter().filter(|result| result.is_ok()).count(),
-            if differing_identity { 1 } else { 2 }
-        );
-        let winner = results
+            })
+            .collect();
+        creators
+            .into_iter()
+            .map(|creator| creator.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
             .iter()
-            .find_map(|result| result.as_ref().ok())
-            .unwrap();
-        for error in results.iter().filter_map(|result| result.as_ref().err()) {
-            assert_eq!(error.code, ErrorCode::StateUnowned);
-        }
-        let persisted: (i64, String, i64) = winner.connection().query_row(
-            "SELECT schema_version, project_id, (SELECT count(*) FROM registry_meta) FROM registry_meta",
-            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).unwrap();
-        assert_eq!(
-            persisted,
-            (
-                nixfied_runtime::registry::SCHEMA_VERSION,
-                winner.identity().project_id.clone(),
-                1
-            )
-        );
-        assert_eq!(
-            winner
-                .connection()
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-                .unwrap(),
-            nixfied_runtime::registry::SCHEMA_VERSION
-        );
-        let owner = winner.identity().clone();
-        drop(results);
-        Registry::open_or_create(&path, &owner).expect("the winning complete schema must reopen");
-    }
+            .filter_map(|result| result.as_ref().err())
+            .next()
+            .unwrap()
+            .code,
+        ErrorCode::CleanupRefused
+    );
+    let winner = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .unwrap();
+    assert_eq!(
+        winner
+            .connection()
+            .query_row("SELECT count(*) FROM registry_meta", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        winner
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        nixfied_runtime::registry::SCHEMA_VERSION
+    );
+    let tables = winner
+        .connection()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        tables,
+        [
+            "cleanups",
+            "events",
+            "ports",
+            "processes",
+            "registry_meta",
+            "runs"
+        ]
+    );
+    assert!(!placement.state_root.exists());
+    assert!(!placement.run_dir.exists());
+    drop(results);
+    Registry::open_or_create(registry_guard(&placement), &identity())
+        .unwrap()
+        .close()
+        .unwrap();
 }
 
 #[test]
-fn failed_metadata_insert_rolls_back_schema_creation() {
+fn invalid_identity_is_rejected_before_database_creation() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
     let mut invalid = identity();
-    invalid.slot = -1; // Fail the real metadata CHECK after all CREATE statements.
-    let error = Registry::open_or_create(&path, &invalid).err().unwrap();
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    assert_empty_unversioned_database(&path);
-    Registry::open_or_create(&path, &identity()).expect("rolled-back creation must be retryable");
+    invalid.slot = -1;
+    let error = Registry::open_or_create(registry_guard(&placement), &invalid)
+        .err()
+        .unwrap();
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert!(!path.exists());
+    Registry::open_or_create(registry_guard(&placement), &identity())
+        .expect("rejected admission must leave the slot usable");
 }
 
 fn assert_empty_unversioned_database(path: &std::path::Path) {
@@ -107,7 +121,8 @@ fn assert_empty_unversioned_database(path: &std::path::Path) {
 #[test]
 fn failed_version_write_rolls_back_tables_and_metadata() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
     let mut conn = rusqlite::Connection::open(&path).unwrap();
     unsafe extern "C" fn deny_version_write(
         _: *mut std::ffi::c_void,
@@ -141,56 +156,16 @@ fn failed_version_write_rolls_back_tables_and_metadata() {
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     drop(conn);
     assert_empty_unversioned_database(&path);
-    Registry::open_or_create(&path, &identity()).expect("failed version write must be retryable");
-}
-
-#[test]
-fn interrupted_creation_commits_neither_schema_nor_version() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "registry_creation_crash_child", "--nocapture"])
-        .env("NIXFIED_TEST_REGISTRY_CRASH_PATH", &path)
-        .status()
-        .unwrap();
-    assert_eq!(
-        status.code(),
-        Some(73),
-        "child must exit at the SQLite commit boundary"
-    );
-    assert_empty_unversioned_database(&path);
-    Registry::open_or_create(&path, &identity()).expect("interrupted creation must be retryable");
-}
-
-#[test]
-fn registry_creation_crash_child() {
-    let Some(path) = std::env::var_os("NIXFIED_TEST_REGISTRY_CRASH_PATH") else {
-        return;
-    };
-    let mut conn = rusqlite::Connection::open(path).unwrap();
-    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-    unsafe extern "C" fn exit_before_commit(_: *mut std::ffi::c_void) -> std::ffi::c_int {
-        // Do not unwind or run Connection/Transaction destructors: model process loss.
-        unsafe { libc::_exit(73) }
-    }
-    // SAFETY: the connection outlives the callback and the callback reads no data.
-    unsafe {
-        rusqlite::ffi::sqlite3_commit_hook(
-            conn.handle(),
-            Some(exit_before_commit),
-            std::ptr::null_mut(),
-        );
-    }
-    nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap();
-    panic!("creation must reach the installed commit hook");
+    Registry::open_or_create(registry_guard(&placement), &identity())
+        .expect("failed version write must be retryable");
 }
 
 #[test]
 fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
     let expected = RegistryIdentity::for_slot("project", "dev", 2, "abi", "tool");
-    let registry = Registry::open_or_create(&path, &expected).unwrap();
+    let placement = registry_placement(&tmp.path, &expected);
+    let registry = Registry::open_or_create(registry_guard(&placement), &expected).unwrap();
     // Deliberately corrupt only this fixture; production writes keep the check.
     registry
         .connection()
@@ -201,7 +176,7 @@ fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
         .execute("UPDATE registry_meta SET slot = -7 WHERE id = 1", [])
         .unwrap();
     drop(registry);
-    let error = match Registry::open_or_create(&path, &expected) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &expected) {
         Ok(_) => panic!("negative observed slot must reject ownership"),
         Err(error) => error,
     };
@@ -235,56 +210,32 @@ fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
 }
 
 #[test]
-fn concurrent_event_history_survives_reopen_and_rejects_another_slot() {
+fn event_history_survives_successive_owners_and_rejects_another_slot() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry/registry.sqlite3");
     let identity = RegistryIdentity::for_slot("project", "staging", 3, "abi", "toolchain");
-    let first = Registry::open_or_create(&path, &identity).unwrap();
-    let second = Registry::open_or_create(&path, &identity).unwrap();
-    let start = std::sync::Barrier::new(2);
-
-    // Use the real write API on independently opened connections. Compare its
-    // acknowledgements with persisted evidence after both connections close.
-    let mut acknowledged = std::thread::scope(|scope| {
-        let writers: Vec<_> = [first, second]
-            .into_iter()
-            .enumerate()
-            .map(|(writer, mut registry)| {
-                let start = &start;
-                scope.spawn(move || {
-                    start.wait();
-                    (0..100)
-                        .map(|index| {
-                            let event_type = format!("writer-{writer}");
-                            let payload = serde_json::json!({"index": index}).to_string();
-                            let seq = registry
-                                .append_event(EventInsert::new(&event_type, &payload))
-                                .unwrap();
-                            (seq, event_type, payload)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        writers
-            .into_iter()
-            .flat_map(|writer| writer.join().unwrap())
-            .collect::<Vec<_>>()
-    });
-    acknowledged.sort_by_key(|event| event.0);
+    let placement = registry_placement(&tmp.path, &identity);
+    let mut acknowledged = Vec::new();
+    for writer in 0..2 {
+        let mut registry = Registry::open_or_create(registry_guard(&placement), &identity).unwrap();
+        for index in 0..100 {
+            let event_type = format!("writer-{writer}");
+            let payload = serde_json::json!({"index": index}).to_string();
+            let seq = registry
+                .append_event(EventInsert::new(&event_type, &payload))
+                .unwrap();
+            acknowledged.push((seq, event_type, payload, "staging".to_string(), 3_i64));
+        }
+        registry.close().unwrap();
+    }
     assert_eq!(
         acknowledged.iter().map(|event| event.0).collect::<Vec<_>>(),
         (1..=200).collect::<Vec<_>>()
     );
-
-    let wrong_slot = RegistryIdentity::for_slot("project", "staging", 4, "abi", "toolchain");
-    let error = match Registry::open_or_create(&path, &wrong_slot) {
-        Ok(_) => panic!("another slot must not adopt the history"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-
-    let registry = Registry::open_or_create(&path, &identity).unwrap();
+    let wrong = RegistryIdentity::for_slot("project", "staging", 4, "abi", "toolchain");
+    assert!(
+        matches!(Registry::open_or_create(registry_guard(&placement), &wrong), Err(error) if error.code == ErrorCode::StateUnowned)
+    );
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity).unwrap();
     let persisted = registry
         .connection()
         .prepare("SELECT seq, event_type, payload_json, environment, slot FROM events ORDER BY seq")
@@ -301,47 +252,7 @@ fn concurrent_event_history_survives_reopen_and_rejects_another_slot() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(
-        persisted,
-        acknowledged
-            .into_iter()
-            .map(|(seq, event_type, payload)| (seq, event_type, payload, "staging".into(), 3))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn all_clean_terminal_siblings_allow_heartbeat_shutdown() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    let mut registry = Registry::open_or_create(&path, &identity).expect("registry should open");
-    insert_run_for_heartbeat(&registry, "run-terminal");
-    for (service, status) in [
-        ("service-a", "completed"),
-        ("service-b", "canceled"),
-        ("service-c", "failed"),
-    ] {
-        registry
-            .connection()
-            .execute(
-                "
-                INSERT INTO run_leases (
-                  run_id, environment, slot, service_instance_id, owner_token,
-                  heartbeat_at, expires_at, status
-                ) VALUES (?1, 'dev', 0, ?2, 'owner-token',
-                          '2001-01-01T00:00:00.000Z', '2001-01-01T00:00:30.000Z', ?3)
-                ",
-                ("run-terminal", service, status),
-            )
-            .expect("lease should insert");
-    }
-    let before = heartbeat_rows(&registry, "run-terminal");
-
-    heartbeat_run_lease(&mut registry, "run-terminal", "owner-token")
-        .expect("a completely clean terminal run should stop heartbeat successfully");
-
-    assert_eq!(heartbeat_rows(&registry, "run-terminal"), before);
+    assert_eq!(persisted, acknowledged);
 }
 
 #[test]
@@ -381,17 +292,19 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
         ),
     ] {
         let tmp = TempDir::new();
-        let path = tmp.path.join("registry.sqlite3");
+        let placement = registry_placement(&tmp.path, &identity());
+        let path = placement.registry_path();
         let expected = identity();
-        Registry::open_or_create(&path, &expected).expect("registry should open");
-        let error = match Registry::open_or_create(&path, &bad) {
+        Registry::open_or_create(registry_guard(&placement), &expected)
+            .expect("registry should open");
+        let error = match RegistryReader::open_existing(&path, &bad) {
             Ok(_) => panic!("{field} mismatch should fail"),
             Err(error) => error,
         };
         assert_eq!(error.code, code, "{field}");
         assert_mismatched_fields(&error, &[field]);
         assert_registry_path_details(&error, &path);
-        Registry::open_or_create(&path, &expected)
+        Registry::open_or_create(registry_guard(&placement), &expected)
             .expect("rejection must preserve the original stored identity");
     }
 }
@@ -399,7 +312,6 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
 #[test]
 fn records_and_checks_selected_slot_identity() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
     let identity = RegistryIdentity::for_slot(
         "minimal",
         "dev",
@@ -407,7 +319,10 @@ fn records_and_checks_selected_slot_identity() {
         "nixfied-runtime-abi:1",
         "nixfied-toolchain:1",
     );
-    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    let placement = registry_placement(&tmp.path, &identity);
+    let path = placement.registry_path();
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity)
+        .expect("registry should open");
     let slot: i64 = registry
         .connection()
         .query_row("SELECT slot FROM registry_meta WHERE id = 1", [], |row| {
@@ -419,7 +334,7 @@ fn records_and_checks_selected_slot_identity() {
 
     let wrong_slot =
         RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1");
-    let error = match Registry::open_or_create(&path, &wrong_slot) {
+    let error = match RegistryReader::open_existing(&path, &wrong_slot) {
         Ok(_) => panic!("slot mismatch should fail"),
         Err(error) => error,
     };
@@ -432,16 +347,17 @@ fn records_and_checks_selected_slot_identity() {
 #[test]
 fn rejects_incompatible_user_version() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
     let identity = identity();
-    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity)
+        .expect("registry should open");
     registry
         .connection()
         .execute_batch("PRAGMA user_version = 99;")
         .expect("test should mutate user_version");
     drop(registry);
 
-    let error = match Registry::open_or_create(&path, &identity) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &identity) {
         Ok(_) => panic!("schema mismatch should fail"),
         Err(error) => error,
     };
@@ -451,16 +367,17 @@ fn rejects_incompatible_user_version() {
 #[test]
 fn rejects_previous_service_status_schema_without_migration() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
     let identity = identity();
-    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity)
+        .expect("registry should open");
     registry
         .connection()
         .execute_batch("PRAGMA user_version = 5;")
         .expect("test should identify the removed service-status schema");
     drop(registry);
 
-    let error = match Registry::open_or_create(&path, &identity) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &identity) {
         Ok(_) => panic!("the prior registry shape must not be migrated"),
         Err(error) => error,
     };
@@ -470,7 +387,8 @@ fn rejects_previous_service_status_schema_without_migration() {
 #[test]
 fn rejects_previous_model_columns_without_rewriting_history() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -480,7 +398,7 @@ fn rejects_previous_model_columns_without_rewriting_history() {
         )
         .unwrap();
     }
-    let error = match Registry::open_or_create(&path, &identity()) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
         Ok(_) => panic!("the previous schema must not be migrated"),
         Err(error) => error,
     };
@@ -503,7 +421,8 @@ fn rejects_previous_model_columns_without_rewriting_history() {
 #[test]
 fn rejects_current_registry_missing_required_shape() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
     {
         let conn = rusqlite::Connection::open(&path).expect("test DB should open");
         conn.pragma_update(
@@ -529,7 +448,7 @@ fn rejects_current_registry_missing_required_shape() {
         .expect("test DB should be initialized as corrupt current schema");
     }
 
-    let error = match Registry::open_or_create(&path, &identity()) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
         Ok(_) => panic!("current registry without required shape should fail"),
         Err(error) => error,
     };
@@ -543,14 +462,15 @@ fn rejects_current_registry_missing_required_shape() {
 #[test]
 fn rejects_nonempty_unversioned_registry() {
     let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
     {
         let conn = rusqlite::Connection::open(&path).expect("test DB should open");
         conn.execute_batch("CREATE TABLE unrelated (id INTEGER PRIMARY KEY);")
             .expect("test DB should contain unrelated state");
     }
 
-    let error = match Registry::open_or_create(&path, &identity()) {
+    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
         Ok(_) => panic!("nonempty unversioned registry should fail"),
         Err(error) => error,
     };
@@ -559,44 +479,6 @@ fn rejects_nonempty_unversioned_registry() {
 
 fn identity() -> RegistryIdentity {
     RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
-}
-
-fn insert_run_for_heartbeat(registry: &Registry, run_id: &str) {
-    registry
-        .connection()
-        .execute(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, status, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            ) VALUES (?1, 'dev', 0, 'service-starting', '/nix/store/manifest.json',
-                      'hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1',
-                      '{}', '{}', '{}', NULL)
-            ",
-            [run_id],
-        )
-        .expect("run should insert");
-}
-
-fn heartbeat_rows(registry: &Registry, run_id: &str) -> Vec<(String, String, String, String)> {
-    registry
-        .connection()
-        .prepare(
-            "
-            SELECT service_instance_id, status, heartbeat_at, expires_at
-            FROM run_leases
-            WHERE run_id = ?1
-            ORDER BY service_instance_id
-            ",
-        )
-        .expect("lease rows should prepare")
-        .query_map([run_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
-        .expect("lease rows should query")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("lease rows should collect")
 }
 
 fn assert_mismatched_fields(error: &nixfied_runtime::RuntimeError, expected: &[&str]) {
@@ -626,4 +508,258 @@ fn assert_registry_path_details(error: &nixfied_runtime::RuntimeError, path: &st
         error.details["registryDir"].as_str(),
         path.parent().and_then(std::path::Path::to_str).or(Some(""))
     );
+}
+
+fn registry_placement(
+    root: &std::path::Path,
+    identity: &RegistryIdentity,
+) -> nixfied_runtime::state::HostPlacement {
+    let placement = nixfied_runtime::state::placement::derive_slot_placement(
+        &identity.project_id,
+        &identity.environment,
+        identity.slot.try_into().unwrap(),
+        "registry-test",
+        root,
+    )
+    .unwrap();
+    registry_guard(&placement).release().unwrap();
+    placement
+}
+
+fn insert_pending_session(registry: &Registry, run_id: &str) {
+    let identity = registry.identity();
+    registry
+        .connection()
+        .execute(
+            "INSERT INTO runs (run_id, environment, slot, manifest_path, computed_manifest_hash,
+             runtime_abi, toolchain_id, generator_json, target_json, source_json)
+         VALUES (?1, ?2, ?3, '/manifest', 'hash', ?4, ?5, '{}', '{}', '{}')",
+            rusqlite::params![
+                run_id,
+                identity.environment,
+                identity.slot,
+                identity.runtime_abi,
+                identity.toolchain_id
+            ],
+        )
+        .unwrap();
+}
+
+fn session_state(registry: &Registry, run_id: &str) -> (Option<String>, String) {
+    registry
+        .connection()
+        .query_row(
+            "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn session_outcome_is_immutable_and_does_not_claim_resource_finalization() {
+    use nixfied_runtime::registry::session::{ExecutionOutcome, record_execution_outcome};
+    for (outcome, wire) in [
+        (ExecutionOutcome::Succeeded, "succeeded"),
+        (ExecutionOutcome::Failed, "failed"),
+        (ExecutionOutcome::Canceled, "canceled"),
+    ] {
+        let tmp = TempDir::new();
+        let placement = registry_placement(&tmp.path, &identity());
+        let mut registry =
+            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+        insert_pending_session(&registry, "run");
+        assert_eq!(
+            record_execution_outcome(&mut registry, "run", "hash", ExecutionOutcome::Interrupted)
+                .unwrap_err()
+                .code,
+            ErrorCode::RegistryCorrupt
+        );
+        assert_eq!(session_state(&registry, "run"), (None, "unfinished".into()));
+        for _ in 0..2 {
+            record_execution_outcome(&mut registry, "run", "hash", outcome).unwrap();
+        }
+        let different = if outcome == ExecutionOutcome::Succeeded {
+            ExecutionOutcome::Failed
+        } else {
+            ExecutionOutcome::Succeeded
+        };
+        assert_eq!(
+            record_execution_outcome(&mut registry, "run", "hash", different)
+                .unwrap_err()
+                .code,
+            ErrorCode::RegistryCorrupt
+        );
+        assert_eq!(
+            session_state(&registry, "run"),
+            (Some(wire.into()), "unfinished".into())
+        );
+        let events: i64 = registry
+            .connection()
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 1);
+    }
+}
+
+#[test]
+fn failed_outcome_event_rolls_back_the_execution_result() {
+    use nixfied_runtime::registry::session::{ExecutionOutcome, record_execution_outcome};
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    insert_pending_session(&registry, "run");
+    registry.connection().execute_batch("CREATE TRIGGER reject_outcome BEFORE INSERT ON events
+        WHEN NEW.event_type = 'run.execution-settled' BEGIN SELECT RAISE(ABORT, 'outcome-denied'); END;").unwrap();
+    let error = record_execution_outcome(&mut registry, "run", "hash", ExecutionOutcome::Succeeded)
+        .unwrap_err();
+    assert!(error.message.contains("outcome-denied"));
+    assert_eq!(session_state(&registry, "run"), (None, "unfinished".into()));
+}
+
+#[test]
+fn successor_interrupts_only_unknown_execution_and_preserves_known_outcomes() {
+    use nixfied_runtime::registry::session::{
+        ExecutionOutcome, record_execution_outcome, record_interrupted_sessions,
+    };
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    for run_id in ["unknown", "succeeded", "failed"] {
+        insert_pending_session(&registry, run_id);
+    }
+    record_execution_outcome(
+        &mut registry,
+        "succeeded",
+        "hash",
+        ExecutionOutcome::Succeeded,
+    )
+    .unwrap();
+    record_execution_outcome(&mut registry, "failed", "hash", ExecutionOutcome::Failed).unwrap();
+    registry.close().unwrap();
+    let mut successor = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    for _ in 0..2 {
+        record_interrupted_sessions(&mut successor).unwrap();
+    }
+    for (run, outcome) in [
+        ("unknown", "interrupted"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+    ] {
+        assert_eq!(
+            session_state(&successor, run),
+            (Some(outcome.into()), "unfinished".into())
+        );
+    }
+    let interruptions: i64 = successor
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'run.interrupted'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(interruptions, 1);
+}
+
+#[test]
+fn recovery_validates_all_session_records_before_mutating_any() {
+    use nixfied_runtime::registry::session::record_interrupted_sessions;
+    for mutation in [
+        "environment = 'other'",
+        "slot = 1",
+        "execution_outcome = 'unknown'",
+        "finalization = 'unknown'",
+        "finalization = 'complete'",
+    ] {
+        let tmp = TempDir::new();
+        let placement = registry_placement(&tmp.path, &identity());
+        let mut registry =
+            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+        for run in ["a-pending", "z-damaged"] {
+            insert_pending_session(&registry, run);
+        }
+        // Model damaged stored bytes outside the supported writer boundary.
+        registry
+            .connection()
+            .execute_batch("PRAGMA ignore_check_constraints = ON")
+            .unwrap();
+        registry
+            .connection()
+            .execute(
+                &format!("UPDATE runs SET {mutation} WHERE run_id = 'z-damaged'"),
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            record_interrupted_sessions(&mut registry).unwrap_err().code,
+            ErrorCode::RegistryCorrupt
+        );
+        assert_eq!(
+            session_state(&registry, "a-pending"),
+            (None, "unfinished".into())
+        );
+        let events: i64 = registry
+            .connection()
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 0, "{mutation}");
+    }
+}
+
+#[test]
+fn schema_rejects_finalization_without_execution_outcome() {
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    insert_pending_session(&registry, "run");
+    assert!(
+        registry
+            .connection()
+            .execute("UPDATE runs SET finalization = 'complete'", [])
+            .is_err()
+    );
+    assert_eq!(session_state(&registry, "run"), (None, "unfinished".into()));
+}
+
+#[test]
+fn ignored_outcome_updates_cannot_publish_false_settlement_events() {
+    use nixfied_runtime::registry::session::{
+        ExecutionOutcome, record_execution_outcome, record_interrupted_sessions,
+    };
+    for recovery in [false, true] {
+        let tmp = TempDir::new();
+        let placement = registry_placement(&tmp.path, &identity());
+        let mut registry =
+            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+        for run in ["a-pending", "z-pending"] {
+            insert_pending_session(&registry, run);
+        }
+        registry
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER ignore_outcome BEFORE UPDATE ON runs
+            WHEN OLD.run_id = 'z-pending' BEGIN SELECT RAISE(IGNORE); END;",
+            )
+            .unwrap();
+        let result = if recovery {
+            record_interrupted_sessions(&mut registry)
+        } else {
+            record_execution_outcome(
+                &mut registry,
+                "z-pending",
+                "hash",
+                ExecutionOutcome::Succeeded,
+            )
+        };
+        assert_eq!(result.unwrap_err().code, ErrorCode::RegistryCorrupt);
+        for run in ["a-pending", "z-pending"] {
+            assert_eq!(session_state(&registry, run), (None, "unfinished".into()));
+        }
+        let events: i64 = registry
+            .connection()
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 0);
+    }
 }

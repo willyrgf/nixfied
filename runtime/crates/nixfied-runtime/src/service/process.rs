@@ -8,7 +8,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{ContainmentRequirement, LoopbackHost, ServiceLifetime, StopSignal};
+use nixfied_manifest::{ContainmentRequirement, LoopbackHost, StopSignal};
 use rusqlite::params;
 use serde::Serialize;
 
@@ -24,22 +24,21 @@ use crate::redaction::{
     CAPTURE_SHUTDOWN_TIMEOUT, LogFileMode, RedactedLogRelays, Redactor, child_output,
     direct_service_output,
 };
-use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
-use crate::registry::{Registry, RunLeaseHeartbeat};
+use crate::registry::Registry;
+use crate::registry::status::{self, DbStatus, PortStatus};
 use crate::service::endpoint::{
     EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
     LockRoot, OwnershipObservation, acquire_startup_locks, observe_ownership,
     observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
-use crate::service::identity::{service_address_hash, service_instance_id};
+use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
-    PortReservation, ProcessRecord, ReservationOutcome, ServiceRecord, ServiceReuseGuard,
-    VerifiedEndpointActivation, activate_service_ready, mark_process_escape, mark_service_canceled,
-    mark_service_failed, mark_service_standing, mark_service_stopped, read_service_snapshot,
-    record_service_borrow, record_service_canceling, record_service_lifecycle_event,
-    record_service_start, release_service_borrow, reserve_service_start,
-    settle_service_reservation, stored_service_matches,
+    EndpointRecord, ProcessRecord, ServiceRecord, ServiceStartOutcome, VerifiedEndpointActivation,
+    activate_service_ready, mark_process_escape, mark_service_canceled, mark_service_failed,
+    mark_service_stopped, read_service_snapshot, record_service_canceling,
+    record_service_lifecycle_event, record_service_start, record_service_start_intent,
+    settle_service_start,
 };
 use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
@@ -113,7 +112,7 @@ struct NixfiedOwner {
 
 include!("../generated/process.rs");
 
-/// Runtime evidence shared by owning and borrowing handles. Callers receive an
+/// Runtime evidence of an owned service. Callers receive an
 /// immutable view; resource capabilities remain in the enclosing private payload.
 #[derive(Debug)]
 pub struct ServiceInfo {
@@ -124,8 +123,6 @@ pub struct ServiceInfo {
     pub pgid: i32,
     pub platform_start_identity: Option<String>,
     pub computed_manifest_hash: String,
-    pub owner_token: String,
-    pub service_lifetime: ServiceLifetime,
     service_name: String,
     primary_endpoint: Option<String>,
     selected_endpoints: BTreeMap<String, SelectedEndpoint>,
@@ -158,19 +155,6 @@ impl ServiceInfo {
     }
 }
 
-pub enum AcquiredService {
-    Borrowed(BorrowedService),
-    Owned(StartingService),
-}
-
-pub enum StartedService {
-    Borrowed(BorrowedService),
-    Owned(ReadyService),
-}
-
-pub struct BorrowedService {
-    info: Box<ServiceInfo>,
-}
 pub struct StartingService {
     owned: Box<OwnedService>,
     startup_guards: EndpointLockGuards,
@@ -197,25 +181,22 @@ impl ReadinessFailure {
     }
 }
 
-impl BorrowedService {
-    pub fn info(&self) -> &ServiceInfo {
-        &self.info
-    }
-    fn release(self, registry: &mut Registry, canceled: bool) -> RuntimeResult<()> {
-        release_service_borrow(
-            registry,
-            &self.info.run_id,
-            &self.info.service_instance_id,
-            &self.info.process_key,
-            &self.info.computed_manifest_hash,
-            canceled,
-        )
-    }
-}
-
 impl StartingService {
     pub fn info(&self) -> &ServiceInfo {
         &self.owned.info
+    }
+    pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
+        self.info().selected_endpoint()
+    }
+    pub fn stop(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
+        let Self {
+            mut owned,
+            startup_guards,
+        } = self;
+        let result = owned.stop_with_cancellation(registry, timeout_ms, None);
+        drop(owned);
+        startup_guards.release();
+        result
     }
     pub fn cancel(
         mut self,
@@ -267,59 +248,6 @@ impl ReadyService {
     pub fn info(&self) -> &ServiceInfo {
         &self.owned.info
     }
-}
-
-impl AcquiredService {
-    pub fn info(&self) -> &ServiceInfo {
-        match self {
-            Self::Borrowed(service) => service.info(),
-            Self::Owned(service) => service.info(),
-        }
-    }
-    pub fn is_borrowed(&self) -> bool {
-        matches!(self, Self::Borrowed(_))
-    }
-    pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
-        self.info().selected_endpoint()
-    }
-    pub fn ready(
-        self,
-        registry: &mut Registry,
-        cancellation: &CancellationToken,
-        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
-    ) -> Result<StartedService, ReadinessFailure> {
-        match self {
-            Self::Borrowed(service) => Ok(StartedService::Borrowed(service)),
-            Self::Owned(service) => service
-                .ready(registry, cancellation, checkpoint)
-                .map(StartedService::Owned),
-        }
-    }
-    /// Stop an acquired resource before readiness, retaining guards through teardown.
-    pub fn stop(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => service.release(registry, false),
-            Self::Owned(service) => {
-                let StartingService {
-                    mut owned,
-                    startup_guards,
-                } = service;
-                let result = owned.stop_with_cancellation(registry, timeout_ms, None);
-                drop(owned);
-                startup_guards.release();
-                result
-            }
-        }
-    }
-}
-
-impl StartedService {
-    pub fn info(&self) -> &ServiceInfo {
-        match self {
-            Self::Borrowed(service) => service.info(),
-            Self::Owned(service) => service.info(),
-        }
-    }
     pub fn service_name(&self) -> &str {
         self.info().service_name()
     }
@@ -335,113 +263,49 @@ impl StartedService {
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => {
-                checkpoint()?;
-                service.info.check_liveness()
-            }
-            Self::Owned(service) => service
-                .owned
-                .check_health(registry, cancellation, checkpoint),
-        }
+        self.owned.check_health(registry, cancellation, checkpoint)
     }
     pub fn finalize_failed_start(
-        self,
+        mut self,
         registry: &mut Registry,
         timeout_ms: u64,
         error: RuntimeError,
     ) -> RuntimeError {
-        match self {
-            Self::Borrowed(service) => {
-                match service.release(registry, error.code == ErrorCode::Canceled) {
-                    Ok(()) => error,
-                    Err(settlement) => settlement.with_cause(error),
-                }
-            }
-            Self::Owned(mut service) => service
-                .owned
-                .settle_failed_service(registry, timeout_ms, error),
-        }
+        self.owned
+            .settle_failed_service(registry, timeout_ms, error)
     }
     pub fn cancel(
-        self,
+        mut self,
         registry: &mut Registry,
         timeout_ms: u64,
         reason: &str,
     ) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => service.release(registry, true),
-            Self::Owned(mut service) => service.owned.cancel(registry, timeout_ms, reason),
-        }
+        self.owned.cancel(registry, timeout_ms, reason)
     }
-    pub fn stop(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
-        self.stop_with_cancellation(registry, timeout_ms, None)
+    pub fn stop(mut self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
+        self.owned
+            .stop_with_cancellation(registry, timeout_ms, None)
     }
     pub fn stop_cancellable(
-        self,
+        mut self,
         registry: &mut Registry,
         timeout_ms: u64,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
-        self.stop_with_cancellation(registry, timeout_ms, Some(cancellation))
-    }
-    fn stop_with_cancellation(
-        self,
-        registry: &mut Registry,
-        timeout_ms: u64,
-        cancellation: Option<&CancellationToken>,
-    ) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => {
-                let canceled = cancellation.is_some_and(|token| token.is_canceled());
-                service.release(registry, canceled)?;
-                if canceled {
-                    Err(canceled_error())
-                } else {
-                    Ok(())
-                }
-            }
-            Self::Owned(mut service) => {
-                service
-                    .owned
-                    .stop_with_cancellation(registry, timeout_ms, cancellation)
-            }
-        }
-    }
-    pub fn stand(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
-        match self {
-            Self::Borrowed(service) => service.release(registry, false),
-            Self::Owned(mut service) => {
-                let info = &service.owned.info;
-                if let Err(error) = mark_service_standing(
-                    registry,
-                    &info.run_id,
-                    &info.service_instance_id,
-                    &info.process_key,
-                    &info.computed_manifest_hash,
-                    info.service_lifetime,
-                ) {
-                    return Err(service
-                        .owned
-                        .settle_failed_service(registry, timeout_ms, error));
-                }
-                service.owned.transfer_to_persistent();
-                Ok(())
-            }
-        }
+        self.owned
+            .stop_with_cancellation(registry, timeout_ms, Some(cancellation))
     }
 }
-
-impl std::fmt::Debug for StartedService {
+impl std::fmt::Debug for ReadyService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StartedService")
+        f.debug_struct("ReadyService")
             .field("info", self.info())
             .finish_non_exhaustive()
     }
 }
 
 /// Only this payload owns child resources. Optional fields exist solely for
-/// move-out during consuming teardown or persistent ownership transfer.
+/// move-out during consuming teardown.
 struct OwnedService {
     info: ServiceInfo,
     child: Option<Child>,
@@ -912,15 +776,6 @@ impl OwnedService {
         }
     }
 
-    fn transfer_to_persistent(mut self) {
-        self.monitor.stop();
-        if let Some(relays) = self.log_relays.take() {
-            relays.detach_for_persistent();
-        }
-        // Dropping a Child handle does not signal or wait for the persistent process.
-        drop(self.child.take());
-    }
-
     fn stop_with_cancellation(
         &mut self,
         registry: &mut Registry,
@@ -1128,7 +983,7 @@ impl OwnedService {
             registry,
             "service.stop.signaled",
             Some(self.info.run_id.as_str()),
-            &self.info.service_instance_id,
+            Some(&self.info.service_instance_id),
             Some(self.info.process_key.as_str()),
             &self.info.computed_manifest_hash,
             &payload,
@@ -1215,7 +1070,8 @@ impl OwnedService {
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
         LifecycleEventContext {
             run_id: Some(self.info.run_id.clone()),
-            service_instance_id: self.info.service_instance_id.clone(),
+            service_name: self.info.service_name.clone(),
+            service_instance_id: Some(self.info.service_instance_id.clone()),
             process_key: Some(self.info.process_key.clone()),
             computed_manifest_hash: self.info.computed_manifest_hash.clone(),
         }
@@ -1326,20 +1182,15 @@ fn proven_nixfied_owner(
     };
     for service_instance_id in candidates {
         let snapshot = read_service_snapshot(registry, &service_instance_id)?;
-        let (Some(service), Some(process)) = (&snapshot.service, &snapshot.process) else {
+        let Some(process) = &snapshot.process else {
             continue;
         };
-        if service.endpoint_identity_hash != requested_service.identity.endpoint_identity_hash
-            || service.state_identity_hash != requested_service.identity.state_identity_hash
-            || service.runtime_compatibility_hash
-                != requested_service.identity.runtime_compatibility_hash
-            || service.target_identity_hash != requested_service.identity.target_identity_hash
-            || !status::PROCESS_ACTIVE.contains(&process.status)
+        if !status::PROCESS_ACTIVE.contains(&process.status)
             || !snapshot.endpoints.iter().any(|stored| {
                 stored.address == address
                     && stored.port == endpoint.port
                     && stored.status == PortStatus::Active
-                    && stored.owner_process_key.as_deref() == Some(&process.process_key)
+                    && stored.owner_process_key == process.process_key
             })
         {
             continue;
@@ -1377,7 +1228,7 @@ fn proven_nixfied_owner(
             environment: registry.identity().environment.clone(),
             slot,
             run_id: process.run_id.clone(),
-            service_id: service.service_name.clone(),
+            service_id: process.service_name.clone(),
             service_instance_id,
             process_key: process.process_key.clone(),
         }));
@@ -1444,13 +1295,12 @@ fn shutdown_service_capture(capture: Option<RedactedLogRelays>) -> RuntimeResult
 /// `${port:<serviceId>}` resolves against.
 pub struct ServiceSelection<'a> {
     pub service_name: &'a str,
-    pub service_lifetime: ServiceLifetime,
     pub endpoint_ports: &'a BTreeMap<String, u16>,
     pub slot_endpoints: &'a SlotEndpoints,
     pub run_timeout_ms: u64,
     pub cancellation: &'a CancellationToken,
     /// Executes the service's prepare task (its flattened nodes) inside the
-    /// service reservation. Supplied by the run driver, which owns the started
+    /// held endpoint startup guards. Supplied by the run driver, which owns the started
     /// services the prepare leaves may require; `None` when the service
     /// declares no prepare task. The runtime stays generic: this is plumbing,
     /// not vocabulary.
@@ -1471,13 +1321,20 @@ pub fn start_service_for_slot(
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
     selection: ServiceSelection<'_>,
-) -> RuntimeResult<AcquiredService> {
+) -> RuntimeResult<StartingService> {
+    if registry.identity().environment != selected_slot.environment
+        || registry.identity().slot != i64::from(selected_slot.slot)
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "service selection does not match the owned slot",
+        ));
+    }
     start_service_with_lock_root(
         admission,
         placement,
         registry,
         run_id,
-        selected_slot,
         selection,
         LockRoot::Fixed,
     )
@@ -1488,10 +1345,9 @@ pub(super) fn start_service_with_lock_root(
     placement: &HostPlacement,
     registry: &mut Registry,
     run_id: impl Into<String>,
-    selected_slot: &SelectedSlot<'_>,
     mut selection: ServiceSelection<'_>,
     lock_root: LockRoot<'_>,
-) -> RuntimeResult<AcquiredService> {
+) -> RuntimeResult<StartingService> {
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
     let cancellation = selection.cancellation;
@@ -1558,15 +1414,9 @@ pub(super) fn start_service_with_lock_root(
     // start exec, so probe attempts later need no endpoint context.
     let ready_probe = prepare_probe(&service.ready.probe, &substitution)?;
     let health_probe = prepare_probe(&service.health.probe, &substitution)?;
-    let address_hash = service_address_hash(
-        admission.common().project_id(),
-        selected_slot.environment,
-        selected_slot.slot,
-        service_name,
-    );
-    let service_instance_id = service_instance_id(&address_hash, &service.identity);
-    // Stable backing storage for the per-endpoint reservation keys.
-    let reservation_keys: Vec<(String, String, u16)> = own_endpoints
+    let service_instance_id = service_instance_id(&run_id, service_name);
+    // Stable backing storage for process-bound endpoint evidence.
+    let endpoint_records: Vec<(String, String, u16)> = own_endpoints
         .values()
         .map(|endpoint| {
             (
@@ -1576,78 +1426,51 @@ pub(super) fn start_service_with_lock_root(
             )
         })
         .collect();
-    let reservations: Vec<PortReservation<'_>> = reservation_keys
+    let endpoints_to_record: Vec<EndpointRecord<'_>> = endpoint_records
         .iter()
-        .map(|(key, address, port)| PortReservation {
+        .map(|(key, address, port)| EndpointRecord {
             endpoint_key: key,
             address,
             port: *port,
         })
         .collect();
-    let owner_token = run_owner_token(&run_id);
     let service_record = ServiceRecord {
         service_instance_id: &service_instance_id,
         service_name,
-        service_address_hash: &address_hash,
-        identity: &service.identity,
-        service_lifetime: selection.service_lifetime,
-        state_root: &placement.state_root,
     };
-    let borrow_request = BorrowServiceRequest {
-        admission,
-        run_id: &run_id,
-        owner_token: &owner_token,
-        service,
-        service_record: &service_record,
-        selected_endpoints: &own_endpoints,
-        reservations: &reservations,
-    };
-    if let Some(started) = borrow_reusable_service(registry, &borrow_request, false)? {
-        return Ok(AcquiredService::Borrowed(started));
-    }
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(own_endpoints.values(), lock_root) {
         Ok(guards) => guards,
         Err(failure) => return Err(endpoint_failure_error(registry, service, failure)),
     };
     cancellation.check()?;
-    reconcile_registry(registry)?;
-    if let Some(started) = borrow_reusable_service(registry, &borrow_request, true)? {
-        startup_guards.release();
-        return Ok(AcquiredService::Borrowed(started));
-    }
-    refuse_nonreusable_local_service(registry, &service_record, service, &own_endpoints)?;
     if let Err(failure) = preflight(own_endpoints.values()) {
         return Err(endpoint_failure_error(registry, service, failure));
     }
-    // Reserve the service instance's active lease and every endpoint port under
-    // the start conflict gates before running any state-mutating lifecycle work.
-    // The run row already exists. Conflicts are serialized and refused before
-    // prepare or spawn, and the reservation is released on failure below.
-    reserve_service_start(
+    // Record startup intent after endpoint preflight and before prepare.
+    // The slot owner and host startup guards stay held through readiness.
+    record_service_start_intent(
         registry,
         &run_id,
-        &owner_token,
         admission.common().computed_manifest_hash(),
         &service_instance_id,
-        &reservations,
     )?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
-        service_instance_id: service_instance_id.clone(),
+        service_name: service_name.to_owned(),
+        service_instance_id: Some(service_instance_id.clone()),
         process_key: None,
         computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
-    // Until spawn succeeds, every failure can settle the reservation directly.
+    // Until spawn succeeds, every failure can settle startup directly.
     // Once a child exists, the separate paths below must first prove containment.
     let (mut child, command_json, redactor, mut log_relays) = (|| {
         cancellation.check()?;
         // prepare is a task reference: the caller supplies a runner that executes
         // the referenced task's flattened nodes (ordinary task evidence — logs,
-        // summaries, registry rows keyed by step path). It runs INSIDE the
-        // service's reservation, so concurrent runtimes cannot double-prepare the
-        // same state, with the just-created lease kept alive for the duration.
+        // summaries, registry rows keyed by step path). Slot authority and
+        // endpoint startup guards remain held throughout preparation.
         if let Some(prepare_task) = &service.prepare {
             let prepare_record = LifecycleRecord::from_meta(
                 &OpMeta {
@@ -1658,12 +1481,6 @@ pub(super) fn start_service_with_lock_root(
                 "prepare",
             );
             record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
-            let prepare_heartbeat = RunLeaseHeartbeat::start(
-                placement.registry_path().to_path_buf(),
-                registry.identity().clone(),
-                run_id.clone(),
-                owner_token.clone(),
-            );
             let prepare_result = match selection.prepare_runner {
                 Some(ref mut runner) => runner(registry),
                 None => Err(RuntimeError::new(
@@ -1673,13 +1490,7 @@ pub(super) fn start_service_with_lock_root(
                     ),
                 )),
             };
-            let heartbeat_result = prepare_heartbeat.stop();
-            let prepare_error = match (prepare_result, heartbeat_result) {
-                (Ok(()), Ok(())) => None,
-                (Err(error), Ok(())) | (Ok(()), Err(error)) => Some(error),
-                (Err(error), Err(heartbeat_error)) => Some(heartbeat_error.with_cause(error)),
-            };
-            if let Some(error) = prepare_error {
+            if let Err(error) = prepare_result {
                 let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
                 return Err(error);
             }
@@ -1707,18 +1518,13 @@ pub(super) fn start_service_with_lock_root(
         })
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
         let redactor = Redactor::from_secrets(admission.secrets());
-        let (stdout, stderr, log_relays) =
-            if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
-                if redactor.is_empty() {
-                    let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
-                    (stdout, stderr, None)
-                } else {
-                    let output = child_output(&stdout_path, &stderr_path, &redactor, LogFileMode::Replace)?;
-                    (output.stdout, output.stderr, Some(output.relays))
-                }
-            } else {
-                (Stdio::null(), Stdio::null(), None)
-            };
+        let (stdout, stderr, log_relays) = if redactor.is_empty() {
+            let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
+            (stdout, stderr, None)
+        } else {
+            let output = child_output(&stdout_path, &stderr_path, &redactor, LogFileMode::Replace)?;
+            (output.stdout, output.stderr, Some(output.relays))
+        };
         let mut command = configured_command(&exec.executable, &args, &env, &command_cwd, exec.stdin);
         command.stdout(stdout).stderr(stderr);
         let spawned = cancellation.check().and_then(|()| crate::spawn::command(&mut command).map_err(|error| {
@@ -1738,7 +1544,7 @@ pub(super) fn start_service_with_lock_root(
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
     let pid = child.id();
     // Before the start record commits, cleanup owns the child and capture, but
-    // may release the reservation only after proving containment.
+    // may settle startup only after proving containment.
     let mut fail_unrecorded =
         |registry: &mut Registry, context: &LifecycleEventContext, pgid, error: RuntimeError| {
             let _ = record_lifecycle_failure(registry, context, &start_record, &error);
@@ -1764,14 +1570,14 @@ pub(super) fn start_service_with_lock_root(
     let process_key = format!("process-{run_id}-{pid}-{pgid}");
     let started_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
-        service_instance_id: service_instance_id.clone(),
+        service_name: service_name.to_owned(),
+        service_instance_id: Some(service_instance_id.clone()),
         process_key: Some(process_key.clone()),
         computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     record_service_start(
         registry,
         &run_id,
-        &owner_token,
         admission.common().computed_manifest_hash(),
         &service_record,
         &ProcessRecord {
@@ -1781,7 +1587,7 @@ pub(super) fn start_service_with_lock_root(
             start_identity: &start_identity,
             command_json: &command_json,
         },
-        &reservations,
+        &endpoints_to_record,
     )
     .map_err(|error| fail_unrecorded(registry, &started_context, Some(pgid), error))?;
     let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
@@ -1798,8 +1604,6 @@ pub(super) fn start_service_with_lock_root(
                 platform_start_identity: platform_start,
                 selected_endpoints: own_endpoints,
                 computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
-                owner_token,
-                service_lifetime: selection.service_lifetime,
                 service_name: service.name.to_string(),
                 primary_endpoint: service.primary_endpoint.clone(),
             },
@@ -1828,314 +1632,7 @@ pub(super) fn start_service_with_lock_root(
         let finalized = started.finalize_failed_start(registry, run_timeout_ms, error);
         return Err(finalized);
     }
-    Ok(AcquiredService::Owned(started))
-}
-
-struct BorrowServiceRequest<'a> {
-    admission: &'a RunAdmission,
-    run_id: &'a str,
-    owner_token: &'a str,
-    service: &'a ExecService,
-    service_record: &'a ServiceRecord<'a>,
-    selected_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
-    reservations: &'a [PortReservation<'a>],
-}
-
-fn refuse_nonreusable_local_service(
-    registry: &mut Registry,
-    requested_record: &ServiceRecord<'_>,
-    requested_service: &ExecService,
-    requested_endpoints: &BTreeMap<String, SelectedEndpoint>,
-) -> RuntimeResult<()> {
-    let snapshot = read_service_snapshot(registry, requested_record.service_instance_id)?;
-    let stored_service = match snapshot.service.as_ref() {
-        Some(service) => service,
-        None => {
-            if let Some(lease) = snapshot
-                .leases
-                .iter()
-                .find(|lease| status::LEASE_OPEN.contains(&lease.status))
-            {
-                return Err(open_service_lease_error(
-                    requested_record.service_instance_id,
-                    &lease.run_id,
-                ));
-            }
-            if snapshot.process.is_some() || !snapshot.endpoints.is_empty() {
-                return Err(RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    format!(
-                        "service instance {} has process or port evidence without service metadata",
-                        requested_record.service_instance_id
-                    ),
-                ));
-            }
-            return Ok(());
-        }
-    };
-    if !stored_service_matches(stored_service, requested_record) {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!(
-                "service instance {} does not match its computed identity",
-                requested_record.service_instance_id
-            ),
-        ));
-    }
-    if let Some(lease) = snapshot
-        .leases
-        .iter()
-        .find(|lease| status::LEASE_OPEN.contains(&lease.status))
-    {
-        return Err(open_service_lease_error(
-            requested_record.service_instance_id,
-            &lease.run_id,
-        ));
-    }
-    let Some(process) = snapshot.process.as_ref() else {
-        if !snapshot.endpoints.is_empty() {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "service instance {} has nonterminal evidence without an actionable process",
-                    requested_record.service_instance_id
-                ),
-            ));
-        }
-        return Ok(());
-    };
-    let escaped = process.status == crate::registry::status::ProcessStatus::Escaped;
-    if !escaped
-        && !process_is_live_with_identity(
-            process.pid,
-            process.pgid,
-            process.platform_start.as_deref(),
-        )?
-    {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            "mandatory reconciliation left a dead service process active",
-        ));
-    }
-    if requested_endpoints.is_empty() {
-        return Err(RuntimeError::new(
-            ErrorCode::LeaseConflict,
-            format!(
-                "live endpoint-less service {} is not exactly reusable; run down before replacement",
-                requested_record.service_name
-            ),
-        ));
-    }
-    let stored_endpoints = open_endpoints_from_snapshot(&snapshot);
-    if stored_endpoints.is_empty() {
-        return Err(port_unverifiable_error(
-            requested_endpoints.values().next(),
-            format!(
-                "live service {} has no complete open endpoint evidence; run down before replacement",
-                requested_record.service_name
-            ),
-        ));
-    }
-    let expected = ExpectedOwner {
-        pid: process.pid,
-        pgid: process.pgid,
-        platform_start: process.platform_start.as_deref(),
-        containment: requested_service.containment.clone(),
-        tracked_processes: &process.tracked_processes,
-    };
-    let observation = if escaped {
-        observe_ownership_after_primary_exit(&stored_endpoints, &expected)
-    } else {
-        observe_ownership(&stored_endpoints, &expected)
-    };
-    match observation {
-        OwnershipObservation::Complete(_) => Err(port_unverifiable_error(
-            stored_endpoints.values().next(),
-            format!(
-                "live service {} is not exactly reusable; run down before replacement",
-                requested_record.service_name
-            ),
-        )),
-        OwnershipObservation::Missing(endpoint) => Err(port_unverifiable_error(
-            Some(endpoint),
-            format!(
-                "live service {} is missing its expected listener; run down before replacement",
-                requested_record.service_name
-            ),
-        )),
-        OwnershipObservation::Outside {
-            endpoint,
-            listeners,
-        } => {
-            let owner = proven_nixfied_owner(registry, endpoint, &listeners, requested_service)?;
-            Err(port_conflict_error(
-                PortConflictReason::ListenerOccupied,
-                &registry.identity().project_id,
-                endpoint,
-                owner.as_ref(),
-            ))
-        }
-        OwnershipObservation::Unverifiable { endpoint, message } => {
-            Err(port_unverifiable_error(endpoint, message))
-        }
-        OwnershipObservation::ContainmentUnconfirmed { message } => {
-            Err(port_unverifiable_error(None, message))
-        }
-    }
-}
-
-fn open_service_lease_error(service_instance_id: &str, run_id: &str) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::LeaseConflict,
-        format!(
-            "service instance {service_instance_id} has authoritative open lease owned by run {run_id}"
-        ),
-    )
-}
-
-fn open_endpoints_from_snapshot(
-    snapshot: &crate::service::registry::ServiceSnapshot,
-) -> BTreeMap<String, SelectedEndpoint> {
-    snapshot
-        .endpoints
-        .iter()
-        .map(|endpoint| {
-            (
-                endpoint.endpoint_id.clone(),
-                SelectedEndpoint {
-                    endpoint_id: endpoint.endpoint_id.clone(),
-                    host: endpoint.host,
-                    port: endpoint.port,
-                },
-            )
-        })
-        .collect()
-}
-
-fn borrow_reusable_service(
-    registry: &mut Registry,
-    request: &BorrowServiceRequest<'_>,
-    under_startup_locks: bool,
-) -> RuntimeResult<Option<BorrowedService>> {
-    let snapshot = read_service_snapshot(registry, request.service_record.service_instance_id)?;
-    let Some(service_row) = &snapshot.service else {
-        return Ok(None);
-    };
-    if !stored_service_matches(service_row, request.service_record) {
-        return Ok(None);
-    }
-    let Some(process_row) = snapshot.process.as_ref() else {
-        return Ok(None);
-    };
-    if process_row.status != ProcessStatus::Ready {
-        return Ok(None);
-    }
-    if !process_is_live_with_identity(
-        process_row.pid,
-        process_row.pgid,
-        process_row.platform_start.as_deref(),
-    )? {
-        return Ok(None);
-    }
-    if !stored_endpoints_match_selection(
-        &snapshot.endpoints,
-        &process_row.process_key,
-        request.selected_endpoints,
-    ) {
-        return Ok(None);
-    }
-    match observe_ownership(
-        request.selected_endpoints,
-        &ExpectedOwner {
-            pid: process_row.pid,
-            pgid: process_row.pgid,
-            platform_start: process_row.platform_start.as_deref(),
-            containment: request.service.containment.clone(),
-            tracked_processes: &[],
-        },
-    ) {
-        OwnershipObservation::Complete(_) => {}
-        OwnershipObservation::Missing(_) => return Ok(None),
-        OwnershipObservation::Outside {
-            endpoint: _,
-            listeners: _,
-        } => return Ok(None),
-        OwnershipObservation::Unverifiable { endpoint, message } => {
-            if under_startup_locks {
-                return Err(port_unverifiable_error(endpoint, message));
-            }
-            return Ok(None);
-        }
-        OwnershipObservation::ContainmentUnconfirmed { message } => {
-            if under_startup_locks {
-                return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
-            }
-            return Ok(None);
-        }
-    }
-    let borrowed = record_service_borrow(
-        registry,
-        request.run_id,
-        request.owner_token,
-        request.admission.common().computed_manifest_hash(),
-        &ServiceReuseGuard {
-            service: request.service_record,
-            process: process_row,
-            endpoints: request.reservations,
-        },
-    )?;
-    if !borrowed {
-        return Ok(None);
-    }
-    let process_row = process_row.clone();
-    Ok(Some(BorrowedService {
-        info: Box::new(ServiceInfo {
-            run_id: request.run_id.to_string(),
-            service_instance_id: request.service_record.service_instance_id.to_string(),
-            process_key: process_row.process_key,
-            pid: process_row.pid,
-            pgid: process_row.pgid,
-            platform_start_identity: process_row.platform_start,
-            selected_endpoints: request.selected_endpoints.clone(),
-            computed_manifest_hash: request
-                .admission
-                .common()
-                .computed_manifest_hash()
-                .to_owned(),
-            owner_token: request.owner_token.to_string(),
-            service_lifetime: request.service_record.service_lifetime,
-            service_name: request.service.name.to_string(),
-            primary_endpoint: request.service.primary_endpoint.clone(),
-        }),
-    }))
-}
-
-fn stored_endpoints_match_selection(
-    stored: &[crate::service::registry::StoredServiceEndpoint],
-    process_key: &str,
-    selected: &BTreeMap<String, SelectedEndpoint>,
-) -> bool {
-    if stored.len() != selected.len() {
-        return false;
-    }
-    for endpoint in stored {
-        if endpoint.status != PortStatus::Active
-            || endpoint.owner_process_key.as_deref() != Some(process_key)
-        {
-            return false;
-        }
-        let endpoint_id = endpoint.endpoint_id.as_str();
-        let Some(selected) = selected.get(endpoint_id) else {
-            return false;
-        };
-        if selected.endpoint_id != endpoint_id
-            || selected.host != endpoint.host
-            || selected.port != endpoint.port
-        {
-            return false;
-        }
-    }
-    true
+    Ok(started)
 }
 
 /// Clean every declared service of the slot, then clean the marker-owned slot
@@ -2150,7 +1647,7 @@ pub fn run_slot_clean(
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     for service in admission.execution_manifest().services().values() {
-        record_service_clean(admission, registry, selected_slot, service)?;
+        record_service_clean(admission, registry, service)?;
     }
     clean_marked_slot_state(admission, placement, registry, selected_slot, mode)
 }
@@ -2159,20 +1656,13 @@ pub fn run_slot_clean(
 fn record_service_clean(
     admission: &ControlAdmission,
     registry: &mut Registry,
-    selected_slot: &SelectedSlot<'_>,
     service: &ExecService,
 ) -> RuntimeResult<()> {
     let record = LifecycleRecord::from_meta(&service.clean.meta, "clean");
-    let address_hash = service_address_hash(
-        admission.project_id(),
-        selected_slot.environment,
-        selected_slot.slot,
-        service.name.as_str(),
-    );
-    let service_instance_id = service_instance_id(&address_hash, &service.identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
-        service_instance_id,
+        service_name: service.name.to_string(),
+        service_instance_id: None,
         process_key: None,
         computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
     };
@@ -2202,15 +1692,11 @@ fn clean_marked_slot_state(
     )
 }
 
-fn run_owner_token(run_id: &str) -> String {
-    format!("{run_id}:runtime-pid-{}", std::process::id())
-}
-
-fn reservation_outcome(error: &RuntimeError) -> ReservationOutcome {
+fn startup_outcome(error: &RuntimeError) -> ServiceStartOutcome {
     if error.code == ErrorCode::Canceled {
-        ReservationOutcome::Canceled
+        ServiceStartOutcome::Canceled
     } else {
-        ReservationOutcome::Failed
+        ServiceStartOutcome::Failed
     }
 }
 
@@ -2220,11 +1706,11 @@ fn settle_reserved_failure(
     service_instance_id: &str,
     error: RuntimeError,
 ) -> RuntimeError {
-    match settle_service_reservation(
+    match settle_service_start(
         registry,
         run_id,
         service_instance_id,
-        reservation_outcome(&error),
+        startup_outcome(&error),
     ) {
         Ok(()) => error,
         Err(settlement_error) => settlement_error.with_cause(error),
@@ -2440,6 +1926,11 @@ pub(crate) enum TerminationReason {
     ObservationFailed,
 }
 
+pub(crate) enum CapturedExecTransition<'a> {
+    Observed(&'a CapturedExecOutcome),
+    Terminating(TerminationReason),
+}
+
 pub(crate) struct CapturedExecFailure {
     pub error: Box<RuntimeError>,
     pub outcome: Option<CapturedExecOutcome>,
@@ -2505,7 +1996,7 @@ impl OwnedCapturedChild {
         mut self,
         cancellation: &CancellationToken,
         mut checkpoint: impl FnMut() -> RuntimeResult<()>,
-        mut before_termination: impl FnMut(TerminationReason) -> RuntimeResult<()>,
+        mut transition: impl FnMut(CapturedExecTransition<'_>) -> RuntimeResult<()>,
     ) -> Result<CapturedExecOutcome, CapturedExecFailure> {
         let started = Instant::now();
         let observed = loop {
@@ -2533,12 +2024,26 @@ impl OwnedCapturedChild {
             }
             thread::sleep(super::OBSERVATION_INTERVAL);
         };
+        let recording = match &observed {
+            Ok(outcome) => transition(CapturedExecTransition::Observed(outcome)),
+            Err(_) => Ok(()),
+        };
         // Intent is synchronous and precedes every signal, even if recording fails.
         let intent = match &observed {
-            Ok(CapturedExecOutcome::Canceled) => before_termination(TerminationReason::Canceled),
-            Ok(CapturedExecOutcome::TimedOut) => before_termination(TerminationReason::TimedOut),
-            Err(_) => before_termination(TerminationReason::ObservationFailed),
+            Ok(CapturedExecOutcome::Canceled) => transition(CapturedExecTransition::Terminating(
+                TerminationReason::Canceled,
+            )),
+            Ok(CapturedExecOutcome::TimedOut) => transition(CapturedExecTransition::Terminating(
+                TerminationReason::TimedOut,
+            )),
+            Err(_) => transition(CapturedExecTransition::Terminating(
+                TerminationReason::ObservationFailed,
+            )),
             Ok(CapturedExecOutcome::Exited(_)) => Ok(()),
+        };
+        let intent = match (recording, intent) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(recording), Err(intent)) => Err(recording.with_cause(intent)),
         };
         let (outcome, operation) = match observed {
             Ok(outcome) => (Some(outcome), intent.err()),
@@ -2659,13 +2164,14 @@ fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
 
 struct LifecycleEventContext {
     run_id: Option<String>,
-    service_instance_id: String,
+    service_name: String,
+    service_instance_id: Option<String>,
     process_key: Option<String>,
     computed_manifest_hash: String,
 }
 
 /// A lifecycle operation's identity and terminal semantics for durable event
-/// recording, owned so it does not borrow the `StartedService` across the
+/// recording, owned so it does not borrow the `ReadyService` across the
 /// `&mut self` calls in the lifecycle methods.
 struct LifecycleRecord {
     meta: OpMeta,
@@ -2687,6 +2193,7 @@ fn record_lifecycle_started(
     record: &LifecycleRecord,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
+        "serviceId": context.service_name,
         "operationId": record.meta.operation_id,
         "class": record.class,
     }))
@@ -2695,7 +2202,7 @@ fn record_lifecycle_started(
         registry,
         "service.lifecycle.started",
         context.run_id.as_deref(),
-        &context.service_instance_id,
+        context.service_instance_id.as_deref(),
         context.process_key.as_deref(),
         &context.computed_manifest_hash,
         &payload_json,
@@ -2739,6 +2246,7 @@ fn record_lifecycle_terminal(
     error: Option<&RuntimeError>,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
+        "serviceId": context.service_name,
         "operationId": record.meta.operation_id,
         "class": record.class,
         "terminalResult": terminal_result,
@@ -2750,7 +2258,7 @@ fn record_lifecycle_terminal(
         registry,
         "service.lifecycle.terminal",
         context.run_id.as_deref(),
-        &context.service_instance_id,
+        context.service_instance_id.as_deref(),
         context.process_key.as_deref(),
         &context.computed_manifest_hash,
         &payload_json,

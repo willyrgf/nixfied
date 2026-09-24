@@ -53,7 +53,6 @@ fn valid_manifest_json() -> Value {
         },
         "state": {
             "markerIdentity": "nixfied-state",
-            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
@@ -112,7 +111,6 @@ fn smoke_task() -> Value {
     json!({
         "kind": "leaf",
         "defaultOutput": "summary",
-        "serviceLifetime": "run-scoped",
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
         "requires": ["synthetic"],
@@ -155,7 +153,6 @@ fn composite_task_default_output_is_rejected() {
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "defaultOutput": "task-output",
-        "serviceLifetime": "run-scoped",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
     let manifest: Manifest = serde_json::from_value(value).expect("composite should deserialize");
@@ -347,7 +344,6 @@ fn accepts_a_bounded_acyclic_composite() {
     let mut value = valid_manifest_json();
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
-        "serviceLifetime": "run-scoped",
         "steps": {
             "first": { "task": "smoke" },
             "second": { "task": "smoke", "dependsOn": ["first"] }

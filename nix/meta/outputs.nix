@@ -102,7 +102,7 @@ in
       "Service evidence selected for the run, including an endpoint only when addressable."
       [
         (required "serviceId" text "Declared service identity.")
-        (required "serviceInstanceId" text "Native service reuse identity.")
+        (required "serviceInstanceId" text "Run-scoped service reference derived from the run ID and declared name.")
         (required "processKey" text "Registry evidence key for the selected service process.")
         (omitted "selectedEndpoint" (ref (
           output "selected-endpoint"
@@ -182,7 +182,7 @@ in
       ]
     )
     (record (output "ps-process") "NoDecoder"
-      "Registry and host facts assembled by native reconciliation."
+      "Recorded facts and host observations from a read-only snapshot."
       [
         (required "processKey" text "Registry process key.")
         (required "runId" text "Owning run id.")
@@ -191,8 +191,6 @@ in
         (required "pgid" i32 "Observed signed process-group id.")
         (required "registryStatus" text "Native registry status string.")
         (required "reconciledStatus" text "Native reconciled status string.")
-        (optional "serviceLifetime" text "Native service lifetime spelling or explicit null.")
-        (required "borrowerCount" i64 "Signed count read through native SQLite handling.")
         (required "live" boolean "Native host liveness observation.")
       ]
     )
@@ -315,8 +313,6 @@ in
           PROC_ESCAPE = annotation "Required process containment or foreground-process identity could not be maintained or verified." "recovery";
           READINESS_TIMEOUT = annotation "The native service readiness budget expired." "services";
           CANCELED = annotation "Native cancellation interrupted the operation." "recovery";
-          LEASE_STALE = annotation "Required run/service lease evidence is no longer current." "state";
-          LEASE_CONFLICT = annotation "An existing lease conflicts with the requested ownership transition." "state";
           TASK_FAILED = annotation "An admitted task failed its native execution or success policy." "tasks";
           LIFECYCLE_FAILED = annotation "An admitted lifecycle operation or finalization stage failed." "services";
           DEPENDENCY_UNAVAILABLE = annotation "An admitted task or service dependency became unavailable." "services";
@@ -335,14 +331,14 @@ in
     (vocabulary "enum PortConflictReason" "PortConflictReason" process "private" copy
       "The two inventoried proven host conflict facts."
     )
-    (vocabulary "status RunStatus" "RunStatus" status "pub" copy
-      "Native runs.status vocabulary; transitions and terminal sets stay native."
+    (vocabulary "status ExecutionOutcome" "ExecutionOutcome" status "pub" copy
+      "Immutable session execution outcome; absence means execution has not settled."
+    )
+    (vocabulary "status FinalizationStatus" "FinalizationStatus" status "pub" copy
+      "Session resource finalization, independent of execution outcome and output sealing."
     )
     (vocabulary "status ProcessStatus" "ProcessStatus" status "pub" copy
       "Native processes.status vocabulary; host reconciliation stays native."
-    )
-    (vocabulary "status RunLeaseStatus" "RunLeaseStatus" status "pub" copy
-      "Native run_leases.status vocabulary; lease transitions stay native."
     )
     (vocabulary "status PortStatus" "PortStatus" status "pub" copy
       "Native ports.status vocabulary; reservation and ownership checks stay native."

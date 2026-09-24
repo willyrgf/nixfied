@@ -16,65 +16,41 @@ use common::*;
 static ENDPOINT_TESTS: Mutex<()> = Mutex::new(());
 
 #[test]
-fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let child = test_child();
+fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "persistent-until-down",
-        "hold",
-    );
+    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
-    fs::create_dir_all(&root_a).unwrap();
-    fs::create_dir_all(&root_b).unwrap();
-
-    let first = run_command(&manifest, &root_a).output().unwrap();
-    assert_success(&first, "root A persistent start");
+    let first = HeldSession::start(&manifest, &root_a);
     assert!(find_named(&root_a, "endpoint-prepare-sentinel").is_some());
-
     let blocked = run_command(&manifest, &root_b).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
             .get("nixfiedOwner")
-            .is_none(),
-        "a private registry in another state root must not be guessed"
+            .is_none()
     );
-    assert!(
-        find_named(&root_b, "endpoint-prepare-sentinel").is_none(),
-        "preflight conflict must happen before root B prepare"
-    );
-
-    assert_success(
-        &down_command(&manifest, &root_a).output().unwrap(),
-        "root A down",
-    );
-    let second = run_command(&manifest, &root_b).output().unwrap();
-    assert_success(&second, "root B start after root A down");
+    assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
+    first.finish();
+    HeldSession::start(&manifest, &root_b).finish();
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_some());
-    assert_success(
-        &down_command(&manifest, &root_b).output().unwrap(),
-        "root B down",
-    );
 }
 
 #[test]
 fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
-    fs::create_dir_all(&root_a).unwrap();
-    fs::create_dir_all(&root_b).unwrap();
 
     let winner = spawn_run(&manifest, &root_a);
     let sentinel = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
@@ -91,15 +67,15 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
 
 #[test]
 fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
-    fs::create_dir_all(&root_a).unwrap();
-    fs::create_dir_all(&root_b).unwrap();
 
     let runtime = spawn_run(&manifest, &root_a);
     let sentinel_a = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
@@ -135,13 +111,14 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
 
 #[test]
 fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, "run-scoped", "hold");
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
 
     let runtime = spawn_run(&manifest, &root);
     let sentinel = wait_for_named(&root, "endpoint-prepare-sentinel", Duration::from_secs(5))
@@ -166,17 +143,17 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
 
 #[test]
 fn external_exact_and_wildcard_listeners_fail_before_prepare() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     for address in ["127.0.0.1", "0.0.0.0"] {
         let temp = TempDir::new();
         let external = TcpListener::bind((address, 0)).unwrap();
         enable_address_reuse(&external);
         let port = external.local_addr().unwrap().port();
-        let manifest =
-            write_endpoint_manifest(&temp.path, &child, port, false, "run-scoped", "hold");
+        let manifest = write_endpoint_manifest(&temp.path, &child, port, false, false, "hold");
         let root = temp.path.join("root");
-        fs::create_dir_all(&root).unwrap();
 
         let output = run_command(&manifest, &root).output().unwrap();
         let error = assert_port_conflict(&output, "listener-occupied", port);
@@ -191,20 +168,14 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
 
 #[test]
 fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "run-scoped",
-        "active-close",
-    );
+    let manifest = write_endpoint_manifest(&temp.path, &child, port, false, false, "active-close");
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
 
     let first = run_command(&manifest, &root).output().unwrap();
     assert_success(&first, "first active-close lifecycle");
@@ -215,263 +186,117 @@ fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
 }
 
 #[test]
-fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let child = test_child();
+fn lost_listener_does_not_grant_a_second_session_execution_rights() {
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "persistent-until-down",
-        "close",
-    );
+    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "close");
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
-
-    let first = run_command(&manifest, &root).output().unwrap();
-    assert_success(&first, "initial persistent owner");
-    let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
-    let first_process = first_json["services"][0]["processKey"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let owner_pid = process_pid(&root, &first_process);
-    let lease_blocked = run_command(&manifest, &root).output().unwrap();
-    assert_error_code(&lease_blocked, "LEASE_CONFLICT", 29);
-    assert_eq!(
-        unsafe { libc::kill(owner_pid, 0) },
-        0,
-        "an open owner lease must block without signaling the live process"
-    );
-    mark_open_leases_stale(&root);
-
-    let ownership_blocked = run_command(&manifest, &root).output().unwrap();
-    let error = assert_error_code(&ownership_blocked, "PORT_UNVERIFIABLE", 24);
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing its expected listener"),
-        "unexpected missing-listener error: {error:#}"
-    );
-    assert_eq!(
-        unsafe { libc::kill(owner_pid, 0) },
-        0,
-        "missing ownership must not trigger a replacement signal"
-    );
-
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "preserved owner down",
-    );
-    let retry = run_command(&manifest, &root).output().unwrap();
-    assert_success(&retry, "retry after explicit down");
-    let retry_json: Value = serde_json::from_slice(&retry.stdout).unwrap();
-    assert_ne!(
-        retry_json["services"][0]["processKey"],
-        json!(first_process),
-        "retry after down must start a new process"
-    );
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "retry down",
-    );
-}
-
-#[test]
-fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let child = test_child();
-    let temp = TempDir::new();
-    let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "persistent-until-down",
-        "close",
-    );
-    let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
-
-    let first = run_command(&manifest, &root).output().unwrap();
-    assert_success(&first, "initial persistent owner");
-    let (owner_pid, owner_process_key) = insert_active_borrower(&root, "run-active-borrower");
+    let first = HeldSession::start(&manifest, &root);
+    let (pid, first_key) = service_process(&root);
     let blocked = run_command(&manifest, &root).output().unwrap();
-    let error = assert_error_code(&blocked, "LEASE_CONFLICT", 29);
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("authoritative open lease"),
-        "unexpected lease conflict: {error:#}"
-    );
+    assert_error_code(&blocked, "CLEANUP_REFUSED", 22);
     assert_eq!(
-        unsafe { libc::kill(owner_pid, 0) },
+        unsafe { libc::kill(pid, 0) },
         0,
-        "replacement refusal must not signal the tracked owner"
+        "refusal must not signal the owner"
     );
-
-    let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
-    let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    let state: (String, String) = connection
-        .query_row(
-            "
-            SELECT p.status, l.status
-            FROM services s
-            JOIN processes p ON p.service_instance_id = s.service_instance_id
-            JOIN run_leases l ON l.service_instance_id = s.service_instance_id
-            WHERE p.process_key = ?1 AND l.run_id = 'run-active-borrower'
-            ",
-            [&owner_process_key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("blocked ownership evidence should remain unchanged");
-    assert_eq!(state, ("ready".into(), "active".into()));
-    connection
-        .execute(
-            "UPDATE run_leases SET status = 'completed' WHERE run_id = 'run-active-borrower'",
-            [],
-        )
-        .expect("test borrower should release");
-    connection
-        .execute(
-            "UPDATE runs SET status = 'completed' WHERE run_id = 'run-active-borrower'",
-            [],
-        )
-        .expect("test borrower run should complete");
-    drop(connection);
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "persistent owner down",
-    );
+    first.finish();
+    let second = HeldSession::start(&manifest, &root);
+    assert_ne!(service_process(&root).1, first_key);
+    second.finish();
 }
 
 #[test]
-fn live_starting_service_is_not_promoted_or_borrowed() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let child = test_child();
+fn active_session_blocks_replacement_without_mutating_owner_evidence() {
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "persistent-until-down",
-        "hold",
-    );
+    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
-
-    let first = run_command(&manifest, &root).output().unwrap();
-    assert_success(&first, "initial persistent owner");
-    let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
-    let first_process = first_json["services"][0]["processKey"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let owner_pid = process_pid(&root, &first_process);
-    force_live_starting_process_without_open_lease(&root);
-
-    let second = run_command(&manifest, &root).output().unwrap();
-    assert_error_code(&second, "PORT_UNVERIFIABLE", 24);
-    assert_eq!(
-        unsafe { libc::kill(owner_pid, 0) },
-        0,
-        "a live Starting process must be preserved"
+    let owner = HeldSession::start(&manifest, &root);
+    let (pid, key) = service_process(&root);
+    let before = service_evidence(&root, &key);
+    assert_error_code(
+        &run_command(&manifest, &root).output().unwrap(),
+        "CLEANUP_REFUSED",
+        22,
     );
-    let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
-    let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    let evidence: (String, String) = connection
-        .query_row(
-            "
-            SELECT p.status, o.status
-            FROM services s
-            JOIN processes p ON p.service_instance_id = s.service_instance_id
-            JOIN ports o ON o.owner_process_key = p.process_key
-            WHERE p.process_key = ?1
-            ",
-            [&first_process],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("Starting evidence should remain unchanged");
-    assert_eq!(evidence, ("starting".into(), "active".into()));
-    drop(connection);
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "Starting owner down",
-    );
+    assert_eq!(service_evidence(&root, &key), before);
+    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    owner.finish();
 }
 
 #[test]
-fn outside_listener_preserves_recorded_process_and_reports_conflict() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let child = test_child();
+fn interrupted_starting_service_is_cleaned_before_fresh_start_not_adopted() {
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(
-        &temp.path,
-        &child,
-        port,
-        false,
-        "persistent-until-down",
-        "close",
-    );
+    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
+    let mut predecessor = HeldSession::start(&manifest, &root);
+    let (_, old_key) = service_process(&root);
+    predecessor.crash();
+    registry_connection(&root)
+        .execute(
+            "UPDATE processes SET status = 'starting' WHERE process_key = ?1",
+            [&old_key],
+        )
+        .unwrap();
+    let successor = HeldSession::start(&manifest, &root);
+    assert_ne!(service_process(&root).1, old_key);
+    assert_eq!(
+        service_evidence(&root, &old_key),
+        ("stopped".into(), "released".into())
+    );
+    successor.finish();
+}
 
-    let first = run_command(&manifest, &root).output().unwrap();
-    assert_success(&first, "initial persistent owner");
-    let first_json: Value = serde_json::from_slice(&first.stdout).unwrap();
-    let first_process = first_json["services"][0]["processKey"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let owner_pid = process_pid(&root, &first_process);
-    let external = TcpListener::bind(("127.0.0.1", port))
-        .expect("external listener should replace the service socket");
-    mark_open_leases_stale(&root);
-
+#[test]
+fn outside_listener_survives_predecessor_recovery_and_reports_conflict() {
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let temp = TempDir::new();
+    let port = available_port_window(1);
+    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "close");
+    let root = temp.path.join("root");
+    let mut predecessor = HeldSession::start(&manifest, &root);
+    let (_, old_key) = service_process(&root);
+    let external = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    predecessor.crash();
     let blocked = run_command(&manifest, &root).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
             .get("nixfiedOwner")
-            .is_none(),
-        "an external listener must not be attributed to the recorded service"
+            .is_none()
     );
     assert_eq!(
-        unsafe { libc::kill(owner_pid, 0) },
-        0,
-        "wrong listener ownership must not signal the recorded process"
+        service_evidence(&root, &old_key),
+        ("stopped".into(), "released".into())
     );
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "wrong-owner service down",
-    );
+    assert_eq!(external.local_addr().unwrap().port(), port);
     drop(external);
-    let retry = run_command(&manifest, &root).output().unwrap();
-    assert_success(&retry, "retry after wrong-owner down");
-    assert_success(
-        &down_command(&manifest, &root).output().unwrap(),
-        "wrong-owner retry down",
-    );
+    HeldSession::start(&manifest, &root).finish();
 }
 
 #[test]
 fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
-    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let _serial = ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(2);
     let manifest = write_multi_endpoint_manifest(&temp.path, &child, port);
     let root = temp.path.join("root");
-    fs::create_dir_all(&root).unwrap();
 
     let first = run_command(&manifest, &root).output().unwrap();
     let first_error = stderr_json(&first.stderr);
@@ -519,7 +344,7 @@ fn write_endpoint_manifest(
     child: &Path,
     port: u16,
     blocking_prepare: bool,
-    service_lifetime: &str,
+    hold_session: bool,
     listener_behavior: &str,
 ) -> PathBuf {
     write_manifest(
@@ -528,7 +353,7 @@ fn write_endpoint_manifest(
             child,
             port,
             blocking_prepare,
-            service_lifetime,
+            hold_session,
             listener_behavior,
         ),
     )
@@ -538,7 +363,7 @@ fn endpoint_manifest(
     child: &Path,
     port: u16,
     blocking_prepare: bool,
-    service_lifetime: &str,
+    hold_session: bool,
     listener_behavior: &str,
 ) -> Value {
     let closure_root = closure_root_for_store_executable(child)
@@ -600,10 +425,8 @@ fn endpoint_manifest(
         behavior => panic!("unsupported endpoint listener behavior {behavior:?}"),
     };
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = start_run;
-    value["tasks"]["smoke"]["serviceLifetime"] = json!(service_lifetime);
     value["tasks"]["smoke"]["invocation"]["run"] = task_run;
     let mut prepare = value["tasks"]["smoke"].clone();
-    prepare["serviceLifetime"] = json!("run-scoped");
     prepare["operationId"] = json!("task.endpoint-prepare.run");
     prepare["requires"] = json!([]);
 
@@ -623,6 +446,29 @@ fn endpoint_manifest(
         ])
     };
     value["tasks"]["endpoint-prepare"] = prepare;
+    if hold_session {
+        let mut client = value["tasks"]["smoke"].clone();
+        client["operationId"] = json!("task.endpoint-client.run");
+        let mut wait = client.clone();
+        wait["operationId"] = json!("task.endpoint-wait.run");
+        wait["invocation"]["run"] = json!([
+            executable_name,
+            "prepare",
+            "${stateDir}/endpoint-session-active",
+            "${stateDir}/endpoint-session-ack"
+        ]);
+        wait["invocation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("timeoutMs");
+        value["tasks"]["endpoint-client"] = client;
+        value["tasks"]["endpoint-wait"] = wait;
+        value["tasks"]["smoke"] = json!({
+            "kind": "composite",
+            "steps": {"client": {"task": "endpoint-client"},
+                      "wait": {"task": "endpoint-wait", "dependsOn": ["client"]}}
+        });
+    }
 
     value
 }
@@ -636,7 +482,7 @@ fn write_manifest(directory: &Path, value: Value) -> PathBuf {
 }
 
 fn write_multi_endpoint_manifest(directory: &Path, child: &Path, port: u16) -> PathBuf {
-    let mut value = endpoint_manifest(child, port, false, "run-scoped", "hold");
+    let mut value = endpoint_manifest(child, port, false, false, "hold");
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     value["services"]["synthetic"]["endpoints"]["admin"] = json!({
         "endpointId": "admin",
@@ -763,52 +609,6 @@ fn assert_port_conflict(output: &Output, reason: &str, port: u16) -> Value {
     error
 }
 
-fn force_live_starting_process_without_open_lease(root: &Path) {
-    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
-    let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    assert_eq!(
-        connection
-            .execute(
-                "UPDATE processes SET status = 'starting' WHERE service_instance_id IS NOT NULL AND status = 'ready'",
-                [],
-            )
-            .expect("process should enter simulated Starting state"),
-        1
-    );
-    assert!(
-        connection
-            .execute(
-                "UPDATE run_leases SET status = 'stale' WHERE status IN ('active', 'canceling')",
-                [],
-            )
-            .expect("test should close every owner token")
-            >= 1
-    );
-}
-
-fn process_pid(root: &Path, process_key: &str) -> libc::pid_t {
-    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
-    rusqlite::Connection::open(registry)
-        .expect("registry should open")
-        .query_row(
-            "SELECT pid FROM processes WHERE process_key = ?1",
-            [process_key],
-            |row| row.get(0),
-        )
-        .expect("process pid should query")
-}
-
-fn mark_open_leases_stale(root: &Path) {
-    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
-    rusqlite::Connection::open(registry)
-        .expect("registry should open")
-        .execute(
-            "UPDATE run_leases SET status = 'stale' WHERE status IN ('active', 'canceling')",
-            [],
-        )
-        .expect("test should close open leases");
-}
-
 fn assert_error_code(output: &Output, code: &str, exit_code: i32) -> Value {
     assert_eq!(output.status.code(), Some(exit_code), "{code} exit code");
     assert!(output.stdout.is_empty());
@@ -817,57 +617,134 @@ fn assert_error_code(output: &Output, code: &str, exit_code: i32) -> Value {
     error
 }
 
-fn insert_active_borrower(root: &Path, borrower_run_id: &str) -> (libc::pid_t, String) {
-    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
-    let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    let (owner_run_id, owner_pid, owner_process_key): (String, libc::pid_t, String) = connection
-        .query_row(
-            "SELECT run_id, pid, process_key FROM processes WHERE status = 'ready'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+/// Keep the session (and therefore its dependencies) alive until the test
+/// explicitly completes or interrupts it. Unwinding still cleans owned children.
+struct HeldSession {
+    runtime: Option<Child>,
+    manifest: PathBuf,
+    root: PathBuf,
+}
+
+impl HeldSession {
+    fn start(manifest: &Path, root: &Path) -> Self {
+        let data = root.join("data/runtime-test/dev/0");
+        for marker in [
+            "endpoint-session-active",
+            "endpoint-session-ack",
+            "endpoint-listener-close",
+            "endpoint-listener-closed",
+        ] {
+            match fs::remove_file(data.join(marker)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => panic!("remove prior test marker: {error}"),
+            }
+        }
+        let mut session = Self {
+            runtime: Some(spawn_run(manifest, root)),
+            manifest: manifest.to_path_buf(),
+            root: root.to_path_buf(),
+        };
+        if !wait_for_path(
+            &data.join("endpoint-session-active"),
+            Duration::from_secs(5),
+        ) {
+            if session
+                .runtime
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_some()
+            {
+                let output = session.runtime.take().unwrap().wait_with_output().unwrap();
+                panic!(
+                    "session did not reach held task: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            panic!("session never reached held task");
+        }
+        // The application marker can precede process registration until gated
+        // spawn is implemented. These recovery scenarios deliberately interrupt
+        // after durable registration, not in that still-unclosed interval.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let registered: i64 = registry_connection(root)
+                .query_row(
+                    "SELECT count(*) FROM processes WHERE service_instance_id IS NULL AND status = 'running'",
+                    [], |row| row.get(0),
+                ).unwrap();
+            if registered == 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "held task was never registered"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session
+    }
+
+    fn finish(mut self) {
+        fs::write(
+            self.root
+                .join("data/runtime-test/dev/0/endpoint-session-ack"),
+            b"finish",
         )
-        .expect("persistent owner process should exist");
-    assert_eq!(
-        connection
-            .execute(
-                "
-                INSERT INTO runs (
-                  run_id, environment, slot, status, manifest_path, computed_manifest_hash,
-                  runtime_abi, toolchain_id, generator_json, target_json, source_json,
-                  summary_path
-                )
-                SELECT ?1, environment, slot, 'service-starting', manifest_path,
-                       computed_manifest_hash, runtime_abi, toolchain_id, generator_json,
-                       target_json, source_json, summary_path
-                FROM runs WHERE run_id = ?2
-                ",
-                rusqlite::params![borrower_run_id, owner_run_id],
-            )
-            .expect("borrower run should be inserted"),
-        1
-    );
-    assert_eq!(
-        connection
-            .execute(
-                "
-                INSERT INTO run_leases (
-                  run_id, environment, slot, service_instance_id, owner_token,
-                  heartbeat_at, expires_at, status
-                )
-                SELECT ?1, environment, slot, service_instance_id, ?2,
-                       strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-                       strftime('%Y-%m-%dT%H:%M:%fZ','now','+60 seconds'),
-                       'active'
-                FROM run_leases WHERE run_id = ?3
-                ",
-                rusqlite::params![
-                    borrower_run_id,
-                    format!("owner-{borrower_run_id}"),
-                    owner_run_id
-                ],
-            )
-            .expect("borrower lease should be inserted"),
-        1
-    );
-    (owner_pid, owner_process_key)
+        .unwrap();
+        let output = wait_for_child_output(self.runtime.take().unwrap(), Duration::from_secs(20));
+        assert_success(&output, "held session completion");
+    }
+
+    fn crash(&mut self) {
+        let runtime = self.runtime.take().unwrap();
+        assert_eq!(
+            unsafe { libc::kill(runtime.id() as libc::pid_t, libc::SIGKILL) },
+            0
+        );
+        let output = wait_for_child_output(runtime, Duration::from_secs(5));
+        assert!(!output.status.success());
+    }
+}
+
+impl Drop for HeldSession {
+    fn drop(&mut self) {
+        if let Some(mut runtime) = self.runtime.take() {
+            unsafe {
+                libc::kill(runtime.id() as libc::pid_t, libc::SIGTERM);
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while matches!(runtime.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if matches!(runtime.try_wait(), Ok(None)) {
+                let _ = runtime.kill();
+            }
+            let _ = runtime.wait();
+        }
+        // A crashed runtime can leave recorded children. This dedicated fixture
+        // root is ours; control must reacquire its slot before signaling them.
+        let _ = down_command(&self.manifest, &self.root).output();
+    }
+}
+
+fn registry_connection(root: &Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(find_named(root, "registry.sqlite3").expect("registry exists"))
+        .unwrap()
+}
+
+fn service_process(root: &Path) -> (libc::pid_t, String) {
+    registry_connection(root).query_row(
+        "SELECT pid, process_key FROM processes WHERE service_instance_id IS NOT NULL AND status = 'ready'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap()
+}
+
+fn service_evidence(root: &Path, process: &str) -> (String, String) {
+    registry_connection(root).query_row(
+        "SELECT p.status, ep.status FROM processes p JOIN ports ep ON ep.owner_process_key = p.process_key
+         WHERE p.process_key = ?1", [process], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap()
 }

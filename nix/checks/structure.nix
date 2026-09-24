@@ -59,7 +59,6 @@ let
   task = {
     kind = "composite";
     defaultOutput = "summary";
-    serviceLifetime = "run-scoped";
 
   };
   child = {
@@ -176,11 +175,11 @@ let
     };
     task = {
       expr = builtins.toJSON (make "TaskSpec" task);
-      expected = ''{"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped"}'';
+      expected = ''{"defaultOutput":"summary","kind":"composite"}'';
     };
     suppliedEmpty = {
       expr = builtins.toJSON (make "TaskSpec" (task // { artifactRefs = [ ]; }));
-      expected = ''{"artifactRefs":[],"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped"}'';
+      expected = ''{"artifactRefs":[],"defaultOutput":"summary","kind":"composite"}'';
     };
     requiredDespiteDefault = {
       expr = rejects (make "TaskSpec" (builtins.removeAttrs task [ "defaultOutput" ]));

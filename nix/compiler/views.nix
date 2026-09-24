@@ -30,7 +30,6 @@ let
         ""
         "- kind: `${task.kind}`"
         "- default output: `${task.defaultOutput}`"
-        "- service lifetime: `${task.serviceLifetime}`"
         "- services required: ${inlineList (required taskId)}"
         "- artifact refs: ${inlineList (task.artifactRefs or [ ])}"
         "- log refs: ${inlineList (task.logRefs or [ ])}"
@@ -118,7 +117,6 @@ in
   ## State
 
   - marker identity: `${manifest.state.markerIdentity}`
-  - epoch: `${manifest.state.stateEpoch}`
   - cleanup: `${manifest.state.cleanupPolicy}`
   - persistence: `${manifest.state.persistence}`
 

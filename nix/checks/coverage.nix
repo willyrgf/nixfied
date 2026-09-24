@@ -25,13 +25,14 @@ let
     "output-schema run-summary-text" = "outputs";
     "output-schema run-error-summary-text" = "outputs";
     endpoint-acquisition = "runtime";
-    endpoint-reuse = "runtime";
-    lease-authority = "runtime";
+    endpoint-ownership = "runtime";
+    session-service-reference = "runtime";
     escape-settlement = "runtime";
     probe-settlement = "runtime";
     service-ownership = "runtime";
     task-evidence = "runtime";
     bounded-capture = "runtime";
+    state-preparation = "runtime";
     finalization = "runtime";
     escaped-port-reconciliation = "runtime";
   };

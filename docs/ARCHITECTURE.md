@@ -37,7 +37,7 @@ The split is defined by the verb, not by timing:
   reshaping their repo.
 - **Rust is the hidden, generic execution runtime.** It knows no domain
   (Postgres/Node/Python/nginx). It executes generic primitives and enforces typed
-  lifecycle semantics. Mutable runtime state — process ownership, ports, leases,
+  lifecycle semantics. Mutable runtime state — process ownership, ports,
   reconciliation, cleanup, logs, summaries — is Rust's responsibility.
 
 > Nix is the authority for what the project is *allowed to be*. Rust is the
@@ -69,7 +69,7 @@ mode:
   `manifest.json` plus the disposable, manifest-derived `views/docs.md` human
   reference. (v1: artifact sealing kept growing toward a mini package format.)
 - **Separate admission metadata → manifest-owned admission contract.** Source identity,
-  target identity, generator/toolchain identity, closure metadata, layered service
+  target identity, generator/toolchain identity, closure metadata, declared service
   identity, and state policy are first-class `manifest.json` fields — so the manifest
   *is* the admission contract, not just an execution graph. The contract is also
   *typed*: illegal shapes (a malformed lifecycle, a non-loopback endpoint, a zero
@@ -231,7 +231,7 @@ runtime-owned PATH assembled from the tool roots, nothing inherited.
    exact ABI/toolchain, target support, source policy, already-realised closures,
    reference resolution (the manifest lowers into the executor's input only if every
    cross-reference exists), writable marker-owned state, registry acquisition, port
-   ownership strategy, and stale-lease reconciliation.
+   ownership strategy, and interrupted-session recovery.
 4. **Execution correctness (Rust).** The impure graph: process groups, signals,
    readiness/health, task/composite cancellation, registry events, summaries,
    cleanup, reconciliation.
@@ -250,10 +250,13 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `flake-input` modes resolve from the Nix store root carried in
   `sourceIdentity`, so `dirtyPolicy = reject` is provable for those modes.
   (v1: live checkout state was implicit.)
-- **Service identity is layered**, so harmless changes don't blur ownership:
-  `serviceInstanceId = hash(serviceAddress, endpointIdentity, stateIdentity,
-  runtimeCompatibilityHash, targetIdentity)`. Reuse requires an exact match across
-  all layers. (v1: reuse blurred incompatible runtime configs.)
+- **Service attribution belongs to process evidence.** The declared service label
+  is stored with the session's process. There is no reusable service registry;
+  endpoint attribution requires process evidence and OS ownership proof, not a
+  compatibility comparison with a new service declaration. Service references
+  frame the run ID and declared name; lowered execution carries no reuse hashes.
+  Startup requires predecessor process settlement, including endpoint-less
+  workloads. Cleanup lifecycle events carry the declaration without an instance.
 - **Placement is split by phase.** Nix bakes only the *logical* placement the
   manifest needs — the per-slot candidate port windows — into `manifest.json`; the
   directory layout (state root, registry, run/logs/artifacts) is a runtime-owned
@@ -262,7 +265,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `runId` known only at runtime. (v1: placement drifted when both sides derived it;
   the layout templates were later pinned constants in the manifest, then removed.)
 
-## Registry, liveness, leases
+## Registry and liveness
 
 - **Per-slot SQLite WAL registry** owns shared mutable state transactionally, with
   a total per-slot event order (timestamps are diagnostic only). It is a *durable
@@ -272,38 +275,36 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 - **Registry readers own stored representation.** Service and control paths share
   endpoint decoding for status, service prefix, nonempty endpoint identity,
   loopback address, and port representation. Raw address spelling remains available
-  for exact row comparisons and event bytes. Reservation, activation, and reuse
+  for exact row comparisons and event bytes. Process registration and activation
   retain their own complete-set and ownership checks within the relevant transaction.
   Shared actionable-process SQL preserves each caller's multiplicity and conflict
   rules. Reconciliation returns typed observations; `ps` alone projects public
   strings, and `down` re-reads rows and refreshes identity before signaling.
 - **Transitions borrow registry context.** Connection, immutable identity, and
-  redactor are borrowed together. Each transition visibly selects its transaction
+  redactor are borrowed together after revalidating the held slot guard. Each
+  transition visibly selects its transaction
   mode and commits mutations with redacted events through one borrowed event record.
-- **Registry-only evidence fails closed.** A live reservation lease without a
-  process is `LEASE_CONFLICT`; a post-reconcile row with neither a valid lease
-  nor a valid process is `REGISTRY_CORRUPT`.
-- **Service state is derived.** The `services` row stores identity, lifetime,
-  and state-root metadata; process readiness comes from the primary process and
-  active ports, while standing and borrowing derive from owner/borrower leases.
-  `ps` projects those facts without a separately persisted service status.
-- **Local service handles encode ownership.** Acquisition returns a borrowed
-  lease handle or an owned starting handle. Only the starting handle owns startup
-  guards; committed readiness consumes it into a ready owner. Session services
-  are ready owners or borrowers, and borrowers carry no child resources.
-  Failure settlement consumes ownership, while successful standing explicitly
-  stops monitoring, detaches output relays, and releases the live child handle.
-- **Leases split three ways** — `run-scoped`, `until-idle`, `persistent-until-down`
-  — because no daemon is guaranteed; reference counts derive from live borrower
-  leases, never an independently mutated counter. `until-idle` services are
-  torn down lazily on the next runtime invocation after the last borrower is
-  gone or stale; `persistent-until-down` services stand until `down` releases
-  them. (v1: lease/refcount semantics assumed a daemon that didn't exist.)
-- **Open leases are replacement authority.** Exact healthy reuse may admit
-  another borrower while the owner and existing borrowers remain open. If the
-  service is not exactly reusable, any open owner or borrower lease returns
-  `LEASE_CONFLICT`; acquisition never mutates the lease or signals its process.
-  Expired process-less reservations are reclaimed by ordinary reconciliation.
+- **Endpoint evidence belongs to a process.** Startup intent is recorded before
+  prepare. Endpoint rows are inserted atomically with the process row and name
+  that process explicitly. There are no ownerless reservations, service leases,
+  owner tokens, heartbeat workers, or expiry sweeps. Unsafe or conflicting
+  stored process evidence rejects before new startup.
+- **Session completion has one owner.** Workload transitions update local process
+  and endpoint evidence, never aggregate execution outcome. The live session
+  records its outcome before replay and teardown. Recovery under the slot guard
+  marks only unknown executions interrupted and preserves known outcomes.
+  `SessionProgress` distinguishes execution, finalizing a known outcome, and
+  finalized execution; checked decoding and SQL constraints reject completion
+  without an outcome. Resource finalization and output sealing are separate facts.
+- **Process lifetime belongs to the session.** Services cannot be borrowed by
+  another session or transferred into a standing state. Starting handles own
+  startup guards and child resources; committed readiness consumes a starting
+  handle into a ready owner. Failure settlement consumes that ownership, and
+  session finalization stops every remaining service and settles its capture.
+- **Slot mutation has one owner.** A writable registry owns a non-cloneable
+  slot guard through SQLite closure. Acquisition validates the private registry
+  ancestry and a stable, non-followed lock file before admitting a writer.
+  Read-only `ps` uses a separate snapshot reader and does not reconcile records.
 
 ## Ports, state, containment
 
@@ -337,16 +338,19 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   atomically; macOS coordinates socket flag setup with every workload spawn.
   Coordination poisoning refuses effects. This process-local synchronization
   protects descriptor inheritance.
-- **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
-  registry opening, and mandatory reconciliation remain run-wide. Endpoint
-  locks begin when the pre-lock exact-reuse attempt does not succeed and cover
-  the under-lock reuse check, local reservation, service prepare, spawn, and
-  readiness.
+- **Application data has no framework compatibility epoch.** Marker version 2
+  records ownership, retention, and provenance. State preparation has no deletion
+  branch and refuses retention downgrades. Application startup owns its format
+  checks and migrations; configuration changes grant no reset authority.
+- **Slot ownership precedes recovery and state preparation.** Recovery settles
+  predecessors regardless of manifest hash. State preparation refuses unresolved
+  process and endpoint evidence and never signals processes. Endpoint locks
+  cover preflight, service prepare, spawn, and readiness after slot preparation.
 - **Listener loss requires explicit teardown.** `ps` remains process liveness
   and never signals solely because an endpoint is missing. Endpoint acquisition
   also never signals a pre-existing process: missing or unprovable ownership is
-  `PORT_UNVERIFIABLE`, an outside listener is `PORT_CONFLICT`, and an open lease
-  is `LEASE_CONFLICT`. The recorded process and ownership evidence remain
+  `PORT_UNVERIFIABLE` and an outside listener is `PORT_CONFLICT`. The recorded
+  process and ownership evidence remain
   actionable to `down` and cleanup; after explicit `down`, a later run may start
   the replacement.
 - **The coordination boundary is deliberately narrow.** Endpoint locks
@@ -363,7 +367,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
   the selected `data/project/environment/slot` root, target symlinks, traversal
   escapes, unmarked roots, marker
-  mismatches, active leases/processes/reservations, and policy-protected
+  mismatches, active process/endpoint evidence, and policy-protected
   persistent state; unlinks symlink entries inside the owned tree without
   following them; and is idempotent and crash-safe. `clean --purge` expresses
   deliberate destruction of protected/persistent state, but it relaxes only that
@@ -405,14 +409,17 @@ selected root task's manifest `defaultOutput`, whose normal value is `summary`.
 
 Task and probe execution share a concrete child owner. Spawn returns that owner;
 tasks record their process before consuming it through completion, while probes
-complete directly. Cancellation/timeout intent precedes signaling. Every exit
+complete directly. Task observation records the execution outcome and exit code
+before containment and capture settlement. `ObservedWithoutEvidence` preserves
+that result when settlement cannot produce completed evidence; it grants no
+replay ticket. Cancellation/timeout intent precedes signaling. Every exit
 path attempts containment and reap, then shuts down both capture workers under
 one absolute deadline. Workers own evidence files, and captured children receive only pipe
 writers, including when no secrets are configured. Actual EOF alone completes
 capture; an incomplete stream cannot issue completed evidence or a replay ticket.
 Service terminal cleanup reuses bounded relay shutdown; services without secrets
-retain their direct-file output policy across runtime interruption. Standing
-explicitly transfers persistent relay ownership.
+retain their direct-file output policy across runtime interruption. Capture
+workers remain owned through session teardown.
 
 `--output task-output` is a separate direct-leaf boundary. The runtime validates
 one explicit leaf after admission but before slot selection, placement, state,
@@ -425,7 +432,7 @@ other stream; both workers are joined and their typed projection issues are
 retained.
 
 The run session is the single finalization owner. It replays before service
-teardown, lease release, aggregate summary, footer, and final error projection,
+teardown, slot release, aggregate summary, footer, and final error projection,
 then runs every remaining cleanup stage even when an earlier stage fails.
 One node runner executes prepare and root occurrences, appending completed task
 records directly to the session's canonical evidence vector. Root and selected
@@ -435,7 +442,7 @@ paths, so repeated task IDs and step paths cannot overwrite prior evidence.
 Before-terminal failures append no record; after-terminal failures retain one.
 Typed evidence crosses registry, summary, and error boundaries without being
 reconstructed from serialized JSON. Compound errors
-retain non-recursive causes, with safety/registry/lease failures first,
+retain non-recursive causes, with safety/registry/ownership failures first,
 projection failures second, and task outcomes third. Captured child
 stdout/stderr otherwise stays in redacted log files, and no `logs` command is
 part of the public surface.
@@ -486,5 +493,5 @@ central log aggregation, and UI are outside a per-project, per-slot, single-host
 authority. A manifest envelope re-opens the v1 artifact-sealing failure
 (SINGLE-MANIFEST-1), while a dynamic runtime adapter protocol restores domain
 awareness and v1 adapter complexity (RUNTIME-GENERIC-1). The no-daemon assumption
-is especially load-bearing because it shapes the lease/liveness model (LIVE-1).
+is especially load-bearing because it shapes the ownership/liveness model (LIVE-1).
 Adding one of these concepts deliberately redefines the product.

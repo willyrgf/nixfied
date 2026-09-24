@@ -115,7 +115,6 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
         },
         "state": {
             "markerIdentity": "nixfied-state",
-            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
@@ -171,7 +170,6 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
             "smoke": {
                 "kind": "leaf",
                 "defaultOutput": "summary",
-                "serviceLifetime": "run-scoped",
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),
                 "requires": ["synthetic"],
