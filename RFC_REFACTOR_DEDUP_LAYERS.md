@@ -5,10 +5,11 @@ one active session per slot, interrupted-session cleanup followed by a fresh
 start, independent compilation/presentation consumers of native definitions,
 structural type generation limited to shared wire meaning, runtime derivation
 of execution graph facts without carried duplicate answers, executable
-dependency identity based on selected outputs and executables, and help scoped
-to Nixfied-generated apps are accepted
-architectural direction. Concrete mechanisms and other solutions below remain
-proposals.
+dependency identity based on selected outputs and executables, help scoped
+to Nixfied-generated apps, per-session FIFO cancellation for `down`, and removal
+of framework-owned application-data compatibility checks are
+accepted architectural direction. Remaining mechanisms and other solutions below
+remain proposals unless explicitly marked accepted.
 
 Started 2026-09-24. Problem baseline:
 [PROBLEM_DUPLICATION_LAYERS.md](PROBLEM_DUPLICATION_LAYERS.md), reviewed against
@@ -62,7 +63,7 @@ record the final outcome, and release ownership. Persistent data can remain afte
 ownership is released; persistent processes cannot become available for borrowing.
 Recovery failure refuses new execution rather than treating the slot as ready.
 
-Explicit cleanup and state-changing recovery or upgrade use the same exclusive
+Explicit cleanup and state-changing recovery use the same exclusive
 ownership boundary. They cannot independently mutate application state while a
 live session owns it. This decision accepts the ownership model, not a particular
 lock primitive or filesystem/registry transaction protocol.
@@ -79,6 +80,12 @@ process teardown. Service-specific startup recovery belongs to the service, such
 as PostgreSQL recovering its own database. Nixfied does not repair that database
 or delete persistent data merely because startup fails.
 
+**The application and user own data compatibility.** Remove `stateEpoch` and its
+mismatch/upgrade machinery. After ownership and recovery checks, Nixfied starts
+the configured executable against retained persistent data, reports startup
+failure if any, and safely finalizes the session without deleting that data.
+Configuration changes do not trigger framework-managed migration or data reset.
+
 **Native definitions feed compilation and presentation independently.** Compilation
 uses native bindings directly and validates executable intent. Documentation and
 help consume the shared definitions and validate their own presentation
@@ -92,10 +99,10 @@ manifest solely because compilation obtains its bindings through that reference.
 | --- | --- | --- |
 | F1: package-name collisions | S1: derive synthesized closure identity from actual selected outputs and executable selection. | Nix compiler |
 | F2: teardown loses containment policy | S2: one session owner throughout startup, execution, teardown, and recovery; remove persistent handoff. | Runtime session/process control |
-| F3: cleanup races execution | S3: exclusive slot mutation authority shared by acquisition, recovery, cleanup, and state upgrade. | Runtime slot/state ownership |
+| F3: cleanup races execution | S3: exclusive slot mutation authority shared by acquisition, recovery, and cleanup. | Runtime slot/state ownership |
 | F4: partial cleanup loses its marker | S3: durable deletion intent tied to an identified tree, with explicit interrupted-transition recovery. | Runtime state cleanup |
 | F5: pathname checks race traversal | S3: directory-identity-based traversal with non-following operations. | Runtime filesystem boundary |
-| F6: manifest replacement defeats service reuse | S4: delete cross-session service reuse and broad manifest-triggered process replacement; retain state compatibility. | Runtime identity/state admission |
+| F6: manifest replacement defeats service reuse | S4: remove service reuse and epoch-driven replacement; retain ownership/retention checks and leave data compatibility to the application/user. | Runtime identity/state admission |
 | F7: presentation gates compilation | S5: native definitions feed independent compilation and presentation consumers. | Nix modules/metadata/docs |
 | F8: schema controls private Rust representation | S6: restrict generation to shared wire structure; Rust owns internal representation. | Manifest schema and native Rust modules |
 | F9: repeated facts and inert policies | S7: remove redundant wire derivations and non-operational fields; retain explicit runtime validation. | Compiler/manifest/runtime lowering |
@@ -142,11 +149,10 @@ tool fixtures so a self-consistent but incorrectly rewritten graph cannot pass.
 
 ### Session boundary
 
-Proposed mapping: one runtime `run` execution is one session covering its root
-task graph, prepare tasks, services, probes, child output, and finalization. This
-reuses the existing execution boundary instead of introducing a second workflow
-kind. The exact foreground development command remains to be specified; this RFC
-does not add a daemon, attachment protocol, or arbitrary runtime scheduling.
+One runtime `run` execution is one session covering its selected task graph,
+prepare tasks, services, probes, child output, and finalization. Long-running tasks
+use that same boundary. Optional background placement is discussed below; no
+separate supervisor or arbitrary runtime scheduling is introduced.
 
 One owner retains process handles and teardown responsibility for the whole
 session. Services can be shared inside that owner, but there is no transfer to
@@ -159,6 +165,297 @@ Audit registry records individually: durable execution evidence and interrupted
 session recovery remain necessary, but borrower coordination no longer justifies
 their own tables or transitions.
 
+### Task-owned session duration and optional background launch
+
+Accepted direction: retain existing task entrypoints. Tasks are the selected work
+that determines session completion; services are dependencies whose lifetime is
+owned by that session. A task may be finite work or a long-running user program.
+Do not force an HTTP server into the service category merely because it runs
+indefinitely.
+
+```sh
+nix run .#serve  # Start PostgreSQL/Redis dependencies, then the user's HTTP task.
+nix run .#down   # From another shell: cancel that same session.
+```
+
+The foreground invocation remains alive while the task graph executes. Task
+completion or failure, service failure, or cancellation enters the common
+finalizer, which stops the remaining processes and applies retention. Services
+do not become reusable detached processes. A second framework execution on the
+same slot still refuses; external clients may connect without acquiring ownership.
+
+Withdraw the proposed `--service` selection, service-root mode, and related
+selection/output extensions. No third manifest kind, service bundle, artificial
+sleep task, task injection, or attachment protocol is needed.
+
+**Invariant:** foreground or background placement does not change task execution,
+slot ownership, cancellation, retention, or recovery. One live runtime owns the
+whole session until finalization.
+
+**Accepted: task invocation `timeoutMs` is optional, with no finite default.**
+Omission means run until the task exits, fails, or the session is canceled. An
+explicit positive millisecond value imposes a finite invocation deadline. Do not
+substitute 30 seconds, a huge sentinel value, or zero for an absent deadline.
+Nix defaulting, manifest emission/decoding, lowering, and execution must preserve
+that absence rather than reconstructing a hidden finite timeout.
+
+The invocation executor owns finite deadline enforcement; declaration and wire
+validation reject invalid supplied values before execution. No deadline never
+means uncancelable: service failure, Ctrl-C, and FIFO `down` still stop the work
+through the session finalizer. Foreground and background execution use the same
+rule, with no task-name-specific exceptions.
+
+Keep readiness, probe attempts, and teardown bounded by their own lifecycle
+limits; specify preparation's relationship to those limits explicitly. The shared
+invocation representation must not erase a probe's enclosing deadline. Runtime
+operation timeouts must not become an implicit task or session deadline. This
+decision adds no composite-wide deadline or timeout inheritance policy.
+
+Observe every owned service while the task graph or preparation runs, including
+transitive and prepare-only dependencies. Unexpected service failure cancels the
+remaining work and reaches the one finalizer. Preserve actual failure evidence
+when cancellation follows it; intentional teardown exits are not fresh execution
+failures. Reuse readiness and startup-health behavior without silently introducing
+periodic application-health scheduling.
+
+**Optional proposal:** `--daemon` on existing task entrypoints could launch the
+entire runtime session in the background and return the shell:
+
+```sh
+nix run .#serve -- --daemon  # Proposed; not currently implemented.
+nix run .#down
+```
+
+This is background placement of the same session owner, not a separate persistent
+supervisor, cross-session service lifetime, or service ownership transfer. Task
+exit still ends the session. Owner death still invokes the accepted recovery path.
+
+Do not equate this optional mode with merely appending a shell ampersand. Specify
+terminal/session detachment, standard-input policy, and redacted output destinations
+around the accepted acknowledgement boundary below. In particular,
+launch acknowledgement cannot claim that a long-running task completed. Background
+children must not retain caller-terminal streams, and unsupported interactive
+input must reject before workload execution. The exact flag/handshake semantics
+remain proposed; do not build attach, restart, or general daemon-management APIs.
+
+### Accepted background-launch acknowledgement and result identity
+
+For background execution, launch success and task success are distinct outcomes.
+The launcher returns success only after the background session owner has passed
+admission, acquired exclusive slot ownership, completed predecessor recovery,
+committed its session identity, established the cancellation endpoint, and set up
+redacted output capture independently of the caller's terminal.
+
+Return that immutable session ID and its evidence location. This acknowledges an
+established session, not service readiness or task completion. Service startup and
+task execution may proceed in the background; subsequent failures belong to the
+selected session's final outcome. The rule applies equally to `serve`, `ci`, and
+other task entrypoints, without task-name-specific branches.
+
+Invalid configuration, occupied slot, failed recovery, or failed session/output
+establishment prevents successful launch acknowledgement. A later test failure
+or service-readiness failure is a failed session result. Owner death leaves an
+unfinished session until recovery settles its obligations; it is never inferred
+to be successful because the launching command returned zero.
+
+Every final result is attributed to the immutable session ID. A newer occupant
+of the same slot cannot replace the result being observed. The owner/finalizer
+records execution outcome separately from finalization completeness as specified
+in S10. Slot selection remains useful for live control, not as durable result
+identity.
+
+The acknowledgement transport, launcher-death behavior during handoff, and exact
+output schema still need implementation specification. Do not add status commands
+or a result-query protocol here; those public API details remain with the deferred
+API audit. No acknowledgement can guarantee the owner remains alive afterward.
+
+**Proof:** reject every pre-acknowledgement failure; report an established session
+without claiming readiness or task success; preserve later startup/task failures;
+retain unfinished evidence on owner death; resolve results by the original ID
+after successor startup; preserve terminal-independent redacted output. Validate
+the actual launch handoff on Linux and macOS.
+
+### Session execution cutover and proof
+
+Implementation must update the existing task timeout contract, lowering/execution,
+and coupled authoring/wire/docs/tests atomically. Optional daemon launch adds only
+its justified command/control surfaces after those semantics are specified.
+
+**Proof:** omission survives authoring-to-runtime transformations and a task can
+outlive the removed 30-second default; explicit finite deadlines still work;
+invalid supplied values reject before effects; no-deadline tasks remain cancelable;
+probe/shutdown limits remain effective; its declared services
+remain owned until task completion/cancellation; service failures reach the owner
+during all phases; Ctrl-C and FIFO `down` converge on finalization; same-slot
+conflicts refuse; both retention modes and owner-death recovery remain correct.
+If background launch is adopted, prove equivalent session ownership plus terminal
+independence, checked startup failures, truthful launch acknowledgement, and
+preserved redacted evidence on Linux and macOS.
+
+No runtime behavior has changed by this specification.
+
+### Proposed session-wide supervision
+
+Status: architect specification for review. The accepted requirement is that
+service failure stops the session; the mechanism and output-order adjustment
+below remain proposals, with implementation and platform proofs outstanding.
+
+**Invariant:** every direct child has one live owner and one reaper; every owned
+service remains observed throughout startup, task execution, and finalization.
+Typed observations feed one lifecycle owner. Observation failure stops further
+work and preserves unresolved obligations; it never means an empty process tree.
+
+#### One owner, one observation cycle
+
+Use one private session supervisor owned by `RunSession`, driven by the existing
+execution thread. Consolidate child ownership into its single in-memory collection:
+`Child` handles, immutable process identities, role, containment/stop policy,
+lifecycle phase, descendant evidence, and checked capture-worker results. Do not
+copy that collection into a second liveness registry or background monitor.
+The SQLite registry remains durable recovery evidence, not a live process owner.
+
+Only the supervisor reaps direct children. Task, probe, readiness, and stop helpers
+operate through its checked wait/observation operations rather than independently
+calling `try_wait` on the same child. Keep the existing sequential static task DAG;
+add no actor runtime, generic event bus, parallel scheduler, or new daemon.
+
+Represent roles explicitly: service, task occurrence (including preparation),
+and lifecycle/probe invocation. Gated-launcher/running/stopping/reaped are lifecycle
+phases, not another semantic workload kind. Use private transitions to prevent
+release before registration and repeated reap/stop authority. A reaped child may
+still have unresolved descendant or capture obligations; process exit alone is
+not finalization.
+
+The observation cycle polls all children and applicable containment evidence,
+collects completed capture-worker outcomes, and returns typed facts. Check the
+whole owned collection, not only the current task's direct requirements. This
+includes transitive and preparation-only dependencies. Remove silent scanner
+errors, poisoned-lock-as-empty fallbacks, and ignored joins from the old monitors.
+
+| Observed result | Owner interpretation |
+| --- | --- |
+| Service exits before intentional stopping, including code zero | Service failure; stop admitting work and finalize the session. |
+| Task succeeds | Complete that occurrence; the remaining graph determines what follows. |
+| Task fails | Retain task failure and stop further graph execution. |
+| Probe invocation fails | Failed attempt under the existing bounded retry policy. |
+| Observation/containment cannot be established | Typed failure and unresolved process obligations; no further workload release. |
+| Required capture fails | Typed output failure; finalize without discarding process ownership. |
+
+Successful probes still require fresh service-liveness and endpoint-ownership
+checks before readiness. This proposal adds no periodic application-health checks
+or service restart policy.
+
+#### Registration and execution checkpoints
+
+Use the gated launcher for every child role. Keep its local `Child` handle during
+startup, verify identity, commit the durable process record, and transfer the
+owned launcher into the supervisor before sending the execution request. A
+session checkpoint between registration and release prevents release after
+cancellation or an already observed terminal failure. Failure to register live
+ownership cannot be followed by workload permission.
+
+A child may fail immediately after permission; observe it as an ordinary startup
+result. Do not claim a checkpoint makes all later process failures impossible.
+
+Every runtime-controlled wait must continue the same session observation cycle:
+task completion (including no-deadline tasks), exec probes, retry delays, TCP
+connection attempts, capture completion, shutdown/containment, and output replay.
+Operation deadlines remain local to their operation and do not suspend observation
+of other processes. Take a checkpoint before admitting another graph node and
+before settling task/session success.
+
+Replace blocking TCP probe waits with one nonblocking connection attempt driven
+through bounded polls to its existing attempt deadline. Repeated short connection
+attempts would silently change retry semantics and are not equivalent.
+
+Document polling cadence and test responsiveness under controlled conditions.
+Do not equate a ten-millisecond polling interval with a universal teardown bound:
+scan cost, OS scheduling, registry I/O, and uninterruptible operations still matter.
+Known runtime wait boundaries must cooperate; arbitrary kernel/filesystem stalls
+are not solved by inventing another observer.
+
+Keep existing capture/replay workers where streams need concurrent processing;
+collect their results through checked completion polling. They own stream work,
+not children, signals, the registry, or session finalization. The existing FIFO
+receiver still only requests cancellation. It is not a second lifecycle owner.
+
+#### Failure attribution and intentional stopping
+
+Keep external cancellation separate from service/task failure, deadline expiry,
+observation failure, and capture failure. Do not collapse internally observed
+failures into the atomic user-cancellation flag and lose their cause.
+
+On a terminal trigger, the owner stops new graph nodes and launcher releases,
+retains observed facts, and enters finalization once. It settles task/prepare/probe
+children and stops services in dependency-safe order while continuing observation.
+
+Before intentionally signaling a child, observe pending exits and transition it
+to expected stopping, then attempt durable stop-intent recording. A registry
+failure remains a failure, but must not prevent containment and reaping attempts.
+An exit already observed before the transition remains unexpected. An exit
+observed afterward is classified against stopping intent, retaining its actual
+status. Do not claim to reconstruct the physical ordering of an unobserved exit
+and a concurrent signal. Services not yet marked stopping remain monitored for
+unexpected failure during teardown of another service.
+
+Preserve execution outcome separately from finalization failures/completeness.
+Retain the current safety-first public error precedence unless separately revised:
+a registry/containment/state failure may be the primary diagnostic while the
+initiating service/task error remains a cause. Preserving an original failure
+does not mean replacing the documented priority rules with first-event-wins.
+
+#### Output backpressure and required ordering revision
+
+Child exit does not establish capture completion. Descendants may retain writers;
+workers may fail while the workload remains alive. Observe checked worker failures
+and panics, and retain the existing bounded capture-shutdown requirements.
+
+Current `ReplayTicket::replay` starts replay workers and synchronously joins them
+before service teardown. An indefinitely blocked sink can therefore suspend
+supervision and cleanup. A separate monitor thread would detect failure but would
+not free that blocked owner to finalize.
+
+Proposed revision: begin eligible replay while sources are retained, poll its
+completion while observing the session, and allow process teardown to proceed
+on failure/cancellation while projection remains pending. Preserve exact redacted
+bytes, per-stream ordering, and checked evidence; never call incomplete projection
+successful. This explicitly revises strict replay-complete-before-service-stop
+ordering and requires a coupled output/lifecycle contract change.
+
+The exact production sink interruption/progress mechanism remains open. Polling
+a worker does not make an arbitrary blocked `Write` or its join interruptible.
+Do not claim bounded finalization, release unresolved ownership, or silently detach
+workers on that basis. Specify either interruptible production sinks or an honest
+remaining completion limitation before implementation acceptance. A generic async
+runtime is not a substitute for that decision.
+
+#### Subtraction and proof
+
+Replace rather than supplement per-service `ProcessMonitor` threads, independent
+task/probe wait loops, service-local child reaping, direct-dependency-only ongoing
+monitoring, and child-local aggregate run settlement. Main owners are `main.rs`,
+`service/process.rs`, `service/task.rs`, `service/readiness.rs`, `redaction.rs`,
+`output.rs`, and `service/registry.rs`. Keep `cancellation.rs` as the external
+request mechanism, not a lossy container for all failure reasons.
+
+A separate observation thread would require synchronized child state, checked
+failure transport, and stop/join coordination while still needing interruptible
+waits in the owner. Per-child wait workers add more of that coordination. Neither
+is the proposed final architecture for the existing sequential executor.
+
+**Required proofs:** service exit during another service's readiness/TCP attempt;
+transitive/prepare-only dependency exit during preparation or no-deadline task;
+role-specific exit-zero handling; unchanged probe retries; observer errors and
+worker panics; cancellation before launcher release; task-success/failure races;
+no new work after an observed terminal trigger; expected-stop classification;
+failure of another service during ordered teardown; capture failure and retained
+writers; projection backpressure without suspended process duties; exactly one
+reaper; containment failure blocking data deletion; registry failures preserving
+teardown and unfinished evidence; equivalent foreground/background supervision.
+Preserve error precedence, redaction, retained data, and run-scoped cleanup.
+Use deterministic barriers, then fixture-backed runtime and cross-layer checks
+on Linux and macOS. No implementation tests were run for this specification.
+
 ### Finalization
 
 **Invariant:** application state is not deleted while any session-owned process
@@ -167,15 +464,18 @@ enter the same finalization owner.
 
 The proposed ordering constraints are:
 
-1. Stop scheduling new work and settle active bounded children.
-2. Complete required output projection while its sources remain available.
+1. Stop scheduling new work and settle active task/prepare/probe children.
+2. Begin required output projection while retaining its sources and continuing
+   session observation; pending projection must not prevent failure/cancellation
+   teardown under the proposed supervision revision above.
 3. Stop services in dependency-safe order; contain descendants and reap owned
    children. Stop probes and join capture workers as their owning processes end.
 4. Apply application-state retention only after process quiescence is established.
 5. Retain final evidence and cleanup outcomes, then release session ownership.
 
-These are ordering constraints, not a new alternative output pipeline. Preserve
-the existing replay/redaction guarantees and attempts to complete later cleanup
+These are ordering constraints, not a new alternative output pipeline. The
+supervision proposal explicitly revises replay/teardown ordering; preserve the
+other replay/redaction guarantees and attempts to complete later cleanup
 stages after an earlier failure. A cleanup failure makes finalization unsuccessful;
 it must not erase the original task result or its evidence.
 
@@ -213,9 +513,9 @@ not reasons to reopen the accepted session model. Preserve the current contract
 until any necessary guarantee revisions are explicitly specified and cut over.
 
 `ps` may continue to inspect session and recovery evidence. A live-session `down`
-needs one cancellation/finalization owner; recovery of a dead owner is a separate
-case. The exact control mechanism must be specified before cutover so a control
-command cannot race the live owner with independent teardown.
+uses the accepted per-session FIFO to request cancellation from the sole
+finalization owner; recovery of a dead owner is a separate case. S10 specifies
+the control mechanism and its required proofs before cutover.
 
 **Proof:** ordinary shutdown of a separately grouped descendant, graceful
 cancellation, abrupt runtime death, readiness failure, capture failure, retained
@@ -240,8 +540,8 @@ or cleanup, and final outcome recording. Completion of the root task alone does
 not release the slot. Explicit cleanup cannot pass a one-time idle check and then
 delete concurrently with a newly acquired session.
 
-Use one exclusion protocol for session acquisition, recovery, explicit cleanup,
-and state-changing upgrade. Its stable coordination object must live outside the
+Use one exclusion protocol for session acquisition, recovery, and explicit
+cleanup. Its stable coordination object must live outside the
 application tree being deleted. Preserve host endpoint coordination: a slot lock
 does not prevent port collisions with another slot, state root, or host program.
 
@@ -298,42 +598,228 @@ clean and is deleted only by explicit purge; run-scoped state is deleted after
 safe finalization. Both manual deletion modes refuse active or unowned state.
 Verify obsolete policy input rejection and preservation of run evidence.
 
-### Crash-safe deletion
+### Crash-safe deletion: proposed marker-last protocol
 
-Proposal: claim a particular owned tree for deletion under slot exclusion, record
-durable intent, and move that tree out of the active namespace before recursive
-removal. Hold directory identities and use non-following relative operations so
-later path replacement cannot redirect deletion.
+Status: architect specification for review, replacing the earlier rename-first
+proposal. It does not change the current contract or claim implementation proof.
 
-The durable record belongs to the existing registry rather than a new cleanup
-database. It must identify the deletion object and ownership facts independently
-of the marker being deleted. Never infer permission from a familiar pathname.
+**Decision proposed:** delete in place, keep the root ownership marker until all
+payload entries are gone, and resume through the existing `cleanups` table.
+Exclusive slot ownership already prevents a successor from using partially deleted
+state. Quarantine therefore buys no execution concurrency here, while adding a
+namespace, rename/commit interruption window, and cross-filesystem constraints.
+Do not introduce a background collector or a second cleanup registry.
 
-Rename and registry commit are not one atomic transaction. Before implementation,
-specify recovery for at least these interruption points:
+#### Ownership and supported boundary
 
-| Observed condition | Required recovery behavior |
+**Invariant:** one slot owner deletes one authorized data generation; unfinished
+deletion remains recoverable and blocks new application execution. The stable
+slot lock, registry, and retained evidence live outside the deletion target.
+
+Every cleanup entrypoint requires the same borrowed slot-ownership context used
+by session finalization and recovery. Establish process quiescence before deleting:
+an available lock, exited leader, or absent listener is insufficient when explicit
+process obligations remain. Purge overrides retention only, never ownership or
+process safety.
+
+This protocol operates in a runtime-managed namespace. Participating runtimes obey
+slot exclusion; external writers must not concurrently rewrite its ancestry or
+application tree. Descriptor-relative non-following operations prevent symlink
+traversal and reduce pathname races; they do not prove confinement against an
+arbitrary malicious same-user actor who can move opened directories, copy markers,
+or alter the registry. Refuse observed replacements or ambiguous evidence. Do not
+claim that a stored device/inode pair is permanent identity across inode reuse.
+
+#### Minimal durable facts
+
+Add a fresh runtime-generated `dataGeneration` to the ownership marker when a
+new application tree is created. Preserve it through subsequent sessions and
+provenance updates. It distinguishes successive application-data trees in history;
+it does not declare application-data compatibility or replace the removed
+`stateEpoch`. It is not a service reuse identity and is not authored in the manifest.
+
+Strict exclusion and blocked recreation already protect ordinary interrupted
+cleanup. The generation's additional purpose is to distinguish later recreated
+marked trees from earlier intent/history, not to prove permanent physical identity
+against copied markers or arbitrary external replacement.
+
+The existing cleanup row retains:
+
+- A unique cleanup ID and the exact runtime-owned relative target.
+- The data generation and validated original marker snapshot.
+- Deletion authorization: predecessor persistence and explicit purge, if supplied.
+- Observed root device/inode as corroborating evidence.
+- Pending or completed status, with safe attempt failures in diagnostics/events.
+
+The marker remains the policy owner; its immutable cleanup snapshot survives
+marker removal. Do not add another mutable policy record. At most one cleanup may
+be pending for the slot's application tree. A retry uses that same operation ID.
+A failed attempt remains pending, even if it removed some data. Closed native
+types and checked decoding reject incoherent generation/authorization/status
+records before deletion.
+
+An old completed cleanup never authorizes deletion of a new tree at the same
+path. Do not select arbitrary historical rows by pathname and treat them as
+current permission.
+
+#### Deletion sequence
+
+1. Acquire the stable slot guard and settle interrupted process obligations.
+2. Resolve pending cleanup before application-root materialization, fresh-marker
+   admission or provenance refresh.
+3. Open the managed ancestry, target parent, and target without following
+   symlinks. Reject the state base, registry, an ancestor, or an unexpected target.
+4. Read the marker through the held target directory; validate ownership,
+   generation, root observations, and the predecessor's retention policy.
+5. For a new operation, authorize run-scoped deletion or explicit persistent
+   purge, then commit the intent and redacted event together. No destructive
+   operation precedes a successful commit.
+6. Delete payload entries through directory descriptors, excluding the root
+   marker. Do not rewrite the marker during cleanup.
+7. Verify that only the validated marker remains. Establish the required
+   filesystem durability barrier for payload removal before removing the marker.
+8. Unlink the marker and remove the now-empty root through its held parent.
+   Establish the required parent-directory durability barrier.
+9. Commit completion and its event. Only then may finalization release the slot
+   or a successor create a fresh data generation.
+
+There are only two durable operation states. Marker-present, markerless-empty,
+and root-absent are filesystem observations, not separate persisted phase flags.
+A registry completion failure leaves the pending intent for another attempt.
+
+A committed purge remains authorization for that operation during recovery; the
+next invocation does not need another purge request. Recovery still revalidates
+ownership and process safety. Conversely, an incoming run-scoped manifest cannot
+retroactively authorize deletion of persistent predecessor data. Retain the
+generation's persistence policy; a conflicting downgrade requires explicit
+purge/recreation, not a provenance rewrite. General retention-policy conversion
+is outside this refactor.
+
+#### Recovery matrix
+
+All observations and actions below occur under exclusive slot ownership.
+
+| Observed condition | Required action |
 | --- | --- |
-| Intent exists; original tree remains | Revalidate its identity under exclusion before continuing. |
-| Tree moved; completion not recorded | Find the exact claimed deletion object and continue without touching a replacement tree. |
-| Tree partly deleted, including marker | Continue from retained deletion authority, not a missing marker. |
-| Claimed tree absent; intent incomplete | Complete the recorded operation only when its identity/history proves this case. |
-| Unexpected tree or ambiguous evidence | Refuse mutation and retain diagnostic evidence. |
+| No pending intent; matching marked tree | Perform fresh authorization before creating intent. |
+| Pending intent; matching generation, marker, and root | Resume the same operation, including partially removed payload. |
+| Pending intent; marker absent, matching root empty | Remove the empty root only; never recurse or recreate a marker. |
+| Pending intent; marker absent, root nonempty | Refuse: this is inconsistent with ordered marker-last deletion. |
+| Pending intent; root absent | Establish the required parent barrier and complete that same operation. |
+| Pending intent; target is a symlink, file, or different generation/root | Refuse without deleting the replacement. |
+| Completed operation; target absent | Report idempotent observation, without inventing a new deletion. |
+| Completed operation; new marked generation present | The old operation grants no authority over it. |
+| Completed operation; supposedly deleted generation reappears | Refuse contradictory history; do not call it fresh data. |
+| Permission/I/O failure during deletion | Keep intent pending; record safe failure; block new execution. |
+| Root removed; completion/event transaction fails | Keep intent pending and settle it from absence on retry. |
+| Registry missing/corrupt or authorization inconsistent | Refuse destructive recovery. |
+| Observed/evidenced external move of the root | Do not search by inode or guess another target; refuse ambiguous evidence. |
 
-Specify filesystem durability and ordering alongside these cases. This table is
-an obligation for the protocol, not a claim that rename alone makes it crash-safe.
+A missing target without a current pending operation may mean there is no
+application data, according to the control command's documented output contract.
+It does not justify attributing that absence to an arbitrarily old cleanup.
+Markerless-empty recovery relies on the pending operation, corroborating identity,
+and managed-namespace exclusion together; inode equality alone is insufficient.
+A hidden external rename can be indistinguishable from completed removal when
+the target is absent. The managed-namespace assumption excludes that interference;
+the protocol does not claim to detect every external move.
 
-**Proof:** two simultaneous sessions for one slot admit only one owner, with no
-losing-session child or application-state mutation; sessions in different slots
-can proceed independently. Hold finalization at controlled barriers and prove
-that a competing run or explicit clean cannot mutate the slot. Kill the owner
-while descendants remain and prove that lock availability alone never admits new
-execution. Exercise recovery/run interleavings, interruption at every durable
-transition, directory replacement during deletion, protected data survival,
-automatic run-scoped deletion, and persistent PostgreSQL data surviving into a
-new process in the next session. Ensure logs and registry history remain intact.
+#### Traversal rules
 
-## 6. S4: remove service reuse identity; preserve state identity
+Replace canonicalize/check/recurse-by-path with a focused descriptor-relative
+walker. Validate single path components; descend with directory/no-follow/
+close-on-exec flags; inspect opened objects with `fstat` and entries without
+following symlinks. Unlink ordinary entries and symlinks relative to the containing
+directory; remove directories only after visiting their contents. Do not open
+device or FIFO entries merely to delete them. Unlinking a regular-file hardlink
+must not truncate the inode's other links.
+
+Revalidate the root entry against the held root before final removal. Unexpected
+type or identity changes fail, rather than trigger unbounded retries. Holding a
+directory FD pins an object, not its ancestry against hostile external renames.
+[POSIX unlink/unlinkat](https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlink.html)
+
+Do not traverse unexpected nested mounts. Device equality alone cannot detect
+same-device bind mounts; explicitly define supported mount assumptions and
+platform checks before promising that boundary. Do not introduce mount management
+as part of cleanup.
+
+#### Durability and proof limits
+
+Runtime death and host power loss are distinct failure models. The ordered
+protocol supports process-death recovery or refusal; a SIGKILL test does not prove
+persistent ordering after power loss.
+
+For host-crash claims, establish and test these dependencies:
+
+- Intent is durable before payload deletion.
+- Payload-name removal is durable before marker removal.
+- Root removal is durable in its parent before completion commits.
+- Initial registry and marker publication have their own durable creation protocol.
+
+Use explicit SQLite durability settings rather than build defaults: the proposed
+baseline is WAL with `synchronous=FULL`; evaluate Darwin `fullfsync` support.
+WAL NORMAL does not provide the same power-loss durability.
+[SQLite synchronization](https://www.sqlite.org/pragma.html#pragma_synchronous)
+
+Linux requires separate containing-directory synchronization for directory-entry
+durability. Apple documents limits of ordinary `fsync` and stronger
+`F_FULLFSYNC` ordering, but those descriptions alone do not establish a tested
+APFS directory-barrier recipe.
+[Linux fsync](https://man7.org/linux/man-pages/man2/fsync.2.html),
+[Apple fsync](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html)
+
+Qualify supported filesystems and test actual platform barriers before advertising
+host-power-loss recovery. Do not give network or unsupported filesystems an
+unverified guarantee. A failed barrier leaves cleanup pending and must not cause
+the runtime to discard the remaining marker or report durable completion. Rename
+quarantine would require persistence barriers too and does not resolve this issue.
+
+#### Coupled changes and verification
+
+Keep registry/WAL/SHM, the stable lock, retained logs/summaries/artifacts, and session
+FIFO storage outside the application tree. FIFO removal follows session control
+lifecycle, not recursive application cleanup. The current `run_dir` placement
+beneath `state_root/runs` must change in the same cutover.
+
+Concrete change sites:
+
+- `state/cleanup.rs`: replace arbitrary-order marker deletion and path recursion;
+  resume one pending operation instead of creating a new attempt identity.
+- Registry status/schema: replace terminal failed-cleanup semantics with pending
+  obligation plus failure evidence. Enforce one pending cleanup and generation
+  binding; remove historical-path lookup as deletion authority.
+- `state/marker.rs`: add data generation, preserve it across reuse, prevent silent
+  retention downgrade, and define atomic/durable initial marker publication.
+- `state/placement.rs` and `state/upgrade.rs`: move evidence and perform pending
+  recovery before any root creation or marker rewrite; remove epoch handling.
+- Finalizer/control: require slot ownership throughout deletion and completion.
+
+Update marker/schema/ABI declarations, producers, fixtures, and normative docs
+together. Reject incompatible old bytes; do not add migration readers or rewrite
+history. Specify old-runtime shutdown and data preservation before the cutover.
+
+**Required independent proofs:** interrupt every commit/removal/barrier and deep
+traversal; retain pending work after partial permission failures; resume with the
+same operation ID; refuse markerless nonempty or replacement trees; never apply
+old completion to new generations; preserve persistent predecessor data across
+configuration changes without purge; prevent outside symlink effects; preserve
+logs, registry and control access; prove slot exclusion through completion; inject
+transaction/event/sync failures without early deletion or false completion.
+Exercise supported replacement/mount boundaries without claiming universal
+hostile-filesystem containment. Run Linux and macOS integration proofs and
+separate filesystem crash tests for any promised host-power-loss guarantee.
+
+No runtime implementation or platform durability tests were performed by adding
+this specification.
+
+## 6. S4: remove reuse and data-compatibility machinery; preserve ownership
+
+Accepted: Nixfied owns process lifecycle and data retention. The application and
+user own application-data compatibility and migration. Remove `stateEpoch`,
+epoch mismatch admission, and epoch-driven cleanup/replacement. Do not replace
+them with inferred compatibility from package versions, executable hashes,
+manifest hashes, or service names.
 
 With no standing services, a new session does not decide whether to borrow an old
 process. Remove compatibility hashes and comparisons used solely for that decision,
@@ -342,17 +828,44 @@ reuse hash and then delete it.
 
 Retain identities with real remaining consumers: project/environment/slot
 ownership, process start identity for safe recovery, raw manifest provenance for
-evidence, endpoint ownership, and state compatibility. Name their purposes clearly.
+evidence, endpoint ownership, and data-generation evidence for safe cleanup as
+proposed in S3. These facts establish ownership and history, not data compatibility.
 
 **Invariant:** a changed manifest does not authorize deletion of persistent data.
-An incompatible state epoch must refuse reuse of retained data until the existing
-policy permits an explicit operation. This RFC adds no state migration machinery.
+After ordinary admission, ownership checks, and interrupted-session recovery,
+start the configured executable against the retained persistent data. If startup
+fails, report the application's error through existing redaction/output rules,
+stop other session processes, and retain persistent data. The user handles any
+migration, repair, rollback, or explicit purge. Nixfied does not interpret a
+database format, certify successful migration, or reset data in response to a
+startup error.
+
+For example, changing PostgreSQL 16 to PostgreSQL 17 starts the new executable
+against the same persistent directory. A compatibility refusal from PostgreSQL
+is a startup failure to report, not a framework instruction to clean or migrate.
+Applications may perform their own normal startup recovery or upgrades; Nixfied
+does not promise that the application leaves its files byte-for-byte unchanged.
+
+Run-scoped data still follows session teardown and cleanup independently of any
+configuration change. Preserve the original retention authorization: changing a
+manifest from persistent to run-scoped cannot silently downgrade retained data.
 Interrupted run-scoped cleanup must finish before new slot execution, regardless
 of whether the next manifest happens to have the same hash.
 
-**Proof:** unrelated task edits do not erase retained data; a new session starts
-new processes; epoch mismatch preserves protected data; recovery does not signal
-an unrelated reused PID; manifest hashes remain accurate execution evidence.
+Remove the option, manifest/marker fields, identity inputs, generated views,
+comparisons, and `UpgradeEpoch` branches together. Update the capability inventory,
+schema/marker versions where their semantics change, fixtures, examples, and
+normative docs; reject removed declarations rather than accepting ignored fields.
+Preserve exact framework ABI/schema admission: it checks Nixfied's own records,
+not application-data compatibility. Do not add old-marker readers or automatic
+data deletion to make an incompatible framework-state cutover succeed.
+
+**Proof:** executable/configuration changes attempt startup without an epoch gate;
+a controlled startup failure is reported while persistent data remains; no
+migration/reset command is invented; run-scoped cleanup follows normal lifecycle;
+ownership mismatch still refuses; retention cannot silently downgrade; obsolete
+epoch declarations reject; recovery does not signal unrelated reused PIDs; raw
+manifest hashes remain accurate evidence rather than replacement authority.
 
 ## 7. S5: make presentation a downstream consumer
 
@@ -568,9 +1081,10 @@ acceptance evidence for runtime correctness.
 
 ## 12. S10: reduce the registry to session evidence and recovery
 
-Status: proposed specification following an independent architect audit of the
-current schema and its callers. The accepted session model motivates these
-removals; the exact records and control mechanisms below still require review.
+Status: proposed registry specification following an independent architect audit
+of the current schema and its callers, with per-session FIFO cancellation
+explicitly accepted below. The accepted session model motivates these removals;
+the remaining record and mechanism proposals still require review.
 No schema or runtime implementation has been changed by this specification.
 
 ### Ownership and scope
@@ -639,7 +1153,7 @@ deliver the simplification. Remove these concrete paths together:
 | [service/registry.rs](runtime/crates/nixfied-runtime/src/service/registry.rs) | Remove `record_service_borrow`, `release_service_borrow`, `mark_service_standing`, `ServiceReuseGuard`, reuse snapshot comparisons, lease conflict gates, and scattered lease updates. Replace startup lease admission with already-held slot ownership and explicit startup evidence. |
 | [control.rs](runtime/crates/nixfied-runtime/src/control.rs) | Remove expiry queries/sweeps, `reconcile_until_idle_services`, borrower counting, and borrower-based shutdown refusals. Split observation from mutation under the slot owner. |
 | [service/identity.rs](runtime/crates/nixfied-runtime/src/service/identity.rs) and lowering | Remove hashes and fields whose only consumer is cross-session reuse. Retain concrete process/state/endpoint identity needed by safety and evidence. |
-| [state/upgrade.rs](runtime/crates/nixfied-runtime/src/state/upgrade.rs) | Remove manifest-hash-filtered process replacement and `ProcessFilter::ManifestHashNot`. Recover interrupted sessions before evaluating retained state, regardless of their manifest hashes. |
+| [state/upgrade.rs](runtime/crates/nixfied-runtime/src/state/upgrade.rs) | Remove manifest-hash-filtered process replacement, `ProcessFilter::ManifestHashNot`, and epoch-driven cleanup. Recover interrupted sessions before ownership/retention checks and fresh startup; keep only metadata operations with a remaining evidence purpose. |
 
 The new service startup path is conceptually:
 
@@ -720,15 +1234,218 @@ public-output/contract update.
 
 For a live owner, `down` requests session cancellation and leaves teardown to that
 owner. For a dead owner, `down` takes the slot and uses the same interrupted-session
-recovery path as the next `run`. The exact cancellation transport remains open;
-do not let this specification introduce a daemon, a competing SQL writer, or a
-bare persisted PID treated as unconditionally safe signaling authority.
+recovery path as the next `run`. The accepted transport for `down` is the
+per-session FIFO below. Ordinary external signals remain cancellation inputs;
+`down` does not use PID signaling or an alternative transport fallback. No
+competing finalization writer is introduced.
 
 `clean` takes the same slot authority, resolves interrupted process obligations,
 then applies persistence/purge authorization and safe deletion. It has no lease
 TTL or borrower-count gate. A live owner causes refusal rather than competing
-cleanup. State upgrades follow the same recovery boundary and never use provenance
-as permission to delete persistent data.
+cleanup. Configuration changes follow the same recovery boundary and never use
+provenance as permission to delete persistent data.
+
+### Accepted: one-bit per-session cancellation FIFO
+
+Status: accepted design following three architect reviews. Implement one
+per-session FIFO transport on both Linux and macOS. Ordinary SIGINT, SIGTERM,
+and SIGHUP remain supported cancellation inputs. Implementation and platform
+proofs remain outstanding; acceptance does not claim those tests have passed.
+
+This choice avoids a private macOS signaling dependency. Current placement allows
+arbitrary state-base paths and uses a relatively long macOS home-based default. A filesystem
+FIFO uses ordinary pathname limits; a Unix socket introduces a much shorter
+address limit and may require separate short-path placement. Avoid adding that
+placement mechanism solely for one cancellation bit.
+
+**Invariant:** `down` requests cancellation of one selected session, never a
+replacement. Only the session finalizes live work; only an exclusive recovery
+successor repairs interrupted work. The control endpoint carries no lifecycle
+state and grants no authority to perform cleanup.
+
+Use one FIFO in a private, never-reused session directory under runtime control
+storage, outside application-data cleanup. Derive its location from existing slot
+placement and immutable run identity; add no endpoint registry or persisted
+address. Exact layout joins the already-required evidence-layout cutover. Reject
+identity collisions; never recreate an old session's control endpoint or use a
+slot-wide `current` FIFO. The path identifies the session, so no run-ID message,
+packet schema, acknowledgement, or negotiation is necessary.
+
+```text
+session: acquire slot → recover → create private session FIFO
+         → open nonblocking reader, then separate keeper writer
+         → start scoped receiver → publish session → execute
+
+down:    select session once → open that FIFO nonblocking
+         → write one byte → observe selected session's finalization
+
+receiver: read a byte → set existing cancellation token
+```
+
+Any byte means cancel; the endpoint has no other operation. Duplicate requests
+are harmless. Use separate read and write opens in the owner: the keeper writer
+prevents idle EOF/HUP from making the receiver spin. Do not use Linux's `O_RDWR`
+FIFO shortcut, whose behavior is not a portable POSIX guarantee. Sender open with
+no reader fails; owner death after open may instead fail the write with EPIPE.
+Retain the existing SIGPIPE handling for control commands. Full buffers, EINTR,
+and unavailable readers require bounded handling, not blocking indefinitely.
+
+Keep the current infallible atomic `CancellationToken::is_canceled()` free of
+hidden I/O. A small scoped receiver owns the FIFO descriptors and polls with a
+bounded shutdown interval. It has no registry connection or teardown authority.
+A read sets the token; unexpected transport failure requests normal finalization
+and returns a typed error for the owner to record. Owner shutdown stops/joins the
+receiver and closes all its descriptors, then removes its endpoint while still
+holding the slot. This worker replaces no supervision responsibility and has no
+heartbeat or expiry semantics. Do not require it to remain alive after the
+monotonic cancellation bit is set; later senders must still observe completion.
+
+Open within validated private directories without following symlinks; verify
+the opened object is a FIFO before writing. Protect parent traversal as well as
+the final component. Mode/ownership checks use the existing same-user trust
+boundary, not a promise against hostile processes with equivalent access to the
+registry. Protect all descriptors against child inheritance. An open writer stays
+attached to that FIFO object; a successor never opens the predecessor's reader.
+
+Missing endpoints, failed writes, or receiver exit do not prove finalization.
+`down` observes the originally selected run and may recover only after acquiring
+the slot and rereading records. A successor already holding the slot is never
+canceled by that old request. Timeout reports incomplete shutdown, without
+automatic owner SIGKILL or independent child teardown. A hung/stopped owner can
+still time out; this limitation is shared with cooperative signal cancellation.
+
+Alternatives reviewed:
+
+| Alternative | Decision rationale |
+| --- | --- |
+| Unix datagram `Cancel(run_id)` | Not selected: requires bounded packet decoding and a socket path that fits both platforms; the FIFO uses the existing session namespace. |
+| Unix stream socket | Unnecessary accept/partial-frame/client-lifetime state when no reply is needed. |
+| Registry cancellation request | Legitimate separation of requested input from lifecycle ownership, not inherently a second supervisor. Adds conditional control writes outside slot ownership, fresh-read polling, transaction/event choices, and database error/contended-writer behavior. Durability buys little because dead sessions require recovery anyway. |
+| PID check followed by `kill` | Check-to-delivery reuse race remains. kqueue observations and advisory locks do not make delivery atomic. |
+| Linux pidfd plus private Darwin API | Retains platform-specific availability/maintenance concerns for a request deliverable through public portable IPC. |
+| Persistent helper or Mach control rights | Adds lifetime or platform-specific capability distribution machinery; does not simplify delivery directly to the session. |
+
+Validation performed: a temporary Linux primitive experiment confirmed no-reader
+open rejection, no idle HUP with the separate keeper writer, multiple cancellation
+bytes, and continued attachment of an already-open writer to the original FIFO
+after pathname replacement. The replacement received no byte. The replacement
+scenario tests descriptor behavior, not permission to reuse session paths. No
+experiment files were retained. macOS and actual Rust/runtime integration remain
+unverified; public API documentation supports the selected primitives, not a
+claim of completed platform testing.
+
+**Required proof:** early/late publication and cancellation; duplicate requests;
+private path/type/symlink rejection; absent/dead reader and broken writes; full
+buffer timeout; no idle busy loop; worker error and bounded join; no inherited
+descriptors; owner death before/after submission; exactly one recovery owner;
+untouched successor; and cancellation through readiness, output, and cleanup.
+Test selected-session targeting even when a requester pauses across old-owner
+exit and successor startup. Run the same behavioral suite on Linux and macOS.
+Remote cancellation IPC does not resolve identity-safe signaling of orphaned
+workload processes; that remains a separate recovery obligation.
+
+Sources: [Apple nonblocking FIFO open behavior](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/open.2.html),
+[FIFO semantics and portability](https://man7.org/linux/man-pages/man7/fifo.7.html),
+[pipe behavior](https://man7.org/linux/man-pages/man7/pipe.7.html),
+and [Rust Unix datagram alternative](https://doc.rust-lang.org/std/os/unix/net/struct.UnixDatagram.html).
+
+### Rejected remote-signaling alternative: source investigation
+
+Remote `down` uses the accepted FIFO above. This section preserves the rejected
+signal candidate's evidence and costs; its macOS dependency is no longer a blocker
+for remote cancellation. The sequence below describes that alternative, not a
+second transport to implement. Ordinary external signals remain supported.
+
+**Invariant:** only the selected live session finalizes its work. `down` requests
+cancellation and observes completion; a successor repairs unfinished work only
+after acquiring slot ownership. Identity or permission failures reject signaling
+before delivery. A timeout does not confer recovery authority.
+
+Install cancellation handlers before publishing the owner. After acquiring the
+slot and recovering predecessors, commit the session's owner identity, host boot
+identity, and platform signaling identity before application children start. The
+owner remains dedicated to that session; it must not release the slot and reuse
+the same process for another session that an old request could cancel.
+
+`down` selects one session, sends SIGTERM to its owner, then observes that session's
+durable finalization. Never signal PID zero, a negative PID, or the owner's process
+group. Do not reuse live child-group teardown from the current control command.
+SIGINT, SIGTERM, and SIGHUP continue to converge on the existing cancellation
+token. Repeated requests remain idempotent, without automatic owner SIGKILL.
+Child escalation belongs to the owner's bounded teardown.
+
+Lock contention before owner publication means startup is unresolved: retry
+observation within a deadline, not guessed signaling. Do not wait for the exclusive
+slot lock before requesting live cancellation. If the owner dies, try acquiring
+the slot and reread records before recovery; another caller may already own it.
+Completion of the selected session ends `down`, even if a replacement has started.
+This command does not promise to keep the slot empty. A late signal cannot rewrite
+an already finalized outcome. Cleanup continues to settle or safely retain its
+obligations when cancellation arrives during finalization.
+
+No request table, heartbeat, acknowledgement exchange, or persistent control
+endpoint is required. Initial completion observation can poll the selected run's
+record with a bounded deadline; process-death notifications are optional
+optimizations, not permission to mutate state.
+
+**Linux candidate:** obtain `pidfd_open` before validating the observed owner
+identity, then send SIGTERM through `pidfd_send_signal`. Reject boot/identity
+mismatches and unsupported or denied operations without falling back to `kill`.
+The handle prevents delivery to a recycled numeric PID; the persisted start and
+boot identity establish that it refers to the selected session.
+
+**macOS candidate:** the owner obtains its own `TASK_AUDIT_TOKEN` and records it
+with boot identity. `proc_signal_with_audittoken` can validate the execution
+generation while delivering a signal with ordinary permission checks. The owner
+must not exec after publication. Token knowledge is not a substitute for OS
+permission and does not justify obtaining another process's privileged task port.
+
+The source availability investigation found:
+
+| Apple XNU revision inspected | Token-signaling wrapper and kernel dispatch |
+| --- | --- |
+| `xnu-8792.61.2` | Absent in the inspected wrapper/kernel sources. |
+| `xnu-10002.1.13` | Absent in the inspected wrapper/kernel sources. |
+| `xnu-10063.121.3` | Present; kernel checks PID generation and permissions on a retained process reference. |
+| `xnu-11215.1.10` | Present; internal request handling differs from the preceding revision. |
+
+This is release-source evidence, not a tested minimum macOS version or proof of
+SDK exports. The header describes its interfaces as private and subject to
+change. The wrapper returns zero or an error number directly; do not interpret it
+as a conventional minus-one/errno interface. Use the OS library wrapper if this
+design is adopted, never copied syscall numbers/structures: inspected revisions
+change internal buffer-size handling. Signal zero is not a portable probe for this
+API; the inspected implementation requires a positive valid signal.
+
+The current CI has a `macos-14` job, but a runner label neither establishes the
+oldest supported point release nor proves this new API. The investigation host
+was Linux. No macOS SDK compilation, export lookup, or behavioral test was run.
+Before adoption, record actual OS/SDK/architecture and test library availability,
+self-token acquisition, same-user sibling-process signaling, wrong-generation
+rejection without delivery, exited targets, and permission errors. Include a
+signal handler/pipe acknowledgement and independent canary process so success is
+observed behavior, not merely an API return code. Resolve the minimum supported
+platform and private-interface maintenance cost explicitly.
+
+If this macOS dependency is unsuitable, evaluate one private session socket as
+the replacement transport; do not silently downgrade to check-then-`kill`, ship
+both transports speculatively, or declare macOS unsupported without a product
+decision. Ordinary external signals and Ctrl-C remain cancellation inputs either
+way.
+
+**Proof:** cancellation before publication, before child authorization, during
+execution and every finalization phase; repeated/concurrent controls; stale
+identities and boot mismatch; owner death during delivery/waiting; one recovery
+owner; untouched successor sessions; stopped/hung owner timeout without competing
+child teardown; no ownership-descriptor leakage. Run on both platforms through
+the actual runtime/registry path. Source review does not satisfy these proofs.
+
+Sources: [Linux pidfd signaling](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html),
+[early XNU wrapper](https://github.com/apple-oss-distributions/xnu/blob/xnu-10002.1.13/libsyscall/wrappers/libproc/libproc.c),
+[later XNU wrapper](https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/libsyscall/wrappers/libproc/libproc.c),
+[XNU identity-checked delivery](https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/bsd/kern/proc_info.c),
+[subsequent XNU implementation](https://github.com/apple-oss-distributions/xnu/blob/xnu-11215.1.10/bsd/kern/proc_info.c),
+and [interface declarations](https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/libsyscall/wrappers/libproc/libproc.h).
 
 ### Registration and interruption
 
@@ -932,7 +1649,7 @@ Required evidence:
 3. Process, task, capture, and cleanup failures preserve distinct evidence; the
    finalizer cannot mark completion with unresolved process or deletion obligations.
 4. Kill the owner around spawn/registration, readiness, final task outcome, process
-   termination, deletion intent, rename, and partial deletion. The successor
+   termination, deletion intent, marker removal, and partial deletion. The successor
    cleans before new execution or safely refuses. Test endpoint-less survivors.
 5. Process identity checks prevent signaling unrelated reused PIDs. `ps` verifies
    liveness without database writes or signals; live `down` has one finalizer.
@@ -966,7 +1683,8 @@ Use ordered coherent commits rather than one rewrite. Suggested sequence:
 3. Cut over session ownership, persistence finalization, recovery, and their wire
    surfaces together. Remove standing/borrower alternatives, their registry
    coordination, and competing session-completion writers in the same cutover.
-4. Remove obsolete reuse/replacement machinery and verify retained state identity.
+4. Remove obsolete reuse/replacement and epoch machinery; verify retained state
+   ownership, retention, and application-owned compatibility behavior.
    Changes inseparable from step 3 belong in that same coherent commit.
 5. Reverse presentation dependencies and narrow internal type generation while
    preserving observable behavior where possible.
@@ -997,21 +1715,30 @@ The accepted process/data separation, exclusive slot ownership, cleanup-then-
 restart recovery behavior, independent compilation/presentation dependency
 direction, shared-wire-only structural type generation, removal of carried
 duplicate graph answers, persistence as the sole retention policy, executable
-identity based on selected outputs, and help scoped to generated apps are not
+identity based on selected outputs, help scoped to generated apps, per-session
+FIFO cancellation, application/user-owned data compatibility, and optional task
+timeouts with no finite default are not
 reopened by this list. These items remain to make implementation concrete:
 
-- Define the exact foreground development session entrypoint without adding
-  dynamic orchestration.
+- Specify S2's optional `--daemon` detachment/input/handoff mechanics and the
+  precise relationship between preparation and enclosing lifecycle deadlines.
+  Existing task entrypoints, optional task timeouts with no finite default,
+  task-owned duration, the background acknowledgement boundary, and immutable
+  result identity are settled; `--service` selection is withdrawn.
 - Specify supported process cleanup and recovery-or-refusal mechanisms on Linux
   and macOS, including interruption during process registration.
-- Define live-session cancellation by control commands without introducing a
-  second finalization owner; dead-session recovery follows the accepted sequence.
+- Review S2's shared supervisor and cooperative wait design, including the
+  explicit output-order revision. Specify production output-sink interruption
+  before claiming bounded finalization under backpressure.
+- Specify the FIFO's exact runtime-owned placement and complete its Linux/macOS
+  implementation proofs; transport selection and single-owner finalization are
+  settled. Dead-session recovery follows the accepted sequence.
 - Specify the slot exclusion and filesystem/registry deletion protocol, including
   durability, identity, and every interrupted transition.
 - Review S10's six-table target, finalizer-owned session completion, read-only
   observation, recovery records, and evidence layout before implementing the
   registry cutover. Those details are architect proposals, not yet accepted schema.
-- Accept or revise S4 and S9; defer S7's remaining metadata/policy proposals to
+- Accept or revise S9; defer S7's remaining metadata/policy proposals to
   the API behavior audit after the main refactor. Review their explicit losses
   and required proofs before accepting them as commitments.
 
