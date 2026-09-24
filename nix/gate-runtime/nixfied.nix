@@ -102,7 +102,7 @@
             > "''${stateDir}/gate-artifacts/example-postgres.json"
           result="''${stateDir}/gate-artifacts/example-postgres.json"
           [ "$(cat "$(jq -r .task.stdoutPath "$result")")" = 1 ]
-          root="''${stateDir}/example-postgres-inner/postgres-example/dev/0"
+          root="''${stateDir}/example-postgres-inner/data/postgres-example/dev/0"
           # A second invocation must adopt the initialized cluster, run the query,
           # and preserve user state rather than initializing over it.
           touch "$root/pgdata/adoption-sentinel"
@@ -470,7 +470,7 @@
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/lifecycle-inner-state"
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke >/dev/null
-          root="''${stateDir}/lifecycle-inner-state/minimal/dev/0"
+          root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           touch "$root/sentinel"
           jq -r .computedManifestHash "$root/.nixfied-state.json" \
             > "''${stateDir}/gate-artifacts/lifecycle-hash1.txt"
@@ -492,7 +492,7 @@
         "-c"
         ''
           set -euo pipefail
-          root="''${stateDir}/lifecycle-inner-state/minimal/dev/0"
+          root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
@@ -519,7 +519,7 @@
         "-c"
         ''
           set -euo pipefail
-          root="''${stateDir}/lifecycle-inner-state/minimal/dev/0"
+          root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
@@ -548,7 +548,7 @@
         "-c"
         ''
           set -euo pipefail
-          root="''${stateDir}/lifecycle-inner-state/minimal/dev/0"
+          root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_EPOCH2_MANIFEST/manifest.json" --task smoke >/dev/null
@@ -574,7 +574,7 @@
         "-c"
         ''
           set -euo pipefail
-          marker="''${stateDir}/lifecycle-inner-state/minimal/dev/0/.nixfied-state.json"
+          marker="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0/.nixfied-state.json"
           mkdir -p "''${stateDir}/gate-artifacts"
           jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
           code=0

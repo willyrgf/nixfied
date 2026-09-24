@@ -173,7 +173,7 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         String::from_utf8_lossy(&recovery.stderr)
     );
 
-    let pgdata = state_base.join("postgres-example/dev/0/pgdata/PG_VERSION");
+    let pgdata = state_base.join("data/postgres-example/dev/0/pgdata/PG_VERSION");
     assert!(
         pgdata.exists(),
         "recovery run should have adopted the existing pgdata cluster"
@@ -191,7 +191,7 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         "clean after recovery failed: {}",
         String::from_utf8_lossy(&clean.stderr)
     );
-    let state_root = state_base.join("postgres-example/dev/0");
+    let state_root = state_base.join("data/postgres-example/dev/0");
     assert!(
         !state_root.exists(),
         "clean should have removed the state root"

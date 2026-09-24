@@ -23,7 +23,7 @@ fn materializes_m0_roots_and_slot_marker() {
 
     assert_eq!(
         fixture.layout.state_root,
-        fixture.tmp.path.join("runtime-test/dev/0")
+        fixture.tmp.path.join("data/runtime-test/dev/0")
     );
     assert_eq!(
         fixture.layout.registry_dir,
@@ -35,7 +35,7 @@ fn materializes_m0_roots_and_slot_marker() {
     );
     assert_eq!(
         fixture.layout.run_dir,
-        fixture.layout.state_root.join("runs/run-1")
+        fixture.layout.registry_dir.join("runs/run-1")
     );
     assert_eq!(fixture.layout.logs_dir, fixture.layout.run_dir.join("logs"));
     assert_eq!(
@@ -77,22 +77,24 @@ fn selects_explicit_slot_placement() {
         .expect("slot placement should derive");
 
     assert_eq!(selected.slot, 1);
-    assert_eq!(layout.state_root, tmp.path.join("runtime-test/dev/1"));
+    assert_eq!(layout.state_root, tmp.path.join("data/runtime-test/dev/1"));
     assert_eq!(
         layout.run_dir,
-        tmp.path.join("runtime-test/dev/1/runs/run-2")
+        tmp.path.join("registry/runtime-test/dev/1/runs/run-2")
     );
     assert_eq!(
         layout.logs_dir,
-        tmp.path.join("runtime-test/dev/1/runs/run-2/logs")
+        tmp.path.join("registry/runtime-test/dev/1/runs/run-2/logs")
     );
     assert_eq!(
         layout.artifacts_dir,
-        tmp.path.join("runtime-test/dev/1/runs/run-2/artifacts")
+        tmp.path
+            .join("registry/runtime-test/dev/1/runs/run-2/artifacts")
     );
     assert_eq!(
         layout.summary_path,
-        tmp.path.join("runtime-test/dev/1/runs/run-2/summary.json")
+        tmp.path
+            .join("registry/runtime-test/dev/1/runs/run-2/summary.json")
     );
     assert_eq!(
         layout.registry_path(),
@@ -162,10 +164,10 @@ fn placement_preserves_unix_backslashes_as_component_bytes() {
     let mut manifest = manifest();
     manifest.project.project_id = r"project\name".into();
     let layout = derive_host_placement(&manifest, r"run\name", &tmp.path).unwrap();
-    assert_eq!(layout.state_root, tmp.path.join(r"project\name/dev/0"));
+    assert_eq!(layout.state_root, tmp.path.join(r"data/project\name/dev/0"));
     assert_eq!(
         layout.run_dir,
-        tmp.path.join(r"project\name/dev/0/runs/run\name")
+        tmp.path.join(r"registry/project\name/dev/0/runs/run\name")
     );
 }
 
@@ -237,14 +239,10 @@ fn clean_accepts_old_provenance_marker() {
 fn cleanup_refuses_unmarked_roots() {
     for mode in [CleanupMode::Standard, CleanupMode::Purge] {
         let fixture = StateFixture::new();
-        let relative = match mode {
-            CleanupMode::Standard => "runtime-test/dev/unmarked",
-            CleanupMode::Purge => "runtime-test/dev/unmarked-purge",
-        };
-        let target = fixture.tmp.path.join(relative);
-        fs::create_dir_all(&target).expect("unmarked root should be created");
+        let target = &fixture.layout.state_root;
+        fs::remove_file(target.join(MARKER_FILE_NAME)).expect("remove selected root marker");
 
-        let error = inspect_cleanup_target(&fixture.tmp.path, &target, &fixture.identity, mode)
+        let error = inspect_cleanup_target(&fixture.tmp.path, target, &fixture.identity, mode)
             .expect_err("unmarked target should be refused");
 
         assert_eq!(error.code, ErrorCode::StateUnowned);
@@ -409,7 +407,7 @@ fn purge_still_refuses_active_registry_refs() {
 #[test]
 fn purge_refuses_symlink_target_but_unlinks_tree_symlinks() {
     let fixture = StateFixture::new();
-    let target_link = fixture.tmp.path.join("runtime-test/dev/target-link");
+    let target_link = fixture.tmp.path.join("data/runtime-test/dev/target-link");
     std::os::unix::fs::symlink(&fixture.layout.state_root, &target_link)
         .expect("target symlink should be created");
     let target_error = inspect_cleanup_target(
@@ -931,4 +929,127 @@ fn manifest() -> Manifest {
 
 fn fixture_manifest() -> Value {
     common::test_child_manifest(23080, 23090)
+}
+
+#[test]
+fn namespace_names_are_ordinary_projects_with_disjoint_data_and_evidence() {
+    let tmp = TempDir::new();
+    let layouts: Vec<_> = ["registry", "data", "dev"]
+        .into_iter()
+        .map(|project| {
+            let mut manifest = manifest();
+            manifest.project.project_id = project.into();
+            let layout = derive_host_placement(&manifest, "session", &tmp.path).unwrap();
+            materialize_run_roots(&layout).unwrap();
+            assert_eq!(
+                layout.state_root,
+                tmp.path.join(format!("data/{project}/dev/0"))
+            );
+            assert_eq!(
+                layout.run_dir,
+                tmp.path
+                    .join(format!("registry/{project}/dev/0/runs/session"))
+            );
+            layout
+        })
+        .collect();
+    for application in &layouts {
+        for evidence in &layouts {
+            assert!(!application.state_root.starts_with(&evidence.registry_dir));
+            assert!(!evidence.registry_dir.starts_with(&application.state_root));
+        }
+    }
+}
+
+#[test]
+fn application_cleanup_preserves_run_evidence_and_registry() {
+    for mode in [CleanupMode::Standard, CleanupMode::Purge] {
+        let fixture = StateFixture::new();
+        let mut registry = fixture.registry();
+        let log = fixture.layout.logs_dir.join("stdout.log");
+        let artifact = fixture.layout.artifacts_dir.join("result.bin");
+        for path in [&log, &artifact, &fixture.layout.summary_path] {
+            fs::write(path, b"retained evidence").unwrap();
+        }
+        fs::write(fixture.layout.state_root.join("application.bin"), b"data").unwrap();
+        fixture.clean(&mut registry, mode).unwrap();
+        assert!(!fixture.layout.state_root.exists());
+        for path in [&log, &artifact, &fixture.layout.summary_path] {
+            assert_eq!(fs::read(path).unwrap(), b"retained evidence");
+        }
+        assert!(fixture.layout.registry_path().is_file());
+        assert_eq!(
+            registry
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM cleanups WHERE status = 'deleted'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn copied_marker_cannot_authorize_evidence_or_another_application_root() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let marker = fs::read(fixture.layout.state_root.join(MARKER_FILE_NAME)).unwrap();
+    for target in [
+        fixture.layout.registry_dir.clone(),
+        fixture.layout.run_dir.clone(),
+        fixture.tmp.path.join("data/other/dev/0"),
+        fixture.tmp.path.join("data"),
+    ] {
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join(MARKER_FILE_NAME), &marker).unwrap();
+        for mode in [CleanupMode::Standard, CleanupMode::Purge] {
+            let error = clean_marked_state(
+                &fixture.tmp.path,
+                &target,
+                &fixture.identity,
+                &mut registry,
+                mode,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::StateUnowned);
+            assert_eq!(fs::read(target.join(MARKER_FILE_NAME)).unwrap(), marker);
+        }
+    }
+    assert_eq!(
+        registry
+            .connection()
+            .query_row("SELECT count(*) FROM cleanups", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cleanup_rejects_application_ancestry_redirected_into_evidence() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let marker = fs::read(fixture.layout.state_root.join(MARKER_FILE_NAME)).unwrap();
+    fs::write(fixture.layout.registry_dir.join(MARKER_FILE_NAME), &marker).unwrap();
+    fs::remove_dir_all(fixture.tmp.path.join("data")).unwrap();
+    std::os::unix::fs::symlink(
+        fixture.tmp.path.join("registry"),
+        fixture.tmp.path.join("data"),
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .clean(&mut registry, CleanupMode::Purge)
+            .unwrap_err()
+            .code,
+        ErrorCode::StateUnowned
+    );
+    assert_eq!(
+        fs::read(fixture.layout.registry_dir.join(MARKER_FILE_NAME)).unwrap(),
+        marker
+    );
+    assert!(fixture.layout.registry_path().is_file());
 }

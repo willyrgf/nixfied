@@ -10,7 +10,9 @@ use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
-use crate::state::placement::canonicalize_existing;
+use crate::state::placement::{
+    application_root, canonicalize_existing, normal_component, reject_existing_symlink_components,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,15 +41,15 @@ pub fn inspect_cleanup_target(
 ) -> RuntimeResult<StateMarker> {
     let state_base = state_base.as_ref();
     let target = target.as_ref();
-    let canonical_base = canonicalize_existing("state base", state_base)?;
+    let expected_target = expected_cleanup_target(state_base, expected)?;
     let canonical_target = canonicalize_existing("cleanup target", target)?;
-    if !canonical_target.starts_with(&canonical_base) {
+    if canonical_target != expected_target {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             format!(
-                "cleanup target {} escapes state base {}",
+                "cleanup target {} is not the selected application root {}",
                 canonical_target.display(),
-                canonical_base.display()
+                expected_target.display()
             ),
         ));
     }
@@ -133,6 +135,12 @@ fn finish_missing_target_cleanup(
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let canonical_target = canonicalize_missing_target(state_base, target)?;
+    if canonical_target != expected_cleanup_target(state_base, expected)? {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "missing cleanup target is not the selected application root",
+        ));
+    }
     refuse_active_refs(registry)?;
     refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
     let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
@@ -555,4 +563,18 @@ fn unix_time_nanos() -> Option<u128> {
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
+}
+
+fn expected_cleanup_target(base: &Path, identity: &StateIdentity) -> RuntimeResult<PathBuf> {
+    let project = normal_component("projectId", &identity.project_id)?;
+    let environment = normal_component("environment", &identity.environment)?;
+    let target = application_root(base, project, environment, identity.slot);
+    reject_existing_symlink_components(base, &target)
+        .map_err(|error| RuntimeError::new(ErrorCode::StateUnowned, error.message))?;
+    Ok(application_root(
+        &canonicalize_existing("state base", base)?,
+        project,
+        environment,
+        identity.slot,
+    ))
 }

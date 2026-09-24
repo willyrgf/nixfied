@@ -361,12 +361,17 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   arbitrary host processes.
 - **State: marker-gated, path-confined cleanup.** Every owned state root carries a
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
-  the state base, target symlinks, traversal escapes, unmarked roots, marker
+  the selected `data/project/environment/slot` root, target symlinks, traversal
+  escapes, unmarked roots, marker
   mismatches, active leases/processes/reservations, and policy-protected
   persistent state; unlinks symlink entries inside the owned tree without
   following them; and is idempotent and crash-safe. `clean --purge` expresses
   deliberate destruction of protected/persistent state, but it relaxes only that
   policy gate.
+- **Evidence outlives application data.** `registry/project/environment/slot`
+  contains SQLite and `runs/runId` evidence. The parallel `data/` namespace
+  contains application state only; cleanup cannot target registry or run
+  directories even if an ownership marker was copied there.
 - **Containment is runtime-owned.** Services run foreground under a runtime-owned
   process group; cancellation propagates to the whole group; a process counts as
   started only after a registry record exists. A supervisor whose children form

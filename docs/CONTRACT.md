@@ -189,8 +189,11 @@ when the manifest/runtime contract changes.
   nonempty single normal path components. Slash, NUL, `.`, `..`, and `${` syntax
   reject as `STATE_UNWRITABLE` before filesystem effects. Original bytes are
   checked before path normalization; Unix backslashes remain ordinary bytes.
-  Layout is direct joining of project/environment/slot and runs/runId beneath
-  the state base, with registry/project/environment/slot as a parallel tree.
+  Application data lives at `data/project/environment/slot` beneath the state
+  base. Coordination lives at `registry/project/environment/slot`; run evidence
+  lives beneath its `runs/runId` directory. These trees are disjoint for every
+  legal project name, including `data` and `registry`. Application cleanup
+  accepts only the selected application root and preserves run evidence.
 - **SOURCE-1:** runtime operations observe source only through declared
   `codebaseId`s. `live-workspace` roots resolve from the invocation root;
   immutable `snapshot` and `flake-input` roots resolve from the Nix store path in
