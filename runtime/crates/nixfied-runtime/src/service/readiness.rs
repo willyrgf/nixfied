@@ -67,6 +67,14 @@ pub(crate) fn tcp_probe_attempt(
     }
 }
 
+pub(crate) struct ExecProbe<'a> {
+    pub command: &'a RenderedInvocation,
+    pub source_root: &'a Path,
+    pub logs_dir: &'a Path,
+    pub redactor: &'a Redactor,
+    pub authority: &'a crate::state::ownership::SlotGuard,
+}
+
 /// Execute one invocation probe attempt: run the probe's bound exec
 /// (args/env already substituted at service start) in its own process group
 /// with the probe's per-attempt deadline; exit 0 is success. Each attempt's
@@ -74,13 +82,17 @@ pub(crate) fn tcp_probe_attempt(
 /// attempt's evidence — the one an operator debugs — survives.
 pub(crate) fn exec_probe_attempt(
     probe: &ProbePolicy,
-    command: &RenderedInvocation,
-    source_root: &Path,
-    logs_dir: &Path,
-    redactor: &Redactor,
+    invocation: ExecProbe<'_>,
     cancellation: &CancellationToken,
     checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
 ) -> RuntimeResult<ProbeAttempt> {
+    let ExecProbe {
+        command,
+        source_root,
+        logs_dir,
+        redactor,
+        authority,
+    } = invocation;
     let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
     let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
     let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
@@ -88,6 +100,7 @@ pub(crate) fn exec_probe_attempt(
     checkpoint()?;
     let outcome = run_captured_exec(
         &CapturedExec {
+            authority,
             executable: &command.executable,
             args: &command.args,
             env: &command.env,

@@ -305,6 +305,10 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   slot guard through SQLite closure. Acquisition validates the private registry
   ancestry and a stable, non-followed lock file before admitting a writer.
   Read-only `ps` uses a separate snapshot reader and does not reconcile records.
+  Workload spawning borrows that guard and consumes its command. The child closes
+  the inherited ownership descriptor before exec, without unlocking the parent's
+  shared lock; close failure refuses exec. Close-on-exec remains defense in depth.
+  Task, prepare, service, and exec-probe spawning all use this boundary.
 
 ## Ports, state, containment
 

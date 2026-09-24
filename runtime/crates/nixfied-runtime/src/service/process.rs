@@ -32,7 +32,7 @@ use crate::service::endpoint::{
     observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
 use crate::service::identity::service_instance_id;
-use crate::service::readiness::{ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
+use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     EndpointRecord, ProcessRecord, ServiceRecord, ServiceStartOutcome, VerifiedEndpointActivation,
     activate_service_ready, mark_process_escape, mark_service_canceled, mark_service_failed,
@@ -41,6 +41,7 @@ use crate::service::registry::{
     settle_service_start,
 };
 use crate::slot::SelectedSlot;
+use crate::state::ownership::SlotGuard;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
 use crate::template::{EndpointSelector, Piece, Template};
 
@@ -383,7 +384,8 @@ impl OwnedService {
         for attempt in 0..attempts {
             cancellation.check()?;
             self.check_probe_liveness(registry, checkpoint)?;
-            let probe_attempt = self.probe_attempt(probe, cancellation, checkpoint);
+            let probe_attempt =
+                self.probe_attempt(registry.authority(), probe, cancellation, checkpoint);
             if let Err(error) = self.check_owned_probe_liveness(registry) {
                 return Err(match probe_attempt {
                     Err(probe_error) => error.with_cause(probe_error),
@@ -473,6 +475,7 @@ impl OwnedService {
 
     fn probe_attempt(
         &self,
+        authority: &SlotGuard,
         probe: &PreparedProbe,
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
@@ -501,10 +504,13 @@ impl OwnedService {
             }
             PreparedProbe::Exec { policy, command } => exec_probe_attempt(
                 policy,
-                command,
-                &self.source_root,
-                &self.logs_dir,
-                &self.redactor,
+                ExecProbe {
+                    command,
+                    source_root: &self.source_root,
+                    logs_dir: &self.logs_dir,
+                    redactor: &self.redactor,
+                    authority,
+                },
                 cancellation,
                 &mut || {
                     checkpoint()?;
@@ -1527,10 +1533,9 @@ pub(super) fn start_service_with_lock_root(
         };
         let mut command = configured_command(&exec.executable, &args, &env, &command_cwd, exec.stdin);
         command.stdout(stdout).stderr(stderr);
-        let spawned = cancellation.check().and_then(|()| crate::spawn::command(&mut command).map_err(|error| {
+        let spawned = cancellation.check().and_then(|()| registry.authority().spawn(command).map_err(|error| {
             RuntimeError::new(ErrorCode::ProcEscape, format!("failed to spawn service {service_name}: {error}"))
         }));
-        drop(command);
         let child = match spawned {
             Ok(child) => child,
             Err(error) => {
@@ -1891,6 +1896,7 @@ fn prepare_probe(
 /// A fully-substituted task or probe command with captured streams and an
 /// optional deadline. Probe callers always supply their finite attempt limit.
 pub(crate) struct CapturedExec<'a> {
+    pub authority: &'a SlotGuard,
     pub executable: &'a str,
     pub args: &'a [String],
     pub env: &'a BTreeMap<String, String>,
@@ -1946,9 +1952,8 @@ pub(crate) fn spawn_captured_exec(spec: &CapturedExec<'_>) -> RuntimeResult<Owne
     let mut command =
         configured_command(spec.executable, spec.args, spec.env, spec.cwd, spec.stdin);
     command.stdout(output.stdout).stderr(output.stderr);
-    let spawned = crate::spawn::command(&mut command);
-    // Command retains pipe writers even after spawn failure.
-    drop(command);
+    // The consuming spawn closes command-owned pipe writers on every result.
+    let spawned = spec.authority.spawn(command);
     match spawned {
         Ok(child) => Ok(OwnedCapturedChild {
             child,
@@ -3043,6 +3048,10 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&root).unwrap();
+        let authority = crate::state::ownership::fixture_guard(
+            &root,
+            &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+        );
         let marker = root.join("survived");
         let stdout = root.join("stdout");
         let stderr = root.join("stderr");
@@ -3051,6 +3060,7 @@ mod tests {
         let redactor = Redactor::from_secrets(&secrets);
         let outcome = run_captured_exec(
             &CapturedExec {
+                authority: &authority,
                 executable: "/bin/sh",
                 args: &[
                     "-c".into(),
@@ -3094,11 +3104,16 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&root).unwrap();
+        let authority = crate::state::ownership::fixture_guard(
+            &root,
+            &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+        );
         let executable = std::env::var("NIXFIED_TEST_SLEEP").unwrap();
         let missing = root.join("missing-program");
         let stdout = root.join("stdout");
         let stderr = root.join("stderr");
         let mut spec = CapturedExec {
+            authority: &authority,
             executable: missing.to_str().unwrap(),
             args: &["30".into()],
             env: &BTreeMap::new(),

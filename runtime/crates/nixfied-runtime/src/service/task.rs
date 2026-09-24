@@ -225,6 +225,7 @@ pub fn run_dependent_task_cancellable(
     cancellation.check().map_err(TaskExecutionError::before)?;
     let started = Instant::now();
     let child = spawn_captured_exec(&CapturedExec {
+        authority: registry.authority(),
         executable: &exec.executable,
         args: &args,
         env: &env,
@@ -573,6 +574,7 @@ mod tests {
             .execute("DROP TABLE events", [])
             .unwrap();
         let child = spawn_captured_exec(&CapturedExec {
+            authority: registry.authority(),
             executable: &std::env::var("NIXFIED_TEST_SLEEP").unwrap(),
             args: &["30".into()],
             env: &std::collections::BTreeMap::new(),
