@@ -13,6 +13,7 @@ pub mod redaction;
 pub mod registry;
 pub mod service;
 pub mod slot;
+mod spawn;
 pub mod state;
 mod template;
 

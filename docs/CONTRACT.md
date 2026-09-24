@@ -230,11 +230,16 @@ when the manifest/runtime contract changes.
   process group, cancellation reaches the whole group, and a long-lived process
   counts as started only after its registry process record exists. Admission
   fails when a service requires stronger containment than the host supports.
-- Exec-probe waits and retry delays observe both the current service and all
+- TCP and exec-probe waits and retry delays observe both the current service and all
   already-started services. Observation failure stops the probe and prevents
   further work. Checkpoints run between waits of at most 10 ms; this cadence is
   not a universal teardown bound, since host observation, capture shutdown,
   registry I/O and OS scheduling also take time.
+- Each TCP probe attempt creates one nonblocking connection and polls that same
+  socket until completion, cancellation, observation failure, or its existing
+  attempt deadline. Polling never reconnects or consumes extra retries. A ready
+  descriptor is checked for its socket error and peer association before success.
+  Readiness still requires the independent endpoint-ownership observation.
 - Readiness and health reobserve service liveness after each completed probe,
   before accepting readiness or settling probe timeout. A monitored service
   escape during a probe remains `PROC_ESCAPE`, including on the last attempt;

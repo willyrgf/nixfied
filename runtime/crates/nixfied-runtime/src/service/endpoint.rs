@@ -10,9 +10,9 @@ use std::io;
 use std::net::IpAddr;
 #[cfg(test)]
 use std::net::{Ipv4Addr, Ipv6Addr};
-#[cfg(target_os = "macos")]
-use std::os::fd::RawFd;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
+#[cfg(test)]
+use std::os::fd::{FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
 
@@ -26,6 +26,7 @@ use crate::service::process::{
 };
 
 use super::TrackedProcessIdentity;
+use super::socket::TcpSocket;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -704,25 +705,8 @@ enum BindResult {
 }
 
 fn bind_exact(endpoint: &SelectedEndpoint) -> Result<BindResult, String> {
-    let domain = match endpoint.host.ip() {
-        IpAddr::V4(_) => libc::AF_INET,
-        IpAddr::V6(_) => libc::AF_INET6,
-    };
-    #[cfg(target_os = "linux")]
-    let socket_type = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
-    #[cfg(not(target_os = "linux"))]
-    let socket_type = libc::SOCK_STREAM;
-    let raw = unsafe { libc::socket(domain, socket_type, libc::IPPROTO_TCP) };
-    if raw < 0 {
-        return Err(format!(
-            "failed to create endpoint preflight socket: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: socket returned a new descriptor owned by this scope.
-    let socket = unsafe { OwnedFd::from_raw_fd(raw) };
-    #[cfg(not(target_os = "linux"))]
-    set_cloexec(socket.as_raw_fd())?;
+    let socket = TcpSocket::new(endpoint.host.ip())
+        .map_err(|error| format!("failed to create endpoint preflight socket: {error}"))?;
     let reuse: libc::c_int = 1;
     // SAFETY: `socket` is live and `reuse` has the type and size required by
     // SO_REUSEADDR.
@@ -741,75 +725,16 @@ fn bind_exact(endpoint: &SelectedEndpoint) -> Result<BindResult, String> {
             io::Error::last_os_error()
         ));
     }
-    let result = match endpoint.host.ip() {
-        IpAddr::V4(address) => {
-            // SAFETY: zero is a valid initial representation; every field bind
-            // consumes is initialized below.
-            let mut sockaddr = unsafe { std::mem::zeroed::<libc::sockaddr_in>() };
-            #[cfg(target_os = "macos")]
-            {
-                sockaddr.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
-            }
-            sockaddr.sin_family = libc::AF_INET as libc::sa_family_t;
-            sockaddr.sin_port = endpoint.port.to_be();
-            sockaddr.sin_addr = libc::in_addr {
-                s_addr: u32::from_ne_bytes(address.octets()),
-            };
-            unsafe {
-                libc::bind(
-                    socket.as_raw_fd(),
-                    (&sockaddr as *const libc::sockaddr_in).cast(),
-                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-                )
-            }
-        }
-        IpAddr::V6(address) => {
-            // SAFETY: zero is a valid initial representation; every field bind
-            // consumes is initialized below.
-            let mut sockaddr = unsafe { std::mem::zeroed::<libc::sockaddr_in6>() };
-            #[cfg(target_os = "macos")]
-            {
-                sockaddr.sin6_len = std::mem::size_of::<libc::sockaddr_in6>() as u8;
-            }
-            sockaddr.sin6_family = libc::AF_INET6 as libc::sa_family_t;
-            sockaddr.sin6_port = endpoint.port.to_be();
-            sockaddr.sin6_addr = libc::in6_addr {
-                s6_addr: address.octets(),
-            };
-            unsafe {
-                libc::bind(
-                    socket.as_raw_fd(),
-                    (&sockaddr as *const libc::sockaddr_in6).cast(),
-                    std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-                )
-            }
-        }
-    };
-    if result == 0 {
-        Ok(BindResult::Available)
-    } else {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EADDRINUSE) {
+    match socket.bind(endpoint.host.ip(), endpoint.port) {
+        Ok(()) => Ok(BindResult::Available),
+        Err(error) if error.raw_os_error() == Some(libc::EADDRINUSE) => {
             Ok(BindResult::AddressInUse)
-        } else {
-            Err(format!(
-                "failed to bind endpoint preflight socket at {}:{}: {error}",
-                endpoint.host, endpoint.port
-            ))
         }
+        Err(error) => Err(format!(
+            "failed to bind endpoint preflight socket at {}:{}: {error}",
+            endpoint.host, endpoint.port
+        )),
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn set_cloexec(fd: RawFd) -> Result<(), String> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-        return Err(format!(
-            "failed to mark endpoint socket close-on-exec: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

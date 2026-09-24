@@ -1,4 +1,7 @@
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
+use std::time::Instant;
+
+use super::socket::{Connection, TcpSocket};
 use std::path::Path;
 
 use nixfied_manifest::LoopbackHost;
@@ -24,18 +27,44 @@ pub(crate) fn tcp_probe_attempt(
     host: LoopbackHost,
     port: u16,
     cancellation: &CancellationToken,
+    checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
 ) -> RuntimeResult<ProbeAttempt> {
     let socket_addr = SocketAddr::new(host.ip(), port);
+    let failed = |error: std::io::Error| {
+        ProbeAttempt::Failed(format!(
+            "probe {} did not connect to {socket_addr}: {error}",
+            probe.label
+        ))
+    };
     cancellation.check()?;
-    Ok(
-        match TcpStream::connect_timeout(&socket_addr, probe.timeout) {
-            Ok(_) => ProbeAttempt::Succeeded,
-            Err(error) => ProbeAttempt::Failed(format!(
-                "probe {} did not connect to {socket_addr}: {error}",
-                probe.label
-            )),
-        },
-    )
+    checkpoint()?;
+    let started = Instant::now();
+    let socket = match TcpSocket::new(host.ip()) {
+        Ok(socket) => socket,
+        Err(error) => return Ok(failed(error)),
+    };
+    let mut state = socket.connect(host.ip(), port);
+    loop {
+        // Never accept a connection or failure without a fresh observation.
+        cancellation.check()?;
+        checkpoint()?;
+        let pending = match state {
+            Ok(Connection::Connected) => return Ok(ProbeAttempt::Succeeded),
+            Err(error) => return Ok(failed(error)),
+            Ok(Connection::Pending(pending)) => pending,
+        };
+        let Some(remaining) = probe
+            .timeout
+            .checked_sub(started.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+        else {
+            return Ok(failed(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "connection attempt timed out",
+            )));
+        };
+        state = pending.poll(remaining);
+    }
 }
 
 /// Execute one invocation probe attempt: run the probe's bound exec
@@ -95,4 +124,154 @@ pub(crate) fn exec_probe_attempt(
             stderr_path.display(),
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
+    use std::time::Duration;
+
+    fn policy(timeout: Duration) -> ProbePolicy {
+        ProbePolicy {
+            label: "tcp-test".into(),
+            timeout,
+            retry_interval: Duration::from_millis(1),
+            max_attempts: 1.try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn tcp_probe_connects_once_and_refuses_a_closed_port() {
+        for ip in [
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ] {
+            let listener = TcpListener::bind(SocketAddr::new(ip, 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            listener.set_nonblocking(true).unwrap();
+            let host = LoopbackHost::parse(&ip.to_string()).unwrap();
+            assert!(matches!(
+                tcp_probe_attempt(
+                    &policy(Duration::from_secs(1)),
+                    host,
+                    port,
+                    &CancellationToken::new(),
+                    &mut || Ok(())
+                )
+                .unwrap(),
+                ProbeAttempt::Succeeded
+            ));
+            drop(listener.accept().unwrap());
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            drop(listener);
+            assert!(matches!(
+                tcp_probe_attempt(
+                    &policy(Duration::from_secs(1)),
+                    host,
+                    port,
+                    &CancellationToken::new(),
+                    &mut || Ok(())
+                )
+                .unwrap(),
+                ProbeAttempt::Failed(_)
+            ));
+        }
+    }
+
+    // Linux's filled accept queue leaves a loopback connect pending. Keep every
+    // accepted connection open and never accept: no timing-dependent remote host
+    // or packet-filter changes are needed to exercise a real pending attempt.
+    #[cfg(target_os = "linux")]
+    fn saturated_listener() -> (TcpSocket, Vec<std::net::TcpStream>, u16) {
+        use std::os::fd::AsRawFd;
+        let ip = Ipv4Addr::LOCALHOST.into();
+        let listener = TcpSocket::new(ip).unwrap();
+        listener.bind(ip, 0).unwrap();
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+        let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        let mut length = std::mem::size_of_val(&address) as libc::socklen_t;
+        assert_eq!(
+            unsafe {
+                libc::getsockname(listener.as_raw_fd(), (&raw mut address).cast(), &mut length)
+            },
+            0
+        );
+        let port = u16::from_be(address.sin_port);
+        let mut clients = Vec::new();
+        for _ in 0..8 {
+            match std::net::TcpStream::connect_timeout(
+                &SocketAddr::new(ip, port),
+                Duration::from_millis(50),
+            ) {
+                Ok(client) => clients.push(client),
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    return (listener, clients, port);
+                }
+                Err(error) => panic!("failed to fill listener queue: {error}"),
+            }
+        }
+        panic!("listener queue did not saturate");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pending_tcp_attempt_observes_cancellation_failure_and_its_deadline() {
+        use crate::error::{ErrorCode, RuntimeError};
+        let (_listener, _clients, port) = saturated_listener();
+        let host = LoopbackHost::parse("127.0.0.1").unwrap();
+        for cancel in [true, false] {
+            let token = CancellationToken::new();
+            let mut observations = 0;
+            let started = Instant::now();
+            let error = tcp_probe_attempt(
+                &policy(Duration::from_secs(30)),
+                host,
+                port,
+                &token,
+                &mut || {
+                    observations += 1;
+                    if observations < 3 {
+                        return Ok(());
+                    }
+                    if cancel {
+                        token.cancel();
+                        token.check()
+                    } else {
+                        Err(RuntimeError::new(
+                            ErrorCode::DependencyUnavailable,
+                            "fixture service exited",
+                        ))
+                    }
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.code,
+                if cancel {
+                    ErrorCode::Canceled
+                } else {
+                    ErrorCode::DependencyUnavailable
+                }
+            );
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+        let started = Instant::now();
+        assert!(matches!(
+            tcp_probe_attempt(
+                &policy(Duration::from_millis(80)),
+                host,
+                port,
+                &CancellationToken::new(),
+                &mut || Ok(())
+            )
+            .unwrap(),
+            ProbeAttempt::Failed(_)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(80));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 }

@@ -331,6 +331,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   locking. These checks detect observed substitution; they do not protect
   managed ancestry against future same-user interference. Endpoint selection
   and lock lifetime remain with the endpoint owner.
+- **TCP probing keeps observation live.** An owned pending connection can only
+  be polled, not reconnected. The same native socket creation and address encoding
+  serve endpoint preflight. Linux creates nonblocking, close-on-exec sockets
+  atomically; macOS coordinates socket flag setup with every workload spawn.
+  Coordination poisoning refuses effects. This process-local synchronization
+  protects descriptor inheritance.
 - **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
   registry opening, and mandatory reconciliation remain run-wide. Endpoint
   locks begin when the pre-lock exact-reuse attempt does not succeed and cover
