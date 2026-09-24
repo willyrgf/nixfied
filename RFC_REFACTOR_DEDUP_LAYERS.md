@@ -4,8 +4,9 @@ Status: draft. Session-owned service processes, a single persistence policy for 
 one active session per slot, interrupted-session cleanup followed by a fresh
 start, independent compilation/presentation consumers of native definitions,
 structural type generation limited to shared wire meaning, runtime derivation
-of execution graph facts without carried duplicate answers, and executable
-dependency identity based on selected outputs and executables are accepted
+of execution graph facts without carried duplicate answers, executable
+dependency identity based on selected outputs and executables, and help scoped
+to Nixfied-generated apps are accepted
 architectural direction. Concrete mechanisms and other solutions below remain
 proposals.
 
@@ -100,6 +101,7 @@ manifest solely because compilation obtains its bindings through that reference.
 | F9: repeated facts and inert policies | S7: remove redundant wire derivations and non-operational fields; retain explicit runtime validation. | Compiler/manifest/runtime lowering |
 | F10: help restricts module integration | S8: construct help from generated apps rather than probing the final caller flake. | Project apps/help |
 | Compatibility and incidental CLI behavior | S9: keep compatibility claims explicit and avoid unrelated protocol expansion. | ABI/constants/native parsers |
+| Registry coordination left over from shared services | S10: remove the sharing protocol; retain session evidence, explicit recovery obligations, and cleanup history. | Runtime registry/session/control |
 
 The session decision also addresses the polling/containment concern underlying
 F2. Session ownership alone does not prove containment; S2 must establish the
@@ -484,7 +486,9 @@ remove obsolete equality checks and decoder fields without compatibility aliases
 ### Remaining proposals: metadata and policy surface
 
 The following changes are separate from the accepted graph-fact decision and
-remain open.
+remain open. API behavior changes are deferred to the separate
+[API behavior audit](docs/API_BEHAVIOR_AUDIT.md) after the main refactor. The
+proposals below are retained for traceability, not bundled into registry work.
 
 Remove descriptive `stateRefs`, `logRefs`, `artifactRefs`, and `summaryRefs` from
 the execution ABI. Useful descriptions may remain Nix-only. Remove source policy
@@ -508,23 +512,40 @@ compatibility fields in the decoder.
 
 ## 10. S8: generate help without dictating project layout
 
+Accepted: the help catalog lists Nixfied-generated framework controls and exported
+project verbs. It is not a catalog of every app in the final flake.
+
 Build the help catalog from the same native app definitions that generate the
-framework controls and exported verbs. Remove final-caller-flake probing as a
-requirement for project app construction. If projects need custom entries, accept
-explicit metadata through a small interface rather than reintroducing evaluation
-of the caller's entire flake.
+framework controls and exported verbs. Render it during construction and have the
+help program print that catalog. Remove final-caller-flake probing, source-context
+checks, and the help program's own `nix flake metadata`/`nix eval` calls. Ordinary
+outer `nix run` evaluation still occurs. Do not add a custom-app metadata interface
+as part of this change.
+
+**Invariant:** generated apps and their catalog obtain names and descriptions from
+the same owning definitions. Help construction checks the metadata it consumes;
+it does not inspect the caller's final flake to rediscover apps. No second authored
+list of project tasks is required.
 
 This should allow ordinary supported Nix module forms without requiring a literal
 root-level `nixfied.nix` solely for help provenance. Installer scaffolding can keep
 its familiar layout; compiler integration need not mandate it.
 
-**Tradeoff:** help no longer automatically discovers arbitrary apps merged later
-into the final flake. Generated help still corresponds to the definitions used to
-build its catalog and must not misrepresent its scope.
+**Tradeoff:** custom apps merged later into the final flake remain runnable but
+are excluded from this catalog. Later overrides of generated app descriptions in
+the final flake are also not reflected; the generated definitions own the catalog
+text. Label help's scope accurately instead of claiming to list every flake app.
+
+The expected code-size reduction is modest: the renderer and basic help checks
+remain. The primary benefit is removing caller-context dependencies and the
+project-layout restriction, not deleting a large subsystem. No existing service
+or task configuration needs to move from `nixfied.nix` into `flake.nix`.
 
 **Proof:** caller-directory independence, non-root module placement and module
 composition, reserved-name rejection, generated description changes, and explicit
-custom metadata if that interface is included.
+exclusion of separately merged apps and later metadata overrides. Preserve help
+argument handling and the absence of runtime state or lock-file mutation. Replace
+context-mismatch rejection tests with successful caller-independent catalog tests.
 
 ## 11. S9: retain honest compatibility checks
 
@@ -545,20 +566,412 @@ effect of this refactor.
 literal behavior tests cover semantic changes. A digest snapshot alone is not
 acceptance evidence for runtime correctness.
 
-## 12. Delivery and verification
+## 12. S10: reduce the registry to session evidence and recovery
+
+Status: proposed specification following an independent architect audit of the
+current schema and its callers. The accepted session model motivates these
+removals; the exact records and control mechanisms below still require review.
+No schema or runtime implementation has been changed by this specification.
+
+### Ownership and scope
+
+**Invariant:** one slot owner authorizes mutation, one session owner executes and
+finalizes its work, and durable records retain unfinished obligations when that
+owner disappears. Registry rows do not grant a second invocation execution rights.
+
+Keep the per-slot SQLite database. Remove its role as a coordinator of independent
+users borrowing standing services. Do not replace SQLite with files, add a second
+registry, or turn the event history into an executable event-sourcing engine.
+
+The implementation boundaries are:
+
+- The slot exclusion mechanism arbitrates mutating invocations. A private borrowed
+  ownership context is required by mutation entrypoints, including control repair.
+- Child execution records local process and outcome evidence. It cannot declare
+  the session finalized.
+- The session finalizer aggregates the outcome and settles teardown and retention.
+- An exclusive recovery successor settles an interrupted predecessor before new
+  execution. It never adopts that predecessor's services for continued use.
+- OS process identity and held filesystem identity justify signaling and deletion;
+  a status string, expired timestamp, or absent lock does not establish safety.
+
+### Current schema and proposed disposition
+
+The current [schema](runtime/crates/nixfied-runtime/src/registry/schema.rs) is
+version 7 with eight tables. The proposed target has six responsibilities backed
+by tables. Table count is an expected consequence, not the acceptance criterion.
+
+| Current table | Disposition | Retained facts and removed responsibilities |
+| --- | --- | --- |
+| `registry_meta` | Keep | Immutable project/environment/slot and schema/ABI/toolchain identity. Preserve exact ownership and compatibility rejection. |
+| `events` | Keep | Append-only per-slot sequence, redacted payloads, and transition/event atomicity. Replace cross-session service-instance references with run plus declared service identity where needed. |
+| `runs` | Reshape | Keep `run_id` as the session identifier, immutable manifest/source/target provenance, and evidence paths. Add owner recovery identity and distinguish execution outcome from unfinished finalization. No second session-ID registry. |
+| `services` | Remove | Delete the reusable service identity/lifetime registry. Move the declared service label to process/event records. Slot state ownership remains with the marker; do not create a replacement service registry. |
+| `processes` | Reshape | Keep session association, process key, PID/PGID/start identity, redacted command evidence, and supported descendant evidence. Record role and unresolved teardown explicitly, independently of task outcome or ports. |
+| `ports` | Narrow to endpoint evidence | Keep endpoint ID/address/port, session/process attribution, and observations required for readiness and recovery. Remove per-slot sharing arbitration and lease-derived reservation ownership. Host endpoint locks and kernel ownership checks remain. |
+| `run_leases` | Remove | Delete per-(run, service) leases, owner tokens, heartbeat/expiry timestamps, borrower counts, and TTL transitions. Do not replace them with session TTL leases. |
+| `cleanups` | Keep and reshape | Retain intent tied to the exact owned deletion object, authorization evidence, attempts, and completion. Remove the old cleanup-policy dimension; preserve persistence/purge and unconditional safety checks. |
+
+The current `services` table holds a service name, address/endpoint/state/runtime/
+target hashes, lifetime, and state root. Most of that exists to decide whether
+another run can reuse a service. Service readiness is already derived from other
+records; deleting this table need not create another persisted service status.
+Session-local service definitions and dependency ordering remain in execution.
+
+Retain concrete recovery facts that currently disappear with the live owner:
+the runtime owner's process identity; each child's role and original process
+identity; containment and stop requirements needed to terminate it without
+depending on a newly supplied manifest. A task occurrence and a service label
+must remain distinguishable. Include prepare and probe children in the ownership
+analysis, even when they have no service endpoint. Persist only the redaction-safe
+facts needed for recovery, never resolved secrets or a duplicate executable graph.
+
+### Remove the sharing protocol throughout its callers
+
+Deleting the tables while keeping their state machine in another form would not
+deliver the simplification. Remove these concrete paths together:
+
+| Current owner | Removal or replacement |
+| --- | --- |
+| [registry/leases.rs](runtime/crates/nixfied-runtime/src/registry/leases.rs) | Remove `RunLeaseHeartbeat`, heartbeat updates, five-second tick, thirty-second TTL, dedicated connection/thread, and stop/join error paths. |
+| [main.rs](runtime/crates/nixfied-runtime/src/main.rs) | Remove the session's heartbeat and service-lifetime fields and startup plumbing. Keep the existing finalization/evidence owner. |
+| [service/process.rs](runtime/crates/nixfied-runtime/src/service/process.rs) | Remove `BorrowedService`, borrowed alternatives, `BorrowServiceRequest`, `borrow_reusable_service`, prepare heartbeats, standing handoff, and detached output. All successful acquisitions yield locally owned services. |
+| [service/registry.rs](runtime/crates/nixfied-runtime/src/service/registry.rs) | Remove `record_service_borrow`, `release_service_borrow`, `mark_service_standing`, `ServiceReuseGuard`, reuse snapshot comparisons, lease conflict gates, and scattered lease updates. Replace startup lease admission with already-held slot ownership and explicit startup evidence. |
+| [control.rs](runtime/crates/nixfied-runtime/src/control.rs) | Remove expiry queries/sweeps, `reconcile_until_idle_services`, borrower counting, and borrower-based shutdown refusals. Split observation from mutation under the slot owner. |
+| [service/identity.rs](runtime/crates/nixfied-runtime/src/service/identity.rs) and lowering | Remove hashes and fields whose only consumer is cross-session reuse. Retain concrete process/state/endpoint identity needed by safety and evidence. |
+| [state/upgrade.rs](runtime/crates/nixfied-runtime/src/state/upgrade.rs) | Remove manifest-hash-filtered process replacement and `ProcessFilter::ManifestHashNot`. Recover interrupted sessions before evaluating retained state, regardless of their manifest hashes. |
+
+The new service startup path is conceptually:
+
+```text
+exclusive slot acquired and predecessor recovered
+    → dependency/prepare execution with required endpoint startup guards
+    → process startup and durable ownership registration
+    → verified readiness
+    → session-local owned service
+```
+
+There is no pre-lock reuse attempt, post-lock reuse retry, borrower reservation,
+prepare heartbeat, or choice between borrowed and owned finalization. Preserve
+host startup guard scope wherever prepare/spawn/readiness require it; removing
+database sharing checks does not make endpoint collisions disappear.
+
+### One writer of session completion
+
+Today `mark_task_finished` updates its process, `runs.status`, lease statuses, and
+an event. Service settlement also updates the run; expiry reconciliation can
+update it again. Guarded updates then try to preserve other participants' outcomes.
+
+Replace that distributed aggregation with one finalizer. Persist two distinct
+facts: execution outcome, and whether finalization remains unfinished. A useful
+conceptual representation is:
+
+```text
+run_id
+    execution outcome: not yet known / succeeded / failed / canceled / interrupted
+    finalization: unfinished / complete
+
+process records: local execution evidence + unresolved ownership obligations
+cleanup records: claimed deletion objects + incomplete/completed operations
+```
+
+These are conceptual domains, not finalized SQL column names or new wire enums.
+Use closed native types and checked decoding to prevent incoherent combinations.
+Complete finalization requires all process obligations settled and the chosen
+retention action completed or deliberately retained under persistent policy.
+Successful task execution with unresolved teardown is unfinished. Failed execution
+with completed teardown can be finalized. A registry write failure cannot turn
+either into successful completion.
+
+Child transitions commit local evidence and events; only the live session owner
+or its exclusive recovery successor settles run finalization. Recovery preserves
+recorded task outcomes and appends recovery evidence rather than fabricating a
+successful result for interrupted work. Do not keep an independent aggregate
+status writer in each service/task helper.
+
+### Endpoint evidence must not hide process obligations
+
+Current [status.rs](runtime/crates/nixfied-runtime/src/registry/status.rs), through
+`unresolved_escape_sql`, treats an escaped process as actionable when matching
+open port rows remain. Removing port reservations without replacing this coupling
+would lose recovery information, especially for endpoint-less processes.
+
+Represent an unresolved process obligation directly. A leader exiting or a task
+reaching a terminal outcome does not prove all descendants are gone. Retain
+endpoint observations for attribution and readiness, linked to the session's
+process record rather than a reusable service instance. A gated launcher can
+precede registration; the protocol must state what each phase establishes.
+
+Endpoint records do not reserve sockets against the host. Keep exact ownership
+observation and host startup locks. Never signal an unrelated listener to settle
+a database reservation. Unknown ownership yields cleanup refusal, not an invented
+association based solely on matching port numbers.
+
+### Observation and control
+
+Proposed `ps` becomes read-only: read a coherent registry snapshot, inspect current
+OS process identities, and report recorded facts separately from current
+observations. It does not expire records, finalize sessions, stop until-idle
+services, or create an absent registry. Observations can become stale after return;
+mutating commands revalidate before acting. Remove `borrower_count` and
+`service_lifetime` from output rather than returning meaningless constant values.
+This revises the existing mutating reconciliation behavior and requires an atomic
+public-output/contract update.
+
+For a live owner, `down` requests session cancellation and leaves teardown to that
+owner. For a dead owner, `down` takes the slot and uses the same interrupted-session
+recovery path as the next `run`. The exact cancellation transport remains open;
+do not let this specification introduce a daemon, a competing SQL writer, or a
+bare persisted PID treated as unconditionally safe signaling authority.
+
+`clean` takes the same slot authority, resolves interrupted process obligations,
+then applies persistence/purge authorization and safe deletion. It has no lease
+TTL or borrower-count gate. A live owner causes refusal rather than competing
+cleanup. State upgrades follow the same recovery boundary and never use provenance
+as permission to delete persistent data.
+
+### Registration and interruption
+
+Current child startup precedes durable PID/PGID/start-identity registration. The
+registry simplification must not assume that deleting leases closes this window.
+Specify gated startup, attachment of actual process identity, and permission for
+the workload to proceed as separate steps with explicit interruption outcomes.
+
+A gated parent/child startup handshake is one candidate, not an accepted mechanism.
+Writing intent before spawn alone cannot identify a child created afterward. If
+recovery lacks sufficient ownership evidence, retain data and refuse new execution.
+Cover tasks, prepare invocations, probes, and service leaders with the same
+ownership reasoning instead of special-casing only listening services.
+
+The minimum guarantee remains cleanup or refusal for supported process behavior,
+not successful automatic recovery from every external scenario. Unknown workload
+ownership still requires refusal; the inert launcher case below has a narrower,
+explicit safety argument.
+
+### Startup mechanism investigation
+
+Independent architect verdict: retain the launcher approach, but simplify the
+protocol and distinguish inert launcher liveness from workload recovery. This is
+an architect recommendation pending implementation proof on both platforms.
+
+Use a small trusted launcher that waits for one private execution request, then
+replaces itself with the workload. The request carries execution configuration
+and is itself permission; there is no separate configuration/permit negotiation.
+This could be an early internal mode of the packaged runtime or a packaged helper;
+choose packaging separately. It is not a persistent supervisor or a new semantic
+manifest seam. Any internal command/protocol must still receive contract review.
+
+Current service startup calls `Command::spawn` before `record_service_start`.
+Tasks similarly call `spawn_bounded_exec` before `record_task_started`; exec probes
+use bounded execution without that task registration. Ordinary error cleanup
+cannot run when the owner is killed between those operations.
+
+| Candidate | Assessment |
+| --- | --- |
+| Write intent, then directly spawn the workload | Intent alone does not identify a child born before the owner dies. It supports refusal, but does not close the execution gap. |
+| Block inside Rust `pre_exec` | A naive wait-for-parent gate can deadlock: the normal spawn path waits for exec/error before returning the child handle. A custom fork/IPC implementation is possible but brings async-signal-safety and descriptor machinery into the runtime. |
+| Spawn a trusted launcher, commit its identity, then permit exec | Preferred candidate: ordinary spawn completes into the launcher; the workload remains gated. One startup protocol can serve both platforms and all child roles. |
+| Linux parent-death signal | Useful only as an optional additional mechanism. It is Linux-specific, tied to the creating thread, has an installation race, and is cleared in forked descendants. It is not durable ownership or tree containment. |
+| Linux cgroup containment | Stronger group membership/termination facilities, but requires available delegated authority and a Linux-specific implementation. Moving an already-running workload into a cgroup does not itself close the initial gap. |
+| Darwin suspended spawn | Provides a platform-specific starting point, but a suspended child can remain if the parent dies before recording it. Suspension alone supplies neither durable registration nor automatic orphan cleanup. |
+
+The proposed common protocol is:
+
+```text
+session holds slot and has its durable session record
+    → spawn trusted launcher with private gate and intended process group
+    → obtain and verify launcher PID/group/start identity
+    → commit recoverable process identity and event together
+    → send one bounded execution request, only after successful commit
+    → launcher closes protocol descriptors and execs the declared program
+```
+
+Only the session owns the request writer. The launcher must not retain a writer,
+slot lock, or database descriptor. Prevent writer leakage into other executed
+children. Close-on-exec does not prevent transient inheritance during fork; prove
+the actual descriptor setup and account for delayed EOF. EOF before a complete
+request, malformed/truncated input, and bounded startup timeout exit without
+executing the workload. Validate the complete bounded frame before effects; no
+shell evaluation, negotiation, retries, or second execution request. Use explicit
+length framing and handle partial reads/writes; pipe capacity is not a message
+size guarantee. Gate descriptors must not consume workload
+stdin. Handle failed writes without uncontrolled SIGPIPE termination.
+
+Before receiving a complete request, the launcher must not touch application
+state, run hooks, fork descendants, or perform normal runtime admission. Launch
+it from a safe working directory with a controlled bootstrap environment, never
+the workload environment: loader variables such as `LD_PRELOAD` or `DYLD_*` could
+otherwise execute workload code before the gate. Deliver executable, arguments,
+environment, and working directory privately in the request without durable secret
+records or diagnostic arguments. Apply them only after validation. Do not add a
+separate helper-ready exchange merely to obtain process identity; normal spawn
+and parent-side observation establish the identity to record.
+
+Remove the proposed per-child durable pre-spawn intent. Before a process identity
+commit, no execution request can have been sent. An unregistered launcher is
+therefore never workload-authorized under this protocol. Its possible delayed exit
+is a resource-liveness issue, not an unknown application process that permanently
+blocks slot recovery. This explicitly narrows the recovery contract for sterile
+bootstrap processes: it does not claim every helper is already gone. Keep bounded
+startup waiting and reap helpers while the owner lives; do not create another
+launcher registry. If bootstrap sterility or commit-before-send cannot be proved,
+this simplification is invalid and recovery must refuse.
+
+Treat a committed identity as **possibly executing** from then onward. Do not add
+a second authoritative `released` flag: permission delivery and SQLite commit
+cannot be atomic, and recovery must handle both a waiting launcher and a workload
+using the same record. Receiving a complete request does not prove exec succeeded
+or a service became ready. Preserve separate exec-failure reporting, readiness
+checks, timeouts, capture, and cancellation semantics. A close-on-exec error
+channel can report setup/exec failures, but EOF alone is not proof of successful
+exec: the launcher may have died without reporting. Settle that case using child
+exit evidence; never fabricate successful execution or service readiness.
+The launcher must not report successful exit without executing the target.
+Startup error messages contain fixed stage/error codes, not raw request values.
+
+| Owner dies | Consequence |
+| --- | --- |
+| Before identity commit | No execution request has been sent. The launcher exits on gate closure when scheduled; it cannot execute the workload. No separate child intent blocks recovery. |
+| After commit, before permission | Durable identity exists. Gate closure prevents workload execution; recovery can settle the registered child. |
+| During/after permission | The workload may execute, even after owner death if permission was already buffered. Recovery has the committed identity and must stop it before new execution. |
+
+This closes the unregistered-workload window, not every descendant-containment
+problem. It does not prove an unregistered launcher has already exited, discover
+arbitrary daemonized descendants, or make PID checks race-free. Define the
+remaining containment/recovery boundary independently, including boot identity
+where needed. Database durability must precede permission; process-kill evidence
+is not proof of power-loss durability.
+
+Investigation evidence: a temporary Linux Python mechanism experiment exercised
+five owner-SIGKILL trials at each of three barriers: before registration, after
+registration but before permission, and after permission. All 15 passed. The first
+two produced no workload effects and the launcher exited; the third preserved
+PID, PGID, and Linux start ticks through exec and allowed test cleanup. This used
+a synced file as registration evidence, not the production SQLite/Rust path.
+No experiment files were added to the repository.
+
+Before acceptance, prove the Rust implementation on Linux and macOS, including
+concurrent descriptor inheritance, failed registration/event commits, cancellation
+racing permission, invalid/partial messages, launcher/exec failure, very fast
+workload exit, and interrupted recovery. Verify process start identity across exec
+on both platforms and preservation of hermetic environment, stdin, and redaction.
+macOS behavior, SQLite durability, and runtime integration remain unverified.
+
+Source review supports the macOS identity strategy: XNU preserves `p_start` during
+exec, and `proc_bsdinfo` exposes that value as the start timestamp used by this
+runtime. Apple's exec documentation also preserves PID and process group. This
+supports, but does not replace, tests on supported macOS versions. If the runtime
+binary hosts the launcher, dispatch before ordinary signal-guard/admission setup;
+establish the target's required signal mask and dispositions before workload exec.
+Use atomic close-on-exec descriptor creation where available; otherwise coordinate
+creation and flag installation with every spawn path. Never temporarily make a
+parent descriptor globally inheritable to pass it to one child.
+
+Primary references: [Rust Unix spawn implementation](https://doc.rust-lang.org/src/std/sys/process/unix/unix.rs.html),
+[Rust pre-exec constraints](https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html),
+[pipe closure semantics](https://man7.org/linux/man-pages/man7/pipe.7.html),
+[parent-death signal semantics](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html),
+[Linux cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html), and
+[Darwin spawn flags](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/spawn.h),
+[XNU exec start-time preservation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_fork.c#L1123),
+[XNU process-info projection](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c#L703), and
+[Apple exec semantics](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/execve.2.html).
+
+### Data and evidence survive on different terms
+
+Recovery uses the predecessor's recorded ownership and retention authorization;
+the next manifest cannot retroactively make its persistent data disposable. Keep
+the marker as the state ownership/retention authority and preserve the necessary
+snapshot in cleanup intent because deletion destroys that marker. Do not add a
+second mutable table of slot policy that must remain synchronized with it.
+
+Recovery must not require the old source checkout or secret values merely to stop
+owned processes or refuse ambiguous cleanup. Its persisted inputs must already be
+safe to read and report without reconstructing the old secret environment.
+
+There is a concrete layout dependency: [placement.rs](runtime/crates/nixfied-runtime/src/state/placement.rs)
+currently puts `run_dir` beneath `state_root/runs/<run_id>`, while the registry is
+outside that tree. Move retained run evidence outside the application-data deletion
+target, or split that target explicitly, before enabling automatic run-scoped
+deletion. Exact paths remain runtime-owned and require a coordinated layout change.
+Do not preserve history in SQLite while deleting all files its evidence paths name.
+Define which artifact files are retained evidence and which belong to disposable
+application state; introduce no new cache or retention manager here.
+
+### Preserve the small durable core
+
+Keep transactionally coupled row changes and redacted events through the existing
+[events.rs](runtime/crates/nixfied-runtime/src/registry/events.rs) boundary. Preserve
+per-slot sequence ordering; timestamps remain diagnostic. Never store secrets and
+redact afterward. Keep closed decoding and exact ownership/ABI/schema checks.
+
+Remove repeated environment/slot columns from per-slot tables only where immutable
+`registry_meta` can supply them without losing required output. This optional
+normalization is lower priority than removing the sharing protocol. Retain
+self-contained provenance where a distinct evidence consumer needs it.
+
+Removing the heartbeat removes a concurrent writer and its failure paths, but is
+not sufficient reason to remove WAL, transaction boundaries, or busy handling.
+Evaluate those against the remaining observation and control access. Keep native,
+focused record operations; do not replace service-specific SQL with a generic ORM
+or configurable transition interpreter.
+
+### Cutover and independent proof
+
+Implement the session/registry change as one coherent contract, including controls,
+outputs, statuses, cleanup gates, and evidence layout. Supporting refactors may be
+separate commits only when each leaves one working current contract. Do not ship
+the new table model beside dormant old sharing semantics.
+
+Required evidence:
+
+1. Two same-slot sessions admit one owner; the loser starts no child and mutates
+   no application state. Different slots retain real host endpoint conflict checks.
+2. Multiple tasks/services share within one session with no leases or heartbeats.
+   Completing one task cannot finalize the run while work or teardown remains.
+3. Process, task, capture, and cleanup failures preserve distinct evidence; the
+   finalizer cannot mark completion with unresolved process or deletion obligations.
+4. Kill the owner around spawn/registration, readiness, final task outcome, process
+   termination, deletion intent, rename, and partial deletion. The successor
+   cleans before new execution or safely refuses. Test endpoint-less survivors.
+5. Process identity checks prevent signaling unrelated reused PIDs. `ps` verifies
+   liveness without database writes or signals; live `down` has one finalizer.
+6. Persistent state survives ordinary clean and new process startup; run-scoped
+   cleanup preserves registry history and retained logs/summaries. A new manifest
+   cannot downgrade old persistent data into automatic deletion.
+7. Failed event insertion rolls back its coupled record transition. Secret
+   sentinels never enter persistent rows, captured evidence, or error projections.
+8. Required old-schema/ABI rejections remain exact, while new raw records reject
+   incoherent states. New controls never read old rows through compatibility logic.
+
+Change the registry schema version for its new semantics and update ABI inventory,
+authored declarations, generated surfaces still needed, fixtures, and docs together.
+Do not migrate or reinterpret old history. Document old-runtime shutdown and an
+explicit preservation/export procedure for persistent data before incompatible
+registry/marker replacement. Do not automatically delete old history to make the
+new schema initialize successfully.
+
+Measure the result by removal of the borrower/standing/heartbeat/replacement
+protocol and competing completion writers, plus preserved recovery proofs. Six
+tables is a proposed target; no deletion-line count or performance gain is claimed
+before implementation and measurement.
+
+## 13. Delivery and verification
 
 Use ordered coherent commits rather than one rewrite. Suggested sequence:
 
 1. Reproduce and fix package selection independently.
-2. Complete the session/containment/control and state-exclusion design, resolving
-   the open decisions below before implementing dependent behavior.
+2. Complete the session/containment/control and state-exclusion design, including
+   S10's registry records and interruption protocol, before dependent behavior.
 3. Cut over session ownership, persistence finalization, recovery, and their wire
-   surfaces together. Remove standing/borrower alternatives in the same cutover.
+   surfaces together. Remove standing/borrower alternatives, their registry
+   coordination, and competing session-completion writers in the same cutover.
 4. Remove obsolete reuse/replacement machinery and verify retained state identity.
    Changes inseparable from step 3 belong in that same coherent commit.
 5. Reverse presentation dependencies and narrow internal type generation while
    preserving observable behavior where possible.
-6. Remove redundant wire assertions and inert fields in scoped contract changes.
+6. Remove accepted redundant wire assertions in a scoped contract change. Defer
+   unrelated inert-field and source-policy changes to the API behavior audit.
 7. Simplify help and any separately accepted compatibility/parser changes.
 
 For each cutover, update authored declarations, capability inventory, generated
@@ -578,14 +991,14 @@ Completion means fewer competing authorities with preserved or explicitly revise
 guarantees. Counts of deleted lines, generated records, or passing tests are not a
 substitute for demonstrating those guarantees.
 
-## 13. Open decisions
+## 14. Open decisions
 
 The accepted process/data separation, exclusive slot ownership, cleanup-then-
 restart recovery behavior, independent compilation/presentation dependency
 direction, shared-wire-only structural type generation, removal of carried
-duplicate graph answers, persistence as the sole retention policy, and executable
-identity based on selected outputs are not reopened by this list. These items
-remain to make implementation concrete:
+duplicate graph answers, persistence as the sole retention policy, executable
+identity based on selected outputs, and help scoped to generated apps are not
+reopened by this list. These items remain to make implementation concrete:
 
 - Define the exact foreground development session entrypoint without adding
   dynamic orchestration.
@@ -595,9 +1008,12 @@ remain to make implementation concrete:
   second finalization owner; dead-session recovery follows the accepted sequence.
 - Specify the slot exclusion and filesystem/registry deletion protocol, including
   durability, identity, and every interrupted transition.
-- Accept or revise S4, S7's remaining metadata/policy proposals, and S8–S9
-  after reviewing their explicit losses and required proofs. Those proposals are
-  not user-approved commitments.
+- Review S10's six-table target, finalizer-owned session completion, read-only
+  observation, recovery records, and evidence layout before implementing the
+  registry cutover. Those details are architect proposals, not yet accepted schema.
+- Accept or revise S4 and S9; defer S7's remaining metadata/policy proposals to
+  the API behavior audit after the main refactor. Review their explicit losses
+  and required proofs before accepting them as commitments.
 
 This draft contains design and verification obligations only. None of the proposed
 runtime behavior has been implemented or validated by adding this document.
