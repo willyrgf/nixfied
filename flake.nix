@@ -377,14 +377,14 @@
           );
           postgresManifest = nixfiedLib.compileManifest ./examples/postgres/nixfied.nix;
           # The cargo lifecycle test runs immediately before the gate in `.#ci`.
-          # Keep its Postgres window distinct: a stopped server may leave a
-          # non-listening TIME_WAIT claim that the gate's raw-bind preflight must
-          # continue to refuse rather than treating as available.
+          # Keep its window distinct from the gate and outside ephemeral ranges:
+          # polling connect can otherwise self-connect using the destination as
+          # its ephemeral source port, falsely indicating a live server.
           postgresTestManifest = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/postgres/nixfied.nix ];
-              nixfied.placement.ports.base = lib.mkForce 44580;
+              nixfied.placement.ports.base = lib.mkForce 25580;
             }
           );
           compositeManifest = nixfiedLib.compileManifest ./examples/composite/nixfied.nix;
