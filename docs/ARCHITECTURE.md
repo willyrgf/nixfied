@@ -309,6 +309,11 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   startup guards and child resources; committed readiness consumes a starting
   handle into a ready owner. Failure settlement consumes that ownership, and
   session finalization stops every remaining service and settles its capture.
+- **Descendant evidence stays on the execution thread.** Service checkpoints
+  refresh retained descendant identities and escape evidence directly. There is
+  no background scanner, shared monitor mutex, or ignored monitor join. Ready
+  service liveness checks include containment observation; startup grace polls
+  that same evidence and cancellation.
 - **Slot mutation has one owner.** A writable registry owns a non-cloneable
   slot guard through SQLite closure. Acquisition validates the private registry
   ancestry and a stable, non-followed lock file before admitting a writer.

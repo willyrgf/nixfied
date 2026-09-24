@@ -278,6 +278,10 @@ when the manifest/runtime contract changes.
   process group, cancellation reaches the whole group, and a long-lived process
   counts as started only after its registry process record exists. Admission
   fails when a service requires stronger containment than the host supports.
+- Service containment evidence is refreshed on the execution thread at liveness
+  checkpoints. Ready-service checks include descendant escape detection, and the
+  startup grace period polls containment and cancellation. No background process
+  scanner owns or updates this evidence.
 - TCP and exec-probe waits and retry delays observe both the current service and all
   already-started services. Observation failure stops the probe and prevents
   further work. Checkpoints run between waits of at most 10 ms; this cadence is
