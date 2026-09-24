@@ -150,7 +150,7 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
             assert!(text.contains("SECRET_LEAK_BLOCKED"), "{text}");
             // Task-output emits human diagnostics. Inspect the durable aggregate summary
             // and files directly: no completed node or task summary may be published.
-            let runs = fixture.state_base.join("runtime-test/dev/0/runs");
+            let runs = fixture.state_base.join("registry/runtime-test/dev/0/runs");
             let run = fs::read_dir(runs).unwrap().next().unwrap().unwrap().path();
             let summary: Value =
                 serde_json::from_slice(&fs::read(run.join("artifacts/run-summary.json")).unwrap())
@@ -224,7 +224,7 @@ fn child_receives_inserted_state_path_without_recursive_substitution() {
         String::from_utf8(output.stdout).unwrap(),
         format!(
             "${{HOME:-{}}}",
-            fixture.state_base.join("runtime-test/dev/0").display()
+            fixture.state_base.join("data/runtime-test/dev/0").display()
         )
     );
 }

@@ -14,6 +14,8 @@ primitive StatePolicy: markerIdentity stateEpoch cleanupPolicy persistence
 primitive SecretDescriptor: secretId source
 primitive SecretSource: kind envVar path
 primitive SlotPolicy: min default max
+# Host placement separates data/project/environment/slot from registry/project/environment/slot.
+# Run evidence is retained under registry slot runs/runId; cleanup targets application roots only.
 primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end

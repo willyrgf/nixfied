@@ -499,6 +499,18 @@ Host directories are resolved natively, outside `manifest.json`:
 | Runtime state | explicit `--state-base`, `NIXFIED_STATE_DIR`, `XDG_STATE_HOME/nixfied`, HOME fallback | `.local/state/nixfied` | `Library/Application Support/nixfied` |
 | File secrets | `NIXFIED_SECRETS_DIR`, `XDG_CONFIG_HOME/nixfied/secrets`, HOME fallback | `.config/nixfied/secrets` | `Library/Application Support/nixfied/secrets` |
 
+Application data is stored under `<base>/data/<project>/<environment>/<slot>`.
+The corresponding `registry/<project>/<environment>/<slot>` directory holds the
+registry and `runs/<runId>` evidence. Cleaning application state preserves logs,
+artifacts, summaries, and registry history.
+
+Placement changes are an incompatible runtime cutover. Stop or recover old
+sessions with their matching runtime before upgrading. Preserve existing data
+and history; the new runtime does not migrate or reinterpret them. If the old
+runtime cannot safely recover, stop the relevant processes offline and preserve
+the old state base before choosing a fresh base. Copying an old marker does not
+authorize reuse of preserved data.
+
 The explicit state argument retains the native parser's lexical-path behavior,
 including an empty operand; the nonempty rule applies to environment overrides.
 When a base is needed, unset HOME without another selected base rejects. Empty HOME is present and

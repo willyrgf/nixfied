@@ -79,10 +79,10 @@ pub fn derive_host_placement_for_slot(
     let slot_relative = project
         .join(environment)
         .join(selected_slot.slot.to_string());
-    let state_root = state_base.join(&slot_relative);
+    let state_root = application_root(&state_base, project, environment, selected_slot.slot);
     // Cleanup evidence survives deletion of the parallel slot state tree.
     let registry_dir = state_base.join("registry").join(&slot_relative);
-    let run_dir = state_root.join("runs").join(run_id);
+    let run_dir = registry_dir.join("runs").join(run_id);
     let logs_dir = run_dir.join("logs");
     let artifacts_dir = run_dir.join("artifacts");
     let summary_path = run_dir.join("summary.json");
@@ -98,7 +98,6 @@ pub fn derive_host_placement_for_slot(
 }
 
 pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
-    materialize_registry_root(placement)?;
     materialize_state_root(placement)
 }
 
@@ -112,17 +111,18 @@ pub fn materialize_registry_root(placement: &HostPlacement) -> RuntimeResult<()>
     materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)
 }
 
-/// Materialize the state root and this run's run/logs/artifacts dirs. Runs
-/// after the marker decision so an upgrade-clean can delete the previous state
-/// root before the new one is created.
+/// Materialize application state and this run's retained evidence directories.
+/// Runs after the marker decision so an upgrade-clean can delete previous
+/// application data without deleting run evidence.
 pub fn materialize_state_root(placement: &HostPlacement) -> RuntimeResult<()> {
     create_dir(&placement.state_base)?;
     let base = canonicalize_materialized("state base", &placement.state_base)?;
     materialize_owned_dir(&placement.state_base, &base, &placement.state_root)?;
-    let root = canonicalize_materialized("state root", &placement.state_root)?;
-    materialize_owned_dir(&placement.state_root, &root, &placement.run_dir)?;
-    materialize_owned_dir(&placement.state_root, &root, &placement.logs_dir)?;
-    materialize_owned_dir(&placement.state_root, &root, &placement.artifacts_dir)?;
+    materialize_registry_root(placement)?;
+    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.run_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)?;
     Ok(())
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn canonicalize_existing(label: &str, path: &Path) -> RuntimeResult<P
     })
 }
 
-fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {
+pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {
     let path = Path::new(value);
     let mut components = path.components();
     let normal = matches!(components.next(), Some(Component::Normal(part)) if part == value)
@@ -180,7 +180,10 @@ fn materialize_owned_dir(
     Ok(())
 }
 
-fn reject_existing_symlink_components(owner_root: &Path, path: &Path) -> RuntimeResult<()> {
+pub(crate) fn reject_existing_symlink_components(
+    owner_root: &Path,
+    path: &Path,
+) -> RuntimeResult<()> {
     let relative = path.strip_prefix(owner_root).map_err(|_| {
         RuntimeError::new(
             ErrorCode::StateUnwritable,
@@ -231,4 +234,17 @@ fn canonicalize_materialized(label: &str, path: &Path) -> RuntimeResult<PathBuf>
             format!("failed to canonicalize {label} {}: {error}", path.display()),
         )
     })
+}
+
+/// Application data and coordination/evidence have structurally disjoint roots.
+pub(crate) fn application_root(
+    base: &Path,
+    project: &Path,
+    environment: &Path,
+    slot: u32,
+) -> PathBuf {
+    base.join("data")
+        .join(project)
+        .join(environment)
+        .join(slot.to_string())
 }

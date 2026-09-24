@@ -593,7 +593,10 @@ fn slot_one_service_uses_slot_placement_port_window() {
     .expect("slot 1 service should accept slot placement port");
 
     assert_eq!(service.selected_endpoint().expect("endpoint").port, 23280);
-    assert_eq!(placement.state_root, tmp.path.join("runtime-test/dev/1"));
+    assert_eq!(
+        placement.state_root,
+        tmp.path.join("data/runtime-test/dev/1")
+    );
     service
         .stop(&mut registry, 1000)
         .expect("service should stop");
@@ -4346,7 +4349,7 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         run_summary["durationMs"].as_u64().is_some(),
         "run summary should carry durationMs: {run_summary}"
     );
-    let state_root = state_base.join("runtime-test").join("dev").join("0");
+    let state_root = state_base.join("data/runtime-test").join("dev").join("0");
     assert!(
         state_root.join(".nixfied-state.json").is_file(),
         "slot marker should exist after run"
