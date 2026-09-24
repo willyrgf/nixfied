@@ -16,46 +16,7 @@ struct RegistryIdentityDiagnostic<'a> {
 
 pub const SCHEMA_VERSION: i64 = 13;
 
-pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
-    conn.execute_batch(
-        "
-        PRAGMA busy_timeout = 5000;
-        PRAGMA journal_mode = WAL;
-        PRAGMA foreign_keys = ON;
-        ",
-    )
-    .map_err(sql_error)?;
-    let transaction = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
-    let starting_user_version = transaction
-        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .map_err(sql_error)?;
-    if starting_user_version != 0 && starting_user_version != SCHEMA_VERSION {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("expected registry user_version {SCHEMA_VERSION}, got {starting_user_version}"),
-        ));
-    }
-    let sqlite_table_count = user_table_count(&transaction)?;
-    let is_new_registry = starting_user_version == 0 && sqlite_table_count == 0;
-    if !is_new_registry {
-        if starting_user_version != SCHEMA_VERSION {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "expected registry user_version {SCHEMA_VERSION}, got {starting_user_version}"
-                ),
-            ));
-        }
-        verify_required_columns(&transaction)?;
-        verify_identity(&transaction, identity)?;
-        return transaction.commit().map_err(sql_error);
-    }
-
-    transaction
-        .execute_batch(
-            "
+const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
               id INTEGER PRIMARY KEY CHECK (id = 1),
               schema_version INTEGER NOT NULL,
@@ -138,9 +99,30 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               status TEXT NOT NULL,
               refusal_reason TEXT
             );
-            ",
-        )
+            ";
+
+pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
+    conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(sql_error)?;
+    // Existing bytes are admitted in a read snapshot before journal conversion
+    // or any schema write. An empty unversioned database is the only bootstrap.
+    {
+        let snapshot = conn.transaction().map_err(sql_error)?;
+        if !is_empty_unversioned(&snapshot)? {
+            verify_existing(&snapshot, identity)?;
+        }
+        snapshot.commit().map_err(sql_error)?;
+    }
+    configure_durability(conn)?;
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    if !is_empty_unversioned(&transaction)? {
+        verify_existing(&transaction, identity)?;
+        return transaction.commit().map_err(sql_error);
+    }
+
+    transaction.execute_batch(SCHEMA_SQL).map_err(sql_error)?;
 
     transaction
         .execute(
@@ -168,42 +150,88 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
     transaction.commit().map_err(sql_error)
 }
 
-fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
-    for (table, columns) in [
-        ("events", &["environment", "slot"][..]),
-        (
-            "runs",
-            &["environment", "slot", "execution_outcome", "finalization"][..],
-        ),
-        (
-            "processes",
-            &[
-                "environment",
-                "slot",
-                "execution_outcome",
-                "exit_code",
-                "service_name",
-            ][..],
-        ),
-        ("ports", &["environment", "slot"][..]),
-        ("cleanups", &["environment", "slot", "purge"][..]),
-    ] {
-        let mut statement = conn
-            .prepare(&format!("PRAGMA table_info({table})"))
-            .map_err(sql_error)?;
-        let found = statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(sql_error)?
-            .collect::<Result<std::collections::BTreeSet<_>, _>>()
-            .map_err(sql_error)?;
-        for column in columns {
-            if !found.contains(*column) {
-                return Err(RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    format!("registry table {table} is missing required column {column}"),
-                ));
-            }
-        }
+fn configure_durability(conn: &Connection) -> RuntimeResult<()> {
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .map_err(sql_error)?;
+    if mode != "wal" {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "registry requires WAL journal mode",
+        ));
+    }
+    conn.execute_batch("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
+        .map_err(sql_error)?;
+    #[cfg(target_os = "macos")]
+    conn.execute_batch("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;")
+        .map_err(sql_error)?;
+    for (setting, required) in [("synchronous", 2), ("foreign_keys", 1)] {
+        verify_setting(conn, setting, required)?;
+    }
+    #[cfg(target_os = "macos")]
+    for setting in ["fullfsync", "checkpoint_fullfsync"] {
+        verify_setting(conn, setting, 1)?;
+    }
+    Ok(())
+}
+
+fn verify_setting(conn: &Connection, setting: &str, required: i64) -> RuntimeResult<()> {
+    let actual: i64 = conn
+        .query_row(&format!("PRAGMA {setting}"), [], |row| row.get(0))
+        .map_err(sql_error)?;
+    if actual != required {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "registry durability setting was not established",
+        ));
+    }
+    Ok(())
+}
+
+fn is_empty_unversioned(conn: &Connection) -> RuntimeResult<bool> {
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(sql_error)?;
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
+        .map_err(sql_error)?;
+    Ok(version == 0 && count == 0)
+}
+
+#[derive(PartialEq, Eq)]
+struct SchemaObject {
+    kind: String,
+    name: String,
+    table: String,
+    sql: Option<String>,
+}
+
+fn schema_objects(conn: &Connection) -> RuntimeResult<Vec<SchemaObject>> {
+    conn.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+        .map_err(sql_error)?
+        .query_map([], |row| {
+            Ok(SchemaObject {
+                kind: row.get(0)?,
+                name: row.get(1)?,
+                table: row.get(2)?,
+                sql: row.get(3)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)
+}
+
+fn verify_schema(conn: &Connection) -> RuntimeResult<()> {
+    // Let SQLite interpret the one authored definition, including constraints
+    // and implicit indexes. Do not maintain a second partial column inventory.
+    let expected = Connection::open_in_memory().map_err(sql_error)?;
+    expected.execute_batch(SCHEMA_SQL).map_err(sql_error)?;
+    if schema_objects(conn)? != schema_objects(&expected)? {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "registry schema does not match its exact version",
+        ));
     }
     Ok(())
 }
@@ -296,15 +324,6 @@ fn registry_identity_json(identity: &RegistryIdentity) -> Value {
     })
 }
 
-fn user_table_count(conn: &Connection) -> RuntimeResult<i64> {
-    conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )
-    .map_err(sql_error)
-}
-
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }
@@ -321,6 +340,6 @@ pub(crate) fn verify_existing(conn: &Connection, identity: &RegistryIdentity) ->
             format!("expected registry user_version {SCHEMA_VERSION}, got {version}"),
         ));
     }
-    verify_required_columns(conn)?;
+    verify_schema(conn)?;
     verify_identity(conn, identity)
 }

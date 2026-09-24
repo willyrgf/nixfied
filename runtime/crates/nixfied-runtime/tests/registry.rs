@@ -455,7 +455,7 @@ fn rejects_current_registry_missing_required_shape() {
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     assert_eq!(
         error.message,
-        "registry table events is missing required column environment"
+        "registry schema does not match its exact version"
     );
 }
 
@@ -475,6 +475,145 @@ fn rejects_nonempty_unversioned_registry() {
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+}
+
+#[test]
+fn exact_schema_and_identity_reject_before_journal_conversion() {
+    for mutation in [
+        "ALTER TABLE events RENAME COLUMN payload_json TO lost_payload",
+        "ALTER TABLE events ADD COLUMN unexpected TEXT",
+        "CREATE TABLE unexpected (value TEXT)",
+        "CREATE TRIGGER suppress_event BEFORE INSERT ON events BEGIN SELECT RAISE(IGNORE); END",
+        "CREATE INDEX unexpected_index ON events(event_type)",
+        "PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = replace(sql, 'CHECK (slot >= 0)', '') WHERE name = 'events'; PRAGMA writable_schema = OFF",
+        "PRAGMA user_version = 99",
+        "UPDATE registry_meta SET toolchain_id = 'other-toolchain'",
+    ] {
+        let tmp = TempDir::new();
+        let placement = registry_placement(&tmp.path, &identity());
+        let path = placement.registry_path();
+        Registry::open_or_create(registry_guard(&placement), &identity())
+            .unwrap()
+            .close()
+            .unwrap();
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA journal_mode = DELETE").unwrap();
+            conn.execute_batch(mutation).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let expected = if mutation.contains("other-toolchain") {
+            ErrorCode::RuntimeAbiMismatch
+        } else {
+            ErrorCode::RegistryCorrupt
+        };
+        let reader_error = RegistryReader::open_existing(&path, &identity())
+            .err()
+            .expect(mutation);
+        assert_eq!(reader_error.code, expected, "{mutation}");
+        let writer_error = Registry::open_or_create(registry_guard(&placement), &identity())
+            .err()
+            .expect(mutation);
+        assert_eq!(writer_error.code, expected, "{mutation}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{mutation}");
+        assert!(!path.with_extension("sqlite3-wal").exists(), "{mutation}");
+        assert!(!path.with_extension("sqlite3-shm").exists(), "{mutation}");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "delete",
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn writer_requires_verified_durability_on_creation_and_reopen() {
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    for _ in 0..2 {
+        let registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+        let conn = registry.connection();
+        assert_eq!(
+            conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "wal"
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        #[cfg(target_os = "macos")]
+        for setting in ["fullfsync", "checkpoint_fullfsync"] {
+            assert_eq!(
+                conn.query_row(&format!("PRAGMA {setting}"), [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        registry.close().unwrap();
+    }
+    // SQLite silently keeps journal_mode=memory for this connection. A setting
+    // request that succeeds is insufficient; the boundary must verify its result.
+    let mut memory = rusqlite::Connection::open_in_memory().unwrap();
+    let error =
+        nixfied_runtime::registry::schema::initialize(&mut memory, &identity()).unwrap_err();
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert_eq!(
+        memory
+            .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn ignored_synchronous_setting_refuses_before_schema_creation() {
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let path = placement.registry_path();
+    let mut conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("PRAGMA synchronous = OFF").unwrap();
+    unsafe extern "C" fn ignore_sync_write(
+        _: *mut std::ffi::c_void,
+        action: std::ffi::c_int,
+        name: *const std::ffi::c_char,
+        value: *const std::ffi::c_char,
+        _: *const std::ffi::c_char,
+        _: *const std::ffi::c_char,
+    ) -> std::ffi::c_int {
+        if action == rusqlite::ffi::SQLITE_PRAGMA && !name.is_null() && !value.is_null()
+            // SAFETY: SQLite supplies this NUL-terminated name during callback.
+            && unsafe { std::ffi::CStr::from_ptr(name) } == c"synchronous"
+        {
+            rusqlite::ffi::SQLITE_IGNORE
+        } else {
+            rusqlite::ffi::SQLITE_OK
+        }
+    }
+    // SAFETY: callback has no borrowed state and lives for the connection.
+    assert_eq!(
+        unsafe {
+            rusqlite::ffi::sqlite3_set_authorizer(
+                conn.handle(),
+                Some(ignore_sync_write),
+                std::ptr::null_mut(),
+            )
+        },
+        rusqlite::ffi::SQLITE_OK
+    );
+    let error = nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap_err();
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    drop(conn);
+    assert_empty_unversioned_database(&path);
 }
 
 fn identity() -> RegistryIdentity {

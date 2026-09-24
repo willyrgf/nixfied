@@ -270,6 +270,14 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 - **Per-slot SQLite WAL registry** owns shared mutable state transactionally, with
   a total per-slot event order (timestamps are diagnostic only). It is a *durable
   record, not a liveness oracle*. (v1: the registry was treated as liveness truth.)
+  Existing version, complete SQLite schema objects, and placed-slot identity
+  validate in a read snapshot before journal conversion. The same authored DDL
+  creates the registry and defines its exact schema; added triggers, indexes,
+  columns, or weakened constraints reject without repair. Writable connections
+  explicitly require and verify WAL, `synchronous=FULL`, and foreign-key checks.
+  Darwin additionally requests and verifies `fullfsync` and
+  `checkpoint_fullfsync`. These settings do not by themselves establish filesystem
+  publication ordering or a tested host-power-loss guarantee.
 - **Liveness is reconciled against the OS** before being reported — `ps` confirms
   process identity (surviving PID reuse) before saying `running`/`stale`/etc.
 - **Registry readers own stored representation.** Service and control paths share
