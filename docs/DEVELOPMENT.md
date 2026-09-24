@@ -78,6 +78,11 @@ and fails loudly rather than skipping coverage. Lifecycle fixtures also receive
 `NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_SHELL` from the same Nix environments, so
 their declared programs are realised store closures.
 
+Runtime library tests that launch workloads require the sibling runtime binary.
+Before running `cargo test -p nixfied-runtime --lib` alone, run
+`cargo build -p nixfied-runtime` in the same Cargo target directory. The full
+workspace test command builds this binary through its integration targets.
+
 For a targeted Rust iteration inside the pinned development environment:
 
 ```sh

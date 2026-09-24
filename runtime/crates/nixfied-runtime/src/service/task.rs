@@ -13,12 +13,12 @@ use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
     CapturedExec, CapturedExecOutcome, CapturedExecTransition, ExecSubstitution, ReadyService,
-    SlotEndpoints, TerminationReason, platform_start_identity, resolve_exec_cwd,
-    spawn_captured_exec,
+    SlotEndpoints, TerminationReason, get_process_group, platform_start_identity, resolve_exec_cwd,
+    spawn_gated_captured_exec,
 };
 use crate::service::registry::{
-    TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
-    record_task_canceling, record_task_observed, record_task_started,
+    InvocationProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready,
+    mark_task_finished, record_task_canceling, record_task_observed, record_task_started,
 };
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
@@ -111,6 +111,7 @@ impl TaskExecutionError {
 /// context.
 #[derive(Debug, Clone, Copy)]
 pub struct RunContext<'a> {
+    launcher: &'a Path,
     admission: &'a RunAdmission,
     run_id: &'a str,
     state_root: &'a Path,
@@ -119,12 +120,14 @@ pub struct RunContext<'a> {
 
 impl<'a> RunContext<'a> {
     pub fn new(
+        launcher: &'a Path,
         admission: &'a RunAdmission,
         run_id: &'a str,
         state_root: &'a Path,
         redactor: &'a Redactor,
     ) -> Self {
         Self {
+            launcher,
             admission,
             run_id,
             state_root,
@@ -224,45 +227,67 @@ pub fn run_dependent_task_cancellable(
     })?;
     cancellation.check().map_err(TaskExecutionError::before)?;
     let started = Instant::now();
-    let child = spawn_captured_exec(&CapturedExec {
-        authority: registry.authority(),
-        executable: &exec.executable,
-        args: &args,
-        env: &env,
-        cwd: &command_cwd,
-        stdin: exec.stdin,
-        timeout: task.timeout,
-        stdout_path: &stdout_path,
-        stderr_path: &stderr_path,
-        redactor: run_context.redactor,
-        log_file_mode: LogFileMode::New,
-        label: "task process",
-    })
+    let child = spawn_gated_captured_exec(
+        &CapturedExec {
+            authority: registry.authority(),
+            executable: &exec.executable,
+            args: &args,
+            env: &env,
+            cwd: &command_cwd,
+            stdin: exec.stdin,
+            timeout: task.timeout,
+            stdout_path: &stdout_path,
+            stderr_path: &stderr_path,
+            redactor: run_context.redactor,
+            log_file_mode: LogFileMode::New,
+            label: "task process",
+        },
+        run_context.launcher,
+    )
     .map_err(TaskExecutionError::before)?;
     let pid = child.pid();
     // process_group(0) establishes the owned group before the child execs.
     let pgid = pid as i32;
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
-    let start_identity = super::StoredProcessIdentity::encode(
-        pid,
-        pgid,
-        platform_start_identity(pid).as_deref(),
-        None,
-    );
-    if let Err(error) = record_task_started(
-        registry,
-        &TaskProcessRecord {
-            run_id: run_context.run_id,
-            process_key: &process_key,
-            pid,
-            pgid,
-            start_identity: &start_identity,
-            command_json: &command_json,
-            computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
-        },
-    ) {
-        return Err(TaskExecutionError::before(child.abort(error)));
-    }
+    let child = child
+        .register_and_release(
+            |_| {
+                if get_process_group(pid)? != pgid {
+                    return Err(RuntimeError::new(
+                        ErrorCode::ProcEscape,
+                        "task launcher process group changed",
+                    ));
+                }
+                let platform_start = platform_start_identity(pid).ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::ProcEscape,
+                        "task launcher start identity is unavailable",
+                    )
+                })?;
+                let start_identity =
+                    super::StoredProcessIdentity::encode(pid, pgid, Some(&platform_start), None);
+                record_task_started(
+                    registry,
+                    &InvocationProcessRecord {
+                        run_id: run_context.run_id,
+                        process_key: &process_key,
+                        pid,
+                        pgid,
+                        start_identity: &start_identity,
+                        command_json: &command_json,
+                        computed_manifest_hash: run_context
+                            .admission
+                            .common()
+                            .computed_manifest_hash(),
+                    },
+                )
+            },
+            || {
+                cancellation.check()?;
+                check_services_live(dependencies)
+            },
+        )
+        .map_err(TaskExecutionError::before)?;
     let outcome = child
         .complete(
             cancellation,
@@ -573,20 +598,25 @@ mod tests {
             .connection()
             .execute("DROP TABLE events", [])
             .unwrap();
-        let child = spawn_captured_exec(&CapturedExec {
-            authority: registry.authority(),
-            executable: &std::env::var("NIXFIED_TEST_SLEEP").unwrap(),
-            args: &["30".into()],
-            env: &std::collections::BTreeMap::new(),
-            cwd: &root,
-            stdin: nixfied_manifest::StdinPolicy::Null,
-            timeout: Some(Duration::from_secs(5)),
-            stdout_path: &root.join("stdout"),
-            stderr_path: &root.join("stderr"),
-            redactor: &Redactor::empty(),
-            log_file_mode: LogFileMode::New,
-            label: "task process",
-        })
+        let child = crate::service::process::spawn_gated_captured_exec(
+            &CapturedExec {
+                authority: registry.authority(),
+                executable: &std::env::var("NIXFIED_TEST_SLEEP").unwrap(),
+                args: &["30".into()],
+                env: &std::collections::BTreeMap::new(),
+                cwd: &root,
+                stdin: nixfied_manifest::StdinPolicy::Null,
+                timeout: Some(Duration::from_secs(5)),
+                stdout_path: &root.join("stdout"),
+                stderr_path: &root.join("stderr"),
+                redactor: &Redactor::empty(),
+                log_file_mode: LogFileMode::New,
+                label: "task process",
+            },
+            &crate::launch::test_launcher(),
+        )
+        .unwrap()
+        .register_and_release(|_| Ok(()), || Ok(()))
         .unwrap();
         let pgid = child.pid() as i32;
         let cancellation = CancellationToken::new();

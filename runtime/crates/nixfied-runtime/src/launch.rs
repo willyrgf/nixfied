@@ -260,7 +260,14 @@ pub struct PendingLaunch {
 
 /// Even after an ambiguous permission send the caller retains the process
 /// handle and must contain/reap it. Never turn delivery failure into detachment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Registration {
+    Unconfirmed,
+    Committed,
+}
+
 pub struct LaunchFailure {
+    pub registration: Registration,
     pub child: std::process::Child,
     pub error: Box<crate::RuntimeError>,
 }
@@ -351,6 +358,10 @@ impl PreparedLaunch {
 }
 
 impl PendingLaunch {
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Abandon an inert bootstrap before registration, preserving the child for
     /// the caller's checked containment and reap. No request bytes were sent.
     pub fn abort(self) -> std::process::Child {
@@ -374,10 +385,12 @@ impl PendingLaunch {
             frame,
             deadline,
         } = self;
+        let mut registration = Registration::Unconfirmed;
         let result = (|| {
             checkpoint()?;
             check_deadline(deadline)?;
             register(&child)?;
+            registration = Registration::Committed;
             checkpoint()?;
             let mut remaining = frame.as_slice();
             while !remaining.is_empty() {
@@ -429,6 +442,7 @@ impl PendingLaunch {
         match result {
             Ok(()) => Ok(child),
             Err(error) => Err(LaunchFailure {
+                registration,
                 child,
                 error: Box::new(error),
             }),
@@ -499,4 +513,15 @@ fn check_deadline(deadline: Instant) -> crate::RuntimeResult<()> {
 }
 fn launch_error(message: &'static str) -> crate::RuntimeError {
     crate::RuntimeError::new(crate::ErrorCode::ProcEscape, message)
+}
+
+#[cfg(test)]
+pub(crate) fn test_launcher() -> std::path::PathBuf {
+    std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("nixfied-runtime")
 }

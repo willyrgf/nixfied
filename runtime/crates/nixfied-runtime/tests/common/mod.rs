@@ -228,6 +228,7 @@ pub fn start_fixture_service(
         run_id,
         selected_slot,
         ServiceSelection {
+            launcher: &runtime_binary(),
             service_name: SYNTHETIC_SERVICE_NAME,
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),

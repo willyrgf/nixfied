@@ -14,7 +14,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
@@ -69,10 +69,12 @@ const SCHEMA_SQL: &str = "
               run_id TEXT NOT NULL,
               service_instance_id TEXT,
               service_name TEXT,
+              role TEXT NOT NULL CHECK (role IN ('task', 'service', 'probe')),
               execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
               exit_code INTEGER,
               status TEXT NOT NULL,
-              CHECK ((service_instance_id IS NULL) = (service_name IS NULL)),
+              CHECK ((role = 'service') = (service_instance_id IS NOT NULL)),
+              CHECK ((role = 'task') = (service_name IS NULL)),
               CHECK (service_name IS NULL OR length(service_name) > 0),
               CHECK (execution_outcome IS NOT NULL OR exit_code IS NULL),
               CHECK (execution_outcome != 'succeeded' OR exit_code IS NOT NULL)

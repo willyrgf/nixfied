@@ -704,6 +704,12 @@ fn run_m0_placed(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
+    let launcher = std::env::current_exe().map_err(|_| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ProcEscape,
+            "cannot locate workload gate executable",
+        )
+    })?;
     let manifest = admission.common().manifest();
     let run_started = Instant::now();
     let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
@@ -811,7 +817,13 @@ fn run_m0_placed(
             binding.service.prepare.as_ref().map(|_| {
                 let context = NodeContext {
                     placement,
-                    run: RunContext::new(admission, run_id, &placement.state_root, redactor),
+                    run: RunContext::new(
+                        &launcher,
+                        admission,
+                        run_id,
+                        &placement.state_root,
+                        redactor,
+                    ),
                     cancellation,
                     output_mode: options.output_mode,
                 };
@@ -842,6 +854,7 @@ fn run_m0_placed(
             run_id,
             selected_slot,
             ServiceSelection {
+                launcher: &launcher,
                 service_name,
                 endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
@@ -914,7 +927,13 @@ fn run_m0_placed(
 
     let context = NodeContext {
         placement,
-        run: RunContext::new(admission, run_id, &placement.state_root, redactor),
+        run: RunContext::new(
+            &launcher,
+            admission,
+            run_id,
+            &placement.state_root,
+            redactor,
+        ),
         cancellation,
         output_mode: options.output_mode,
     };

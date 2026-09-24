@@ -32,6 +32,99 @@ mod common;
 use common::*;
 
 #[test]
+fn service_registration_event_failure_prevents_workload_effects() {
+    let root = TempDir::new();
+    let marker = root.path.join("must-not-execute");
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(
+        test_child().to_str().unwrap(),
+        &["output", "occurrence", marker.to_str().unwrap(), "0"],
+        port,
+    );
+    fixture.registry.connection().execute_batch(
+        "CREATE TRIGGER reject_service_registration BEFORE INSERT ON events WHEN NEW.event_type='service.starting' BEGIN SELECT RAISE(ABORT, 'injected'); END"
+    ).unwrap();
+    let error = expect_service_start_failure(
+        fixture.start("run-registration-denied", port),
+        &mut fixture.registry,
+        "registration failure must keep the gate closed",
+    );
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert!(!marker.exists());
+    assert_eq!(
+        fixture.query::<i64>("SELECT count(*) FROM processes", []),
+        0
+    );
+    assert_eq!(fixture.query::<i64>("SELECT count(*) FROM ports", []), 0);
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type='service.starting'",
+            []
+        ),
+        0
+    );
+}
+
+#[test]
+fn probe_registration_event_failure_prevents_workload_effects() {
+    let port = available_port_window(1);
+    let value = exec_probe_fixture_value(
+        &test_sleep(),
+        &["30"],
+        port,
+        json!([
+            "-c",
+            "printf forbidden > \"$1\"",
+            "probe",
+            "${stateDir}/must-not-execute"
+        ]),
+        1,
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let service = fixture
+        .start("run-probe-registration-denied", port)
+        .unwrap();
+    fixture.registry.connection().execute_batch(
+        "CREATE TRIGGER reject_probe_registration BEFORE INSERT ON events WHEN NEW.event_type='probe.running' BEGIN SELECT RAISE(ABORT, 'injected'); END"
+    ).unwrap();
+    let (service, error) = service
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
+        .expect_err("probe registration must reject before execution")
+        .into_parts();
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert!(
+        !fixture
+            .placement
+            .state_root
+            .join("must-not-execute")
+            .exists()
+    );
+    assert_eq!(
+        fixture.query::<i64>("SELECT count(*) FROM processes WHERE role='probe'", []),
+        0
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type='probe.running'",
+            []
+        ),
+        0
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM processes WHERE role='service' AND status='running'",
+            []
+        ),
+        1
+    );
+    service.finalize_failed_start(&mut fixture.registry, 1000, error);
+}
+
+#[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23180);
     let service = fixture
@@ -474,6 +567,7 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         "run-owner-collision",
         &selected,
         ServiceSelection {
+            launcher: &runtime_binary(),
             service_name: "other",
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
@@ -709,6 +803,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         &fixture.placement,
         &mut fixture.registry,
         RunContext::new(
+            &runtime_binary(),
             &fixture.admission,
             &service.info().run_id,
             &fixture.placement.state_root,
@@ -796,6 +891,7 @@ fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
         &fixture.placement,
         &mut fixture.registry,
         RunContext::new(
+            &runtime_binary(),
             &fixture.admission,
             &service.info().run_id,
             &fixture.placement.state_root,
@@ -945,7 +1041,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     let first_probe_log = fixture
         .placement
         .logs_dir
-        .join("lifecycle.ready.probe.stdout.log");
+        .join("lifecycle.synthetic.ready.probe.0.stdout.log");
     let acknowledge = thread::spawn(move || {
         assert!(
             wait_for_path(&first_probe_log, Duration::from_secs(5)),
@@ -974,7 +1070,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         fixture
             .placement
             .logs_dir
-            .join("lifecycle.ready.probe.stdout.log")
+            .join("lifecycle.synthetic.ready.probe.0.stdout.log")
             .exists(),
         "probe attempts should leave captured output"
     );
@@ -1001,6 +1097,32 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         .expect_err("a failing exec probe should time out and clean up")
         .into_parts();
 
+    assert_eq!(fixture.query::<i64>("SELECT count(*) FROM processes WHERE role='probe' AND service_name='synthetic' AND service_instance_id IS NULL AND execution_outcome='failed' AND exit_code=7 AND status='failed'", []), 3);
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type='probe.execution-observed'",
+            []
+        ),
+        3
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM runs WHERE execution_outcome IS NOT NULL",
+            []
+        ),
+        0
+    );
+    for occurrence in 0..3 {
+        assert!(
+            fixture
+                .placement
+                .logs_dir
+                .join(format!(
+                    "lifecycle.synthetic.ready.probe.{occurrence}.stdout.log"
+                ))
+                .is_file()
+        );
+    }
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
     assert!(
         error.message.contains("exited with code 7"),
@@ -1248,6 +1370,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &fixture.placement,
         &mut fixture.registry,
         RunContext::new(
+            &runtime_binary(),
             &fixture.admission,
             &service.info().run_id,
             &fixture.placement.state_root,
@@ -1348,6 +1471,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &fixture.placement,
         &mut fixture.registry,
         RunContext::new(
+            &runtime_binary(),
             &fixture.admission,
             &service.info().run_id,
             &fixture.placement.state_root,
@@ -2563,9 +2687,9 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                 .execute(
                     "INSERT INTO processes (
                    process_key, environment, slot, pid, pgid, start_identity,
-                   command_json, run_id, service_instance_id, status
+                   command_json, run_id, service_instance_id, status, role
                  ) SELECT ?1, environment, slot, 2147483647, 2147483647, start_identity,
-                          command_json, ?2, NULL, ?3
+                          command_json, ?2, NULL, ?3, 'task'
                    FROM processes WHERE process_key = ?4",
                     rusqlite::params![key, run_id, status, service.info().process_key],
                 )
@@ -2655,8 +2779,8 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status
-            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running')
+              command_json, run_id, service_instance_id, status, role
+            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running', 'task')
             ",
             rusqlite::params![
                 task_process_key,
@@ -3061,6 +3185,7 @@ impl ServiceFixture {
             run_id,
             &select_slot(self.admission.common().manifest(), None).expect("slot"),
             ServiceSelection {
+                launcher: &runtime_binary(),
                 service_name: "synthetic",
                 endpoint_ports: &BTreeMap::new(),
                 slot_endpoints: &SlotEndpoints::new(),
@@ -3088,6 +3213,7 @@ impl ServiceFixture {
             run_id,
             &selected,
             ServiceSelection {
+                launcher: &runtime_binary(),
                 service_name: "synthetic",
                 endpoint_ports: &endpoint_ports,
                 slot_endpoints: &SlotEndpoints::new(),
@@ -3373,7 +3499,27 @@ fn spawn_failure_after_prepare_settles_startup_and_allows_restored_retry() {
     );
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
-    assert_pre_child_settlement(&fixture.registry, "run-spawn-failed");
+    let (count, status): (i64, String) = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*), min(status) FROM processes WHERE run_id='run-spawn-failed'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((count, status.as_str()), (1, "failed"));
+    assert_eq!(
+        fixture.query::<i64>("SELECT count(*) FROM ports WHERE status != 'released'", []),
+        0
+    );
+    assert_eq!(
+        fixture.query::<Option<String>>(
+            "SELECT execution_outcome FROM runs WHERE run_id='run-spawn-failed'",
+            []
+        ),
+        None
+    );
 
     restore_executable_fixture(&executable);
     assert_prepared_retry(&mut fixture, "run-after-spawn-failed", port);

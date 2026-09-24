@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -316,6 +315,8 @@ struct OwnedService {
     health_probe: PreparedProbe,
     logs_dir: PathBuf,
     source_root: PathBuf,
+    launcher: PathBuf,
+    next_probe_occurrence: u64,
     redactor: Redactor,
     log_relays: Option<RedactedLogRelays>,
 }
@@ -384,8 +385,7 @@ impl OwnedService {
         for attempt in 0..attempts {
             cancellation.check()?;
             self.check_probe_liveness(registry, checkpoint)?;
-            let probe_attempt =
-                self.probe_attempt(registry.authority(), probe, cancellation, checkpoint);
+            let probe_attempt = self.probe_attempt(registry, probe, cancellation, checkpoint);
             if let Err(error) = self.check_owned_probe_liveness(registry) {
                 return Err(match probe_attempt {
                     Err(probe_error) => error.with_cause(probe_error),
@@ -474,8 +474,8 @@ impl OwnedService {
     }
 
     fn probe_attempt(
-        &self,
-        authority: &SlotGuard,
+        &mut self,
+        registry: &mut Registry,
         probe: &PreparedProbe,
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
@@ -502,24 +502,38 @@ impl OwnedService {
                     },
                 )
             }
-            PreparedProbe::Exec { policy, command } => exec_probe_attempt(
-                policy,
-                ExecProbe {
-                    command,
-                    source_root: &self.source_root,
-                    logs_dir: &self.logs_dir,
-                    redactor: &self.redactor,
-                    authority,
-                },
-                cancellation,
-                &mut || {
-                    checkpoint()?;
-                    if let Some(error) = self.escape_error() {
-                        return Err(error);
-                    }
-                    self.info.check_liveness()
-                },
-            ),
+            PreparedProbe::Exec { policy, command } => {
+                let occurrence = self.next_probe_occurrence;
+                self.next_probe_occurrence = occurrence.checked_add(1).ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::StateUnwritable,
+                        "probe occurrence sequence exhausted",
+                    )
+                })?;
+                exec_probe_attempt(
+                    policy,
+                    ExecProbe {
+                        command,
+                        source_root: &self.source_root,
+                        logs_dir: &self.logs_dir,
+                        redactor: &self.redactor,
+                        registry,
+                        launcher: &self.launcher,
+                        run_id: &self.info.run_id,
+                        service_name: &self.info.service_name,
+                        manifest_hash: &self.info.computed_manifest_hash,
+                        occurrence,
+                    },
+                    cancellation,
+                    &mut || {
+                        checkpoint()?;
+                        if let Some(error) = self.escape_error() {
+                            return Err(error);
+                        }
+                        self.info.check_liveness()
+                    },
+                )
+            }
         }
     }
 
@@ -1300,6 +1314,7 @@ fn shutdown_service_capture(capture: Option<RedactedLogRelays>) -> RuntimeResult
 /// its endpoints (keyed by endpointId), and the cross-service slot endpoint map
 /// `${port:<serviceId>}` resolves against.
 pub struct ServiceSelection<'a> {
+    pub launcher: &'a Path,
     pub service_name: &'a str,
     pub endpoint_ports: &'a BTreeMap<String, u16>,
     pub slot_endpoints: &'a SlotEndpoints,
@@ -1471,7 +1486,7 @@ pub(super) fn start_service_with_lock_root(
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
     // Until spawn succeeds, every failure can settle startup directly.
     // Once a child exists, the separate paths below must first prove containment.
-    let (mut child, command_json, redactor, mut log_relays) = (|| {
+    let (pending, command_json, redactor, mut log_relays) = (|| {
         cancellation.check()?;
         // prepare is a task reference: the caller supplies a runner that executes
         // the referenced task's flattened nodes (ordinary task evidence — logs,
@@ -1523,6 +1538,7 @@ pub(super) fn start_service_with_lock_root(
             stderr_path: stderr_path.as_path(),
         })
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
+        let request = crate::launch::PreparedLaunch::new(&exec.executable, &args, &env, &command_cwd)?;
         let redactor = Redactor::from_secrets(admission.secrets());
         let (stdout, stderr, log_relays) = if redactor.is_empty() {
             let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
@@ -1531,11 +1547,9 @@ pub(super) fn start_service_with_lock_root(
             let output = child_output(&stdout_path, &stderr_path, &redactor, LogFileMode::Replace)?;
             (output.stdout, output.stderr, Some(output.relays))
         };
-        let mut command = configured_command(&exec.executable, &args, &env, &command_cwd, exec.stdin);
-        command.stdout(stdout).stderr(stderr);
-        let spawned = cancellation.check().and_then(|()| registry.authority().spawn(command).map_err(|error| {
-            RuntimeError::new(ErrorCode::ProcEscape, format!("failed to spawn service {service_name}: {error}"))
-        }));
+        let spawned = cancellation.check().and_then(|()| request.spawn(
+            selection.launcher, registry.authority(), stdin_for(exec.stdin), stdout, stderr,
+        ));
         let child = match spawned {
             Ok(child) => child,
             Err(error) => {
@@ -1547,29 +1561,58 @@ pub(super) fn start_service_with_lock_root(
         Ok((child, command_json, redactor, log_relays))
     })()
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    let pid = child.id();
+    let pid = pending.id();
     // Before the start record commits, cleanup owns the child and capture, but
     // may settle startup only after proving containment.
-    let mut fail_unrecorded =
-        |registry: &mut Registry, context: &LifecycleEventContext, pgid, error: RuntimeError| {
-            let _ = record_lifecycle_failure(registry, context, &start_record, &error);
-            let containment = terminate_unrecorded_child(&mut child, pgid, service, run_timeout_ms);
-            let contained = containment.is_ok();
-            let error = completion_error(
-                containment,
-                shutdown_service_capture(log_relays.take()),
-                Some(error),
+    let mut fail_unrecorded = |registry: &mut Registry,
+                               child: &mut Child,
+                               context: &LifecycleEventContext,
+                               pgid,
+                               error: RuntimeError| {
+        let _ = record_lifecycle_failure(registry, context, &start_record, &error);
+        let containment = terminate_unrecorded_child(child, pgid, service, run_timeout_ms);
+        let contained = containment.is_ok();
+        let error = completion_error(
+            containment,
+            shutdown_service_capture(log_relays.take()),
+            Some(error),
+        )
+        .unwrap();
+        if contained {
+            settle_reserved_failure(registry, &run_id, &service_instance_id, error)
+        } else {
+            error
+        }
+    };
+    let observed = (|| {
+        let pgid = get_process_group(pid)?;
+        if pgid != pid as i32 {
+            return Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                "service launcher process group changed",
+            ));
+        }
+        let start = platform_start_identity(pid).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ProcEscape,
+                "service launcher start identity is unavailable",
             )
-            .unwrap();
-            if contained {
-                settle_reserved_failure(registry, &run_id, &service_instance_id, error)
-            } else {
-                error
-            }
-        };
-    let pgid = get_process_group(pid)
-        .map_err(|error| fail_unrecorded(registry, &lifecycle_context, None, error))?;
-    let platform_start = platform_start_identity(pid);
+        })?;
+        Ok((pgid, Some(start)))
+    })();
+    let (pgid, platform_start) = match observed {
+        Ok(identity) => identity,
+        Err(error) => {
+            let mut child = pending.abort();
+            return Err(fail_unrecorded(
+                registry,
+                &mut child,
+                &lifecycle_context,
+                None,
+                error,
+            ));
+        }
+    };
     let start_identity =
         super::StoredProcessIdentity::encode(pid, pgid, platform_start.as_deref(), Some(&[]));
     let process_key = format!("process-{run_id}-{pid}-{pgid}");
@@ -1580,23 +1623,42 @@ pub(super) fn start_service_with_lock_root(
         process_key: Some(process_key.clone()),
         computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
-    record_service_start(
-        registry,
-        &run_id,
-        admission.common().computed_manifest_hash(),
-        &service_record,
-        &ProcessRecord {
-            process_key: &process_key,
-            pid,
-            pgid,
-            start_identity: &start_identity,
-            command_json: &command_json,
-        },
-        &endpoints_to_record,
-    )
-    .map_err(|error| fail_unrecorded(registry, &started_context, Some(pgid), error))?;
     let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
     let monitor = spawn_process_monitor(pid, pgid, strict_process_group);
+    let (child, launch_error) = match pending.register_and_release(
+        |_| {
+            record_service_start(
+                registry,
+                &run_id,
+                admission.common().computed_manifest_hash(),
+                &service_record,
+                &ProcessRecord {
+                    process_key: &process_key,
+                    pid,
+                    pgid,
+                    start_identity: &start_identity,
+                    command_json: &command_json,
+                },
+                &endpoints_to_record,
+            )
+        },
+        || cancellation.check(),
+    ) {
+        Ok(child) => (child, None),
+        Err(failure) if failure.registration == crate::launch::Registration::Committed => {
+            (failure.child, Some(*failure.error))
+        }
+        Err(failure) => {
+            let mut child = failure.child;
+            return Err(fail_unrecorded(
+                registry,
+                &mut child,
+                &started_context,
+                Some(pgid),
+                *failure.error,
+            ));
+        }
+    };
     let mut started = StartingService {
         startup_guards,
         owned: Box::new(OwnedService {
@@ -1619,10 +1681,16 @@ pub(super) fn start_service_with_lock_root(
             health_probe,
             logs_dir: placement.logs_dir.clone(),
             source_root: source.observed_root.clone(),
+            launcher: selection.launcher.to_owned(),
+            next_probe_occurrence: 0,
             redactor,
             log_relays,
         }),
     };
+    if let Some(error) = launch_error {
+        let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
+        return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
+    }
     if let Err(error) = ensure_foreground_child_alive(&mut started.owned) {
         let error = started
             .owned
@@ -1942,54 +2010,87 @@ pub(crate) struct CapturedExecFailure {
     pub outcome: Option<CapturedExecOutcome>,
 }
 
-pub(crate) fn spawn_captured_exec(spec: &CapturedExec<'_>) -> RuntimeResult<OwnedCapturedChild> {
+/// Inert captured bootstrap. Capture and the child stay owned through failed
+/// registration/delivery; normal completion only accepts an authorized child.
+pub(crate) struct PendingCapturedChild {
+    pending: Option<crate::launch::PendingLaunch>,
+    capture: Option<RedactedLogRelays>,
+    timeout: Option<Duration>,
+    label: String,
+}
+
+impl PendingCapturedChild {
+    pub fn pid(&self) -> u32 {
+        self.pending.as_ref().expect("pending child is owned").id()
+    }
+
+    pub fn register_and_release(
+        mut self,
+        register: impl FnOnce(&Child) -> RuntimeResult<()>,
+        checkpoint: impl FnMut() -> RuntimeResult<()>,
+    ) -> RuntimeResult<OwnedCapturedChild> {
+        let result = self
+            .pending
+            .take()
+            .expect("pending child is owned")
+            .register_and_release(register, checkpoint);
+        match result {
+            Ok(child) => Ok(self.owned(child)),
+            Err(failure) => Err(self.owned(failure.child).abort(*failure.error)),
+        }
+    }
+
+    fn owned(&mut self, child: Child) -> OwnedCapturedChild {
+        OwnedCapturedChild {
+            child,
+            capture: self.capture.take(),
+            timeout: self.timeout,
+            label: std::mem::take(&mut self.label),
+        }
+    }
+}
+
+impl Drop for PendingCapturedChild {
+    fn drop(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            // Unwind fallback uses the same captured-child containment path.
+            drop(self.owned(pending.abort()));
+        }
+    }
+}
+
+pub(crate) fn spawn_gated_captured_exec(
+    spec: &CapturedExec<'_>,
+    launcher: &Path,
+) -> RuntimeResult<PendingCapturedChild> {
+    let request =
+        crate::launch::PreparedLaunch::new(spec.executable, spec.args, spec.env, spec.cwd)?;
     let output = child_output(
         spec.stdout_path,
         spec.stderr_path,
         spec.redactor,
         spec.log_file_mode,
     )?;
-    let mut command =
-        configured_command(spec.executable, spec.args, spec.env, spec.cwd, spec.stdin);
-    command.stdout(output.stdout).stderr(output.stderr);
-    // The consuming spawn closes command-owned pipe writers on every result.
-    let spawned = spec.authority.spawn(command);
-    match spawned {
-        Ok(child) => Ok(OwnedCapturedChild {
-            child,
+    match request.spawn(
+        launcher,
+        spec.authority,
+        stdin_for(spec.stdin),
+        output.stdout,
+        output.stderr,
+    ) {
+        Ok(pending) => Ok(PendingCapturedChild {
+            pending: Some(pending),
             capture: Some(output.relays),
             timeout: spec.timeout,
-            label: spec.label.to_owned(),
+            label: spec.label.into(),
         }),
         Err(error) => {
-            let error = RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to spawn {}: {error}", spec.label),
-            );
             let capture = output
                 .relays
                 .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
             Err(completion_error(Ok(()), capture, Some(error)).expect("spawn failure is retained"))
         }
     }
-}
-
-fn configured_command(
-    executable: &str,
-    args: &[String],
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-    stdin: StdinPolicy,
-) -> Command {
-    let mut command = Command::new(executable);
-    command
-        .env_clear()
-        .args(args)
-        .envs(env)
-        .current_dir(cwd)
-        .stdin(stdin_for(stdin));
-    command.process_group(0);
-    command
 }
 
 impl OwnedCapturedChild {
@@ -2123,16 +2224,6 @@ fn completion_error(
         });
     }
     primary
-}
-
-pub(crate) fn run_captured_exec(
-    spec: &CapturedExec<'_>,
-    cancellation: &CancellationToken,
-    checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
-) -> RuntimeResult<CapturedExecOutcome> {
-    spawn_captured_exec(spec)?
-        .complete(cancellation, checkpoint, |_| Ok(()))
-        .map_err(|failure| *failure.error)
 }
 
 /// Finish an owned bounded child, including descendants left after direct exit.
@@ -2270,7 +2361,7 @@ fn record_lifecycle_terminal(
     )
 }
 
-fn get_process_group(pid: u32) -> RuntimeResult<i32> {
+pub(crate) fn get_process_group(pid: u32) -> RuntimeResult<i32> {
     process_group(pid)?.ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -3058,7 +3149,7 @@ mod tests {
         let secrets =
             ResolvedSecrets::from_values(BTreeMap::from([("token".into(), "secret".into())]));
         let redactor = Redactor::from_secrets(&secrets);
-        let outcome = run_captured_exec(
+        let outcome = spawn_gated_captured_exec(
             &CapturedExec {
                 authority: &authority,
                 executable: "/bin/sh",
@@ -3078,9 +3169,13 @@ mod tests {
                 log_file_mode: LogFileMode::Replace,
                 label: "pipe-holder",
             },
-            &CancellationToken::new(),
-            &mut || Ok(()),
+            &crate::launch::test_launcher(),
         )
+        .unwrap()
+        .register_and_release(|_| Ok(()), || Ok(()))
+        .unwrap()
+        .complete(&CancellationToken::new(), || Ok(()), |_| Ok(()))
+        .map_err(|failure| *failure.error)
         .unwrap();
         let survived = marker.exists();
         let captured = std::fs::read_to_string(&stdout).unwrap();
@@ -3126,17 +3221,29 @@ mod tests {
             log_file_mode: LogFileMode::Replace,
             label: "task process",
         };
-        let error = spawn_captured_exec(&spec).err().unwrap();
+        let error = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher())
+            .unwrap()
+            .register_and_release(|_| Ok(()), || Ok(()))
+            .err()
+            .unwrap();
         assert_eq!(error.code, ErrorCode::ProcEscape);
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
         spec.executable = &executable;
-        let child = spawn_captured_exec(&spec).unwrap();
-        let pid = child.pid() as i32;
-        let error = child.abort(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            "process recording denied",
-        ));
+        let pending = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher()).unwrap();
+        let pid = pending.pid() as i32;
+        let error = pending
+            .register_and_release(
+                |_| {
+                    Err(RuntimeError::new(
+                        ErrorCode::RegistryCorrupt,
+                        "process recording denied",
+                    ))
+                },
+                || Ok(()),
+            )
+            .err()
+            .unwrap();
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
         assert_eq!(error.message, "process recording denied");
         assert_eq!(

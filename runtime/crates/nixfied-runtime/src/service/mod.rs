@@ -65,8 +65,9 @@ pub(crate) use process::{
     terminate_process_tree_with_snapshot,
 };
 pub(crate) use registry::{
-    ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
-    mark_task_finished, release_unresolved_escape_ports,
+    InvocationIdentity, InvocationOwner, ProcessRecord, TaskTerminalStatus,
+    mark_invocation_finished, mark_process_escape, mark_service_stopped, mark_task_finished,
+    release_unresolved_escape_ports,
 };
 
 #[cfg(test)]

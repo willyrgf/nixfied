@@ -25,6 +25,7 @@ jobs:
         run: |
           nix develop --command bash -euo pipefail -c '
             cd runtime
+            cargo build -p nixfied-runtime
             cargo test -p nixfied-runtime --lib
             cargo test -p nixfied-runtime --test endpoint --test service --test output
           '
