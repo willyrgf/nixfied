@@ -122,7 +122,6 @@ pub struct ClosureSpec {
     pub store_path: String,
     pub executable: String,
     pub target_system: String,
-    pub operation_bindings: UniqueVec<OperationId>,
     pub requires_executable: bool,
     pub effects: Vec<ClosureEffect>,
 }
@@ -250,8 +249,6 @@ pub struct TaskSpec {
     pub invocation: Option<InvocationSpec>,
     #[serde(default, skip_serializing_if = "UniqueVec::is_empty")]
     pub requires: UniqueVec<ServiceId>,
-    #[serde(default)]
-    pub services_required: UniqueVec<ServiceId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_policy: Option<ExitPolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

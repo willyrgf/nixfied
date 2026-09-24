@@ -554,11 +554,7 @@ fn endpoint_manifest(
         port,
     );
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-        "service.synthetic.start",
-        "task.endpoint-prepare.run",
-        "task.smoke.run"
-    ]);
+
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
     let (start_run, task_run) = match listener_behavior {
         "hold" => (
@@ -610,7 +606,7 @@ fn endpoint_manifest(
     prepare["serviceLifetime"] = json!("run-scoped");
     prepare["operationId"] = json!("task.endpoint-prepare.run");
     prepare["requires"] = json!([]);
-    prepare["servicesRequired"] = json!([]);
+
     prepare["logRefs"] = json!(["task.endpoint-prepare"]);
     prepare["invocation"]["run"] = if blocking_prepare {
         json!([

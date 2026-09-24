@@ -1513,7 +1513,7 @@ mod tests {
         });
         value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
         value["tasks"]["smoke"]["requires"] = json!([]);
-        value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+
         value["tasks"]["smoke"]["invocation"]["run"] = json!(["sleep", "0"]);
         let manifest: Manifest = serde_json::from_value(value).unwrap();
         let manifest_path = workspace.0.join("manifest.json");

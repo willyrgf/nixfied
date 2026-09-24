@@ -63,10 +63,7 @@ fn valid_manifest_json() -> Value {
                 "storePath": "/nix/store/00000000000000000000000000000000-synthetic-helper",
                 "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
                 "targetSystem": "aarch64-darwin",
-                "operationBindings": [
-                    "service.synthetic.start",
-                    "task.smoke.run"
-                ],
+
                 "requiresExecutable": true,
                 "effects": ["process", "network-listener"]
             }
@@ -119,7 +116,7 @@ fn smoke_task() -> Value {
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
         "requires": ["synthetic"],
-        "servicesRequired": ["synthetic"],
+
         "exitPolicy": { "successCodes": [0] },
         "artifactRefs": [],
         "logRefs": ["task.smoke"],
@@ -135,12 +132,6 @@ fn parse_valid_manifest() -> Manifest {
 /// binds its own lifecycle, endpoint, and probe. Used to prove structural
 /// validation accepts arbitrary service counts.
 fn add_worker_service(value: &mut Value) {
-    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
-        "service.synthetic.start",
-        "service.worker.start",
-        "task.smoke.run"
-    ]);
-
     let mut worker = synthetic_service();
     worker["endpoints"] =
         json!({ "worker-tcp": { "endpointId": "worker-tcp", "host": "127.0.0.1" } });
@@ -241,7 +232,6 @@ fn accepts_task_only_manifests() {
     let mut value = valid_manifest_json();
     value["services"] = json!({});
     value["tasks"]["smoke"]["requires"] = json!([]);
-    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
 
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
     ValidatedManifest::try_from(manifest).expect("task-only manifests are valid");
@@ -425,4 +415,27 @@ fn connects_to_chain_is_accepted() {
     value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
     ValidatedManifest::try_from(manifest).expect("acyclic wiring should validate");
+}
+
+#[test]
+fn removed_derived_fields_reject_at_the_wire_boundary() {
+    let valid = valid_manifest_json();
+    for (kind, id, field) in [
+        ("closures", "synthetic-helper", "operationBindings"),
+        ("tasks", "smoke", "servicesRequired"),
+    ] {
+        let mut value = valid.clone();
+        value
+            .get_mut(kind)
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json!([]));
+        assert!(
+            serde_json::from_value::<Manifest>(value).is_err(),
+            "{field}"
+        );
+    }
 }

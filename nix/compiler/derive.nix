@@ -59,7 +59,6 @@ let
       storePath = "${closure.package}";
       executable = "${closure.package}/${closure.executable}";
       targetSystem = target.closureSystem;
-      operationBindings = gatedBindings id closure.operationBindings;
       requiresExecutable = closure.requiresExecutable;
       effects = closure.effects;
     };
@@ -137,7 +136,6 @@ let
       kind = "executable";
       inherit (identity) storePath executable;
       targetSystem = target.closureSystem;
-      operationBindings = derivedBindings id;
       requiresExecutable = true;
       effects = [ "process" ];
     }
@@ -344,8 +342,8 @@ let
   services = mapAttrs serviceSpec config.nixfied.services;
 
   # Derived per task: the union of transitive leaf requires, closed over
-  # connectsTo (docs/DERIVATION_SPEC.md §3). The runtime re-derives and
-  # compares at admission (DERIVE-1).
+  # connectsTo (docs/DERIVATION_SPEC.md §3). Force the capacity check before
+  # emission; runtime independently derives its graph at admission (DERIVE-1).
   taskServicesRequired =
     let
       derived = deriveFacts.servicesRequired {
@@ -370,84 +368,89 @@ let
     required;
   taskSpec =
     name: task:
-    if task.kind == "composite" then
-      construct "TaskSpec" {
-        kind = "composite";
-        defaultOutput = task.defaultOutput;
-        serviceLifetime = task.serviceLifetime;
-        servicesRequired = taskServicesRequired name;
-        steps = mapAttrs (
-          _stepName: step:
-          construct "StepSpec" {
-            task = step.task;
-            dependsOn = step.dependsOn;
-          }
-        ) task.steps;
-      }
-    else
-      construct "TaskSpec" {
-        kind = "leaf";
-        defaultOutput = task.defaultOutput;
-        serviceLifetime = task.serviceLifetime;
-        operationId = leafOperationId name task;
-        invocation = resolveInvocation "task ${name}" task.invocation;
-        requires = task.requires;
-        servicesRequired = taskServicesRequired name;
-        exitPolicy = construct "ExitPolicy" {
-          successCodes = task.exitPolicy.successCodes;
-        };
-        artifactRefs = task.artifactRefs;
-        logRefs = task.logRefs;
-        summaryRefs = task.summaryRefs;
-      };
+    builtins.seq (taskServicesRequired name) (
+      if task.kind == "composite" then
+        construct "TaskSpec" {
+          kind = "composite";
+          defaultOutput = task.defaultOutput;
+          serviceLifetime = task.serviceLifetime;
+          steps = mapAttrs (
+            _stepName: step:
+            construct "StepSpec" {
+              task = step.task;
+              dependsOn = step.dependsOn;
+            }
+          ) task.steps;
+        }
+      else
+        construct "TaskSpec" {
+          kind = "leaf";
+          defaultOutput = task.defaultOutput;
+          serviceLifetime = task.serviceLifetime;
+          operationId = leafOperationId name task;
+          invocation = resolveInvocation "task ${name}" task.invocation;
+          requires = task.requires;
+          exitPolicy = construct "ExitPolicy" {
+            successCodes = task.exitPolicy.successCodes;
+          };
+          artifactRefs = task.artifactRefs;
+          logRefs = task.logRefs;
+          summaryRefs = task.summaryRefs;
+        }
+    );
   tasks = mapAttrs taskSpec config.nixfied.tasks;
 
 in
 {
   packages = closurePackages;
 
-  manifest = construct "Manifest" {
-    manifestVersion = constants.manifestVersion;
-    toolchainId = constants.toolchainId;
-    runtimeAbi = constants.runtimeAbi;
-    generator = construct "Generator" {
-      name = "nixfied";
-      version = constants.toolchainId;
-      emitter = "nix/compiler/emit-manifest.nix";
-    };
-    project = construct "Project" {
-      inherit (config.nixfied.project) projectId name;
-    };
-    inherit target;
-    codebases = [
-      (construct "Codebase" {
-        codebaseId = "main";
-        inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
-        sourcePolicy = construct "SourcePolicy" {
-          inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
-        };
-      })
-    ];
-    secrets = secretDescriptors;
-    # Membership does not exist; `dev` is the single isolation namespace
-    # (state roots, slots, registry keys).
-    environments = [ "dev" ];
-    inherit slotPolicy;
-    placement = construct "Placement" {
-      inherit slotPlacements;
-    };
-    state = construct "StatePolicy" {
-      inherit (config.nixfied.state)
-        markerIdentity
-        stateEpoch
-        cleanupPolicy
-        persistence
-        ;
-    };
-    inherit
-      closures
-      services
-      tasks
-      ;
-  };
+  manifest =
+    builtins.deepSeq
+      (mapAttrs (id: closure: gatedBindings id closure.operationBindings) config.nixfied.closures)
+      (
+        construct "Manifest" {
+          manifestVersion = constants.manifestVersion;
+          toolchainId = constants.toolchainId;
+          runtimeAbi = constants.runtimeAbi;
+          generator = construct "Generator" {
+            name = "nixfied";
+            version = constants.toolchainId;
+            emitter = "nix/compiler/emit-manifest.nix";
+          };
+          project = construct "Project" {
+            inherit (config.nixfied.project) projectId name;
+          };
+          inherit target;
+          codebases = [
+            (construct "Codebase" {
+              codebaseId = "main";
+              inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
+              sourcePolicy = construct "SourcePolicy" {
+                inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
+              };
+            })
+          ];
+          secrets = secretDescriptors;
+          # Membership does not exist; `dev` is the single isolation namespace
+          # (state roots, slots, registry keys).
+          environments = [ "dev" ];
+          inherit slotPolicy;
+          placement = construct "Placement" {
+            inherit slotPlacements;
+          };
+          state = construct "StatePolicy" {
+            inherit (config.nixfied.state)
+              markerIdentity
+              stateEpoch
+              cleanupPolicy
+              persistence
+              ;
+          };
+          inherit
+            closures
+            services
+            tasks
+            ;
+        }
+      );
 }

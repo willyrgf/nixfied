@@ -54,7 +54,7 @@ let
     kind = "composite";
     defaultOutput = "summary";
     serviceLifetime = "run-scoped";
-    servicesRequired = [ ];
+
   };
   child = {
     identity = d.local "Child";
@@ -167,14 +167,18 @@ let
     };
     task = {
       expr = builtins.toJSON (make "TaskSpec" task);
-      expected = ''{"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped","servicesRequired":[]}'';
+      expected = ''{"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped"}'';
     };
     suppliedEmpty = {
       expr = builtins.toJSON (make "TaskSpec" (task // { artifactRefs = [ ]; }));
-      expected = ''{"artifactRefs":[],"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped","servicesRequired":[]}'';
+      expected = ''{"artifactRefs":[],"defaultOutput":"summary","kind":"composite","serviceLifetime":"run-scoped"}'';
     };
     requiredDespiteDefault = {
-      expr = rejects (make "TaskSpec" (builtins.removeAttrs task [ "servicesRequired" ]));
+      expr = rejects (make "TaskSpec" (builtins.removeAttrs task [ "defaultOutput" ]));
+      expected = true;
+    };
+    removedDerivedField = {
+      expr = rejects (make "TaskSpec" (task // { servicesRequired = [ ]; }));
       expected = true;
     };
     secret = {

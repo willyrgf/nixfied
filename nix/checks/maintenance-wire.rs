@@ -8,9 +8,9 @@ fn select(task: &FixtureTaskSpec) -> bool {
 #[test]
 fn required_boolean_rejects_missing_null_and_wrong_type() {
     for raw in [
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[]}"#,
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[],"fixtureEnabled":null}"#,
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[],"fixtureEnabled":"true"}"#,
+        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped"}"#,
+        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":null}"#,
+        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":"true"}"#,
     ] {
         assert!(serde_json::from_str::<FixtureTaskSpec>(raw).is_err());
     }
@@ -20,11 +20,11 @@ fn required_boolean_rejects_missing_null_and_wrong_type() {
 fn added_boolean_is_constructed_serialized_and_consumed_natively() {
     for (raw, expected) in [
         (
-            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[],"fixtureEnabled":true}"#,
+            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":true}"#,
             true,
         ),
         (
-            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[],"fixtureEnabled":false}"#,
+            r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","fixtureEnabled":false}"#,
             false,
         ),
     ] {

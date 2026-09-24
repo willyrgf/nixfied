@@ -104,7 +104,7 @@ let
     kind = "composite";
     defaultOutput = "summary";
     serviceLifetime = "run-scoped";
-    servicesRequired = [ ];
+
   };
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
 
@@ -113,7 +113,7 @@ assert rejects (construct input);
 assert rejects (construct (input // { fixtureEnabled = null; }));
 assert
   builtins.toJSON (construct (input // { fixtureEnabled = true; }))
-  == ''{"defaultOutput":"summary","fixtureEnabled":true,"kind":"composite","serviceLifetime":"run-scoped","servicesRequired":[]}'';
+  == ''{"defaultOutput":"summary","fixtureEnabled":true,"kind":"composite","serviceLifetime":"run-scoped"}'';
 assert (construct (input // { fixtureEnabled = false; })).fixtureEnabled == false;
 assert lib.hasInfix "--budget-ms <operation-budget-milliseconds>" syntax.help.run;
 import ./cargo-fixture.nix { inherit pkgs; } {

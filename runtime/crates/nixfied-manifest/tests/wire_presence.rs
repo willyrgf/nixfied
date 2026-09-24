@@ -86,15 +86,9 @@ fn task_defaults_and_unique_lists_keep_distinct_wire_policies() {
     assert_eq!(TaskDefaultOutput::default(), TaskDefaultOutput::Summary);
     assert_eq!(
         serde_json::to_string(&parsed).unwrap(),
-        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped","servicesRequired":[]}"#
+        r#"{"kind":"composite","defaultOutput":"summary","serviceLifetime":"run-scoped"}"#
     );
-    for field in [
-        "defaultOutput",
-        "servicesRequired",
-        "steps",
-        "requires",
-        "artifactRefs",
-    ] {
+    for field in ["defaultOutput", "steps", "requires", "artifactRefs"] {
         let mut invalid = input.clone();
         invalid[field] = Value::Null;
         assert!(
@@ -106,6 +100,7 @@ fn task_defaults_and_unique_lists_keep_distinct_wire_policies() {
     invalid["defaultOutput"] = json!("unknown");
     assert!(serde_json::from_value::<TaskSpec>(invalid).is_err());
     let mut duplicate = input;
-    duplicate["servicesRequired"] = json!(["db", "db"]);
+    duplicate["requires"] = json!(["db", "db"]);
+
     assert!(serde_json::from_value::<TaskSpec>(duplicate).is_err());
 }

@@ -2,7 +2,10 @@
 
 let
   manifestJson = builtins.toJSON derived.manifest;
-  docsMarkdown = import ./views.nix { manifest = derived.manifest; };
+  docsMarkdown = import ./views.nix {
+    manifest = derived.manifest;
+    inherit (pkgs) lib;
+  };
 in
 pkgs.runCommand "nixfied-manifest"
   {

@@ -363,7 +363,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       ],
       'derivation': [
           'Status: **normative**.',
-          'neither implementation may drift from the text',
+          'no equality check of',
           'flatten(ci) =',
           'ci.check.fmt',
           'servicesRequired(all) = ["api", "postgres", "worker"]',

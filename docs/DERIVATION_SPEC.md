@@ -2,14 +2,14 @@
 
 ## Specification ownership and scope
 
-Status: **normative**. Both implementations — the Nix compiler
-(`nix/compiler/derive.nix`) and the runtime lowering
-(`runtime/crates/nixfied-runtime/src/execution/lower.rs`) — are written
-against this document, and the golden vectors in §6 land as fixtures on both
-sides. This is the DERIVE-1 drift mitigation: like the ABI digest, a derived
-fact is trustworthy only because two independent implementations share one
-normative source. If this spec is wrong, fix the spec first, then both
-implementations; neither implementation may drift from the text.
+Status: **normative**. Nix validates authored graphs and restrictions; runtime
+admission derives the graph it executes from manifest inputs. Independent Nix
+and Rust vectors and behavioral tests establish conformance. The manifest does
+not carry `servicesRequired` or `operationBindings`, and no equality check of
+carried graph facts occurs at admission. Closure binding sets exist only to
+check authored Nix restrictions; runtime executable selection remains mandatory.
+This removes per-manifest detection of disagreement between Nix and Rust graph
+derivations; independent vectors do not prove agreement for every possible input.
 
 Scope: the exact algorithms for
 
@@ -150,7 +150,7 @@ name uniqueness).
 
 The derived service set of a selected task — the services started (eagerly,
 upfront) for the run, the planner's port-demand input, and the runtime's
-admission-compare target.
+admission-derived plan input.
 
 ```
 servicesRequired(task):
@@ -185,17 +185,17 @@ Pinned consequences:
 - `requires` targets and `connectsTo` targets must name declared services
   (eval + admission error otherwise; the existing undeclared-reference
   checks).
-- The runtime re-derives this set at admission and compares it with the
-  manifest-carried value; a mismatch is `MANIFEST_ADMISSION` naming both values
-  (DERIVE-1, fail closed).
+- Runtime admission derives this set from graph inputs and checks every slot's
+  capacity before execution. Nix derives it for early diagnostics and disposable
+  documentation; the manifest contains only its inputs.
 
 An explicit `operationBindings`-style narrowing does **not** exist for
 `servicesRequired`: the set is a fact, not a choice.
 
 ## 4. `operationBindings(closure)`
 
-The derived authorization map: which operations a closure is dispatched
-against. With invocations inline, every executed program position is an
+The Nix authoring restriction check: which operations dispatch against a
+closure. With invocations inline, every executed program position is an
 invocation whose `run[0]` was resolved at eval to an executable provided by
 exactly one declared closure (its *executable closure*).
 
@@ -230,11 +230,13 @@ Pinned consequences:
   gate**: if declared, it must be a *superset-equal check* target — the
   derived set must be a subset of the declared set, and every declared
   binding must name a declared operation. A derived binding outside the
-  declared list is an eval + admission error ("closure `c` is dispatched
+  declared list is an eval error ("closure `c` is dispatched
   against `op` but its declared bindings do not allow it"). Absent a
-  declaration, the derived set is authoritative.
-- The runtime re-derives and compares at admission like §3 (fail closed,
-  `MANIFEST_ADMISSION` naming both values).
+  declaration, the derived set determines the authoring check.
+- No binding set crosses the wire. Nix owns this authored restriction; runtime
+  admission resolves each invocation against its declared tools, validates
+  references and effects, and checks operation-ID uniqueness. It creates no
+  otherwise-unused binding registry.
 
 ## 5. Default operation ids and terminal tokens
 
@@ -282,8 +284,9 @@ wire.
 
 ### 6.1 Representative examples
 
-Each vector is input (the relevant manifest fragment) and the exact expected
-derivation. These land verbatim as fixtures in **both** implementations:
+Each vector is graph input and the exact expected derivation. Nix binding-set
+vectors prove authoring restrictions; Rust vectors prove selected executables
+and graph behavior. Both implementations retain independent literal expectations:
 Nix eval fixtures under the compiler tests, and cargo fixtures next to the
 runtime lowering. A fixture diverging from this section is a bug in the
 fixture.
