@@ -4,7 +4,9 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Component, PathBuf};
+use std::process::{Child, Command};
 
 use super::HostPlacement;
 use crate::cancellation::CancellationToken;
@@ -167,6 +169,24 @@ impl SlotGuard {
         self.directory
             .verify_private_file(c"slot.lock", &self.file)
             .map_err(acquisition_error)
+    }
+
+    /// Consume the command so its pre-exec callback cannot outlive this borrow
+    /// and later close an unrelated descriptor after the guard has been released.
+    pub(crate) fn spawn(&self, mut command: Command) -> io::Result<Child> {
+        let inherited = self.file.as_raw_fd();
+        // SAFETY: the guard remains borrowed until spawn returns. The child
+        // callback uses only close; it neither allocates nor unlocks the shared
+        // open file description. A failed close is not retried.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::close(inherited) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        crate::spawn::command(&mut command)
     }
 
     pub fn release(self) -> RuntimeResult<()> {
@@ -382,6 +402,95 @@ mod tests {
             0o600
         );
         guard.release().unwrap();
+    }
+
+    #[test]
+    fn production_spawn_closes_authority_even_without_close_on_exec() {
+        const ISOLATED: &str = "NIXFIED_TEST_ISOLATED_AUTHORITY_SPAWN";
+        if std::env::var_os(ISOLATED).is_none() {
+            // Other harness threads can fork while this guard exists, retaining
+            // its lock briefly until exec. Isolate the proof from that documented
+            // fork window so only the intended child can retain this authority.
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "state::ownership::tests::production_spawn_closes_authority_even_without_close_on_exec",
+                    "--nocapture",
+                ])
+                .env(ISOLATED, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let _isolated = LOCK_TEST.lock().unwrap();
+        let fixture = Fixture::new();
+        let guard = fixture.acquire().unwrap();
+        let inherited = guard.file.as_raw_fd();
+        let remove_close_on_exec = |command: &mut Command| {
+            // SAFETY: only fcntl runs after fork. Alter the child copy of the
+            // flag, leaving the parent's descriptor unchanged. This callback
+            // precedes SlotGuard's close and defeats CLOEXEC as a false proof.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::fcntl(inherited, libc::F_SETFD, 0) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        };
+        let mut command = Command::new(std::env::var("NIXFIED_TEST_CHILD").unwrap());
+        command.arg("assert-fd-closed").arg(inherited.to_string());
+        remove_close_on_exec(&mut command);
+        assert!(guard.spawn(command).unwrap().wait().unwrap().success());
+        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
+
+        let mut command = Command::new(std::env::var("NIXFIED_TEST_SLEEP").unwrap());
+        command.arg("30");
+        remove_close_on_exec(&mut command);
+        let mut child = guard.spawn(command).unwrap();
+        let parent_still_owns = fixture.acquire().is_err();
+        guard.release().unwrap();
+        let successor = fixture.acquire();
+        // Settle the test child before asserting so failures do not orphan it.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(
+            parent_still_owns,
+            "child close must never unlock the parent"
+        );
+        successor
+            .expect("live child must not retain released authority")
+            .release()
+            .unwrap();
+    }
+
+    #[test]
+    fn child_authority_close_failure_refuses_exec_without_unlocking_parent() {
+        let _isolated = LOCK_TEST.lock().unwrap();
+        let fixture = Fixture::new();
+        let guard = fixture.acquire().unwrap();
+        let inherited = guard.file.as_raw_fd();
+        let marker = fixture.root.join("must-not-execute");
+        let mut command = Command::new(std::env::var("NIXFIED_TEST_SHELL").unwrap());
+        command
+            .args(["-c", "printf unexpected > \"$1\"", "test"])
+            .arg(&marker);
+        // SAFETY: simulate a child descriptor setup fault using close only.
+        // The guard's following close must report EBADF and prevent exec.
+        unsafe {
+            command.pre_exec(move || {
+                libc::close(inherited);
+                Ok(())
+            });
+        }
+        let error = guard.spawn(command).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+        assert!(!marker.exists());
+        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
+        guard.release().unwrap();
+        fixture.acquire().unwrap().release().unwrap();
     }
 
     #[test]
