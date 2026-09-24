@@ -1,8 +1,6 @@
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
@@ -37,16 +35,6 @@ impl CancellationToken {
 
 pub fn canceled_error() -> RuntimeError {
     RuntimeError::new(ErrorCode::Canceled, "run was canceled")
-}
-
-pub fn sleep_cancellable(duration: Duration, token: &CancellationToken) -> RuntimeResult<()> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        token.check()?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        thread::sleep(remaining.min(Duration::from_millis(10)));
-    }
-    token.check()
 }
 
 extern "C" fn handle_signal(_signal: libc::c_int) {

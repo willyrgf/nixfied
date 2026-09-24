@@ -50,11 +50,13 @@ pub(crate) fn exec_probe_attempt(
     logs_dir: &Path,
     redactor: &Redactor,
     cancellation: &CancellationToken,
+    checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
 ) -> RuntimeResult<ProbeAttempt> {
     let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
     let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
     let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
     cancellation.check()?;
+    checkpoint()?;
     let outcome = run_captured_exec(
         &CapturedExec {
             executable: &command.executable,
@@ -70,6 +72,7 @@ pub(crate) fn exec_probe_attempt(
             label: &format!("lifecycle operation {}", probe.label),
         },
         cancellation,
+        checkpoint,
     )?;
     Ok(match outcome {
         CapturedExecOutcome::Canceled => return Err(canceled_error()),

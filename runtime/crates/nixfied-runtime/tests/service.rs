@@ -144,7 +144,11 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         .expect("foreground service should start");
 
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owned listener should satisfy readiness");
     let process_status: String = fixture.query(
         "SELECT status FROM processes WHERE process_key = ?1",
@@ -201,7 +205,11 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
         .expect("test should inject an unexpected open endpoint row");
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("ready activation must reject the complete mismatched open set")
         .into_parts();
 
@@ -269,7 +277,11 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
         .expect("test should race the reserved owner evidence");
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("ready activation must not accept a mismatched owner")
         .into_parts();
 
@@ -314,10 +326,18 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .expect("foreground service should start");
 
     let mut service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("service should become ready");
     service
-        .check_health(&mut fixture.registry, &CancellationToken::new())
+        .check_health(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("service health should pass");
     service
         .stop(&mut fixture.registry, 1000)
@@ -423,7 +443,11 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         .start("run-owner-attribution", port, ServiceLifetime::RunScoped)
         .expect("owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owner should prove its listener");
 
     // A second address with the same exact service contract creates a distinct
@@ -509,7 +533,11 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
         .expect("foreground service should start");
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("wildcard listener must not satisfy declared loopback endpoint")
         .into_parts();
 
@@ -683,7 +711,11 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         .start("run-task", port, ServiceLifetime::RunScoped)
         .expect("foreground service should start");
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owned listener should become ready");
 
     let task = run_dependent_task_cancellable(
@@ -756,7 +788,11 @@ fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
         .expect("foreground service should start");
 
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .unwrap();
     fixture
         .registry
@@ -809,7 +845,11 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
         .expect("service should initially start");
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("readiness should time out and clean up")
         .into_parts();
 
@@ -925,7 +965,11 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     });
 
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("exec probe should succeed once the flag appears");
     acknowledge
         .join()
@@ -959,7 +1003,11 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         .expect("service should initially start");
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("a failing exec probe should time out and clean up")
         .into_parts();
 
@@ -1013,7 +1061,11 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
                 fs::write(root.join("ack"), b"ready").unwrap();
             })
         });
-        let result = service.ready(&mut fixture.registry, &CancellationToken::new());
+        let result = service.ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        );
         if let Some(acknowledger) = acknowledger {
             acknowledger.join().unwrap();
             let service =
@@ -1051,11 +1103,19 @@ fn exec_health_probe_failure_records_failed() {
             .start("run-exec-health-fail", port, ServiceLifetime::RunScoped)
             .expect("service should start");
         let mut service = service
-            .ready(&mut fixture.registry, &CancellationToken::new())
+            .ready(
+                &mut fixture.registry,
+                &CancellationToken::new(),
+                &mut || Ok(()),
+            )
             .expect("service should become ready");
 
         let error = service
-            .check_health(&mut fixture.registry, &CancellationToken::new())
+            .check_health(
+                &mut fixture.registry,
+                &CancellationToken::new(),
+                &mut || Ok(()),
+            )
             .expect_err("a failing health probe should fail the service");
 
         assert_ne!(error.code, ErrorCode::Canceled);
@@ -1134,7 +1194,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     });
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &cancellation)
+        .ready(&mut fixture.registry, &cancellation, &mut || Ok(()))
         .expect_err("readiness should be canceled")
         .into_parts();
     let process_key = service.info().process_key.clone();
@@ -1188,7 +1248,11 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         .start("run-task-canceled", port, ServiceLifetime::RunScoped)
         .expect("foreground service should start");
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owned listener should become ready");
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
@@ -1298,7 +1362,11 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .start("run-task-timeout", port, ServiceLifetime::RunScoped)
         .expect("foreground service should start");
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owned listener should become ready");
 
     let result = run_dependent_task_cancellable(
@@ -1585,7 +1653,11 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     );
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("readiness should report the monitored escape")
         .into_parts();
 
@@ -1740,7 +1812,11 @@ fn readiness_refuses_monitored_setsid_escape() {
     assert!(wait_for_path(&detached, Duration::from_secs(3)));
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("readiness should refuse monitored escape")
         .into_parts();
 
@@ -1781,7 +1857,11 @@ fn readiness_records_foreground_exit_as_escape() {
     wait_for_process_exit(service.info().pid);
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("readiness should record foreground exit as escape")
         .into_parts();
 
@@ -1837,7 +1917,11 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
     wait_for_process_exit(service.info().pid);
 
     let (service, error) = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect_err("a listener retained by the tracked child is still a process escape")
         .into_parts();
 
@@ -1911,7 +1995,11 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
         .start("run-owner", port, ServiceLifetime::RunScoped)
         .expect("owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owner should become ready before reuse");
     let owner_process_key = owner.info().process_key.clone();
     let owner_pgid = owner.info().pgid;
@@ -1974,7 +2062,11 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
         .start("run-owner-port", port_a, ServiceLifetime::RunScoped)
         .expect("owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("owner should become ready before mismatch attempt");
 
     let error = match fixture.start("run-borrower-port", port_b, ServiceLifetime::RunScoped) {
@@ -2008,7 +2100,11 @@ fn failed_standing_commit_consumes_owner_and_preserves_settlement_precedence() {
                 ServiceLifetime::PersistentUntilDown,
             )
             .expect("persistent owner should start")
-            .ready(&mut fixture.registry, &CancellationToken::new())
+            .ready(
+                &mut fixture.registry,
+                &CancellationToken::new(),
+                &mut || Ok(()),
+            )
             .expect("persistent owner should become ready");
         let pgid = owner.info().pgid;
         fixture
@@ -2096,7 +2192,11 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
         )
         .expect("persistent owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("persistent service should become ready");
     let service_instance_id = owner.info().service_instance_id.clone();
     let owner_process_key = owner.info().process_key.clone();
@@ -2183,7 +2283,11 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
         )
         .expect("persistent owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("persistent owner should become ready");
     let owner_pgid = owner.info().pgid;
     owner
@@ -2231,7 +2335,11 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
         .start("run-until-idle-owner", port, ServiceLifetime::UntilIdle)
         .expect("until-idle owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("until-idle service should become ready");
     let service_instance_id = owner.info().service_instance_id.clone();
     let owner_pgid = owner.info().pgid;
@@ -2288,7 +2396,11 @@ fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
         .start("run-clean-owner", port, ServiceLifetime::UntilIdle)
         .expect("until-idle owner service should start");
     let owner = owner
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("until-idle service should become ready");
     owner
         .stand(&mut fixture.registry, 1000)
@@ -2422,7 +2534,11 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         .start("run-listener-loss-ps", port, ServiceLifetime::RunScoped)
         .expect("service should start");
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("service should first prove its listener");
     fs::write(
         fixture.placement.state_root.join("listener-close"),
@@ -2807,7 +2923,11 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         )
         .expect("fixture service should start");
     let escaped = escaped
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("fixture service should prove exact ownership");
     let borrower = fixture
         .start(
@@ -3454,7 +3574,11 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
         .expect("endpoint-less service should start");
     assert!(service.selected_endpoint().is_none());
     let service = service
-        .ready(&mut fixture.registry, &CancellationToken::new())
+        .ready(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
         .expect("invocation probe readiness should succeed with no ownership claim");
     service
         .stop(&mut fixture.registry, 1000)
@@ -3740,7 +3864,7 @@ impl<'a> StartedSlot<'a> {
         )
         .expect("slot service should start");
         let service = service
-            .ready(&mut registry, &CancellationToken::new())
+            .ready(&mut registry, &CancellationToken::new(), &mut || Ok(()))
             .expect("slot service should become ready");
         Self {
             selected,

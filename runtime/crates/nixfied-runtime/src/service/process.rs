@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::admission::secrets::ResolvedSecrets;
 use crate::admission::{ControlAdmission, RunAdmission};
-use crate::cancellation::{CancellationToken, canceled_error, sleep_cancellable};
+use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
@@ -132,6 +132,22 @@ pub struct ServiceInfo {
 }
 
 impl ServiceInfo {
+    fn check_liveness(&self) -> RuntimeResult<()> {
+        if !process_is_live_with_identity(
+            self.pid,
+            self.pgid,
+            self.platform_start_identity.as_deref(),
+        )? {
+            return Err(RuntimeError::new(
+                ErrorCode::DependencyUnavailable,
+                format!(
+                    "service {} exited while session work was running",
+                    self.service_name()
+                ),
+            ));
+        }
+        Ok(())
+    }
     pub fn service_name(&self) -> &str {
         &self.service_name
     }
@@ -216,10 +232,11 @@ impl StartingService {
         mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> Result<ReadyService, ReadinessFailure> {
-        if let Err(error) = self
-            .owned
-            .wait_for_probe_ready_cancellable(registry, cancellation)
+        if let Err(error) =
+            self.owned
+                .wait_for_probe_ready_cancellable(registry, cancellation, checkpoint)
         {
             return Err(ReadinessFailure {
                 service: self,
@@ -269,11 +286,12 @@ impl AcquiredService {
         self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> Result<StartedService, ReadinessFailure> {
         match self {
             Self::Borrowed(service) => Ok(StartedService::Borrowed(service)),
             Self::Owned(service) => service
-                .ready(registry, cancellation)
+                .ready(registry, cancellation, checkpoint)
                 .map(StartedService::Owned),
         }
     }
@@ -308,31 +326,23 @@ impl StartedService {
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
-    pub(crate) fn check_liveness(&self) -> RuntimeResult<()> {
-        let info = self.info();
-        if !process_is_live_with_identity(
-            info.pid,
-            info.pgid,
-            info.platform_start_identity.as_deref(),
-        )? {
-            return Err(RuntimeError::new(
-                ErrorCode::DependencyUnavailable,
-                format!(
-                    "service {} exited while session work was running",
-                    self.service_name()
-                ),
-            ));
-        }
-        Ok(())
+    pub fn check_liveness(&self) -> RuntimeResult<()> {
+        self.info().check_liveness()
     }
     pub fn check_health(
         &mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
         match self {
-            Self::Borrowed(_) => Ok(()),
-            Self::Owned(service) => service.owned.check_health(registry, cancellation),
+            Self::Borrowed(service) => {
+                checkpoint()?;
+                service.info.check_liveness()
+            }
+            Self::Owned(service) => service
+                .owned
+                .check_health(registry, cancellation, checkpoint),
         }
     }
     pub fn finalize_failed_start(
@@ -456,12 +466,19 @@ impl OwnedService {
         &mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
         let record = LifecycleRecord::from_meta(&self.service.ready.meta, "ready");
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
         let probe = self.ready_probe.clone();
-        match self.wait_probe_with_ownership(registry, &probe, cancellation, Some(&record)) {
+        match self.wait_probe_with_ownership(
+            registry,
+            &probe,
+            cancellation,
+            Some(&record),
+            checkpoint,
+        ) {
             Ok(()) => Ok(()),
             Err(error) => {
                 let _ = record_lifecycle_failure(registry, &context, &record, &error);
@@ -474,12 +491,13 @@ impl OwnedService {
         &mut self,
         registry: &mut Registry,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
         let record = LifecycleRecord::from_meta(&self.service.health.meta, "health");
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
         let probe = self.health_probe.clone();
-        match self.wait_probe_with_ownership(registry, &probe, cancellation, None) {
+        match self.wait_probe_with_ownership(registry, &probe, cancellation, None, checkpoint) {
             Ok(()) => record_lifecycle_success(registry, &context, &record),
             Err(error) => {
                 let _ = record_lifecycle_failure(registry, &context, &record, &error);
@@ -494,23 +512,23 @@ impl OwnedService {
         probe: &PreparedProbe,
         cancellation: &CancellationToken,
         ready_record: Option<&LifecycleRecord>,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
         let (attempts, retry_interval, label) = probe_policy(probe);
         let mut last_pending = format!("probe {label} made no attempt");
         for attempt in 0..attempts {
             cancellation.check()?;
-            if let Err(error) = self.ensure_start_process_live() {
-                return Err(
-                    self.override_after_primary_exit_with_endpoint_evidence(registry, error)
-                );
+            self.check_probe_liveness(registry, checkpoint)?;
+            let probe_attempt = self.probe_attempt(probe, cancellation, checkpoint);
+            if let Err(error) = self.check_owned_probe_liveness(registry) {
+                return Err(match probe_attempt {
+                    Err(probe_error) => error.with_cause(probe_error),
+                    Ok(_) => error,
+                });
             }
-            let probe_attempt = self.probe_attempt(probe, cancellation)?;
+            let probe_attempt = probe_attempt?;
+            checkpoint()?;
             cancellation.check()?;
-            if let Err(error) = self.ensure_start_process_live() {
-                return Err(
-                    self.override_after_primary_exit_with_endpoint_evidence(registry, error)
-                );
-            }
             let observation = self.observe_endpoint_ownership();
             match observation {
                 OwnershipObservation::Complete(ownership) => {
@@ -553,7 +571,16 @@ impl OwnedService {
                 }
             }
             if attempt + 1 < attempts {
-                sleep_cancellable(retry_interval, cancellation)?;
+                let waiting = Instant::now();
+                while waiting.elapsed() < retry_interval {
+                    cancellation.check()?;
+                    self.check_probe_liveness(registry, checkpoint)?;
+                    thread::sleep(
+                        retry_interval
+                            .saturating_sub(waiting.elapsed())
+                            .min(Duration::from_millis(10)),
+                    );
+                }
             }
         }
         let timeout = RuntimeError::new(
@@ -565,10 +592,26 @@ impl OwnedService {
         Err(self.override_with_endpoint_evidence(registry, timeout))
     }
 
+    fn check_probe_liveness(
+        &mut self,
+        registry: &Registry,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
+    ) -> RuntimeResult<()> {
+        checkpoint()?;
+        self.check_owned_probe_liveness(registry)
+    }
+
+    fn check_owned_probe_liveness(&mut self, registry: &Registry) -> RuntimeResult<()> {
+        self.ensure_start_process_live().map_err(|error| {
+            self.override_after_primary_exit_with_endpoint_evidence(registry, error)
+        })
+    }
+
     fn probe_attempt(
         &self,
         probe: &PreparedProbe,
         cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<ProbeAttempt> {
         match probe {
             PreparedProbe::Tcp(probe) => {
@@ -587,6 +630,13 @@ impl OwnedService {
                 &self.logs_dir,
                 &self.redactor,
                 cancellation,
+                &mut || {
+                    checkpoint()?;
+                    if let Some(error) = self.escape_error() {
+                        return Err(error);
+                    }
+                    self.info.check_liveness()
+                },
             ),
         }
     }
@@ -2556,9 +2606,10 @@ fn completion_error(
 pub(crate) fn run_captured_exec(
     spec: &CapturedExec<'_>,
     cancellation: &CancellationToken,
+    checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
 ) -> RuntimeResult<CapturedExecOutcome> {
     spawn_captured_exec(spec)?
-        .complete(cancellation, || Ok(()), |_| Ok(()))
+        .complete(cancellation, checkpoint, |_| Ok(()))
         .map_err(|failure| *failure.error)
 }
 
@@ -3498,6 +3549,7 @@ mod tests {
                 label: "pipe-holder",
             },
             &CancellationToken::new(),
+            &mut || Ok(()),
         )
         .unwrap();
         let survived = marker.exists();
