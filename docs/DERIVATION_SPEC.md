@@ -61,6 +61,19 @@ is on the assembled PATH but is not any tool closure's declared executable
 reachable by child processes through PATH, but cannot be `run[0]` without its
 own tool closure entry.
 
+### 1.2 Package-shaped tool identity (Nix authoring)
+
+Package-shaped tools synthesize closure keys as `tool-<sha256>`, using the
+SHA-256 of Nix's JSON encoding of `{ executable, storePath }`. `storePath`
+is the selected package output coerced to a string; `executable` is that
+output plus `/bin/` and `meta.mainProgram` (falling back to `lib.getName`).
+Package names alone never identify a closure. Equal selections share an entry;
+different outputs or executable selections remain distinct. Insertion checks
+full identity equality even when hashes match. Any collision with an explicitly
+named closure rejects before emission. Operation bindings use these same keys
+and the ordinary resolution rule above; no second binding namespace exists.
+The runtime consumes ordinary closure IDs and does not synthesize package IDs.
+
 ## 2. Flattening and step paths
 
 A run executes one selected task. The planner flattens the (acyclic,

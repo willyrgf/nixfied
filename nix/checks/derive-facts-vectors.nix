@@ -313,4 +313,6 @@ assert lib.assertMsg (failed == [ ])
   "derivation-spec golden vectors failed: ${
     builtins.concatStringsSep ", " (map (vector: vector.name) failed)
   }";
-pkgs.runCommand "derive-facts-vectors" { } "touch $out"
+pkgs.runCommand "derive-facts-vectors" {
+  toolIdentity = import ./tool-identity.nix { inherit lib pkgs; };
+} "test -e $toolIdentity; touch $out"
