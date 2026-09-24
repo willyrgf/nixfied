@@ -136,7 +136,8 @@ pub struct InvocationSpec {
     pub codebase_id: CodebaseId,
     pub cwd: String,
     pub stdin: StdinPolicy,
-    pub timeout_ms: std::num::NonZeroU64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<std::num::NonZeroU64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

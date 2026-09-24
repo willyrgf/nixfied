@@ -1043,9 +1043,8 @@ fn execute_node(
     };
     let occurrence = evidence.allocate_occurrence().map_err(decorate)?;
     let task = node.task;
-    let mut dependencies = Vec::new();
     for name in &task.requires {
-        let service = started
+        started
             .iter()
             .find(|service| service.service_name() == name.as_str())
             .ok_or_else(|| {
@@ -1063,7 +1062,6 @@ fn execute_node(
                     },
                 ))
             })?;
-        dependencies.push(service);
     }
     if matches!(role, NodeRole::Prepare)
         && context.output_mode.emit_summary()
@@ -1084,7 +1082,7 @@ fn execute_node(
         context.placement,
         registry,
         context.run,
-        &dependencies,
+        &started.iter().collect::<Vec<_>>(),
         node.node_id.as_str(),
         occurrence,
         task,

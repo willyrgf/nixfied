@@ -19,21 +19,33 @@ fn lifecycle() -> Value {
 }
 
 #[test]
-fn required_positive_timeout_preserves_full_u64_domain() {
+fn optional_positive_timeout_preserves_absence_and_full_u64_domain() {
     for timeout in [json!(1), json!(u64::MAX)] {
         let mut input = invocation();
         input["timeoutMs"] = timeout.clone();
         let parsed: InvocationSpec = serde_json::from_value(input).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap()["timeoutMs"], timeout);
     }
-    for timeout in [Value::Null, json!(0), json!(-1), json!(1.5), json!("1")] {
+    for timeout in [json!(0), json!(-1), json!(1.5), json!("1")] {
         let mut input = invocation();
         input["timeoutMs"] = timeout;
         assert!(serde_json::from_value::<InvocationSpec>(input).is_err());
     }
     let mut input = invocation();
     input.as_object_mut().unwrap().remove("timeoutMs");
-    assert!(serde_json::from_value::<InvocationSpec>(input).is_err());
+    for absent in [input.clone(), {
+        input["timeoutMs"] = Value::Null;
+        input
+    }] {
+        let parsed: InvocationSpec = serde_json::from_value(absent).unwrap();
+        assert!(parsed.timeout_ms.is_none());
+        assert!(
+            serde_json::to_value(parsed)
+                .unwrap()
+                .get("timeoutMs")
+                .is_none()
+        );
+    }
     let overflow = invocation()
         .to_string()
         .replace("\"timeoutMs\":1", "\"timeoutMs\":18446744073709551616");

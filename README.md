@@ -7,7 +7,7 @@ process execution, ports, state, reconciliation, and cleanup.
 
 The manifest has two kinds:
 
-- a **task** is a bounded invocation or a static composite DAG;
+- a **task** is an invocation with an optional deadline or a static composite DAG;
 - a **service** is a runtime-owned long-lived process with lifecycle and
   optional endpoint declarations.
 

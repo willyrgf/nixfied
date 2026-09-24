@@ -12,8 +12,8 @@ use crate::output::{EvidenceMode, ReplayTicket};
 use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
-    BoundedExec, BoundedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService,
-    TerminationReason, platform_start_identity, resolve_exec_cwd, spawn_bounded_exec,
+    CapturedExec, CapturedExecOutcome, ExecSubstitution, SlotEndpoints, StartedService,
+    TerminationReason, platform_start_identity, resolve_exec_cwd, spawn_captured_exec,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
@@ -126,7 +126,7 @@ impl<'a> RunContext<'a> {
     }
 }
 
-/// Run a bounded task gated on the readiness of every service it declares in
+/// Run a task gated on the readiness of every service it declares in
 /// `dependsOnServicesReady` (which may be empty). The run-level context comes from
 /// `run_context`; the first dependency, if any, is the primary that provides
 /// `${port}`/`${host}` substitution.
@@ -145,16 +145,28 @@ pub fn run_dependent_task_cancellable(
     cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
     ensure_task_dependencies(registry, task, dependencies).map_err(TaskExecutionError::before)?;
+    check_services_live(dependencies).map_err(TaskExecutionError::before)?;
+    let declared_dependencies: Vec<_> = task
+        .requires
+        .iter()
+        .map(|name| {
+            dependencies
+                .iter()
+                .copied()
+                .find(|service| service.service_name() == name.as_str())
+                .expect("declared dependency checked above")
+        })
+        .collect();
     // The first dependency is the primary, providing bare ${port}/${host};
     // every declared dependency is addressable by name via ${port:<serviceId>}
     // and ${host:<serviceId>}. A task with no services runs in the run context
     // alone.
-    let endpoint = dependencies
+    let endpoint = declared_dependencies
         .first()
         .and_then(|service| service.selected_endpoint());
     // Endpoint-less dependencies are alive while the task runs but contribute
     // nothing addressable; lowering already rejected placeholders toward them.
-    let named: SlotEndpoints = dependencies
+    let named: SlotEndpoints = declared_dependencies
         .iter()
         .filter_map(|service| {
             Some((
@@ -205,7 +217,7 @@ pub fn run_dependent_task_cancellable(
     })?;
     cancellation.check().map_err(TaskExecutionError::before)?;
     let started = Instant::now();
-    let child = spawn_bounded_exec(&BoundedExec {
+    let child = spawn_captured_exec(&CapturedExec {
         executable: &exec.executable,
         args: &args,
         env: &env,
@@ -244,22 +256,30 @@ pub fn run_dependent_task_cancellable(
         return Err(TaskExecutionError::before(child.abort(error)));
     }
     let outcome = child
-        .complete(cancellation, |reason| {
-            record_task_cancellation_intent(
-                registry,
-                &TaskCancellationContext {
-                    run_id: run_context.run_id,
-                    task_id,
-                    process_key: &process_key,
-                    computed_manifest_hash: run_context.admission.common().computed_manifest_hash(),
-                },
-                pgid,
-                match reason {
-                    TerminationReason::Canceled => "run canceled",
-                    TerminationReason::TimedOut => "task timeout",
-                },
-            )
-        })
+        .complete(
+            cancellation,
+            || check_services_live(dependencies),
+            |reason| {
+                record_task_cancellation_intent(
+                    registry,
+                    &TaskCancellationContext {
+                        run_id: run_context.run_id,
+                        task_id,
+                        process_key: &process_key,
+                        computed_manifest_hash: run_context
+                            .admission
+                            .common()
+                            .computed_manifest_hash(),
+                    },
+                    pgid,
+                    match reason {
+                        TerminationReason::Canceled => "run canceled",
+                        TerminationReason::TimedOut => "task timeout",
+                        TerminationReason::ObservationFailed => "session observation failed",
+                    },
+                )
+            },
+        )
         .map_err(|failure| {
             let mut error = *failure.error;
             if let Some(outcome) = failure.outcome {
@@ -343,10 +363,10 @@ pub fn run_dependent_task_cancellable(
 
 fn task_terminal(
     task: &ExecTask,
-    outcome: &BoundedExecOutcome,
+    outcome: &CapturedExecOutcome,
 ) -> (Option<i32>, TaskTerminalStatus) {
     match outcome {
-        BoundedExecOutcome::Exited(status) => {
+        CapturedExecOutcome::Exited(status) => {
             let code = status.code();
             let terminal = if code.is_some_and(|code| task.success_codes.contains(&code)) {
                 TaskTerminalStatus::Succeeded
@@ -355,14 +375,14 @@ fn task_terminal(
             };
             (code, terminal)
         }
-        BoundedExecOutcome::TimedOut => (None, TaskTerminalStatus::TimedOut),
-        BoundedExecOutcome::Canceled => (None, TaskTerminalStatus::Canceled),
+        CapturedExecOutcome::TimedOut => (None, TaskTerminalStatus::TimedOut),
+        CapturedExecOutcome::Canceled => (None, TaskTerminalStatus::Canceled),
     }
 }
 
 fn task_outcome_error(
     task: &ExecTask,
-    outcome: &BoundedExecOutcome,
+    outcome: &CapturedExecOutcome,
     terminal: TaskTerminalStatus,
 ) -> Option<RuntimeError> {
     match terminal {
@@ -373,12 +393,14 @@ fn task_outcome_error(
             format!(
                 "task {} timed out after {}ms",
                 task.task_id,
-                task.timeout.as_millis()
+                task.timeout
+                    .expect("timeout outcome requires a deadline")
+                    .as_millis()
             ),
         )),
         TaskTerminalStatus::Failed => {
             let code = match outcome {
-                BoundedExecOutcome::Exited(status) => status.code(),
+                CapturedExecOutcome::Exited(status) => status.code(),
                 _ => None,
             };
             Some(RuntimeError::new(
@@ -396,6 +418,13 @@ fn task_outcome_error(
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn check_services_live(services: &[&StartedService]) -> RuntimeResult<()> {
+    for service in services {
+        service.check_liveness()?;
+    }
+    Ok(())
 }
 
 /// Verify every service the task declares as a dependency is among the started
@@ -509,13 +538,13 @@ mod tests {
             .connection()
             .execute("DROP TABLE events", [])
             .unwrap();
-        let child = spawn_bounded_exec(&BoundedExec {
+        let child = spawn_captured_exec(&CapturedExec {
             executable: &std::env::var("NIXFIED_TEST_SLEEP").unwrap(),
             args: &["30".into()],
             env: &std::collections::BTreeMap::new(),
             cwd: &root,
             stdin: nixfied_manifest::StdinPolicy::Null,
-            timeout: Duration::from_secs(5),
+            timeout: Some(Duration::from_secs(5)),
             stdout_path: &root.join("stdout"),
             stderr_path: &root.join("stderr"),
             redactor: &Redactor::empty(),
@@ -527,30 +556,34 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let failure = child
-            .complete(&cancellation, |_| {
-                assert_eq!(
-                    unsafe { libc::kill(pgid, 0) },
-                    0,
-                    "intent precedes termination"
-                );
-                record_task_cancellation_intent(
-                    &mut registry,
-                    &TaskCancellationContext {
-                        run_id: "test",
-                        task_id: "task",
-                        process_key: "process",
-                        computed_manifest_hash: "hash",
-                    },
-                    pgid,
-                    "task canceled",
-                )
-            })
+            .complete(
+                &cancellation,
+                || Ok(()),
+                |_| {
+                    assert_eq!(
+                        unsafe { libc::kill(pgid, 0) },
+                        0,
+                        "intent precedes termination"
+                    );
+                    record_task_cancellation_intent(
+                        &mut registry,
+                        &TaskCancellationContext {
+                            run_id: "test",
+                            task_id: "task",
+                            process_key: "process",
+                            computed_manifest_hash: "hash",
+                        },
+                        pgid,
+                        "task canceled",
+                    )
+                },
+            )
             .err()
             .unwrap();
         let exited = unsafe { libc::kill(pgid, 0) } == -1;
         assert!(matches!(
             failure.outcome,
-            Some(BoundedExecOutcome::Canceled)
+            Some(CapturedExecOutcome::Canceled)
         ));
         drop(registry);
         std::fs::remove_dir_all(&root).unwrap();

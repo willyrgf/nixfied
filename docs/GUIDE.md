@@ -257,6 +257,11 @@ The main rules are:
 - `invocation.tools` contains declared closure IDs or Nix packages. Their
   executable roots form the child `PATH`. The child otherwise receives only
   declared `env`; the runtime environment is not inherited.
+- `invocation.timeoutMs` is optional and defaults to `null`: tasks run until
+  exit, cancellation, or a started-service failure. A positive value imposes a
+  deadline. This also applies to preparation tasks; readiness probing starts
+  afterward and retains its own finite attempt limits. Runtime `--timeout-ms`
+  limits lifecycle operations, not the selected task's duration.
 - A leaf's `requires` names services that must be ready while it executes.
   Service `connectsTo` declarations order transitive dependencies and make
   their named endpoints addressable. Composite service requirements are

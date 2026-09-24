@@ -35,8 +35,8 @@ in
     description = "Whether the child receives closed stdin (`null`) or the runtime command's stdin (`inherit`).";
   };
   timeoutMs = mkOption {
-    type = positiveInt;
-    default = 30000;
-    description = "Maximum invocation duration in milliseconds before cancellation.";
+    type = types.nullOr positiveInt;
+    default = null;
+    description = "Optional task deadline in milliseconds. Null means no deadline; cancellation and service liveness still apply. Probe attempts use their own timeout.";
   };
 }

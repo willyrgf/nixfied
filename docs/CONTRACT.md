@@ -76,6 +76,18 @@ when the manifest/runtime contract changes.
 
 ## Task and service algebra
 
+- Task invocation `timeoutMs` is optional. Absence (or explicit null) has no
+  finite default; a supplied value must be a positive `u64`. Nix emits absent
+  deadlines by omitting the field. Lowering and execution preserve the absence.
+  Task waits remain cancelable and observe every started service, including
+  transitive and preparation-only dependencies. An observed service exit,
+  including exit zero, fails the running work. Endpoint substitutions remain
+  limited to the task's declared dependencies.
+- Preparation follows the same task deadline rule. Its completion precedes
+  readiness probing; no implicit readiness or command timeout caps preparation.
+  Probe attempts and graceful teardown retain their own finite lifecycle limits.
+  Runtime operation timeouts do not create a task or composite-wide deadline.
+
 - **KIND-2:** the manifest has exactly two semantic kinds: task and service. New
   adopter vocabulary must first be expressed as names over that algebra; a new
   schema kind requires proof that the algebra cannot represent it.
