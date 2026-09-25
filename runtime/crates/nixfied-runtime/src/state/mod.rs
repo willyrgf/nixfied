@@ -3,6 +3,7 @@ pub mod marker;
 pub mod ownership;
 pub mod placement;
 pub mod preparation;
+pub(crate) mod tree;
 
 pub use cleanup::{
     CleanupMode, CleanupOutcome, RetentionOutcome, apply_retention, clean_marked_state,

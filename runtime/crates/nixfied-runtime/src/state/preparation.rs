@@ -10,7 +10,6 @@ use crate::state::cleanup::{refuse_deleted_generation, resume_pending_cleanup};
 use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
 };
-use crate::state::placement::{HostPlacement, materialize_state_root};
 
 /// What [`prepare_slot_state`] did to make the slot usable for this identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -33,32 +32,28 @@ impl PreparationReport {
 /// Prepare the marker-owned state root after the slot owner has completed
 /// predecessor recovery. This function never signals processes. Unsettled
 /// registry evidence rejects before marker inspection or filesystem mutation.
+/// The application tree is inspected and created only through the slot
+/// guard's held descriptor.
 pub fn prepare_slot_state(
-    placement: &HostPlacement,
     identity: &StateIdentity,
     registry: &mut Registry,
 ) -> RuntimeResult<PreparationReport> {
     require_settled_slot(registry)?;
     // An unfinished deletion blocks any new generation or provenance rewrite.
     resume_pending_cleanup(identity, registry)?;
-    let decision = evaluate_slot_marker(placement, identity)?;
-    let report = match decision {
+    let report = match evaluate_slot_marker(registry, identity)? {
         MarkerDecision::Fresh => {
-            materialize_state_root(placement)?;
-            commit_slot_marker(placement, identity)?;
+            commit_slot_marker(registry, identity)?;
             PreparationReport::unchanged()
         }
         MarkerDecision::Adopt(existing) => {
             refuse_deleted_generation(registry, &existing)?;
-            materialize_state_root(placement)?;
             PreparationReport::unchanged()
         }
         MarkerDecision::Refresh { existing } => {
             refuse_deleted_generation(registry, &existing)?;
-            // The root's ancestry is checked before any registry mutation.
-            materialize_state_root(placement)?;
             record_provenance_refresh(registry, identity, &existing)?;
-            refresh_slot_marker(placement, identity, &existing)?;
+            refresh_slot_marker(registry, identity, &existing)?;
             PreparationReport {
                 provenance_refreshed: true,
                 from_manifest_hash: Some(existing.computed_manifest_hash),

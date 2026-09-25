@@ -5,9 +5,8 @@
 //! symlinks, keeps the root marker until every payload entry is gone, and then
 //! commits completion. A pending intent is resumed by the same operation ID;
 //! it is never replaced by a new attempt identity.
-use std::ffi::{CStr, CString};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nixfied_manifest::PersistencePolicy;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -19,11 +18,7 @@ use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker};
-use crate::state::ownership::SlotGuard;
-use crate::state::placement::normal_component;
-
-const MARKER: &CStr = c".nixfied-state.json";
-const MARKER_LIMIT: usize = 64 * 1024;
+use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(
@@ -61,7 +56,7 @@ pub fn clean_marked_state(
     registry: &mut Registry,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    let target = CleanupTarget::new(registry.authority(), expected)?;
+    let target = ApplicationTree::new(registry.authority(), expected)?;
     refuse_active_refs(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(outcome);
@@ -94,7 +89,7 @@ pub fn apply_retention(
     expected: &StateIdentity,
     registry: &mut Registry,
 ) -> RuntimeResult<RetentionOutcome> {
-    let target = CleanupTarget::new(registry.authority(), expected)?;
+    let target = ApplicationTree::new(registry.authority(), expected)?;
     refuse_active_refs(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(RetentionOutcome::Deleted(outcome));
@@ -126,7 +121,7 @@ struct OpenedTree {
 }
 
 fn open_marked(
-    target: &CleanupTarget,
+    target: &ApplicationTree,
     expected: &StateIdentity,
 ) -> RuntimeResult<Option<OpenedTree>> {
     let (parent, root, identity) = match target.open()? {
@@ -163,7 +158,7 @@ fn open_marked(
 /// Commit intent for an authorized generation, then delete it marker-last.
 fn delete_generation(
     registry: &mut Registry,
-    target: &CleanupTarget,
+    target: &ApplicationTree,
     opened: OpenedTree,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
@@ -191,7 +186,7 @@ pub fn resume_pending_cleanup(
     expected: &StateIdentity,
     registry: &mut Registry,
 ) -> RuntimeResult<Option<CleanupOutcome>> {
-    let target = CleanupTarget::new(registry.authority(), expected)?;
+    let target = ApplicationTree::new(registry.authority(), expected)?;
     if pending_cleanup(registry)?.is_none() {
         return Ok(None);
     }
@@ -201,7 +196,7 @@ pub fn resume_pending_cleanup(
 
 fn resume_pending(
     registry: &mut Registry,
-    target: &CleanupTarget,
+    target: &ApplicationTree,
     expected: &StateIdentity,
 ) -> RuntimeResult<Option<CleanupOutcome>> {
     let Some(record) = pending_cleanup(registry)? else {
@@ -244,9 +239,7 @@ fn resume_pending(
                     .with_detail("cleanupId", &record.cleanup_id));
                 }
                 None => {
-                    let names = root
-                        .entry_names()
-                        .map_err(|error| io_error(target, error))?;
+                    let names = root.entry_names().map_err(|error| target.io_error(error))?;
                     if !names.is_empty() {
                         return Err(RuntimeError::new(
                             ErrorCode::CleanupRefused,
@@ -269,7 +262,7 @@ fn resume_pending(
 /// next; commit completion last. Failure leaves the committed intent pending.
 fn finish_deletion(
     registry: &mut Registry,
-    target: &CleanupTarget,
+    target: &ApplicationTree,
     record: &CleanupRecord,
     parent: Directory,
     root: Directory,
@@ -293,7 +286,7 @@ fn finish_deletion(
 }
 
 fn remove_root(
-    target: &CleanupTarget,
+    target: &ApplicationTree,
     record: &CleanupRecord,
     parent: &Directory,
     root: &Directory,
@@ -334,36 +327,6 @@ fn remove_contents(directory: &Directory, device: u64, keep_marker: bool) -> io:
     Ok(())
 }
 
-fn read_root_marker(root: &Directory) -> RuntimeResult<Option<StateMarker>> {
-    match root.entry(MARKER) {
-        Ok(None) => return Ok(None),
-        Ok(Some(EntryKind::File(_))) => {}
-        Ok(Some(_)) => {
-            return Err(RuntimeError::new(
-                ErrorCode::StateUnowned,
-                "state marker is not a regular file",
-            ));
-        }
-        Err(error) => return Err(marker_error(error)),
-    }
-    let bytes = root
-        .read_regular_file(MARKER, MARKER_LIMIT)
-        .map_err(marker_error)?;
-    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("state marker is invalid: {error}"),
-        )
-    })
-}
-
-fn marker_error(error: io::Error) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::StateUnowned,
-        format!("state marker is unreadable: {error}"),
-    )
-}
-
 /// Persistence alone determines whether deletion is permitted. Purge overrides
 /// retention only; ownership and process safety remain unconditional.
 fn authorize(marker: &StateMarker, mode: CleanupMode) -> RuntimeResult<()> {
@@ -378,130 +341,11 @@ fn authorize(marker: &StateMarker, mode: CleanupMode) -> RuntimeResult<()> {
     }
 }
 
-/// The application root derived from placement, never a caller-supplied path,
-/// and opened from the slot guard's held state-base descriptor.
-struct CleanupTarget {
-    base: Directory,
-    ancestry: [CString; 3],
-    name: CString,
-    relative: String,
-    path: PathBuf,
-}
-
-enum Observed {
-    Absent,
-    Present {
-        parent: Directory,
-        root: Directory,
-        identity: FileIdentity,
-    },
-}
-
-impl CleanupTarget {
-    fn new(guard: &SlotGuard, identity: &StateIdentity) -> RuntimeResult<Self> {
-        let project = normal_component("projectId", &identity.project_id)?;
-        let environment = normal_component("environment", &identity.environment)?;
-        let slot = identity.slot.to_string();
-        let relative = Path::new("data")
-            .join(project)
-            .join(environment)
-            .join(&slot);
-        let component = |value: &std::ffi::OsStr| {
-            CString::new(std::os::unix::ffi::OsStrExt::as_bytes(value))
-                .map_err(|_| invalid_target("placement component contains NUL"))
-        };
-        Ok(Self {
-            path: guard.state_base().join(&relative),
-            base: guard.state_base_directory()?,
-            ancestry: [
-                c"data".to_owned(),
-                component(project.as_os_str())?,
-                component(environment.as_os_str())?,
-            ],
-            name: component(std::ffi::OsStr::new(&slot))?,
-            relative: relative.to_string_lossy().into_owned(),
-        })
-    }
-
-    fn open_parent(&self) -> RuntimeResult<Option<Directory>> {
-        let mut directory = self
-            .base
-            .try_clone()
-            .map_err(|error| io_error(self, error))?;
-        for name in &self.ancestry {
-            match directory
-                .entry(name)
-                .map_err(|error| io_error(self, error))?
-            {
-                None => return Ok(None),
-                Some(EntryKind::Directory(_)) => {
-                    directory = directory
-                        .open_owned_child(name)
-                        .map_err(|error| io_error(self, error))?;
-                }
-                Some(_) => {
-                    return Err(invalid_target(
-                        "application root ancestry is not a directory",
-                    ));
-                }
-            }
-        }
-        Ok(Some(directory))
-    }
-
-    fn open(&self) -> RuntimeResult<Observed> {
-        let Some(parent) = self.open_parent()? else {
-            return Ok(Observed::Absent);
-        };
-        match parent
-            .entry(&self.name)
-            .map_err(|error| io_error(self, error))?
-        {
-            None => Ok(Observed::Absent),
-            Some(EntryKind::Directory(_)) => {
-                let root = parent
-                    .open_owned_child(&self.name)
-                    .map_err(|error| io_error(self, error))?;
-                let identity = root.identity().map_err(|error| io_error(self, error))?;
-                Ok(Observed::Present {
-                    parent,
-                    root,
-                    identity,
-                })
-            }
-            Some(_) => Err(invalid_target(
-                "cleanup target is not a directory; refusing to follow or delete it",
-            )),
-        }
-    }
-
-    fn sync_parent(&self) -> RuntimeResult<()> {
-        if let Some(parent) = self.open_parent()? {
-            parent.sync().map_err(|error| io_error(self, error))?;
-        }
-        Ok(())
-    }
-}
-
-fn deleted(record: &CleanupRecord, target: &CleanupTarget) -> CleanupOutcome {
+fn deleted(record: &CleanupRecord, target: &ApplicationTree) -> CleanupOutcome {
     CleanupOutcome::Deleted {
         cleanup_id: record.cleanup_id.clone(),
         deleted_path: target.path.clone(),
     }
-}
-
-fn invalid_target(message: &str) -> RuntimeError {
-    RuntimeError::new(ErrorCode::StateUnowned, message.to_owned())
-}
-
-fn io_error(target: &CleanupTarget, error: io::Error) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::StateUnowned,
-        format!(
-            "failed to inspect cleanup target {}: {error}",
-            target.path.display()
-        ),
-    )
 }
 
 /// One committed deletion operation. The marker snapshot is the policy owner's
@@ -787,15 +631,4 @@ fn attempt_failed(
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn marker_name_matches_the_published_marker() {
-        assert_eq!(
-            super::MARKER.to_bytes(),
-            crate::state::MARKER_FILE_NAME.as_bytes()
-        );
-    }
 }

@@ -357,7 +357,10 @@ when the manifest/runtime contract changes.
   the removed `cleanupPolicy` option and manifest field reject. The marker
   records the tree's persistence and a runtime-generated `dataGeneration`,
   preserved by provenance refresh. A fresh marker is published atomically
-  (durable temporary file, rename, directory sync). Marker version 3 rejects the
+  (durable temporary file, rename, directory sync). An unmarked tree that holds
+  only temporaries of an interrupted marker publication is fresh; those
+  temporaries are removed before the marker is published, and any other
+  unmarked content refuses. Marker version 3 rejects the
   previous marker shape; old state requires the matching old runtime or an
   explicit offline preservation procedure before upgrade.
 - Exclusive predecessor recovery precedes state preparation regardless of
@@ -373,8 +376,9 @@ when the manifest/runtime contract changes.
   data permits ordinary deletion; `persistent` data requires explicit purge,
   which overrides retention only. Confinement, marker, live-process,
   slot-ownership, and registry gates remain unconditional. The target is derived
-  from placement and opened through directory descriptors without following
-  symlinks; entries inside the owned tree are unlinked relative to their held
+  from the held slot's identity; state preparation and cleanup open it from the
+  slot guard's held state-base descriptor, never by resolving its path again,
+  and through directory descriptors without following symlinks; entries inside the owned tree are unlinked relative to their held
   directory without being followed, truncated, or crossing a nested mount.
 - Deletion commits one pending intent (operation ID, relative target, data
   generation, marker snapshot, purge authorization, observed root identity) and

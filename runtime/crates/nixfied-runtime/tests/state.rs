@@ -115,7 +115,8 @@ fn slot_one_marker_records_selected_identity() {
     materialize_run_roots(&layout).expect("roots should materialize");
     let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
 
-    let marker = commit_slot_marker(&layout, &identity).expect("marker should be written");
+    let registry = slot_registry(&layout, &identity);
+    let marker = commit_slot_marker(&registry, &identity).expect("marker should be written");
 
     assert_eq!(marker.environment, "dev");
     assert_eq!(marker.slot, 1);
@@ -198,12 +199,78 @@ fn materialization_refuses_symlinked_roots_and_nested_run_paths() {
 }
 
 #[test]
+fn cleanup_never_derives_a_tree_for_a_slot_the_guard_does_not_hold() {
+    let tmp = TempDir::new();
+    let mut value = fixture_manifest();
+    add_slot_one(&mut value, 23180, 23190);
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should parse");
+    let admission = fixture_admission(&manifest, &tmp.path);
+    let slot = |number| {
+        let selected = select_slot(&manifest, Some(number)).expect("slot should select");
+        let layout = derive_host_placement_for_slot(&manifest, &selected, "run-1", &tmp.path)
+            .expect("slot placement should derive");
+        materialize_run_roots(&layout).expect("roots should materialize");
+        let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
+        (layout, identity)
+    };
+    let (zero, zero_identity) = slot(0);
+    let (one, one_identity) = slot(1);
+    let registry = slot_registry(&one, &one_identity);
+    commit_slot_marker(&registry, &one_identity).expect("slot 1 marker should be written");
+    registry.close().unwrap();
+    fs::write(one.state_root.join("kept"), b"kept").unwrap();
+
+    let mut registry = slot_registry(&zero, &zero_identity);
+    for result in [
+        clean_marked_state(&one_identity, &mut registry, CleanupMode::Purge).map(|_| ()),
+        commit_slot_marker(&registry, &one_identity).map(|_| ()),
+        evaluate_slot_marker(&registry, &one_identity).map(|_| ()),
+    ] {
+        assert_eq!(result.unwrap_err().code, ErrorCode::StateUnowned);
+    }
+    assert_eq!(fs::read(one.state_root.join("kept")).unwrap(), b"kept");
+}
+
+#[test]
+fn interrupted_first_marker_publication_does_not_block_the_slot() {
+    let tmp = TempDir::new();
+    let manifest = manifest();
+    let admission = fixture_admission(&manifest, &tmp.path);
+    let layout = derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout derives");
+    materialize_run_roots(&layout).expect("roots should materialize");
+    let identity = StateIdentity::from_admission(admission.common());
+    let leftover = layout
+        .state_root
+        .join(format!("{MARKER_FILE_NAME}.0123456789abcdef.tmp").replacen('.', "..", 1));
+    fs::write(&leftover, b"{").unwrap();
+    let mut registry = slot_registry(&layout, &identity);
+
+    prepare_slot_state(&identity, &mut registry).expect("a publication leftover is not data");
+
+    assert!(!leftover.exists());
+    let marker: StateMarker =
+        serde_json::from_slice(&fs::read(layout.state_root.join(MARKER_FILE_NAME)).unwrap())
+            .unwrap();
+    assert_eq!(marker.compare(&identity), MarkerComparison::Match);
+
+    // Any other unmarked content is still refused.
+    fs::remove_file(layout.state_root.join(MARKER_FILE_NAME)).unwrap();
+    fs::write(
+        layout.state_root.join(format!("{MARKER_FILE_NAME}.tmp")),
+        b"x",
+    )
+    .unwrap();
+    let error = prepare_slot_state(&identity, &mut registry).unwrap_err();
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+}
+
+#[test]
 fn marker_evaluate_refuses_foreign_ownership() {
     let fixture = StateFixture::new();
     let mut other = fixture.identity.clone();
     other.project_id = "other-project".to_string();
 
-    let error = evaluate_slot_marker(&fixture.layout, &other)
+    let error = evaluate_slot_marker(&fixture.registry(), &other)
         .expect_err("ownership mismatch must be refused");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
@@ -224,7 +291,7 @@ fn clean_accepts_old_provenance_marker() {
     let mut old = fixture.identity.clone();
     old.computed_manifest_hash = "older-manifest-hash".to_string();
     old.manifest_path = PathBuf::from("/nix/store/older-manifest/manifest.json");
-    commit_slot_marker(&fixture.layout, &old).expect("old-provenance marker should be written");
+    commit_slot_marker(&registry, &old).expect("old-provenance marker should be written");
 
     let outcome = fixture
         .clean(&mut registry, CleanupMode::Standard)
@@ -559,7 +626,7 @@ fn pending_cleanup_refuses_inconsistent_or_replaced_trees_without_deleting() {
     insert_pending(&registry, &fixture, "cleanup-pending", &old, false);
     fs::remove_dir_all(&fixture.layout.state_root).unwrap();
     fs::create_dir(&fixture.layout.state_root).unwrap();
-    commit_slot_marker(&fixture.layout, &fixture.identity).unwrap();
+    commit_slot_marker(&registry, &fixture.identity).unwrap();
     fs::write(fixture.layout.state_root.join("new"), b"new").unwrap();
     let error = fixture
         .clean(&mut registry, CleanupMode::Purge)
@@ -587,7 +654,7 @@ fn pending_state_preparation_settles_deletion_before_a_new_generation() {
     let old = read_marker(&fixture);
     insert_pending(&registry, &fixture, "cleanup-before-run", &old, false);
     fs::write(fixture.layout.state_root.join("stale"), b"old").unwrap();
-    prepare_slot_state(&fixture.layout, &fixture.identity, &mut registry)
+    prepare_slot_state(&fixture.identity, &mut registry)
         .expect("pending run-scoped deletion should settle before preparation");
     let fresh = read_marker(&fixture);
     assert_ne!(fresh.data_generation, old.data_generation);
@@ -614,7 +681,7 @@ fn deleted_generation_reappearing_is_contradictory_history() {
     assert_eq!(read_marker(&fixture), marker);
     assert_eq!(cleanup_rows(&registry), 1);
     // State preparation never adopts it as application data either.
-    let error = prepare_slot_state(&fixture.layout, &fixture.identity, &mut registry).unwrap_err();
+    let error = prepare_slot_state(&fixture.identity, &mut registry).unwrap_err();
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_eq!(read_marker(&fixture), marker);
 }
@@ -880,6 +947,23 @@ struct StateFixture {
     identity: StateIdentity,
 }
 
+fn slot_registry(
+    layout: &nixfied_runtime::state::HostPlacement,
+    identity: &StateIdentity,
+) -> Registry {
+    Registry::open_or_create(
+        registry_guard(layout),
+        &RegistryIdentity::for_slot(
+            &identity.project_id,
+            &identity.environment,
+            identity.slot,
+            &identity.runtime_abi,
+            &identity.toolchain_id,
+        ),
+    )
+    .expect("registry should open")
+}
+
 impl StateFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
@@ -889,7 +973,9 @@ impl StateFixture {
             derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
         let identity = StateIdentity::from_admission(admission.common());
-        commit_slot_marker(&layout, &identity).expect("marker should be written");
+        let registry = slot_registry(&layout, &identity);
+        commit_slot_marker(&registry, &identity).expect("marker should be written");
+        registry.close().expect("registry should close");
         Self {
             tmp,
             layout,
@@ -902,17 +988,7 @@ impl StateFixture {
     }
 
     fn registry(&self) -> Registry {
-        Registry::open_or_create(
-            registry_guard(&self.layout),
-            &RegistryIdentity::for_slot(
-                &self.identity.project_id,
-                &self.identity.environment,
-                self.identity.slot,
-                &self.identity.runtime_abi,
-                &self.identity.toolchain_id,
-            ),
-        )
-        .expect("registry should open")
+        slot_registry(&self.layout, &self.identity)
     }
 }
 
