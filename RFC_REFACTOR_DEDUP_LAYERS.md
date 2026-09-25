@@ -22,6 +22,39 @@ the diagnosis and evidence. No runtime behavior is changed by writing this RFC.
 each accepted change is implemented as a coherent contract cutover. This RFC
 does not authorize silently weakening containment, cleanup, or redaction.
 
+## Implementation status (2026-09-25)
+
+The accepted direction is implemented on branch `loc-review`. Full `nix run .#ci`
+passes on Linux (aarch64). The implementing commits, in order:
+
+| Area | Commits |
+| --- | --- |
+| A, F: executable identity, presentation-independent compilation, wire-only generation, runtime graph derivation, generated-app help | `6331e10`, `48505ae`, `4a1cfcd`, `b6d1909`, `19352d8` |
+| C: exclusive slot ownership, gated registration, session observation, capture checkpoints | `92a0fe2` … `5497909` |
+| S3: `persistence` as the sole policy, data generations, marker-last descriptor-relative deletion, pending-intent recovery matrix | `2d0a890` |
+| Finalization: one settlement writer, automatic run-scoped deletion, recovery settlement | `bb2c5e9` |
+| S10: per-session cancellation FIFO for `down` | `e79405c` |
+| Explicit process ownership obligations, stop intent before signals | `9782f97` |
+| Session observation before every workload release | `a92ebe9` |
+| D: command-owned presenter, source records, capture outcomes, output seal | `12f2fbc`, `c4a46e2` |
+| E: background launch (`run --daemon`) | `eb49bdb` |
+
+Not done or not proven:
+
+- macOS was not built or tested for these commits; CI macOS coverage is still required.
+- Host power-loss durability is not claimed. Deletion and marker publication use
+  `fsync` ordering, which supports only process-death recovery.
+- The single in-memory supervisor collection (§4, "Proposed session-wide
+  supervision") remains a proposal. The accepted requirement is met by
+  checkpoints: every wait, release, and startup grace observes every started
+  service. There is no one owner object for all children.
+- A service that fails while another service is being stopped is classified
+  when its own stop observes the exit. No separate observation loop runs during
+  ordered teardown.
+- Owner-kill proofs cover preparation, registration, and interrupted deletion
+  (simulated pending intents). Not every boundary listed in §13 has a
+  deterministic barrier.
+
 ## 1. Accepted product direction
 
 **A session owns all its service processes. State policy independently determines
