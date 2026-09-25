@@ -86,13 +86,14 @@ pub fn down(
                         == CancellationDelivery::Requested;
             }
         }
-        if requested
-            && let Some(run_id) = &selected
+        // The chosen session ends `down` once it settles, whether its own owner
+        // or a successor's recovery settled it.
+        if let Some(run_id) = &selected
             && let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
             && session_settled(&reader, run_id)?
         {
             return Ok(DownReport {
-                canceled_run_id: selected,
+                canceled_run_id: selected.filter(|_| requested),
                 ..DownReport::default()
             });
         }
