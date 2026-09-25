@@ -421,8 +421,10 @@ NIXFIED_STATE_DIR=/tmp/my-project-state nix run .#check -- --slot 0
 
 `clean` is idempotent, path-confined, marker-gated, slot-owned, and
 process-gated. Run `down` first. `nixfied.state.persistence` is the only
-retention policy: `run-scoped` data may be cleaned normally, while `persistent`
-data additionally requires `clean --purge`. Purge overrides retention only, never
+retention policy: `run-scoped` data is deleted automatically after each
+session's processes have stopped (or by the next invocation's recovery if the
+runtime died), while `persistent` data survives sessions and additionally
+requires `clean --purge`. Purge overrides retention only, never
 the ownership, confinement, or live-process checks. An interrupted deletion is
 resumed with its original identity before any new data is created. Do not
 manually rewrite state markers or the registry.

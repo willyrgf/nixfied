@@ -6,6 +6,7 @@ use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{EventInsert, insert_event};
+use crate::registry::session::{record_interrupted_sessions, record_recovered_sessions};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryReader};
 use crate::service::{
@@ -15,7 +16,10 @@ use crate::service::{
     process_is_live_with_start_identity, release_unresolved_escape_ports, terminate_process_group,
     terminate_process_tree_with_snapshot,
 };
-use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
+use crate::state::{
+    CleanupMode, CleanupOutcome, RetentionOutcome, StateIdentity, apply_retention,
+    clean_marked_state,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +188,31 @@ pub fn down_owned_process_groups(
         stopped.push(row.process_key);
     }
     Ok(DownReport { stopped, stale })
+}
+
+/// What exclusive predecessor recovery settled before any new work.
+#[derive(Debug)]
+pub struct RecoveryReport {
+    pub down: DownReport,
+    pub retention: RetentionOutcome,
+}
+
+/// The exclusive successor's settlement of every interrupted or unfinished
+/// predecessor: record unknown outcomes as interrupted, stop recorded process
+/// obligations, resume pending deletion, apply the predecessor tree's own
+/// retention, then complete the predecessors' finalization. It never resumes
+/// tasks or adopts services; any unsafe step refuses and blocks new work.
+pub fn recover_slot(
+    registry: &mut Registry,
+    state_base: &Path,
+    identity: &StateIdentity,
+    timeout_ms: u64,
+) -> RuntimeResult<RecoveryReport> {
+    record_interrupted_sessions(registry)?;
+    let down = down_owned_process_groups(registry, timeout_ms)?;
+    let retention = apply_retention(state_base, identity, registry)?;
+    record_recovered_sessions(registry)?;
+    Ok(RecoveryReport { down, retention })
 }
 
 pub fn clean_reconciled_state(

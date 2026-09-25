@@ -1,5 +1,6 @@
 use nixfied_runtime::registry::session::{
-    ExecutionOutcome, record_execution_outcome, record_interrupted_sessions,
+    ExecutionOutcome, record_execution_outcome, record_finalization_complete,
+    record_finalization_unfinished,
 };
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -23,7 +24,8 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, derive_host_placement_for_slot, prepare_slot_state, state_base_from_env,
+    StateIdentity, apply_retention, derive_host_placement_for_slot, prepare_slot_state,
+    state_base_from_env,
 };
 use nixfied_runtime::{
     AdmissionContext, ControlAdmission, RunAdmission, RuntimeError, StoreOriginPolicy,
@@ -107,6 +109,7 @@ include!("generated/commands.rs");
 
 struct RunSession<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
+    state: &'a StateIdentity,
     admission: &'a RunAdmission,
     options: &'a RunOptions,
     redactor: &'a Redactor,
@@ -235,6 +238,7 @@ impl<'a> RunSession<'a> {
                 .as_ref()
                 .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
         let had_initial_failure = !failures.is_empty();
+        let mut quiescent = true;
         while let Some(service) = self.started.pop() {
             let result = if canceled {
                 service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
@@ -248,8 +252,34 @@ impl<'a> RunSession<'a> {
                 )
             };
             if let Err(error) = result {
+                quiescent = false;
                 failures.push(error);
             }
+        }
+        // Retention follows process quiescence; unknown quiescence retains data.
+        // Completion is claimed only after every obligation settled.
+        let settlement = if quiescent {
+            apply_retention(&self.placement.state_base, self.state, &mut self.registry)
+                .map(|_| ())
+                .inspect_err(|error| failures.push(error.clone()))
+        } else {
+            Err(RuntimeError::new(
+                nixfied_runtime::ErrorCode::CleanupRefused,
+                "session processes did not settle; application data retained",
+            ))
+        };
+        let manifest_hash = self.admission.common().computed_manifest_hash();
+        let recorded = match settlement {
+            Ok(()) => record_finalization_complete(&mut self.registry, self.run_id, manifest_hash),
+            Err(error) => record_finalization_unfinished(
+                &mut self.registry,
+                self.run_id,
+                manifest_hash,
+                &error,
+            ),
+        };
+        if let Err(error) = recorded {
+            failures.push(error);
         }
         record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
         let duration_ms = elapsed_ms(self.run_started);
@@ -728,8 +758,12 @@ fn run_m0_placed(
         ),
     )?;
     registry.set_redactor(redactor.clone());
-    record_interrupted_sessions(&mut registry)?;
-    nixfied_runtime::control::down_owned_process_groups(&mut registry, options.timeout_ms)?;
+    nixfied_runtime::control::recover_slot(
+        &mut registry,
+        &placement.state_base,
+        &identity,
+        options.timeout_ms,
+    )?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
     if upgrade.upgraded
         && options.output_mode.emit_summary()
@@ -782,6 +816,7 @@ fn run_m0_placed(
     // then health before the next.
     let mut session = RunSession {
         placement,
+        state: &identity,
         admission,
         options,
         redactor,
@@ -1488,23 +1523,35 @@ fn run_control_admitted(
             &CancellationToken::new(),
         )?;
         let mut registry = Registry::open_or_create(guard, &identity)?;
+        let state = StateIdentity::from_selected_slot(admission, &selected_slot);
         let operation = (|| {
-            record_interrupted_sessions(&mut registry)?;
+            let recovery = nixfied_runtime::control::recover_slot(
+                &mut registry,
+                &placement.state_base,
+                &state,
+                options.timeout_ms,
+            )?;
             match command {
                 ControlCommand::Ps => unreachable!("read-only command returned before acquisition"),
-                ControlCommand::Down => {
-                    print_json(&nixfied_runtime::control::down_owned_process_groups(
+                ControlCommand::Down => print_json(&recovery.down),
+                ControlCommand::Clean => {
+                    let cleaned = run_slot_clean(
+                        admission,
+                        &placement,
                         &mut registry,
-                        options.timeout_ms,
-                    )?)
+                        &selected_slot,
+                        options.cleanup_mode,
+                    )?;
+                    // Recovery may already have applied the predecessor's
+                    // run-scoped retention; report that deletion, not absence.
+                    match (recovery.retention, cleaned) {
+                        (
+                            nixfied_runtime::state::RetentionOutcome::Deleted(deleted),
+                            nixfied_runtime::state::CleanupOutcome::Absent { .. },
+                        ) => print_json(&deleted),
+                        (_, cleaned) => print_json(&cleaned),
+                    }
                 }
-                ControlCommand::Clean => print_json(&run_slot_clean(
-                    admission,
-                    &placement,
-                    &mut registry,
-                    &selected_slot,
-                    options.cleanup_mode,
-                )?),
             }
         })();
         let release = registry.close();

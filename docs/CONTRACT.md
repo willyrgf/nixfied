@@ -248,6 +248,22 @@ when the manifest/runtime contract changes.
   failures do not rewrite it. An exclusive recovery successor records
   `interrupted` only for an unknown predecessor outcome. Recovery validates all
   session records before writing any interruption evidence.
+- Session finalization has one writer. After stopping services, the live owner
+  applies the application tree's own retention only when every service stop
+  settled and no process or endpoint evidence remains active: `run-scoped` data
+  is deleted through the marker-last protocol and `persistent` data is retained.
+  Only then does it commit `finalization = complete` with a `run.finalized`
+  event. Unsettled processes, refused retention, or a failed deletion retain
+  data, keep finalization `unfinished`, attempt a
+  `run.finalization-unfinished` event, and fail the command. Task failure,
+  timeout, and cancellation never change retention.
+- Every mutating command first performs exclusive predecessor recovery:
+  record unknown outcomes as interrupted, stop recorded process obligations,
+  resume a pending deletion, apply the predecessor tree's own retention (the
+  marker, never the new manifest, authorizes deletion), then complete every
+  unfinished predecessor's finalization with a `run.recovered` event. Recovery
+  never resumes tasks or adopts services; any unsafe step refuses and blocks new
+  work. `clean` reports a deletion performed by that recovery.
 - A task's observed execution outcome and exit code commit atomically with its
   observation event before containment and capture settlement. That observation
   does not grant completed output evidence or replay. A later capture failure

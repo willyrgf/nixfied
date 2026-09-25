@@ -156,6 +156,135 @@ pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()>
     transaction.commit().map_err(sql_error)
 }
 
+/// The session owner's settlement writer. Complete finalization requires a
+/// known execution outcome and is claimed only after the caller settled every
+/// process, capture, and retention obligation. Repeating it is harmless.
+pub fn record_finalization_complete(
+    registry: &mut Registry,
+    run_id: &str,
+    manifest_hash: &str,
+) -> RuntimeResult<()> {
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    match progress(&transaction, identity, run_id, manifest_hash)? {
+        SessionProgress::Executing => {
+            return Err(invalid(
+                "finalization cannot complete before the execution outcome is known",
+            ));
+        }
+        SessionProgress::Finalized(_) => return Ok(()),
+        SessionProgress::Finalizing(_) => {}
+    }
+    write_complete(&transaction, run_id)?;
+    insert_event(
+        &transaction,
+        identity,
+        redactor,
+        EventInsert {
+            event_type: "run.finalized",
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: None,
+            computed_manifest_hash: Some(manifest_hash),
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)
+}
+
+/// Attempt to record that the live owner could not settle its obligations.
+/// Finalization stays unfinished; a successor must recover or refuse.
+pub fn record_finalization_unfinished(
+    registry: &mut Registry,
+    run_id: &str,
+    manifest_hash: &str,
+    reason: &RuntimeError,
+) -> RuntimeResult<()> {
+    let payload = serde_json::json!({"code": reason.code, "message": reason.message}).to_string();
+    let mut event = EventInsert::new("run.finalization-unfinished", &payload);
+    event.run_id = Some(run_id);
+    event.computed_manifest_hash = Some(manifest_hash);
+    registry.append_event(event).map(|_| ())
+}
+
+/// Called by the exclusive successor only after it settled predecessor process,
+/// deletion, and retention obligations. Known outcomes are preserved; the
+/// successor completes finalization without adopting any predecessor work.
+pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT run_id, computed_manifest_hash, execution_outcome, finalization
+                 FROM runs WHERE finalization = 'unfinished' ORDER BY run_id",
+            )
+            .map_err(sql_error)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+    };
+    for (run_id, hash, outcome, finalization) in rows {
+        if decode(outcome.as_deref(), &finalization)? == SessionProgress::Executing {
+            return Err(invalid(
+                "recovery cannot settle a session whose interruption was not recorded",
+            ));
+        }
+        write_complete(&transaction, &run_id)?;
+        insert_event(
+            &transaction,
+            identity,
+            redactor,
+            EventInsert {
+                event_type: "run.recovered",
+                run_id: Some(&run_id),
+                service_instance_id: None,
+                process_key: None,
+                computed_manifest_hash: Some(&hash),
+                payload_json: "{}",
+            },
+        )?;
+    }
+    transaction.commit().map_err(sql_error)
+}
+
+fn write_complete(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
+    let changed = transaction
+        .execute(
+            "UPDATE runs SET finalization = 'complete'
+             WHERE run_id = ?1 AND execution_outcome IS NOT NULL AND finalization = 'unfinished'",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    if changed != 1 {
+        return Err(invalid(
+            "finalization update did not affect exactly one settled session",
+        ));
+    }
+    Ok(())
+}
+
 fn write_unknown_outcome(
     transaction: &Transaction<'_>,
     run_id: &str,

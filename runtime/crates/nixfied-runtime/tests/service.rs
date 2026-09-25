@@ -3846,11 +3846,31 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         run_summary["durationMs"].as_u64().is_some(),
         "run summary should carry durationMs: {run_summary}"
     );
+    // Run-scoped data ends with its settled session; evidence and history stay.
     let state_root = state_base.join("data/runtime-test").join("dev").join("0");
     assert!(
-        state_root.join(".nixfied-state.json").is_file(),
-        "slot marker should exist after run"
+        !state_root.exists(),
+        "run-scoped state should be deleted by session finalization"
     );
+    let registry =
+        rusqlite::Connection::open(state_base.join("registry/runtime-test/dev/0/registry.sqlite3"))
+            .unwrap();
+    let settled: (String, String, String) = registry
+        .query_row(
+            "SELECT r.execution_outcome, r.finalization, c.status FROM runs r, cleanups c",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        settled,
+        (
+            "succeeded".to_string(),
+            "complete".to_string(),
+            "completed".to_string()
+        )
+    );
+    drop(registry);
 
     let clean = run_binary("clean", &[]);
     assert!(
@@ -3858,10 +3878,8 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         "clean failed: {}",
         String::from_utf8_lossy(&clean.stderr)
     );
-    assert!(
-        !state_root.exists(),
-        "clean should remove the slot state root"
-    );
+    let clean: Value = serde_json::from_slice(&clean.stdout).unwrap();
+    assert_eq!(clean["result"], "absent");
 
     assert!(
         !sentinel.exists(),

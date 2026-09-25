@@ -410,11 +410,21 @@
           # shard: a provenance-only delta (same identity, new manifest hash), an
           # retained-data configuration change, and a postgres
           # whose smoke query sleeps long enough to interrupt mid-run.
+          # The lifecycle shard retains data across sessions, so it uses
+          # persistent retention; run-scoped data ends with its session.
+          minimalPersistentManifest = nixfiedLib.compileManifest (
+            { ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.state.persistence = "persistent";
+            }
+          );
           minimalManifestB = nixfiedLib.compileManifest (
             { lib, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
               nixfied.project.name = lib.mkForce "Minimal B";
+              nixfied.state.persistence = "persistent";
             }
           );
           minimalManifestChangedState = nixfiedLib.compileManifest (
@@ -422,6 +432,7 @@
             {
               imports = [ ./examples/minimal/nixfied.nix ];
               nixfied.project.name = lib.mkForce "Minimal changed configuration";
+              nixfied.state.persistence = "persistent";
             }
           );
           # A deterministically failing composite (its leaf dials a closed
@@ -488,8 +499,10 @@
               nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
               nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MANIFEST =
                 toString negativeFailManifest;
-              nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
-              nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
+              nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MANIFEST =
+                toString minimalPersistentManifest;
+              nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MANIFEST =
+                toString minimalPersistentManifest;
               nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MANIFEST = toString minimalManifestB;
               nixfied.tasks.lifecycle-change-preserves-data.invocation.env.MINIMAL_CHANGED_STATE_MANIFEST =
                 toString minimalManifestChangedState;

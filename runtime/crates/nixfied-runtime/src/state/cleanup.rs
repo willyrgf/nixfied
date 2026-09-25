@@ -66,12 +66,72 @@ pub fn clean_marked_state(
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(outcome);
     }
-    let (parent, root, observed) = match target.open()? {
-        Observed::Absent => {
-            return Ok(CleanupOutcome::Absent {
-                target_path: target.path,
-            });
+    let Some(opened) = open_marked(&target, expected)? else {
+        return Ok(CleanupOutcome::Absent {
+            target_path: target.path,
+        });
+    };
+    authorize(&opened.marker, mode)?;
+    delete_generation(registry, &target, opened, mode)
+}
+
+/// What session settlement did with the application tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetentionOutcome {
+    /// Persistent data survives the session.
+    Retained,
+    /// Run-scoped data was deleted after process quiescence.
+    Deleted(CleanupOutcome),
+    /// No application tree exists.
+    Absent,
+}
+
+/// Apply the tree's own retention policy after process quiescence: run-scoped
+/// data is deleted, persistent data is retained. The marker, not the current
+/// manifest, authorizes deletion, so a changed manifest cannot make retained
+/// persistent data disposable. Pending deletions are resumed first.
+pub fn apply_retention(
+    state_base: impl AsRef<Path>,
+    expected: &StateIdentity,
+    registry: &mut Registry,
+) -> RuntimeResult<RetentionOutcome> {
+    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    refuse_active_refs(registry)?;
+    if let Some(outcome) = resume_pending(registry, &target, expected)? {
+        return Ok(RetentionOutcome::Deleted(outcome));
+    }
+    let Some(opened) = open_marked(&target, expected)? else {
+        return Ok(RetentionOutcome::Absent);
+    };
+    if opened.marker.runtime_abi != expected.runtime_abi {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "existing state marker was written under a different runtime ABI",
+        ));
+    }
+    match opened.marker.persistence {
+        PersistencePolicy::Persistent => Ok(RetentionOutcome::Retained),
+        PersistencePolicy::RunScoped => {
+            delete_generation(registry, &target, opened, CleanupMode::Standard)
+                .map(RetentionOutcome::Deleted)
         }
+    }
+}
+
+/// A present application tree whose marker belongs to the expected owner.
+struct OpenedTree {
+    parent: Directory,
+    root: Directory,
+    identity: FileIdentity,
+    marker: StateMarker,
+}
+
+fn open_marked(
+    target: &CleanupTarget,
+    expected: &StateIdentity,
+) -> RuntimeResult<Option<OpenedTree>> {
+    let (parent, root, identity) = match target.open()? {
+        Observed::Absent => return Ok(None),
         Observed::Present {
             parent,
             root,
@@ -93,8 +153,22 @@ pub fn clean_marked_state(
             "state marker identity does not match the requested cleanup identity",
         ));
     }
-    authorize(&marker, mode)?;
-    if generation_completed(registry, &marker.data_generation)? {
+    Ok(Some(OpenedTree {
+        parent,
+        root,
+        identity,
+        marker,
+    }))
+}
+
+/// Commit intent for an authorized generation, then delete it marker-last.
+fn delete_generation(
+    registry: &mut Registry,
+    target: &CleanupTarget,
+    opened: OpenedTree,
+    mode: CleanupMode,
+) -> RuntimeResult<CleanupOutcome> {
+    if generation_completed(registry, &opened.marker.data_generation)? {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             "a previously deleted data generation reappeared; refusing contradictory history",
@@ -103,12 +177,12 @@ pub fn clean_marked_state(
     let record = CleanupRecord {
         cleanup_id: format!("cleanup-{}", crate::token::random_hex()?),
         target: target.relative.clone(),
-        marker,
+        marker: opened.marker,
         purge: mode.is_purge(),
-        root: observed,
+        root: opened.identity,
     };
     record_intent(registry, &record)?;
-    finish_deletion(registry, &target, &record, parent, root)
+    finish_deletion(registry, target, &record, opened.parent, opened.root)
 }
 
 /// Settle a pending deletion before any application-root materialization,
