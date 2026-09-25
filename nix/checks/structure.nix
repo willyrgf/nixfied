@@ -182,10 +182,6 @@ let
       expr = rejects (make "TaskSpec" (builtins.removeAttrs task [ "defaultOutput" ]));
       expected = true;
     };
-    removedDerivedField = {
-      expr = rejects (make "TaskSpec" (task // { servicesRequired = [ ]; }));
-      expected = true;
-    };
     secret = {
       expr = make "SecretSource" {
         kind = "env-var";

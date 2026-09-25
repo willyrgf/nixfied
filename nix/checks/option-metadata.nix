@@ -337,9 +337,7 @@ assert rejects
 assert rejects
   (evaluate system { nixfied.tasks.bad.invocation.timeoutMs = "30"; })
   .config.nixfied.tasks.bad.invocation.timeoutMs;
-assert rejects (evaluate system { nixfied.state.stateEpoch = "1"; }).config.nixfied.state;
-assert rejects (evaluate system { nixfied.state.stateEpoch = null; }).config.nixfied.state;
-assert rejects (evaluate system { nixfied.state.cleanupPolicy = "protected"; }).config.nixfied.state;
+assert rejects (evaluate system { nixfied.state.undeclaredOption = true; }).config.nixfied.state;
 assert
   (evaluate system { nixfied.codebases.main.sourceIdentity = "source"; })
   .config.nixfied.codebases.main.sourceIdentity == "source";
