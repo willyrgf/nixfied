@@ -1,6 +1,7 @@
 pub(crate) use crate::registry::records::StoredEndpoint as StoredServiceEndpoint;
 use crate::registry::records::read_open_endpoints;
 use crate::registry::sqlite::RegistryContext;
+use nixfied_manifest::ContainmentRequirement;
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -25,11 +26,11 @@ pub(crate) struct ServiceRecord<'a> {
 
 /// How to terminate a recorded process without the manifest that started it.
 /// Recovery uses these persisted facts, never a newly supplied manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StopPolicy {
     pub(crate) signal: i32,
     pub(crate) timeout_ms: u64,
-    pub(crate) tree: bool,
+    pub(crate) containment: ContainmentRequirement,
 }
 
 impl StopPolicy {
@@ -37,14 +38,26 @@ impl StopPolicy {
     pub(crate) const INVOCATION: Self = Self {
         signal: libc::SIGTERM,
         timeout_ms: 1000,
-        tree: false,
+        containment: ContainmentRequirement::ProcessGroup,
     };
 
-    fn containment(self) -> &'static str {
-        if self.tree {
-            "process-tree"
-        } else {
-            "process-group"
+    /// The stored containment column.
+    fn containment(&self) -> &'static str {
+        match self.containment {
+            ContainmentRequirement::ProcessGroup => "process-group",
+            ContainmentRequirement::ProcessTree => "process-tree",
+        }
+    }
+
+    /// Parse the stored containment column.
+    pub(crate) fn parse_containment(stored: &str) -> RuntimeResult<ContainmentRequirement> {
+        match stored {
+            "process-group" => Ok(ContainmentRequirement::ProcessGroup),
+            "process-tree" => Ok(ContainmentRequirement::ProcessTree),
+            _ => Err(RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                "invalid process containment",
+            )),
         }
     }
 }

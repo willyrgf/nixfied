@@ -26,7 +26,7 @@ use nixfied_runtime::state::{
 use nixfied_runtime::{ErrorCode, RunAdmission, RuntimeError};
 use serde_json::{Value, json};
 
-use nixfied_runtime::control::down_owned_process_groups;
+use nixfied_runtime::control::stop_recorded_processes;
 
 mod common;
 use common::*;
@@ -672,7 +672,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     assert!(slot0_ps.processes.iter().any(|process| process.live));
     assert!(slot1_ps.processes.iter().any(|process| process.live));
 
-    down_owned_process_groups(&mut slot0.registry, 1000).expect("slot 0 down should stop slot 0");
+    stop_recorded_processes(&mut slot0.registry, 1000).expect("slot 0 down should stop slot 0");
     drop(slot0.service);
     let slot0_after_down =
         observe_registry(&slot0.registry).expect("slot 0 ps should observe after down");
@@ -2001,7 +2001,7 @@ fn ps_observes_dead_process_without_mutating_evidence() {
     assert_eq!(process_status, "running");
     assert_eq!(stale_ports, 0);
     assert_eq!(stale_events, 0);
-    down_owned_process_groups(&mut fixture.registry, 1000).unwrap();
+    stop_recorded_processes(&mut fixture.registry, 1000).unwrap();
     let status: String = fixture.query(
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
@@ -2118,7 +2118,7 @@ fn down_stops_verified_owned_process_group_only() {
         .expect("foreground service should start");
 
     let report =
-        down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
+        stop_recorded_processes(&mut fixture.registry, 1000).expect("down should stop service");
 
     assert_eq!(report.stopped, vec![service.info().process_key.clone()]);
     let process_status: String = fixture.query(
@@ -2171,7 +2171,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
         .expect_err("open unresolved escape must block cleanup");
     assert_eq!(cleanup_error.code, ErrorCode::CleanupRefused);
 
-    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+    let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("down should remain available without endpoint observation");
     assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     let terminal: (String, String) = fixture
@@ -2245,7 +2245,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
     );
     assert_eq!(open_ports, 1);
 
-    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+    let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("down should terminate the surviving group containment");
     assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
@@ -2317,7 +2317,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
     );
     assert!(matches!(port_status.as_str(), "reserved" | "active"));
 
-    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+    let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("down should terminate the identity-tracked reparented child");
     assert_eq!(down.stopped, vec![service.info().process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
@@ -2364,7 +2364,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         )
         .expect("escaped evidence should remain durable");
     assert_eq!(state, ("escaped".into(), "active".into()));
-    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+    let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("explicit down should terminate the preserved escape");
     assert_eq!(down.stopped, vec![escaped_process_key.clone()]);
     assert!(
@@ -2395,7 +2395,7 @@ fn owned_process_cleanup_does_not_settle_the_session() {
     .expect("slot marker should be written for cleanup proof");
 
     let report =
-        down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
+        stop_recorded_processes(&mut fixture.registry, 1000).expect("down should stop service");
     let run_status: Option<String> = fixture.query(
         "SELECT execution_outcome FROM runs WHERE run_id = ?1",
         [&service.info().run_id],
@@ -2460,7 +2460,7 @@ fn control_rejects_malformed_open_endpoints_before_signaling() {
             .connection()
             .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
             .unwrap();
-        let error = down_owned_process_groups(&mut fixture.registry, 1000).unwrap_err();
+        let error = stop_recorded_processes(&mut fixture.registry, 1000).unwrap_err();
         assert_eq!(error.code, ErrorCode::RegistryCorrupt, "{mutation}");
         assert!(process_is_non_zombie(service.info().pid), "{mutation}");
         let after: i64 = fixture
@@ -2515,7 +2515,7 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
             .connection()
             .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
             .unwrap();
-        let error = down_owned_process_groups(&mut fixture.registry, 1000)
+        let error = stop_recorded_processes(&mut fixture.registry, 1000)
             .expect_err("all process rows must decode before reconciliation or teardown");
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
         assert!(
@@ -2595,7 +2595,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     )
     .expect("slot marker should be written for cleanup proof");
 
-    let report = down_owned_process_groups(&mut fixture.registry, 1000)
+    let report = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("down should stop service and task");
     let _ = task_child.wait();
     let run_status: Option<String> = fixture.query(
@@ -2680,7 +2680,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
         "TERM-ignoring descendant should start before down"
     );
 
-    let report = down_owned_process_groups(&mut fixture.registry, 200)
+    let report = stop_recorded_processes(&mut fixture.registry, 200)
         .expect("down should escalate and stop the process group");
     thread::sleep(Duration::from_millis(2300));
 

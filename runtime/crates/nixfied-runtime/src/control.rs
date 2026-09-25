@@ -145,10 +145,11 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
         .into_iter()
         .map(|row| {
             let active = status::PROCESS_ACTIVE.contains(&row.status);
-            let live = if active || row.unsettled {
-                row.observed_liveness()?
+            let live = row.live()?;
+            let ownership = if row.is_obligation() {
+                "unresolved"
             } else {
-                false
+                "settled"
             };
             let observed_status = if active {
                 if live {
@@ -167,45 +168,12 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
                 pgid: row.pgid,
                 registry_status: row.status.as_str().to_string(),
                 observed_status: observed_status.as_str().to_string(),
-                ownership: if active || row.unsettled {
-                    "unresolved"
-                } else {
-                    "settled"
-                }
-                .to_string(),
+                ownership: ownership.to_string(),
                 live,
             })
         })
         .collect::<RuntimeResult<Vec<_>>>()?;
     Ok(PsReport { processes })
-}
-
-/// Recovery's first pass under slot authority: settle every recorded process
-/// proven gone and release endpoint evidence no live owner holds. Returns the
-/// process keys it settled.
-fn settle_dead_processes(registry: &mut Registry) -> RuntimeResult<Vec<String>> {
-    registry.authority().validate()?;
-    read_open_endpoints(registry.connection(), None)?;
-    let rows = process_rows(registry.connection())?;
-    let mut settled = Vec::new();
-    for row in rows {
-        let active = status::PROCESS_ACTIVE.contains(&row.status);
-        let live = if active || row.unsettled {
-            row.observed_liveness()?
-        } else {
-            false
-        };
-        if active && !live {
-            mark_process_stale(registry, &row)?;
-            settled.push(row.process_key);
-        } else if row.unsettled && !live {
-            settle_unsettled(registry, &row)?;
-            settled.push(row.process_key);
-        }
-    }
-    let rows = process_rows(registry.connection())?;
-    release_orphaned_endpoints(registry, &rows)?;
-    Ok(settled)
 }
 
 /// State preparation never performs teardown. The slot owner must first settle
@@ -214,11 +182,7 @@ pub(crate) fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     registry.authority().validate()?;
     let processes = process_rows(registry.connection())?;
     let endpoints = read_open_endpoints(registry.connection(), None)?;
-    if processes
-        .iter()
-        .any(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unsettled)
-        || !endpoints.is_empty()
-    {
+    if processes.iter().any(ProcessRow::is_obligation) || !endpoints.is_empty() {
         return Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
             "state preparation requires settled predecessor processes and endpoints",
@@ -227,26 +191,36 @@ pub(crate) fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     Ok(())
 }
 
-pub fn down_owned_process_groups(
+/// Recovery's process pass under slot authority: settle every recorded
+/// obligation proven gone, release endpoint evidence no live owner holds, then
+/// stop every live obligation with its recorded policy.
+pub fn stop_recorded_processes(
     registry: &mut Registry,
     timeout_ms: u64,
 ) -> RuntimeResult<DownReport> {
-    let mut stale = settle_dead_processes(registry)?;
-    let rows = process_rows(registry.connection())?;
-    let mut stopped = Vec::new();
-    for row in rows
-        .into_iter()
-        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unsettled)
-    {
-        if !row.observed_liveness()? {
-            if row.unsettled {
-                settle_unsettled(registry, &row)?;
-            } else {
-                mark_process_stale(registry, &row)?;
-            }
-            stale.push(row.process_key);
+    registry.authority().validate()?;
+    read_open_endpoints(registry.connection(), None)?;
+    let mut stale = Vec::new();
+    let mut live = Vec::new();
+    for row in process_rows(registry.connection())? {
+        if !row.is_obligation() {
             continue;
         }
+        if row.observed_liveness()? {
+            live.push(row);
+            continue;
+        }
+        if row.unsettled {
+            settle_unsettled(registry, &row)?;
+        } else {
+            mark_process_stale(registry, &row)?;
+        }
+        stale.push(row.process_key);
+    }
+    let rows = process_rows(registry.connection())?;
+    release_orphaned_endpoints(registry, &rows)?;
+    let mut stopped = Vec::new();
+    for row in live {
         // Escape evidence snapshots live descendants before any signal.
         let escape_start_identity = row
             .service_instance_id
@@ -332,7 +306,7 @@ pub fn recover_slot(
     timeout_ms: u64,
 ) -> RuntimeResult<RecoveryReport> {
     record_interrupted_sessions(registry)?;
-    let down = down_owned_process_groups(registry, timeout_ms)?;
+    let down = stop_recorded_processes(registry, timeout_ms)?;
     let retention = apply_retention(identity, registry)?;
     record_recovered_sessions(registry)?;
     Ok(RecoveryReport { down, retention })
@@ -356,6 +330,20 @@ struct ProcessRow {
 }
 
 impl ProcessRow {
+    /// Active rows and unresolved terminal rows are recorded obligations.
+    fn is_obligation(&self) -> bool {
+        status::PROCESS_ACTIVE.contains(&self.status) || self.unsettled
+    }
+
+    /// Host liveness of a recorded obligation; a settled row is never live.
+    fn live(&self) -> RuntimeResult<bool> {
+        if self.is_obligation() {
+            self.observed_liveness()
+        } else {
+            Ok(false)
+        }
+    }
+
     fn is_live(&self) -> RuntimeResult<bool> {
         process_is_live_with_identity(
             self.pid,
@@ -517,16 +505,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     timeout_ms: u64::try_from(stop_timeout_ms).map_err(|_| {
                         RuntimeError::new(ErrorCode::RegistryCorrupt, "invalid stop timeout")
                     })?,
-                    tree: match containment.as_str() {
-                        "process-group" => false,
-                        "process-tree" => true,
-                        _ => {
-                            return Err(RuntimeError::new(
-                                ErrorCode::RegistryCorrupt,
-                                "invalid process containment",
-                            ));
-                        }
-                    },
+                    containment: StopPolicy::parse_containment(&containment)?,
                 };
                 let coherent = match role {
                     ProcessRole::Task => service_instance_id.is_none() && service_name.is_none(),

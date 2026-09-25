@@ -1474,7 +1474,7 @@ pub(super) fn start_service_with_lock_root(
         stop: StopPolicy {
             signal: stop_signal_number(service.stop.signal),
             timeout_ms: service.stop.timeout.as_millis() as u64,
-            tree: matches!(service.containment, ContainmentRequirement::ProcessTree),
+            containment: service.containment.clone(),
         },
     };
     cancellation.check()?;
