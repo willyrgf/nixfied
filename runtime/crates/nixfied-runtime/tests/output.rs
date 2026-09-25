@@ -1775,3 +1775,76 @@ fn unexpected_service_exit_zero_fails_the_session_and_still_settles() {
         "a settled failure still applies run-scoped retention"
     );
 }
+
+#[test]
+fn service_failure_during_another_services_preparation_releases_no_further_workload() {
+    let port = available_port_window(2);
+    let exit_marker = tempfile_marker("prepare-dependency-exit");
+    let release = tempfile_marker("prepare-release");
+    let executable = test_child();
+    let executable = executable.to_str().unwrap();
+    let mut manifest = synthetic_manifest(
+        executable,
+        &[
+            "listen",
+            "127.0.0.1",
+            "${port}",
+            "exit-zero-on-marker",
+            exit_marker.to_str().unwrap(),
+        ],
+        port,
+        port + 1,
+    );
+    let program = manifest["tasks"]["smoke"]["invocation"]["run"][0].clone();
+    let mut second = manifest["services"]["synthetic"].clone();
+    for class in ["start", "ready", "health", "stop", "clean"] {
+        second["lifecycle"][class]["operationId"] = json!(format!("service.second.{class}"));
+    }
+    second["lifecycle"]["start"]["invocation"]["run"] =
+        json!([program.clone(), "listen", "127.0.0.1", "${port}", "hold"]);
+    second["lifecycle"]["prepare"] = json!({"task": "prep"});
+    second["endpoints"] = json!({"second-tcp": {"endpointId": "second-tcp", "host": "127.0.0.1"}});
+    second["primaryEndpoint"] = json!("second-tcp");
+    second["logRefs"] = json!(["service.second"]);
+    manifest["services"]["second"] = second;
+    let mut prep = manifest["tasks"]["smoke"].clone();
+    prep["operationId"] = json!("task.prep.run");
+    prep["logRefs"] = json!(["task.prep"]);
+    // The prepare-only dependency fails while preparation waits without a deadline.
+    prep["invocation"]["run"] = json!([program.clone(), "prepare", exit_marker, release]);
+    prep["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    manifest["tasks"]["prep"] = prep;
+    manifest["tasks"]["smoke"]["requires"] = json!(["second"]);
+    manifest["tasks"]["smoke"]["invocation"]["run"] = json!([program, "exit", "0"]);
+    let fixture = RuntimeFixture::new(manifest);
+    let output = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("DEPENDENCY_UNAVAILABLE"), "{error}");
+    let connection = registry_connection(&fixture);
+    let (outcome, finalization, second_started, unresolved): (String, String, i64, i64) =
+        connection
+            .query_row(
+                "SELECT r.execution_outcome, r.finalization,
+                   (SELECT count(*) FROM processes WHERE service_name = 'second' AND role = 'service'),
+                   (SELECT count(*) FROM processes WHERE ownership = 'unresolved')
+                 FROM runs r",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+    assert_eq!(outcome, "failed");
+    assert_eq!(
+        second_started, 0,
+        "no workload is released after an owned service failed"
+    );
+    assert_eq!(unresolved, 0, "the interrupted prepare task settled");
+    assert_eq!(finalization, "complete");
+    assert!(!release.exists());
+}

@@ -887,6 +887,12 @@ fn run_m0_placed(
                 }) as PrepareRunner<'_>
             });
 
+        let session_checkpoint = || {
+            for service in &session.started {
+                service.check_liveness()?;
+            }
+            Ok(())
+        };
         let current_service = match start_service_for_slot(
             admission,
             placement,
@@ -900,6 +906,7 @@ fn run_m0_placed(
                 slot_endpoints: &slot_endpoints,
                 run_timeout_ms: options.timeout_ms,
                 cancellation,
+                session_checkpoint: &session_checkpoint,
                 prepare_runner,
             },
         ) {

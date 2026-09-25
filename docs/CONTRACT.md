@@ -276,6 +276,10 @@ when the manifest/runtime contract changes.
   `ownership`. A task or probe interrupted by a session failure after
   containment, reaping, and capture settlement records a terminal status and
   settles.
+- Service release after durable registration and the startup grace period
+  observe every already-started service as well as cancellation. A failure of
+  any owned service, including a prepare-only dependency during preparation,
+  withholds release of every further workload.
 - Service teardown observes pending exits before recording stop intent; an exit
   observed then remains an unexpected failure. The stop lifecycle start event is
   the durable stop intent and precedes every stop signal; its recording failure

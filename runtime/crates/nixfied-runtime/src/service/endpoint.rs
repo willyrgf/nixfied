@@ -1417,6 +1417,7 @@ mod tests {
             "run-unsafe-lock-root",
             ServiceSelection {
                 launcher: Path::new("/unused-before-endpoint-rejection"),
+                session_checkpoint: &|| Ok(()),
                 service_name: "synthetic",
                 endpoint_ports: &endpoint_ports,
                 slot_endpoints: &std::collections::BTreeMap::new(),
