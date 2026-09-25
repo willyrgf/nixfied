@@ -10,7 +10,11 @@ use crate::registry::Registry;
 use crate::slot::SelectedSlot;
 use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
-pub const MARKER_FILE_NAME: &str = ".nixfied-state.json";
+/// The marker's entry name, derived from the one name the tree publishes.
+pub const MARKER_FILE_NAME: &str = match MARKER.to_str() {
+    Ok(name) => name,
+    Err(_) => panic!("the marker name is UTF-8"),
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateIdentity {
