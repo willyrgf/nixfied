@@ -553,6 +553,46 @@ pub fn registry_identity() -> RegistryIdentity {
     RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
 }
 
+/// The placement of `run_id` in `selected_slot`.
+pub fn slot_placement(
+    manifest: &Manifest,
+    selected_slot: &SelectedSlot<'_>,
+    run_id: &str,
+    state_base: &Path,
+) -> RuntimeResult<HostPlacement> {
+    nixfied_runtime::state::derive_slot_placement(
+        &manifest.project.project_id,
+        selected_slot.environment,
+        selected_slot.slot,
+        run_id,
+        state_base,
+    )
+}
+
+/// The placement of `run_id` in the manifest's default slot.
+pub fn default_placement(
+    manifest: &Manifest,
+    run_id: &str,
+    state_base: &Path,
+) -> RuntimeResult<HostPlacement> {
+    slot_placement(
+        manifest,
+        &nixfied_runtime::slot::select_slot(manifest, None)?,
+        run_id,
+        state_base,
+    )
+}
+
+/// The state identity of the manifest's default slot.
+pub fn default_state_identity(
+    admission: &nixfied_runtime::ControlAdmission,
+) -> nixfied_runtime::state::StateIdentity {
+    nixfied_runtime::state::StateIdentity::from_selected_slot(
+        admission,
+        &nixfied_runtime::slot::select_slot(admission.manifest(), None).unwrap(),
+    )
+}
+
 /// A registry placement for `identity` whose slot authority is free.
 pub fn registry_placement(root: &Path, identity: &RegistryIdentity) -> HostPlacement {
     let placement = nixfied_runtime::state::placement::derive_slot_placement(

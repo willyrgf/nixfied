@@ -3,12 +3,12 @@
 use std::ffi::CString;
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Component, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use super::HostPlacement;
+use super::placement::SlotIdentity;
 use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, PrivateFile};
@@ -18,7 +18,7 @@ use crate::filesystem::{Directory, PrivateFile};
 pub struct SlotGuard {
     file: PrivateFile,
     directory: Directory,
-    registry_path: PathBuf,
+    slot: SlotIdentity,
     state_base: PathBuf,
     ancestors: Vec<(Directory, CString)>,
 }
@@ -43,57 +43,20 @@ impl SlotGuard {
         cancellation: &CancellationToken,
     ) -> RuntimeResult<Option<Self>> {
         cancellation.check()?;
-        // HostPlacement currently has public fields. Validate its entire slot
-        // relation before bootstrapping rather than trusting a constructed path.
-        let relative = placement
-            .registry_dir
-            .strip_prefix(&placement.state_base)
-            .map_err(|_| invalid("registry placement escapes the state base"))?;
-        let components: Vec<_> = relative.components().collect();
-        let [
-            Component::Normal(namespace),
-            Component::Normal(project),
-            Component::Normal(environment),
-            Component::Normal(slot),
-        ] = components.as_slice()
-        else {
-            return Err(invalid("invalid slot coordination placement"));
-        };
-        if *namespace != "registry"
-            || placement.state_root
-                != placement
-                    .state_base
-                    .join("data")
-                    .join(project)
-                    .join(environment)
-                    .join(slot)
-        {
-            return Err(invalid("incoherent slot placement"));
-        }
-        for (field, component) in [("projectId", project), ("environment", environment)] {
-            let value = component
-                .to_str()
-                .ok_or_else(|| invalid("invalid slot identity encoding"))?;
-            super::placement::normal_component(field, value)?;
-        }
-        let slot_text = slot
-            .to_str()
-            .ok_or_else(|| invalid("invalid slot component"))?;
-        if slot_text
-            .parse::<u32>()
-            .ok()
-            .is_none_or(|number| number.to_string() != slot_text)
-        {
-            return Err(invalid("invalid slot component"));
-        }
         let mut directory =
-            Directory::private_anchor(&placement.state_base).map_err(acquisition_error)?;
+            Directory::private_anchor(placement.state_base()).map_err(acquisition_error)?;
         refuse_network_filesystem(&directory)?;
         let mut ancestors = Vec::new();
-        for component in [namespace, project, environment, slot] {
+        let slot = placement.slot();
+        for component in [
+            "registry",
+            slot.project(),
+            slot.environment(),
+            &slot.slot().to_string(),
+        ] {
             cancellation.check()?;
             let component =
-                CString::new(component.as_bytes()).map_err(|_| invalid("NUL in slot placement"))?;
+                CString::new(component).map_err(|_| invalid("NUL in slot placement"))?;
             let child = directory
                 .create_private_child(&component)
                 .map_err(acquisition_error)?;
@@ -112,8 +75,8 @@ impl SlotGuard {
         let guard = Self {
             file,
             directory,
-            registry_path: placement.registry_path(),
-            state_base: placement.state_base.clone(),
+            slot: slot.clone(),
+            state_base: placement.state_base().to_path_buf(),
             ancestors,
         };
         guard.validate()?;
@@ -126,17 +89,7 @@ impl SlotGuard {
         environment: &str,
         slot: i64,
     ) -> RuntimeResult<()> {
-        let project = super::placement::normal_component("projectId", project)?;
-        let environment = super::placement::normal_component("environment", environment)?;
-        let slot = u32::try_from(slot).map_err(|_| invalid("invalid registry slot"))?;
-        let expected = self
-            .state_base
-            .join("registry")
-            .join(project)
-            .join(environment)
-            .join(slot.to_string())
-            .join("registry.sqlite3");
-        if expected != self.registry_path {
+        if !self.slot.names(project, environment, slot) {
             return Err(invalid(
                 "registry identity does not match held slot authority",
             ));
@@ -149,26 +102,13 @@ impl SlotGuard {
     /// session directory is a run identity collision and is never reused.
     pub fn claim_run_dir(&self, placement: &HostPlacement) -> RuntimeResult<Directory> {
         self.validate()?;
-        let run_id = placement
-            .run_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| invalid("invalid run evidence placement"))?;
-        if placement.registry_path() != self.registry_path
-            || placement.run_dir != placement.registry_dir.join("runs").join(run_id)
-            || placement.logs_dir != placement.run_dir.join("logs")
-            || placement.artifacts_dir != placement.run_dir.join("artifacts")
-        {
+        if placement.slot() != &self.slot || placement.state_base() != self.state_base {
             return Err(invalid(
                 "run evidence placement does not match held slot authority",
             ));
         }
-        let run_id = CString::new(
-            super::placement::normal_component("runId", run_id)?
-                .as_os_str()
-                .as_bytes(),
-        )
-        .map_err(|_| invalid("NUL in run identity"))?;
+        let run_id =
+            CString::new(placement.run_id()).map_err(|_| invalid("NUL in run identity"))?;
         let claimed = (|| {
             let run_dir = self
                 .directory
@@ -183,18 +123,26 @@ impl SlotGuard {
                 ErrorCode::StateUnwritable,
                 format!(
                     "failed to claim session evidence {}: {error}",
-                    placement.run_dir.display()
+                    placement.run_dir().display()
                 ),
             )
         })
     }
 
-    pub fn registry_path(&self) -> &std::path::Path {
-        &self.registry_path
+    pub fn registry_path(&self) -> PathBuf {
+        self.state_base
+            .join("registry")
+            .join(self.slot.relative())
+            .join("registry.sqlite3")
+    }
+
+    /// The held slot's identity.
+    pub(crate) fn slot(&self) -> &SlotIdentity {
+        &self.slot
     }
 
     /// The state base as placement names it, for diagnostics only.
-    pub(crate) fn state_base(&self) -> &std::path::Path {
+    pub(crate) fn state_base(&self) -> &Path {
         &self.state_base
     }
 
@@ -302,6 +250,7 @@ pub(crate) fn fixture_guard(
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     // A concurrent harness fork can briefly inherit any live fixture lock until
@@ -328,17 +277,8 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let root = crate::test_support::TestDir::new("slot");
-            let registry_dir = root.join("registry/project/dev/0");
-            let run_dir = registry_dir.join("runs/session");
-            let placement = HostPlacement {
-                state_base: root.to_path_buf(),
-                state_root: root.join("data/project/dev/0"),
-                registry_dir,
-                logs_dir: run_dir.join("logs"),
-                artifacts_dir: run_dir.join("artifacts"),
-                summary_path: run_dir.join("summary.json"),
-                run_dir,
-            };
+            let placement =
+                crate::state::derive_slot_placement("project", "dev", 0, "session", &root).unwrap();
             Self { root, placement }
         }
         fn acquire(&self) -> RuntimeResult<SlotGuard> {
@@ -355,16 +295,16 @@ mod tests {
         }
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
-        let path = fixture.placement.registry_dir.join("slot.lock");
+        let path = fixture.placement.registry_dir().join("slot.lock");
         let inode = fs::metadata(&path).unwrap().ino();
         fs::write(&path, b"inert contents").unwrap();
         assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
         // Closing an unrelated open must not release an open-description flock.
         drop(fs::File::open(&path).unwrap());
         assert!(fixture.acquire().is_err());
-        assert!(!fixture.placement.state_root.exists());
+        assert!(!fixture.placement.state_root().exists());
         assert!(!fixture.placement.registry_path().exists());
-        assert!(!fixture.placement.run_dir.exists());
+        assert!(!fixture.placement.run_dir().exists());
         guard.release().unwrap();
         let next = fixture.acquire().unwrap();
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
@@ -380,10 +320,8 @@ mod tests {
         let fixture = Fixture::new();
         let alias = fixture.root.with_extension("alias");
         std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
-        let mut placement = fixture.placement.clone();
-        placement.state_base = alias.clone();
-        placement.registry_dir = alias.join("registry/project/dev/0");
-        placement.state_root = alias.join("data/project/dev/0");
+        let placement =
+            crate::state::derive_slot_placement("project", "dev", 0, "session", &alias).unwrap();
         let guard = fixture.acquire().unwrap();
         assert!(SlotGuard::acquire(&placement, &CancellationToken::new()).is_err());
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -406,7 +344,7 @@ mod tests {
         for kind in ["symlink", "hardlink", "fifo", "mode", "directory"] {
             let fixture = Fixture::new();
             fixture.acquire().unwrap().release().unwrap();
-            let lock = fixture.placement.registry_dir.join("slot.lock");
+            let lock = fixture.placement.registry_dir().join("slot.lock");
             fs::remove_file(&lock).unwrap();
             let other = fixture.root.join("other");
             fs::write(&other, b"preserve").unwrap();
@@ -445,9 +383,9 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         assert!(SlotGuard::acquire(&fixture.placement, &token).is_err());
-        assert!(!fixture.placement.registry_dir.exists());
+        assert!(!fixture.placement.registry_dir().exists());
         let guard = fixture.acquire().unwrap();
-        let lock = fixture.placement.registry_dir.join("slot.lock");
+        let lock = fixture.placement.registry_dir().join("slot.lock");
         fs::rename(&lock, lock.with_extension("old")).unwrap();
         fs::write(&lock, b"replacement").unwrap();
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
@@ -475,12 +413,12 @@ mod tests {
         for path in [
             fixture.root.to_path_buf(),
             fixture.root.join("registry"),
-            fixture.placement.registry_dir.clone(),
+            fixture.placement.registry_dir().clone(),
         ] {
             assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o700);
         }
         assert_eq!(
-            fs::metadata(fixture.placement.registry_dir.join("slot.lock"))
+            fs::metadata(fixture.placement.registry_dir().join("slot.lock"))
                 .unwrap()
                 .mode()
                 & 0o777,
@@ -582,7 +520,7 @@ mod tests {
         let lock = CString::new(
             fixture
                 .placement
-                .registry_dir
+                .registry_dir()
                 .join("slot.lock")
                 .as_os_str()
                 .as_bytes(),

@@ -223,7 +223,7 @@ pub fn record_run_created(
                 admission.common().generator_json(),
                 admission.common().target_json(),
                 source_json,
-                placement.summary_path.display().to_string(),
+                placement.summary_path().display().to_string(),
                 owner_identity,
                 crate::output::DIAGNOSTIC_SOURCE,
             ],

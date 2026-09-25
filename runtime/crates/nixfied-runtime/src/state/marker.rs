@@ -27,24 +27,16 @@ pub struct StateIdentity {
 }
 
 impl StateIdentity {
-    pub fn from_admission(admission: &ControlAdmission) -> Self {
-        Self::for_slot(admission, "dev", 0)
-    }
-
     pub fn from_selected_slot(
         admission: &ControlAdmission,
         selected_slot: &SelectedSlot<'_>,
     ) -> Self {
-        Self::for_slot(admission, selected_slot.environment, selected_slot.slot)
-    }
-
-    pub fn for_slot(admission: &ControlAdmission, environment: &str, slot: u32) -> Self {
         let manifest = admission.manifest();
         Self {
             marker_identity: manifest.state.marker_identity.clone(),
             project_id: manifest.project.project_id.clone(),
-            environment: environment.to_string(),
-            slot,
+            environment: selected_slot.environment.to_string(),
+            slot: selected_slot.slot,
             persistence: manifest.state.persistence,
             manifest_path: admission.manifest_path().to_path_buf(),
             computed_manifest_hash: admission.computed_manifest_hash().to_owned(),

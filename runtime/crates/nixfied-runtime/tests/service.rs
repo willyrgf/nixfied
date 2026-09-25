@@ -19,10 +19,7 @@ use nixfied_runtime::service::{
     run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
-use nixfied_runtime::state::{
-    CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
-    derive_host_placement_for_slot,
-};
+use nixfied_runtime::state::{CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker};
 use nixfied_runtime::{ErrorCode, RunAdmission, RuntimeError};
 use serde_json::{Value, json};
 
@@ -95,7 +92,7 @@ fn probe_registration_event_failure_prevents_workload_effects() {
     assert!(
         !fixture
             .placement
-            .state_root
+            .state_root()
             .join("must-not-execute")
             .exists()
     );
@@ -147,14 +144,14 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     assert!(
         fixture
             .placement
-            .logs_dir
+            .logs_dir()
             .join("service.synthetic.stdout.log")
             .exists()
     );
     assert!(
         fixture
             .placement
-            .logs_dir
+            .logs_dir()
             .join("service.synthetic.stderr.log")
             .exists()
     );
@@ -404,7 +401,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
             if deleted_path.ends_with("runtime-test/dev/0")
     ));
-    assert!(!fixture.placement.state_root.exists());
+    assert!(!fixture.placement.state_root().exists());
     assert_eq!(
         lifecycle_events(&fixture.registry),
         vec![
@@ -611,9 +608,8 @@ fn slot_one_service_uses_slot_placement_port_window() {
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let admission = fixture_admission(&manifest, &tmp.path);
     let selected_slot = select_slot(&manifest, Some(1)).expect("slot 1 should select");
-    let placement =
-        derive_host_placement_for_slot(&manifest, &selected_slot, "run-slot-1", &tmp.path)
-            .expect("slot 1 layout should derive");
+    let placement = slot_placement(&manifest, &selected_slot, "run-slot-1", &tmp.path)
+        .expect("slot 1 layout should derive");
     let mut registry = open_slot_registry(&placement, &manifest, &selected_slot);
     registry.authority().claim_run_dir(&placement).unwrap();
 
@@ -630,7 +626,7 @@ fn slot_one_service_uses_slot_placement_port_window() {
 
     assert_eq!(service.selected_endpoint().expect("endpoint").port, 23280);
     assert_eq!(
-        placement.state_root,
+        placement.state_root(),
         tmp.path.join("data/runtime-test/dev/1")
     );
     service
@@ -650,15 +646,21 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let mut slot0 = StartedSlot::start(&manifest, &admission, &tmp.path, 0, "run-slot-0", 23210);
     let mut slot1 = StartedSlot::start(&manifest, &admission, &tmp.path, 1, "run-slot-1", 23310);
 
-    assert_ne!(slot0.placement.state_root, slot1.placement.state_root);
+    assert_ne!(slot0.placement.state_root(), slot1.placement.state_root());
     assert_ne!(
         slot0.placement.registry_path(),
         slot1.placement.registry_path()
     );
-    assert_ne!(slot0.placement.run_dir, slot1.placement.run_dir);
-    assert_ne!(slot0.placement.logs_dir, slot1.placement.logs_dir);
-    assert_ne!(slot0.placement.artifacts_dir, slot1.placement.artifacts_dir);
-    assert_ne!(slot0.placement.summary_path, slot1.placement.summary_path);
+    assert_ne!(slot0.placement.run_dir(), slot1.placement.run_dir());
+    assert_ne!(slot0.placement.logs_dir(), slot1.placement.logs_dir());
+    assert_ne!(
+        slot0.placement.artifacts_dir(),
+        slot1.placement.artifacts_dir()
+    );
+    assert_ne!(
+        slot0.placement.summary_path(),
+        slot1.placement.summary_path()
+    );
     assert_ne!(
         slot0.service.selected_endpoint().expect("endpoint").port,
         slot1.service.selected_endpoint().expect("endpoint").port
@@ -693,13 +695,13 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let slot0_identity = StateIdentity::from_selected_slot(admission.common(), &slot0.selected);
     clean_marked_state(&slot0_identity, &mut slot0.registry, CleanupMode::Standard)
         .expect("slot 0 cleanup should succeed after down");
-    assert!(!slot0.placement.state_root.exists());
-    assert!(slot1.placement.state_root.exists());
+    assert!(!slot0.placement.state_root().exists());
+    assert!(slot1.placement.state_root().exists());
 
     let slot1_identity = StateIdentity::from_selected_slot(admission.common(), &slot1.selected);
     clean_marked_state(&slot0_identity, &mut slot1.registry, CleanupMode::Standard)
         .expect_err("slot 0 identity must not clean slot 1 state");
-    assert!(slot1.placement.state_root.exists());
+    assert!(slot1.placement.state_root().exists());
 
     slot1
         .service
@@ -893,9 +895,9 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
         .start("run-exec-probe", port)
         .expect("service should start");
 
-    let listener_bound = fixture.placement.state_root.join("listener-bound");
-    let ready_ack = fixture.placement.state_root.join("ready-ack");
-    let ready_flag = fixture.placement.state_root.join("ready-flag");
+    let listener_bound = fixture.placement.state_root().join("listener-bound");
+    let ready_ack = fixture.placement.state_root().join("ready-ack");
+    let ready_flag = fixture.placement.state_root().join("ready-flag");
     assert!(
         wait_for_path(&listener_bound, Duration::from_secs(5)),
         "service child should announce the bound listener"
@@ -903,7 +905,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     assert!(!ready_flag.exists(), "listener bind must precede readiness");
     let first_probe_log = fixture
         .placement
-        .logs_dir
+        .logs_dir()
         .join("lifecycle.synthetic.ready.probe.0.stdout.log");
     let acknowledge = thread::spawn(move || {
         assert!(
@@ -928,7 +930,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     assert!(
         fixture
             .placement
-            .logs_dir
+            .logs_dir()
             .join("lifecycle.synthetic.ready.probe.0.stdout.log")
             .exists(),
         "probe attempts should leave captured output"
@@ -971,7 +973,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         assert!(
             fixture
                 .placement
-                .logs_dir
+                .logs_dir()
                 .join(format!(
                     "lifecycle.synthetic.ready.probe.{occurrence}.stdout.log"
                 ))
@@ -1018,7 +1020,7 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
             json!(if acknowledge { 1 } else { 30000 });
         let mut fixture = ServiceFixture::from_value(value);
         let service = fixture.start("probe-deadline", port).unwrap();
-        let root = fixture.placement.state_root.clone();
+        let root = fixture.placement.state_root().clone();
         let acknowledger = acknowledge.then(|| {
             thread::spawn(move || {
                 assert!(wait_for_path(&root.join("attempt"), Duration::from_secs(5)));
@@ -1229,7 +1231,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &fs::read(
             fixture
                 .placement
-                .summary_path
+                .summary_path()
                 .with_file_name("summary.0.json"),
         )
         .expect("summary should read"),
@@ -1299,7 +1301,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         &fs::read(
             fixture
                 .placement
-                .summary_path
+                .summary_path()
                 .with_file_name("summary.0.json"),
         )
         .expect("summary should read"),
@@ -2076,13 +2078,13 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
     ));
     let service = fixture.start_ready("run-listener-loss-ps", port);
     fs::write(
-        fixture.placement.state_root.join("listener-close"),
+        fixture.placement.state_root().join("listener-close"),
         b"close",
     )
     .expect("test should request listener loss");
     assert!(
         wait_for_path(
-            &fixture.placement.state_root.join("listener-closed"),
+            &fixture.placement.state_root().join("listener-closed"),
             Duration::from_secs(5)
         ),
         "service child should acknowledge listener loss"
@@ -2390,7 +2392,7 @@ fn owned_process_cleanup_does_not_settle_the_session() {
         .expect("foreground service should start");
     commit_slot_marker(
         &fixture.registry,
-        &StateIdentity::from_admission(fixture.admission.common()),
+        &default_state_identity(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -2409,7 +2411,7 @@ fn owned_process_cleanup_does_not_settle_the_session() {
         [],
     );
     let cleanup = clean_marked_state(
-        &StateIdentity::from_admission(fixture.admission.common()),
+        &default_state_identity(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -2427,7 +2429,7 @@ fn owned_process_cleanup_does_not_settle_the_session() {
         nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
             if deleted_path.ends_with("runtime-test/dev/0")
     ));
-    assert!(!fixture.placement.state_root.exists());
+    assert!(!fixture.placement.state_root().exists());
 }
 
 #[test]
@@ -2591,7 +2593,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     );
     commit_slot_marker(
         &fixture.registry,
-        &StateIdentity::from_admission(fixture.admission.common()),
+        &default_state_identity(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
 
@@ -2619,7 +2621,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         [],
     );
     let cleanup = clean_marked_state(
-        &StateIdentity::from_admission(fixture.admission.common()),
+        &default_state_identity(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
     )
@@ -2650,7 +2652,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
             if deleted_path.ends_with("runtime-test/dev/0")
     ));
-    assert!(!fixture.placement.state_root.exists());
+    assert!(!fixture.placement.state_root().exists());
 }
 
 #[test]
@@ -2992,7 +2994,7 @@ impl ServiceFixture {
                 &runtime_binary(),
                 &self.admission,
                 &service.info().run_id,
-                &self.placement.state_root,
+                &self.placement.state_root(),
                 &Redactor::from_secrets(self.admission.secrets()),
             ),
             &[service],
@@ -3026,8 +3028,8 @@ impl ServiceFixture {
             &tmp.path,
             store_root,
         );
-        let placement = derive_host_placement(&manifest, "run-service", &tmp.path)
-            .expect("layout should derive");
+        let placement =
+            default_placement(&manifest, "run-service", &tmp.path).expect("layout should derive");
         let registry = Registry::open_or_create(
             registry_guard(&placement),
             &RegistryIdentity::default_slot(
@@ -3039,7 +3041,7 @@ impl ServiceFixture {
         .expect("registry should open");
         registry.authority().claim_run_dir(&placement).unwrap();
         // Workloads address an existing application root, as after preparation.
-        fs::create_dir_all(&placement.state_root).unwrap();
+        fs::create_dir_all(placement.state_root()).unwrap();
         Self {
             _tmp: tmp,
             admission,
@@ -3066,7 +3068,7 @@ impl<'a> StartedSlot<'a> {
         selected_port: u16,
     ) -> Self {
         let selected = select_slot(manifest, Some(slot)).expect("slot should select");
-        let placement = derive_host_placement_for_slot(manifest, &selected, run_id, state_base)
+        let placement = slot_placement(manifest, &selected, run_id, state_base)
             .expect("slot placement should derive");
         let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
         let mut registry = open_slot_registry(&placement, manifest, &selected);
@@ -4078,9 +4080,8 @@ fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
     let fixture = RuntimeFixture::new(&manifest);
 
     let selected_slot = select_slot(&manifest, None).expect("slot should select");
-    let placement =
-        derive_host_placement_for_slot(&manifest, &selected_slot, "setup", &fixture.state_base)
-            .expect("placement should derive");
+    let placement = slot_placement(&manifest, &selected_slot, "setup", &fixture.state_base)
+        .expect("placement should derive");
     let registry = open_slot_registry(&placement, &manifest, &selected_slot);
     // Fault injection changes stored identity; the writer constructor rejects
     // an incoherent requested identity before creating the database.

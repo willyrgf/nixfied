@@ -11,7 +11,7 @@ use nixfied_manifest::{Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
-    derive_host_placement, prepare_slot_state,
+    prepare_slot_state,
 };
 use nixfied_runtime::{ErrorCode, RunAdmission};
 use serde_json::Value;
@@ -220,9 +220,8 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         ))
         .expect("manifest should parse");
         let admission_a = admission(&manifest, &tmp.path, false);
-        let placement =
-            derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
-        let identity_a = StateIdentity::from_admission(admission_a.common());
+        let placement = default_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
+        let identity_a = default_state_identity(admission_a.common());
         let mut registry = open_registry(&placement, &manifest);
         registry.authority().claim_run_dir(&placement).unwrap();
         commit_slot_marker(&registry, &identity_a).expect("marker should be written");
@@ -240,8 +239,8 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         let process_key = service.info().process_key.clone();
 
         let admission_b = admission(&manifest, &tmp.path, changed);
-        let identity_b = StateIdentity::from_admission(admission_b.common());
-        let marker_path = placement.state_root.join(MARKER_FILE_NAME);
+        let identity_b = default_state_identity(admission_b.common());
+        let marker_path = placement.state_root().join(MARKER_FILE_NAME);
         let marker_before = fs::read(&marker_path).unwrap();
         for (status, expected) in [
             ("running", ErrorCode::CleanupRefused),
@@ -351,11 +350,11 @@ impl PreparationFixture {
 
     fn identity(&self, pretty: bool) -> StateIdentity {
         let admission = admission(&self.manifest, &self.tmp.path, pretty);
-        StateIdentity::from_admission(admission.common())
+        default_state_identity(admission.common())
     }
 
     fn placement(&self, run_id: &str) -> HostPlacement {
-        derive_host_placement(&self.manifest, run_id, &self.tmp.path).expect("layout should derive")
+        default_placement(&self.manifest, run_id, &self.tmp.path).expect("layout should derive")
     }
 
     fn prepare(
@@ -375,7 +374,7 @@ impl PreparationFixture {
     }
 
     fn state_root(&self) -> PathBuf {
-        self.placement("control").state_root
+        self.placement("control").state_root()
     }
 
     fn plant_sentinel(&self) -> PathBuf {

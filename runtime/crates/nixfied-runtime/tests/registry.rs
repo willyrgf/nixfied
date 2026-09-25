@@ -75,8 +75,8 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
             "runs"
         ]
     );
-    assert!(!placement.state_root.exists());
-    assert!(!placement.run_dir.exists());
+    assert!(!placement.state_root().exists());
+    assert!(!placement.run_dir().exists());
     drop(results);
     Registry::open_or_create(registry_guard(&placement), &registry_identity())
         .unwrap()
