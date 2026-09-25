@@ -756,7 +756,7 @@ mod tests {
             },
             "state": {
                 "markerIdentity": "nixfied-state",
-                "cleanupPolicy": "delete-on-clean", "persistence": "run-scoped"
+                "persistence": "run-scoped"
             },
             "closures": {
                 "c": {

@@ -118,8 +118,7 @@ in
       "Source identity interpretation: immutable snapshot/input or live workspace."
     )
     (vocabulary "DirtyPolicy" false "Policy for uncommitted live-workspace source changes.")
-    (vocabulary "CleanupPolicy" false "Ordinary cleanup permission for owned state.")
-    (vocabulary "PersistencePolicy" false "State persistence policy, distinct from service lifetime.")
+    (vocabulary "PersistencePolicy" false "The sole application-data retention policy.")
     (vocabulary "StopSignal" true "The closed set of graceful shutdown signals the runtime can send.")
   ];
   records = [
@@ -197,9 +196,6 @@ in
     (record "StatePolicy" "State-marker ownership and data retention policy." [
       (field "markerIdentity" text required "RequiredPresent"
         "Required marker identity for adopting or cleaning state."
-      )
-      (field "cleanupPolicy" (enum "CleanupPolicy") required "RequiredPresent"
-        "Ordinary cleanup permission."
       )
       (field "persistence" (enum "PersistencePolicy") required "RequiredPresent"
         "Application-data retention, independent of process lifetime."

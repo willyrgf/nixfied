@@ -420,10 +420,12 @@ NIXFIED_STATE_DIR=/tmp/my-project-state nix run .#check -- --slot 0
 ```
 
 `clean` is idempotent, path-confined, marker-gated, slot-owned, and
-process-gated. Run `down` first. A protected or persistent policy additionally
-requires `clean --purge`; purge relaxes only that policy gate, never the
-ownership, confinement, or live-process checks. Do not manually rewrite state
-markers or the registry.
+process-gated. Run `down` first. `nixfied.state.persistence` is the only
+retention policy: `run-scoped` data may be cleaned normally, while `persistent`
+data additionally requires `clean --purge`. Purge overrides retention only, never
+the ownership, confinement, or live-process checks. An interrupted deletion is
+resumed with its original identity before any new data is created. Do not
+manually rewrite state markers or the registry.
 
 ### Diagnose a state refusal
 
@@ -431,7 +433,7 @@ Before retrying a state or cleanup failure, use the reported error and any
 evidence paths to answer these questions:
 
 - Which check failed: access to the state path, marker identity, registry
-  integrity, live lease/process ownership, or cleanup policy? A failure to read
+  integrity, live process ownership, a pending deletion, or persistence? A failure to read
   evidence does not establish that the slot is idle or unowned.
 - Are the framework pin, project identity, slot, and state base the ones used
   for the affected run? Keep that context consistent when using `ps`, `down`,
@@ -439,9 +441,9 @@ evidence paths to answer these questions:
 - Does `ps` successfully establish the slot's current state? If inspection
   fails, preserve its diagnostic and existing evidence; do not treat failure
   as an empty process list or delete registry/marker files to proceed.
-- Is cleanup blocked only by the declared protected/persistent policy, or by
-  ownership, confinement, leases, or processes? `--purge` addresses only the
-  policy gate. Use `down` for owned processes; a failed ownership proof needs
+- Is cleanup blocked only by `persistent` retention, or by ownership,
+  confinement, a pending deletion, or processes? `--purge` addresses only
+  retention. Use `down` for owned processes; a failed ownership proof needs
   investigation, not a broader deletion command.
 
 Keep the original diagnostics and reported evidence paths when investigating.

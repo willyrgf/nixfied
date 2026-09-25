@@ -49,8 +49,7 @@ Stale => "stale",
 
 db_status! {
     CleanupStatus {
-    Intent => "intent",
-Deleted => "deleted",
-Failed => "failed",
+    Pending => "pending",
+Completed => "completed",
     }
 }

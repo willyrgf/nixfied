@@ -321,7 +321,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       'runtime': ('command', 'run'),
       'secrets': ('option', 'nixfied.secrets.<name>.source.kind'),
       'services': ('record', 'primitive/Lifecycle'),
-      'state': ('option', 'nixfied.state.cleanupPolicy'),
+      'state': ('option', 'nixfied.state.persistence'),
       'tasks': ('option', 'nixfied.tasks.<name>.requires'),
   }
   assert set(cases) == set(index['topics'])
@@ -345,7 +345,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
   journeys = {
       'state': [
           'Run `down` first.',
-          'purge relaxes only that policy gate',
+          'Purge overrides retention only',
           'never the ownership, confinement, or live-process checks',
           'runtime-owned slot root',
           'Child-tool caches remain project-owned.',
@@ -408,7 +408,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
               assert 'Related topic: ' + destination in body, (name, error)
               assert 'docs topic ' + name + '`' not in body, (name, error)
   state = index['topics']['state']['text']
-  assert state.index('### option nixfied.state.cleanupPolicy') < state.index('### option nixfied.placement.ports.base')
+  assert state.index('### option nixfied.state.persistence') < state.index('### option nixfied.placement.ports.base')
   errors = index['topics']['errors']['text']
   assert errors.index('### record output-schema/runtime-error\n') < errors.index('### record output-schema/run-task\n')
   entries = {(x['kind'], x['id']): x for x in index['api'] + index['options']}

@@ -1937,28 +1937,7 @@ signed integer
 
 
 
-## nixfied\.state\.cleanupPolicy
-
-Whether ordinary ` clean ` may delete owned state or must require explicit purge\.
-
-
-
-*Type:*
-one of “delete-on-clean”, “protected”
-
-
-
-*Default:*
-
-```nix
-"delete-on-clean"
-```
-
-
-
 ## nixfied\.state\.markerIdentity
-
-
 
 Identity written into the slot marker and required before the runtime may adopt or clean its state\.
 
@@ -1981,7 +1960,7 @@ non-empty string
 
 
 
-Whether slot state is eligible for ordinary cleanup or treated as persistent data requiring explicit purge\.
+The sole application-data retention policy: ` run-scoped ` data is deleted after safe session teardown and by ordinary ` clean `; ` persistent ` data survives sessions and ordinary ` clean `, and only explicit purge deletes it\.
 
 
 

@@ -243,7 +243,7 @@ assert builtins.length (parentEntries { }) == 4;
 assert
   (lib.findFirst (entry: entry.name == "parent.contextual") null (parentEntries { })).default.text
   == "nativeContext";
-assert builtins.length entries == 126;
+assert builtins.length entries == 125;
 assert rejects (mkOption {
   type = lib.types.str;
 });
@@ -339,6 +339,7 @@ assert rejects
   .config.nixfied.tasks.bad.invocation.timeoutMs;
 assert rejects (evaluate system { nixfied.state.stateEpoch = "1"; }).config.nixfied.state;
 assert rejects (evaluate system { nixfied.state.stateEpoch = null; }).config.nixfied.state;
+assert rejects (evaluate system { nixfied.state.cleanupPolicy = "protected"; }).config.nixfied.state;
 assert
   (evaluate system { nixfied.codebases.main.sourceIdentity = "source"; })
   .config.nixfied.codebases.main.sourceIdentity == "source";

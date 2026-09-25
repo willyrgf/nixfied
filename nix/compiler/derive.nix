@@ -439,7 +439,6 @@ in
           state = construct "StatePolicy" {
             inherit (config.nixfied.state)
               markerIdentity
-              cleanupPolicy
               persistence
               ;
           };

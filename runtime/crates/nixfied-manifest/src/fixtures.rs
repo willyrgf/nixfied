@@ -115,7 +115,6 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
         },
         "state": {
             "markerIdentity": "nixfied-state",
-            "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
         "closures": {

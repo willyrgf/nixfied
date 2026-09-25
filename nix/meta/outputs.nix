@@ -200,10 +200,15 @@ in
         (required "stale" (list text) "Process keys classified stale by native reconciliation.")
       ]
     )
-    (record (local "CleanupOutcome") "NoDecoder" "Result of successful marker-gated native cleanup." [
-      (required "cleanupId" text "Recorded cleanup identity.")
-      (required "deletedPath" path "Native deleted state path.")
-    ])
+    (record (local "CleanupOutcome") "NoDecoder"
+      "Result of native cleanup: one deleted data generation, or an absent tree with nothing pending."
+      [
+        (required "result" text "`deleted` or `absent`.")
+        (omitted "cleanupId" text "Deletion operation identity; present only for `deleted`.")
+        (omitted "deletedPath" path "Deleted application root; present only for `deleted`.")
+        (omitted "targetPath" path "Absent application root; present only for `absent`.")
+      ]
+    )
     (record (output "runtime-error-cause") "NoDecoder"
       "Non-recursive safe cause; native selection and allowlisting remove unsafe infrastructure text."
       errorFields
@@ -307,7 +312,7 @@ in
           REGISTRY_CORRUPT = annotation "Registry schema, identity, status or transactional evidence cannot be trusted." "state";
           STATE_UNWRITABLE = annotation "Native state or evidence I/O could not complete." "state";
           STATE_UNOWNED = annotation "Required state ownership proof is absent or inconsistent." "state";
-          CLEANUP_REFUSED = annotation "Native cleanup policy or ownership checks refused deletion." "state";
+          CLEANUP_REFUSED = annotation "Native persistence, ownership, or process checks refused deletion, or a pending deletion remains unresolved." "state";
           PORT_CONFLICT = annotation "A startup lock or listener proves a conflict at a planned endpoint." "placeholders";
           PORT_UNVERIFIABLE = annotation "Native endpoint ownership cannot be proved safely." "placeholders";
           PROC_ESCAPE = annotation "Required process containment or foreground-process identity could not be maintained or verified." "recovery";

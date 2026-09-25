@@ -32,7 +32,7 @@ fn native_paths_keep_non_utf8_failure_instead_of_becoming_lossy() {
     let mut task: TaskRun = serde_json::from_str(TASK).unwrap();
     task.stdout_path = invalid.clone();
     assert!(serde_json::to_value(task).is_err());
-    let cleanup = CleanupOutcome {
+    let cleanup = CleanupOutcome::Deleted {
         cleanup_id: "cleanup".into(),
         deleted_path: invalid.clone(),
     };

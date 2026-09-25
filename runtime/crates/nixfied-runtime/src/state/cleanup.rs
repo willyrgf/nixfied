@@ -1,24 +1,43 @@
-use crate::registry::sqlite::RegistryContext;
-use std::io::ErrorKind;
+//! Crash-safe deletion of one marker-owned application-data generation.
+//!
+//! The slot owner commits one pending intent before any destructive effect,
+//! deletes payload entries through directory descriptors without following
+//! symlinks, keeps the root marker until every payload entry is gone, and then
+//! commits completion. A pending intent is resumed by the same operation ID;
+//! it is never replaced by a new attempt identity.
+use std::ffi::{CStr, CString};
+use std::io;
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
-use rusqlite::params;
+use nixfied_manifest::PersistencePolicy;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::filesystem::{Directory, EntryKind, FileIdentity};
 use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
+use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{self, CleanupStatus, DbStatus};
-use crate::state::marker::{StateIdentity, StateMarker, read_marker};
-use crate::state::placement::{
-    application_root, canonicalize_existing, normal_component, reject_existing_symlink_components,
-};
+use crate::state::marker::{StateIdentity, StateMarker};
+use crate::state::placement::normal_component;
+
+const MARKER: &CStr = c".nixfied-state.json";
+const MARKER_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CleanupOutcome {
-    pub cleanup_id: String,
-    pub deleted_path: PathBuf,
+#[serde(
+    tag = "result",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CleanupOutcome {
+    /// This operation deleted (or completed deleting) one data generation.
+    Deleted {
+        cleanup_id: String,
+        deleted_path: PathBuf,
+    },
+    /// No application tree exists and no deletion is pending.
+    Absent { target_path: PathBuf },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,261 +52,401 @@ impl CleanupMode {
     }
 }
 
-pub fn inspect_cleanup_target(
+/// Delete the selected slot's application tree when its marker authorizes the
+/// mode. A pending predecessor operation is resumed first under its own
+/// committed authorization; the requested mode never extends it.
+pub fn clean_marked_state(
     state_base: impl AsRef<Path>,
-    target: impl AsRef<Path>,
     expected: &StateIdentity,
+    registry: &mut Registry,
     mode: CleanupMode,
-) -> RuntimeResult<StateMarker> {
-    let state_base = state_base.as_ref();
-    let target = target.as_ref();
-    let expected_target = expected_cleanup_target(state_base, expected)?;
-    let canonical_target = canonicalize_existing("cleanup target", target)?;
-    if canonical_target != expected_target {
-        return Err(RuntimeError::new(
+) -> RuntimeResult<CleanupOutcome> {
+    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    refuse_active_refs(registry)?;
+    if let Some(outcome) = resume_pending(registry, &target, expected)? {
+        return Ok(outcome);
+    }
+    let (parent, root, observed) = match target.open()? {
+        Observed::Absent => {
+            return Ok(CleanupOutcome::Absent {
+                target_path: target.path,
+            });
+        }
+        Observed::Present {
+            parent,
+            root,
+            identity,
+        } => (parent, root, identity),
+    };
+    let marker = read_root_marker(&root)?.ok_or_else(|| {
+        RuntimeError::new(
             ErrorCode::StateUnowned,
             format!(
-                "cleanup target {} is not the selected application root {}",
-                canonical_target.display(),
-                expected_target.display()
+                "state root {} has no state marker; refusing to delete unmarked state",
+                target.path.display()
             ),
-        ));
-    }
-    reject_target_symlink(target)?;
-    let marker = read_marker(&canonical_target)?;
-    // Cleanup is gated on ownership, not provenance: the slot's current owner
-    // may clean a state root last used by an older build of the same manifest.
+        )
+    })?;
     if !marker.matches_ownership(expected) {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             "state marker identity does not match the requested cleanup identity",
         ));
     }
-    refuse_cleanup_policy(&marker.cleanup_policy, &marker.persistence, mode)?;
-    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
-    Ok(marker)
-}
-
-pub fn clean_marked_state(
-    state_base: impl AsRef<Path>,
-    target: impl AsRef<Path>,
-    expected: &StateIdentity,
-    registry: &mut Registry,
-    mode: CleanupMode,
-) -> RuntimeResult<CleanupOutcome> {
-    let target = target.as_ref();
-    if target_is_missing(target)? {
-        return finish_missing_target_cleanup(
-            state_base.as_ref(),
-            target,
-            expected,
-            registry,
-            mode,
-        );
-    }
-    let marker = inspect_cleanup_target(state_base, target, expected, mode)?;
-    refuse_active_refs(registry)?;
-    let canonical_target = canonicalize_existing("cleanup target", target)?;
-    let cleanup_id = format!(
-        "cleanup-{}-{}",
-        std::process::id(),
-        unix_time_nanos().unwrap_or(0)
-    );
-    let payload_json = cleanup_payload_json(&cleanup_id, &canonical_target, mode);
-    record_cleanup_intent(
-        registry,
-        &cleanup_id,
-        &canonical_target,
-        &marker,
-        &payload_json,
-        mode,
-    )?;
-    if let Err(cleanup_error) = remove_dir_all_confined(&canonical_target, &canonical_target) {
-        let _ = record_cleanup_terminal(
-            registry,
-            &cleanup_id,
-            &marker.computed_manifest_hash,
-            &payload_json,
-            CleanupTerminal::Failed {
-                safe_reason: &cleanup_error.message,
-            },
-        );
-        return Err(cleanup_error);
-    }
-    record_cleanup_terminal(
-        registry,
-        &cleanup_id,
-        &marker.computed_manifest_hash,
-        &payload_json,
-        CleanupTerminal::Deleted,
-    )?;
-    Ok(CleanupOutcome {
-        cleanup_id,
-        deleted_path: canonical_target,
-    })
-}
-
-fn finish_missing_target_cleanup(
-    state_base: &Path,
-    target: &Path,
-    expected: &StateIdentity,
-    registry: &mut Registry,
-    mode: CleanupMode,
-) -> RuntimeResult<CleanupOutcome> {
-    let canonical_target = canonicalize_missing_target(state_base, target)?;
-    if canonical_target != expected_cleanup_target(state_base, expected)? {
+    authorize(&marker, mode)?;
+    if generation_completed(registry, &marker.data_generation)? {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
-            "missing cleanup target is not the selected application root",
+            "a previously deleted data generation reappeared; refusing contradictory history",
         ));
     }
-    refuse_active_refs(registry)?;
-    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
-    let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
-    if cleanup.status == CleanupStatus::Intent {
-        let payload_json =
-            cleanup_payload_json(&cleanup.cleanup_id, &canonical_target, cleanup.mode);
-        record_cleanup_terminal(
-            registry,
-            &cleanup.cleanup_id,
-            &cleanup.marker.computed_manifest_hash,
-            &payload_json,
-            CleanupTerminal::Deleted,
-        )?;
+    let record = CleanupRecord {
+        cleanup_id: format!("cleanup-{}", crate::token::random_hex()?),
+        target: target.relative.clone(),
+        marker,
+        purge: mode.is_purge(),
+        root: observed,
+    };
+    record_intent(registry, &record)?;
+    finish_deletion(registry, &target, &record, parent, root)
+}
+
+/// Settle a pending deletion before any application-root materialization,
+/// marker admission, or provenance refresh. Returns `None` when nothing is
+/// pending.
+pub fn resume_pending_cleanup(
+    state_base: impl AsRef<Path>,
+    expected: &StateIdentity,
+    registry: &mut Registry,
+) -> RuntimeResult<Option<CleanupOutcome>> {
+    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    if pending_cleanup(registry)?.is_none() {
+        return Ok(None);
     }
-    Ok(CleanupOutcome {
-        cleanup_id: cleanup.cleanup_id,
-        deleted_path: canonical_target,
+    refuse_active_refs(registry)?;
+    resume_pending(registry, &target, expected)
+}
+
+fn resume_pending(
+    registry: &mut Registry,
+    target: &CleanupTarget,
+    expected: &StateIdentity,
+) -> RuntimeResult<Option<CleanupOutcome>> {
+    let Some(record) = pending_cleanup(registry)? else {
+        return Ok(None);
+    };
+    if record.target != target.relative || !record.marker.matches_ownership(expected) {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "pending cleanup does not belong to the selected application root",
+        )
+        .with_detail("cleanupId", &record.cleanup_id));
+    }
+    let outcome = match target.open()? {
+        Observed::Absent => {
+            target.sync_parent()?;
+            complete(registry, &record)?;
+            deleted(&record, target)
+        }
+        Observed::Present {
+            parent,
+            root,
+            identity,
+        } => {
+            if identity != record.root {
+                return Err(RuntimeError::new(
+                    ErrorCode::StateUnowned,
+                    "pending cleanup target was replaced; refusing to delete the replacement",
+                )
+                .with_detail("cleanupId", &record.cleanup_id));
+            }
+            match read_root_marker(&root)? {
+                Some(marker) if marker == record.marker => {
+                    finish_deletion(registry, target, &record, parent, root)?
+                }
+                Some(_) => {
+                    return Err(RuntimeError::new(
+                        ErrorCode::StateUnowned,
+                        "pending cleanup target holds a different data generation",
+                    )
+                    .with_detail("cleanupId", &record.cleanup_id));
+                }
+                None => {
+                    let names = root
+                        .entry_names()
+                        .map_err(|error| io_error(target, error))?;
+                    if !names.is_empty() {
+                        return Err(RuntimeError::new(
+                            ErrorCode::CleanupRefused,
+                            "pending cleanup target lost its marker but is not empty; refusing to guess ownership",
+                        )
+                        .with_detail("cleanupId", &record.cleanup_id));
+                    }
+                    remove_root(target, &record, &parent, &root)
+                        .map_err(|error| attempt_failed(registry, &record, error))?;
+                    complete(registry, &record)?;
+                    deleted(&record, target)
+                }
+            }
+        }
+    };
+    Ok(Some(outcome))
+}
+
+/// Delete payload, then the marker, then the root, each step durable before the
+/// next; commit completion last. Failure leaves the committed intent pending.
+fn finish_deletion(
+    registry: &mut Registry,
+    target: &CleanupTarget,
+    record: &CleanupRecord,
+    parent: Directory,
+    root: Directory,
+) -> RuntimeResult<CleanupOutcome> {
+    let removed = (|| {
+        remove_contents(&root, record.root.device, true)?;
+        root.sync()?;
+        let remaining = root.entry_names()?;
+        if remaining.iter().any(|name| name.as_c_str() != MARKER) {
+            return Err(io::Error::other(
+                "unexpected entries appeared during cleanup",
+            ));
+        }
+        root.remove_entry(MARKER, false)?;
+        root.sync()?;
+        remove_root(target, record, &parent, &root)
+    })();
+    removed.map_err(|error| attempt_failed(registry, record, error))?;
+    complete(registry, record)?;
+    Ok(deleted(record, target))
+}
+
+fn remove_root(
+    target: &CleanupTarget,
+    record: &CleanupRecord,
+    parent: &Directory,
+    root: &Directory,
+) -> io::Result<()> {
+    // Revalidate the held root against its entry before the final removal.
+    match parent.entry(&target.name)? {
+        Some(EntryKind::Directory(identity))
+            if identity == record.root && root.identity()? == record.root => {}
+        _ => return Err(io::Error::other("cleanup root entry changed")),
+    }
+    parent.remove_entry(&target.name, true)?;
+    parent.sync()
+}
+
+fn remove_contents(directory: &Directory, device: u64, keep_marker: bool) -> io::Result<()> {
+    for name in directory.entry_names()? {
+        if keep_marker && name.as_c_str() == MARKER {
+            continue;
+        }
+        match directory.entry(&name)? {
+            None => {}
+            Some(EntryKind::Directory(identity)) => {
+                if identity.device != device {
+                    return Err(io::Error::other(
+                        "cleanup refuses to traverse a nested mount",
+                    ));
+                }
+                let child = directory.open_owned_child(&name)?;
+                remove_contents(&child, device, false)?;
+                drop(child);
+                directory.remove_entry(&name, true)?;
+            }
+            Some(EntryKind::File(_) | EntryKind::Other(_)) => {
+                directory.remove_entry(&name, false)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_root_marker(root: &Directory) -> RuntimeResult<Option<StateMarker>> {
+    match root.entry(MARKER) {
+        Ok(None) => return Ok(None),
+        Ok(Some(EntryKind::File(_))) => {}
+        Ok(Some(_)) => {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnowned,
+                "state marker is not a regular file",
+            ));
+        }
+        Err(error) => return Err(marker_error(error)),
+    }
+    let bytes = root
+        .read_regular_file(MARKER, MARKER_LIMIT)
+        .map_err(marker_error)?;
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!("state marker is invalid: {error}"),
+        )
     })
 }
 
-#[derive(Debug)]
-struct PriorCleanup {
-    cleanup_id: String,
-    status: CleanupStatus,
-    mode: CleanupMode,
-    marker: StateMarker,
+fn marker_error(error: io::Error) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::StateUnowned,
+        format!("state marker is unreadable: {error}"),
+    )
 }
 
-fn target_is_missing(target: &Path) -> RuntimeResult<bool> {
-    match std::fs::symlink_metadata(target) {
-        Ok(_) => Ok(false),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "failed to inspect cleanup target {}: {error}",
-                target.display()
-            ),
+/// Persistence alone determines whether deletion is permitted. Purge overrides
+/// retention only; ownership and process safety remain unconditional.
+fn authorize(marker: &StateMarker, mode: CleanupMode) -> RuntimeResult<()> {
+    match (&marker.persistence, mode) {
+        (PersistencePolicy::RunScoped, _) | (PersistencePolicy::Persistent, CleanupMode::Purge) => {
+            Ok(())
+        }
+        (PersistencePolicy::Persistent, CleanupMode::Standard) => Err(RuntimeError::new(
+            ErrorCode::CleanupRefused,
+            "persistent state requires explicit purge",
         )),
     }
 }
 
-fn canonicalize_missing_target(state_base: &Path, target: &Path) -> RuntimeResult<PathBuf> {
-    let canonical_base = canonicalize_existing("state base", state_base)?;
-    let parent = target.parent().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("cleanup target {} has no parent", target.display()),
-        )
-    })?;
-    let name = target.file_name().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("cleanup target {} has no final component", target.display()),
-        )
-    })?;
-    let canonical_parent = canonicalize_existing("cleanup target parent", parent)?;
-    if !canonical_parent.starts_with(&canonical_base) {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "cleanup target {} escapes state base {}",
-                canonical_parent.join(name).display(),
-                canonical_base.display()
-            ),
-        ));
-    }
-    Ok(canonical_parent.join(name))
+/// The application root derived from placement, never a caller-supplied path.
+struct CleanupTarget {
+    base: PathBuf,
+    ancestry: [CString; 3],
+    name: CString,
+    relative: String,
+    path: PathBuf,
 }
 
-fn find_prior_cleanup(
-    registry: &Registry,
-    canonical_target: &Path,
-    expected: &StateIdentity,
-) -> RuntimeResult<PriorCleanup> {
-    let rows = {
-        let mut statement = registry
-            .connection()
-            .prepare(&format!(
-                "
-                SELECT cleanup_id, marker_json, status, purge
-                FROM cleanups
-                WHERE target_path = ?1 AND status IN ({})
-                ORDER BY rowid DESC
-                ",
-                status::sql_in_list(status::CLEANUP_PRIOR)
-            ))
-            .map_err(sql_error)?;
-        statement
-            .query_map([canonical_target.display().to_string()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?
-    };
-    for (cleanup_id, marker_json, status, purge) in rows {
-        let marker = serde_json::from_str::<StateMarker>(&marker_json).map_err(|error| {
+enum Observed {
+    Absent,
+    Present {
+        parent: Directory,
+        root: Directory,
+        identity: FileIdentity,
+    },
+}
+
+impl CleanupTarget {
+    fn new(state_base: &Path, identity: &StateIdentity) -> RuntimeResult<Self> {
+        let project = normal_component("projectId", &identity.project_id)?;
+        let environment = normal_component("environment", &identity.environment)?;
+        let slot = identity.slot.to_string();
+        let relative = Path::new("data")
+            .join(project)
+            .join(environment)
+            .join(&slot);
+        let component = |value: &std::ffi::OsStr| {
+            CString::new(std::os::unix::ffi::OsStrExt::as_bytes(value))
+                .map_err(|_| invalid_target("placement component contains NUL"))
+        };
+        let base = state_base.canonicalize().map_err(|error| {
             RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!("cleanup {cleanup_id} has invalid marker evidence: {error}"),
+                ErrorCode::StateUnowned,
+                format!(
+                    "failed to resolve state base {}: {error}",
+                    state_base.display()
+                ),
             )
         })?;
-        if marker.matches_ownership(expected) {
-            return Ok(PriorCleanup {
-                cleanup_id,
-                status: CleanupStatus::parse_db(&status)?,
-                mode: if purge == 0 {
-                    CleanupMode::Standard
-                } else {
-                    CleanupMode::Purge
-                },
-                marker,
-            });
+        Ok(Self {
+            path: base.join(&relative),
+            base,
+            ancestry: [
+                c"data".to_owned(),
+                component(project.as_os_str())?,
+                component(environment.as_os_str())?,
+            ],
+            name: component(std::ffi::OsStr::new(&slot))?,
+            relative: relative.to_string_lossy().into_owned(),
+        })
+    }
+
+    fn open_parent(&self) -> RuntimeResult<Option<Directory>> {
+        let mut directory =
+            Directory::open_existing(&self.base).map_err(|error| io_error(self, error))?;
+        for name in &self.ancestry {
+            match directory
+                .entry(name)
+                .map_err(|error| io_error(self, error))?
+            {
+                None => return Ok(None),
+                Some(EntryKind::Directory(_)) => {
+                    directory = directory
+                        .open_owned_child(name)
+                        .map_err(|error| io_error(self, error))?;
+                }
+                Some(_) => {
+                    return Err(invalid_target(
+                        "application root ancestry is not a directory",
+                    ));
+                }
+            }
+        }
+        Ok(Some(directory))
+    }
+
+    fn open(&self) -> RuntimeResult<Observed> {
+        let Some(parent) = self.open_parent()? else {
+            return Ok(Observed::Absent);
+        };
+        match parent
+            .entry(&self.name)
+            .map_err(|error| io_error(self, error))?
+        {
+            None => Ok(Observed::Absent),
+            Some(EntryKind::Directory(_)) => {
+                let root = parent
+                    .open_owned_child(&self.name)
+                    .map_err(|error| io_error(self, error))?;
+                let identity = root.identity().map_err(|error| io_error(self, error))?;
+                Ok(Observed::Present {
+                    parent,
+                    root,
+                    identity,
+                })
+            }
+            Some(_) => Err(invalid_target(
+                "cleanup target is not a directory; refusing to follow or delete it",
+            )),
         }
     }
-    Err(RuntimeError::new(
-        ErrorCode::StateUnowned,
-        format!(
-            "cleanup target {} is absent without matching cleanup evidence",
-            canonical_target.display()
-        ),
-    ))
+
+    fn sync_parent(&self) -> RuntimeResult<()> {
+        if let Some(parent) = self.open_parent()? {
+            parent.sync().map_err(|error| io_error(self, error))?;
+        }
+        Ok(())
+    }
 }
 
-fn refuse_cleanup_policy(
-    cleanup_policy: &CleanupPolicy,
-    persistence: &PersistencePolicy,
-    mode: CleanupMode,
-) -> RuntimeResult<()> {
-    if mode.is_purge() {
-        return Ok(());
+fn deleted(record: &CleanupRecord, target: &CleanupTarget) -> CleanupOutcome {
+    CleanupOutcome::Deleted {
+        cleanup_id: record.cleanup_id.clone(),
+        deleted_path: target.path.clone(),
     }
-    if cleanup_policy == &CleanupPolicy::DeleteOnClean
-        && persistence == &PersistencePolicy::RunScoped
-    {
-        return Ok(());
-    }
-    Err(RuntimeError::new(
-        ErrorCode::CleanupRefused,
-        "state cleanup policy requires explicit purge",
-    ))
+}
+
+fn invalid_target(message: &str) -> RuntimeError {
+    RuntimeError::new(ErrorCode::StateUnowned, message.to_owned())
+}
+
+fn io_error(target: &CleanupTarget, error: io::Error) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::StateUnowned,
+        format!(
+            "failed to inspect cleanup target {}: {error}",
+            target.path.display()
+        ),
+    )
+}
+
+/// One committed deletion operation. The marker snapshot is the policy owner's
+/// immutable authorization; it survives the marker's removal.
+#[derive(Debug)]
+struct CleanupRecord {
+    cleanup_id: String,
+    target: String,
+    marker: StateMarker,
+    purge: bool,
+    root: FileIdentity,
 }
 
 fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
@@ -330,42 +489,133 @@ fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     Ok(())
 }
 
-fn record_cleanup_intent(
-    registry: &mut Registry,
-    cleanup_id: &str,
-    target: &Path,
-    marker: &StateMarker,
-    payload_json: &str,
-    mode: CleanupMode,
-) -> RuntimeResult<()> {
-    let marker_json = serde_json::to_string(marker).map_err(|error| {
+fn pending_cleanup(registry: &Registry) -> RuntimeResult<Option<CleanupRecord>> {
+    registry
+        .connection()
+        .query_row(
+            "SELECT cleanup_id, target, data_generation, marker_json, purge, root_identity
+             FROM cleanups WHERE status = ?1",
+            [CleanupStatus::Pending.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?
+        .map(
+            |(cleanup_id, target, generation, marker_json, purge, root)| {
+                decode_record(cleanup_id, target, generation, &marker_json, purge, &root)
+            },
+        )
+        .transpose()
+}
+
+/// Reject incoherent generation/authorization records before deletion.
+fn decode_record(
+    cleanup_id: String,
+    target: String,
+    generation: String,
+    marker_json: &str,
+    purge: i64,
+    root: &str,
+) -> RuntimeResult<CleanupRecord> {
+    let corrupt = |message: &str| {
+        RuntimeError::new(ErrorCode::RegistryCorrupt, message.to_owned())
+            .with_detail("cleanupId", &cleanup_id)
+    };
+    let marker = serde_json::from_str::<StateMarker>(marker_json)
+        .map_err(|_| corrupt("cleanup record has invalid marker evidence"))?;
+    let purge = match purge {
+        0 => false,
+        1 => true,
+        _ => return Err(corrupt("cleanup record has invalid authorization")),
+    };
+    if marker.data_generation != generation {
+        return Err(corrupt(
+            "cleanup record generation disagrees with its marker",
+        ));
+    }
+    if !purge && marker.persistence != PersistencePolicy::RunScoped {
+        return Err(corrupt(
+            "cleanup record lacks authorization for persistent data",
+        ));
+    }
+    let root = root
+        .split_once(':')
+        .and_then(|(device, inode)| {
+            Some(FileIdentity {
+                device: device.parse().ok()?,
+                inode: inode.parse().ok()?,
+            })
+        })
+        .ok_or_else(|| corrupt("cleanup record has invalid root identity"))?;
+    Ok(CleanupRecord {
+        cleanup_id,
+        target,
+        marker,
+        purge,
+        root,
+    })
+}
+
+fn generation_completed(registry: &Registry, generation: &str) -> RuntimeResult<bool> {
+    registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM cleanups WHERE data_generation = ?1",
+            [generation],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .map_err(sql_error)
+}
+
+fn payload(record: &CleanupRecord) -> String {
+    serde_json::json!({
+        "cleanupId": record.cleanup_id,
+        "target": record.target,
+        "dataGeneration": record.marker.data_generation,
+        "purge": record.purge,
+    })
+    .to_string()
+}
+
+fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()> {
+    let marker_json = serde_json::to_string(&record.marker).map_err(|error| {
         RuntimeError::new(
             ErrorCode::CleanupRefused,
             format!("failed to serialize cleanup marker: {error}"),
         )
     })?;
+    let payload = payload(record);
     let RegistryContext {
         connection,
         identity,
         redactor,
     } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
     transaction
         .execute(
-            "
-            INSERT INTO cleanups (
-              cleanup_id, environment, slot, target_path, purge, marker_json, status,
-              refusal_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
-            ",
+            "INSERT INTO cleanups (
+               cleanup_id, target, data_generation, marker_json, purge, root_identity, status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                cleanup_id,
-                identity.environment.as_str(),
-                identity.slot,
-                target.display().to_string(),
-                if mode.is_purge() { 1_i64 } else { 0_i64 },
+                record.cleanup_id,
+                record.target,
+                record.marker.data_generation,
                 marker_json,
-                CleanupStatus::Intent.as_str(),
+                i64::from(record.purge),
+                record.root.to_string(),
+                CleanupStatus::Pending.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -378,186 +628,94 @@ fn record_cleanup_intent(
             run_id: None,
             service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(&marker.computed_manifest_hash),
-            payload_json,
+            computed_manifest_hash: Some(&record.marker.computed_manifest_hash),
+            payload_json: &payload,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
-enum CleanupTerminal<'a> {
-    Deleted,
-    Failed { safe_reason: &'a str },
-}
-
-fn record_cleanup_terminal(
-    registry: &mut Registry,
-    cleanup_id: &str,
-    computed_manifest_hash: &str,
-    payload_json: &str,
-    terminal: CleanupTerminal<'_>,
-) -> RuntimeResult<()> {
-    let (status, refusal_reason, event_type) = match terminal {
-        CleanupTerminal::Deleted => (CleanupStatus::Deleted, None, "cleanup.deleted"),
-        CleanupTerminal::Failed { safe_reason } => {
-            (CleanupStatus::Failed, Some(safe_reason), "cleanup.failed")
-        }
-    };
+fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()> {
+    let payload = payload(record);
     let RegistryContext {
         connection,
         identity,
         redactor,
     } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
-    transaction
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let changed = transaction
         .execute(
-            "
-            UPDATE cleanups
-            SET status = ?2, refusal_reason = ?3
-            WHERE cleanup_id = ?1
-            ",
-            params![cleanup_id, status.as_str(), refusal_reason],
+            "UPDATE cleanups SET status = ?2 WHERE cleanup_id = ?1 AND status = ?3",
+            params![
+                record.cleanup_id,
+                CleanupStatus::Completed.as_str(),
+                CleanupStatus::Pending.as_str(),
+            ],
         )
         .map_err(sql_error)?;
+    if changed != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "cleanup completion did not settle exactly one pending operation",
+        ));
+    }
     insert_event(
         &transaction,
         identity,
         redactor,
         EventInsert {
-            event_type,
+            event_type: "cleanup.completed",
             run_id: None,
             service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(computed_manifest_hash),
-            payload_json,
+            computed_manifest_hash: Some(&record.marker.computed_manifest_hash),
+            payload_json: &payload,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
-fn cleanup_payload_json(cleanup_id: &str, target: &Path, mode: CleanupMode) -> String {
-    serde_json::json!({
-        "cleanupId": cleanup_id,
-        "targetPath": target.display().to_string(),
-        "purge": mode.is_purge(),
+/// Keep the committed intent pending; attempt to record the safe failure.
+fn attempt_failed(
+    registry: &mut Registry,
+    record: &CleanupRecord,
+    error: io::Error,
+) -> RuntimeError {
+    let failure = RuntimeError::new(
+        ErrorCode::CleanupRefused,
+        format!(
+            "cleanup {} remains pending after a failed deletion step: {error}",
+            record.cleanup_id
+        ),
+    )
+    .with_detail("cleanupId", &record.cleanup_id);
+    let payload = serde_json::json!({
+        "cleanupId": record.cleanup_id,
+        "target": record.target,
+        "reason": error.to_string(),
     })
-    .to_string()
-}
-
-fn reject_target_symlink(target: &Path) -> RuntimeResult<()> {
-    let metadata = std::fs::symlink_metadata(target).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "failed to inspect cleanup target {}: {error}",
-                target.display()
-            ),
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("cleanup target is a symlink {}", target.display()),
-        ));
+    .to_string();
+    let mut event = EventInsert::new("cleanup.attempt-failed", &payload);
+    event.computed_manifest_hash = Some(&record.marker.computed_manifest_hash);
+    match registry.append_event(event) {
+        Ok(_) => failure,
+        Err(recording) => failure.with_cause(recording),
     }
-    Ok(())
-}
-
-fn remove_dir_all_confined(path: &Path, canonical_target: &Path) -> RuntimeResult<()> {
-    for entry in std::fs::read_dir(path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            format!(
-                "failed to inspect cleanup target {}: {error}",
-                path.display()
-            ),
-        )
-    })? {
-        let entry = entry.map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::CleanupRefused,
-                format!(
-                    "failed to inspect cleanup target {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-        let entry_path = entry.path();
-        let metadata = std::fs::symlink_metadata(&entry_path).map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::CleanupRefused,
-                format!(
-                    "failed to inspect cleanup target {}: {error}",
-                    entry_path.display()
-                ),
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            std::fs::remove_file(&entry_path).map_err(|error| {
-                RuntimeError::new(
-                    ErrorCode::CleanupRefused,
-                    format!(
-                        "failed to unlink cleanup symlink {}: {error}",
-                        entry_path.display()
-                    ),
-                )
-            })?;
-        } else if metadata.is_dir() {
-            let canonical_entry = canonicalize_existing("cleanup entry", &entry_path)?;
-            if !canonical_entry.starts_with(canonical_target) {
-                return Err(RuntimeError::new(
-                    ErrorCode::StateUnowned,
-                    format!(
-                        "cleanup entry {} escapes cleanup target {}",
-                        canonical_entry.display(),
-                        canonical_target.display()
-                    ),
-                ));
-            }
-            remove_dir_all_confined(&entry_path, canonical_target)?;
-        } else {
-            std::fs::remove_file(&entry_path).map_err(|error| {
-                RuntimeError::new(
-                    ErrorCode::CleanupRefused,
-                    format!(
-                        "failed to delete cleanup entry {}: {error}",
-                        entry_path.display()
-                    ),
-                )
-            })?;
-        }
-    }
-    std::fs::remove_dir(path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            format!("failed to delete cleanup dir {}: {error}", path.display()),
-        )
-    })
-}
-
-fn unix_time_nanos() -> Option<u128> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_nanos())
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }
 
-fn expected_cleanup_target(base: &Path, identity: &StateIdentity) -> RuntimeResult<PathBuf> {
-    let project = normal_component("projectId", &identity.project_id)?;
-    let environment = normal_component("environment", &identity.environment)?;
-    let target = application_root(base, project, environment, identity.slot);
-    reject_existing_symlink_components(base, &target)
-        .map_err(|error| RuntimeError::new(ErrorCode::StateUnowned, error.message))?;
-    Ok(application_root(
-        &canonicalize_existing("state base", base)?,
-        project,
-        environment,
-        identity.slot,
-    ))
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn marker_name_matches_the_published_marker() {
+        assert_eq!(
+            super::MARKER.to_bytes(),
+            crate::state::MARKER_FILE_NAME.as_bytes()
+        );
+    }
 }

@@ -257,9 +257,16 @@ when the manifest/runtime contract changes.
 - Application-data compatibility belongs to the application and user. There is
   no `stateEpoch` declaration, manifest field, or marker field. Configuration
   changes update provenance without deleting data; application startup failure
-  does not authorize deletion. Marker version 2 rejects old marker shapes.
-  Existing persistent or protected retention cannot be silently weakened during
-  state preparation. Exact framework ABI and schema checks remain mandatory.
+  does not authorize deletion. Marker version 3 rejects old marker shapes.
+  Existing persistent retention cannot be silently weakened during state
+  preparation. Exact framework ABI and schema checks remain mandatory.
+- `nixfied.state.persistence` is the sole application-data retention policy;
+  the removed `cleanupPolicy` option and manifest field reject. The marker
+  records the tree's persistence and a runtime-generated `dataGeneration`,
+  preserved by provenance refresh. A fresh marker is published atomically
+  (durable temporary file, rename, directory sync). Marker version 3 rejects the
+  previous marker shape; old state requires the matching old runtime or an
+  explicit offline preservation procedure before upgrade.
 - Exclusive predecessor recovery precedes state preparation regardless of
   manifest provenance. State preparation rejects unsettled process or endpoint
   evidence before marker inspection or mutation and never signals processes.
@@ -269,11 +276,28 @@ when the manifest/runtime contract changes.
   unfinished. Failed result/event transactions publish neither fact. Resource
   completion requires independent process, capture, and data-cleanup proof.
 - **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined,
-  marker-gated, slot-owned, process-gated, and policy-gated. Explicit purge
-  relaxes only the protected/persistent policy gate; confinement, marker,
-  live-process, slot-ownership, and registry gates remain unconditional. The cleanup target
-  itself cannot be a symlink; symlink entries inside an owned tree are unlinked
-  without being followed.
+  marker-gated, slot-owned, process-gated, and persistence-gated. `run-scoped`
+  data permits ordinary deletion; `persistent` data requires explicit purge,
+  which overrides retention only. Confinement, marker, live-process,
+  slot-ownership, and registry gates remain unconditional. The target is derived
+  from placement and opened through directory descriptors without following
+  symlinks; entries inside the owned tree are unlinked relative to their held
+  directory without being followed, truncated, or crossing a nested mount.
+- Deletion commits one pending intent (operation ID, relative target, data
+  generation, marker snapshot, purge authorization, observed root identity) and
+  its event before any destructive effect. Payload removal, marker removal, and
+  root removal are each followed by a directory `fsync`; completion commits last.
+  At most one deletion is pending per slot. A pending intent is resumed with the
+  same operation ID and authorization before any new generation, marker
+  admission, or provenance refresh: an absent root completes it, a matching
+  marked root resumes deletion, and an empty markerless root is removed. A
+  markerless nonempty root, a replaced root, or a different generation refuses
+  without deletion. A failed step leaves the intent pending with a
+  `cleanup.attempt-failed` event. A deleted generation reappearing refuses as
+  contradictory history. An absent root with nothing pending reports
+  `result: absent` without attributing it to an older operation. These
+  barriers support process-death recovery; host power-loss durability is not
+  claimed.
 - **PROC-1..3 / PROC-CAP-1:** every spawned process belongs to a runtime-owned
   process group, cancellation reaches the whole group, and a long-lived process
   counts as started only after its registry process record exists. Admission

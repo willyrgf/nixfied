@@ -5,5 +5,5 @@ Usage:
 
 Options:
   --slot <number>  Select a declared project slot
-  --purge          Relax only the protected/persistent cleanup policy gate
+  --purge          Also delete persistent state; ownership and process checks still apply
   -h, --help       Show this help
