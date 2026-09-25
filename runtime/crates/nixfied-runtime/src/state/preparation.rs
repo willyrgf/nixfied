@@ -55,8 +55,9 @@ pub fn prepare_slot_state(
         }
         MarkerDecision::Refresh { existing } => {
             refuse_deleted_generation(registry, &existing)?;
-            record_provenance_refresh(registry, identity, &existing)?;
+            // The root's ancestry is checked before any registry mutation.
             materialize_state_root(placement)?;
+            record_provenance_refresh(registry, identity, &existing)?;
             refresh_slot_marker(placement, identity, &existing)?;
             PreparationReport {
                 provenance_refreshed: true,

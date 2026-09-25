@@ -88,6 +88,26 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
 }
 
 #[test]
+fn symlinked_ancestry_rejects_a_provenance_refresh_before_any_registry_event() {
+    let fixture = UpgradeFixture::new();
+    fixture.prepare("run-1", &fixture.identity(false)).unwrap();
+    let state_root = fixture.state_root();
+    let project = state_root.parent().unwrap().parent().unwrap().to_path_buf();
+    let moved = project.with_file_name("moved-project");
+    fs::rename(&project, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &project).unwrap();
+    let marker = fs::read(state_root.join(MARKER_FILE_NAME)).unwrap();
+
+    let error = fixture
+        .prepare("run-2", &fixture.identity(true))
+        .expect_err("a symlinked state ancestry must reject");
+
+    assert_eq!(error.code, ErrorCode::StateUnwritable, "{error:?}");
+    assert_eq!(fixture.upgrade_event_count(), 0);
+    assert_eq!(fs::read(state_root.join(MARKER_FILE_NAME)).unwrap(), marker);
+}
+
+#[test]
 fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
     for obsolete in ["epoch", "version", "cleanup-policy"] {
         let fixture = UpgradeFixture::new();
