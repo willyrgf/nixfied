@@ -105,7 +105,7 @@ pub(crate) fn exec_probe_attempt(
         occurrence,
     } = invocation;
     let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
-    // Replace-on-retry probe logs remain outside the default live display.
+    // Each probe attempt owns new logs outside the default live display.
     let evidence = crate::output::EvidenceSource::in_logs(
         logs_dir,
         service_name,
@@ -131,7 +131,6 @@ pub(crate) fn exec_probe_attempt(
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,
             redactor,
-            log_file_mode: crate::redaction::LogFileMode::New,
             label: &format!("lifecycle operation {}", probe.label),
         },
         launcher,

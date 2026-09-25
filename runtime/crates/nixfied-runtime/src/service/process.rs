@@ -20,8 +20,7 @@ use crate::execution::{
 };
 use crate::launch::Refusal;
 use crate::redaction::{
-    CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, LogFileMode, RedactedLogRelays, Redactor,
-    child_output,
+    CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, RedactedLogRelays, Redactor, child_output,
 };
 use crate::registry::Registry;
 use crate::registry::status::{self, DbStatus, PortStatus};
@@ -1537,7 +1536,7 @@ pub fn start_service_for_slot(
         let redactor = Redactor::from_secrets(admission.secrets());
         // Service output always passes through owned capture workers, so writer
         // closure is checked rather than inferred from the leader's exit.
-        let output = child_output(stdout_path, stderr_path, &redactor, LogFileMode::Replace)?;
+        let output = child_output(stdout_path, stderr_path, &redactor)?;
         let (stdout, stderr, log_relays) = (output.stdout, output.stderr, Some(output.relays));
         let spawned = cancellation.check().and_then(|()| request.spawn(
             selection.launcher, registry.authority(), stdin_for(exec.stdin), stdout, stderr,
@@ -1926,7 +1925,6 @@ pub(crate) struct CapturedExec<'a> {
     pub stdout_path: &'a Path,
     pub stderr_path: &'a Path,
     pub redactor: &'a Redactor,
-    pub log_file_mode: LogFileMode,
     /// Names the operation in spawn/inspect failures.
     pub label: &'a str,
 }
@@ -2035,12 +2033,7 @@ pub(crate) fn spawn_gated_captured_exec(
 ) -> RuntimeResult<PendingCapturedChild> {
     let request =
         crate::launch::PreparedLaunch::new(spec.executable, spec.args, spec.env, spec.cwd)?;
-    let output = child_output(
-        spec.stdout_path,
-        spec.stderr_path,
-        spec.redactor,
-        spec.log_file_mode,
-    )?;
+    let output = child_output(spec.stdout_path, spec.stderr_path, spec.redactor)?;
     match request.spawn(
         launcher,
         spec.authority,
@@ -3199,7 +3192,6 @@ mod tests {
                     stdout_path: Path::new("/dev/full"),
                     stderr_path: &root.join("stderr"),
                     redactor: &Redactor::empty(),
-                    log_file_mode: LogFileMode::Replace,
                     label: "capture-failure",
                 },
                 &crate::launch::test_launcher(),
@@ -3275,7 +3267,6 @@ mod tests {
                 stdout_path: &stdout,
                 stderr_path: &stderr,
                 redactor: &redactor,
-                log_file_mode: LogFileMode::Replace,
                 label: "pipe-holder",
             },
             &crate::launch::test_launcher(),
@@ -3318,7 +3309,6 @@ mod tests {
             stdout_path: &stdout,
             stderr_path: &stderr,
             redactor: &Redactor::empty(),
-            log_file_mode: LogFileMode::Replace,
             label: "task process",
         };
         let Some(Refusal::Registered(failure)) =
@@ -3333,6 +3323,12 @@ mod tests {
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
         spec.executable = &executable;
+        // Each spawn creates new capture evidence.
+        let remove_evidence = || {
+            std::fs::remove_file(&stdout).unwrap();
+            std::fs::remove_file(&stderr).unwrap();
+        };
+        remove_evidence();
         let pending = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher()).unwrap();
         let pid = pending.pid() as i32;
         let error = pending
@@ -3359,6 +3355,7 @@ mod tests {
         );
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
+        remove_evidence();
         let pending = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher()).unwrap();
         let pid = pending.pid() as i32;
         let mut checkpoints = 0;
