@@ -572,6 +572,7 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         &selected,
         ServiceSelection {
             launcher: &runtime_binary(),
+            session_checkpoint: &|| Ok(()),
             service_name: "other",
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
@@ -3304,6 +3305,7 @@ impl ServiceFixture {
             &select_slot(self.admission.common().manifest(), None).expect("slot"),
             ServiceSelection {
                 launcher: &runtime_binary(),
+                session_checkpoint: &|| Ok(()),
                 service_name: "synthetic",
                 endpoint_ports: &BTreeMap::new(),
                 slot_endpoints: &SlotEndpoints::new(),
@@ -3332,6 +3334,7 @@ impl ServiceFixture {
             &selected,
             ServiceSelection {
                 launcher: &runtime_binary(),
+                session_checkpoint: &|| Ok(()),
                 service_name: "synthetic",
                 endpoint_ports: &endpoint_ports,
                 slot_endpoints: &SlotEndpoints::new(),

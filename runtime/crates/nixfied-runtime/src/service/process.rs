@@ -1329,6 +1329,10 @@ pub struct ServiceSelection<'a> {
     pub slot_endpoints: &'a SlotEndpoints,
     pub run_timeout_ms: u64,
     pub cancellation: &'a CancellationToken,
+    /// Observes every service the session already started. Release and the
+    /// startup grace consult it, so no workload is released after another
+    /// owned service already failed.
+    pub session_checkpoint: &'a dyn Fn() -> RuntimeResult<()>,
     /// Executes the service's prepare task (its flattened nodes) inside the
     /// held endpoint startup guards. Supplied by the run driver, which owns the started
     /// services the prepare leaves may require; `None` when the service
@@ -1381,6 +1385,7 @@ pub(super) fn start_service_with_lock_root(
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
     let cancellation = selection.cancellation;
+    let session_checkpoint = selection.session_checkpoint;
     let source = admission.source();
     let service_name = selection.service_name;
     let endpoint_ports = selection.endpoint_ports;
@@ -1650,7 +1655,10 @@ pub(super) fn start_service_with_lock_root(
                 &endpoints_to_record,
             )
         },
-        || cancellation.check(),
+        || {
+            cancellation.check()?;
+            session_checkpoint()
+        },
     ) {
         Ok(child) => (child, None),
         Err(failure) if failure.registration == crate::launch::Registration::Committed => {
@@ -1699,7 +1707,9 @@ pub(super) fn start_service_with_lock_root(
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
-    if let Err(error) = ensure_foreground_child_alive(&mut started.owned, cancellation) {
+    if let Err(error) =
+        ensure_foreground_child_alive(&mut started.owned, cancellation, session_checkpoint)
+    {
         let error = if error.code == ErrorCode::Canceled {
             error
         } else {
@@ -2465,10 +2475,12 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
 fn ensure_foreground_child_alive(
     service: &mut OwnedService,
     cancellation: &CancellationToken,
+    session_checkpoint: &dyn Fn() -> RuntimeResult<()>,
 ) -> RuntimeResult<()> {
     let deadline = Instant::now() + FOREGROUND_GRACE;
     while Instant::now() < deadline {
         cancellation.check()?;
+        session_checkpoint()?;
         if let Some(error) = service.escape_error() {
             return Err(error);
         }
