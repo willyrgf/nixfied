@@ -219,14 +219,7 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
                         .env("NIXFIED_CAPTURE_SECRET", "abcdef")
                         .spawn()
                         .unwrap();
-                    assert!(wait_for_path(&pid_path, Duration::from_secs(5)));
-                    let survivor = Survivor(
-                        fs::read_to_string(&pid_path)
-                            .unwrap()
-                            .trim()
-                            .parse()
-                            .unwrap(),
-                    );
+                    let survivor = Survivor(wait_for_pid_file(&pid_path).try_into().unwrap());
                     assert_eq!(
                         unsafe { libc::getpgid(survivor.0) },
                         survivor.0,
