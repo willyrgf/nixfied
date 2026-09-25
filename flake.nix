@@ -407,9 +407,9 @@
           rethManifest = nixfiedLib.compileManifest ./examples/reth/nixfied.nix;
           toolchainManifest = nixfiedLib.compileManifest ./examples/toolchain/nixfied.nix;
           # Gate-only variants of the example manifests, for the state lifecycle
-          # shard: a provenance-only delta (same identity, new manifest hash), an
-          # retained-data configuration change, and a postgres
-          # whose smoke query sleeps long enough to interrupt mid-run.
+          # shard: a configuration change with the same state identity and a new
+          # manifest hash, and a postgres whose smoke query sleeps long enough
+          # to interrupt mid-run.
           # The lifecycle shard retains data across sessions, so it uses
           # persistent retention; run-scoped data ends with its session.
           minimalPersistentManifest = nixfiedLib.compileManifest (
@@ -424,14 +424,6 @@
             {
               imports = [ ./examples/minimal/nixfied.nix ];
               nixfied.project.name = lib.mkForce "Minimal B";
-              nixfied.state.persistence = "persistent";
-            }
-          );
-          minimalManifestChangedState = nixfiedLib.compileManifest (
-            { lib, ... }:
-            {
-              imports = [ ./examples/minimal/nixfied.nix ];
-              nixfied.project.name = lib.mkForce "Minimal changed configuration";
               nixfied.state.persistence = "persistent";
             }
           );
@@ -503,11 +495,10 @@
                 toString minimalPersistentManifest;
               nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MANIFEST =
                 toString minimalPersistentManifest;
-              nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MANIFEST = toString minimalManifestB;
-              nixfied.tasks.lifecycle-change-preserves-data.invocation.env.MINIMAL_CHANGED_STATE_MANIFEST =
-                toString minimalManifestChangedState;
-              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_CHANGED_STATE_MANIFEST =
-                toString minimalManifestChangedState;
+              nixfied.tasks.lifecycle-change-preserves-data.invocation.env.MINIMAL_B_MANIFEST =
+                toString minimalManifestB;
+              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_B_MANIFEST =
+                toString minimalManifestB;
               nixfied.tasks.lifecycle-session-ownership.invocation.env.SESSION_ENDPOINT_MANIFEST =
                 toString sessionEndpointManifest;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MANIFEST = toString purgeMinimalManifest;
