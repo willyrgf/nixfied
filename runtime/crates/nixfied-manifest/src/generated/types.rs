@@ -276,7 +276,7 @@ pub struct ExitPolicy {
     pub success_codes: UniqueVec<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClosureKind {
     #[serde(rename = "executable")]
     Executable,
@@ -284,7 +284,7 @@ pub enum ClosureKind {
     Helper,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClosureEffect {
     #[serde(rename = "process")]
     Process,
@@ -336,7 +336,7 @@ pub enum SecretSourceKind {
     File,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContainmentRequirement {
     #[serde(rename = "process-group")]
     ProcessGroup,
@@ -344,7 +344,7 @@ pub enum ContainmentRequirement {
     ProcessTree,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SourceMode {
     #[serde(rename = "snapshot")]
     Snapshot,
@@ -354,7 +354,7 @@ pub enum SourceMode {
     LiveWorkspace,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DirtyPolicy {
     #[serde(rename = "allow")]
     Allow,
@@ -364,7 +364,7 @@ pub enum DirtyPolicy {
     Reject,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PersistencePolicy {
     #[serde(rename = "run-scoped")]
     RunScoped,

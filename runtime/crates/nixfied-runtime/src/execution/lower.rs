@@ -193,7 +193,7 @@ fn lower_service(
         endpoints,
         primary_endpoint: primary_endpoint.clone(),
         connects_to: connects_to.iter().cloned().collect(),
-        containment: containment.clone(),
+        containment: *containment,
     })
 }
 

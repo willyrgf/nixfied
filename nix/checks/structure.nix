@@ -69,9 +69,6 @@ let
     rust = {
       file = "fixture.rs";
       name = "Child";
-      visibility = "pub";
-      emission = "Owned";
-      derives = [ ];
     };
     fields = [
       (
@@ -367,18 +364,6 @@ let
     };
     cycle = {
       expr = badField (f: f // { value = d.ref (d.inventory "primitive Project"); });
-      expected = true;
-    };
-    borrowedDecoder = {
-      expr = badRecord (
-        r:
-        r
-        // {
-          rust = r.rust // {
-            emission = "Borrowed";
-          };
-        }
-      );
       expected = true;
     };
     keyword = {

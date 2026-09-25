@@ -1,5 +1,5 @@
-# Wire descriptions for native Rust output records. No Rust storage, borrowing,
-# visibility or type declarations are generated from these records.
+# Wire descriptions for native runtime outputs. Output records generate no Rust;
+# each vocabulary names only the enum and owner file that nix/meta/rust.nix emits.
 { lib }:
 let
   d = import ./declarations.nix;
@@ -47,13 +47,6 @@ let
       ;
     producer = "None";
   };
-  copy = [
-    "Debug"
-    "Clone"
-    "Copy"
-    "PartialEq"
-    "Eq"
-  ];
   evidencePaths = [
     (required "stdoutPath" path "Redacted captured stdout evidence path.")
     (required "stderrPath" path "Redacted captured stderr evidence path.")
@@ -72,12 +65,11 @@ let
       description = "Open native diagnostics, including explicit null. Fixed nested structures have their own declared records.";
     } "Native detail composition and cause filtering remain authoritative.")
   ];
-  vocabulary = coordinate: name: owner: visibility: derives: description: {
+  vocabulary = coordinate: name: owner: description: {
     inherit coordinate description;
     decoder = "NoDecoder";
     rust = owner // {
-      inherit name visibility derives;
-      emission = "Owned";
+      inherit name;
     };
   };
   annotation = description: contextTopic: { inherit description contextTopic; };
@@ -260,7 +252,7 @@ in
       ]
     )
     (record (output "port-conflict-endpoint") "NoDecoder"
-      "Borrowed endpoint evidence for a proven host conflict."
+      "Endpoint evidence for a proven host conflict."
       [
         (required "transport" text "Native transport spelling, currently tcp.")
         (required "family" text "Native address-family classification.")
@@ -274,7 +266,7 @@ in
       [
         (required "reason" (enum "enum PortConflictReason") "Native choice of the proven conflict fact.")
         (required "projectId" text "Requesting project identity.")
-        (required "endpoint" (ref (output "port-conflict-endpoint")) "Nested borrowed endpoint view.")
+        (required "endpoint" (ref (output "port-conflict-endpoint")) "The contended endpoint.")
         (omitted "nixfiedOwner" (ref (
           output "nixfied-owner"
         )) "Present only when native ownership proof identifies a Nixfied owner.")
@@ -304,11 +296,11 @@ in
     )
   ];
   vocabularies = [
-    (vocabulary "run-output-mode" "RunOutputMode" main "private" copy
+    (vocabulary "run-output-mode" "RunOutputMode" main
       "Native run output selection; contextual default and parser repetition rules stay native."
     )
     (
-      (vocabulary "error-code" "ErrorCode" error "pub" copy
+      (vocabulary "error-code" "ErrorCode" error
         "Native failure classes; no per-code exit policy is generated."
       )
       // {
@@ -343,28 +335,28 @@ in
         };
       }
     )
-    (vocabulary "exit-class" "ExitClass" error "pub" copy
+    (vocabulary "exit-class" "ExitClass" error
       "Native constructor-selected class; numeric process status is a separate native mapping."
     )
-    (vocabulary "enum PortConflictReason" "PortConflictReason" process "private" copy
+    (vocabulary "enum PortConflictReason" "PortConflictReason" process
       "The two inventoried proven host conflict facts."
     )
-    (vocabulary "status ExecutionOutcome" "ExecutionOutcome" status "pub" copy
+    (vocabulary "status ExecutionOutcome" "ExecutionOutcome" status
       "Immutable session execution outcome; absence means execution has not settled."
     )
-    (vocabulary "status FinalizationStatus" "FinalizationStatus" status "pub" copy
+    (vocabulary "status FinalizationStatus" "FinalizationStatus" status
       "Session resource finalization, independent of execution outcome and output sealing."
     )
-    (vocabulary "status ProcessRole" "ProcessRole" status "pub" copy
+    (vocabulary "status ProcessRole" "ProcessRole" status
       "Durable workload role; preparation is a task occurrence and probes own separate process evidence."
     )
-    (vocabulary "status ProcessStatus" "ProcessStatus" status "pub" copy
+    (vocabulary "status ProcessStatus" "ProcessStatus" status
       "Native processes.status vocabulary; ownership settlement is the separate ownership column."
     )
-    (vocabulary "status PortStatus" "PortStatus" status "pub" copy
+    (vocabulary "status PortStatus" "PortStatus" status
       "Native ports.status vocabulary: endpoint evidence (reserved until verified, then active), never a socket reservation."
     )
-    (vocabulary "status CleanupStatus" "CleanupStatus" status "pub" copy
+    (vocabulary "status CleanupStatus" "CleanupStatus" status
       "Native cleanups.status vocabulary; marker-gated deletion stays native."
     )
   ];
