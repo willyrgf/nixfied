@@ -705,6 +705,16 @@ fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeErro
                 .with_detail("runId", &acknowledgement.run_id)
                 .with_detail("runDir", &acknowledgement.run_dir))
         }
+        LaunchOutcome::CancellationUndelivered {
+            acknowledgement,
+            cause,
+        } => Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            "the launcher was interrupted after establishment; its cancellation request did not reach the session",
+        )
+        .with_detail("runId", &acknowledgement.run_id)
+        .with_detail("runDir", &acknowledgement.run_dir)
+        .with_cause(cause)),
     }
 }
 

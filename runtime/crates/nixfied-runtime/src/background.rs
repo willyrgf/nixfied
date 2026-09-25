@@ -79,6 +79,34 @@ pub enum LaunchOutcome {
     /// Establishment won the race with the launcher's interruption; the
     /// launcher then requested cancellation of exactly that session.
     CanceledAfterEstablishment(Acknowledgement),
+    /// Establishment won the race with the launcher's interruption, but the
+    /// cancellation request did not reach that session's owner.
+    CancellationUndelivered {
+        acknowledgement: Acknowledgement,
+        cause: RuntimeError,
+    },
+}
+
+/// Request cancellation of exactly the acknowledged session and report
+/// whether the request reached its owner.
+fn cancel_established(acknowledgement: Acknowledgement) -> LaunchOutcome {
+    use crate::session_control::{CancellationDelivery, request_cancellation};
+    match request_cancellation(&acknowledgement.run_dir) {
+        Ok(CancellationDelivery::Requested) => {
+            LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
+        }
+        Ok(CancellationDelivery::Unavailable) => LaunchOutcome::CancellationUndelivered {
+            acknowledgement,
+            cause: RuntimeError::new(
+                ErrorCode::LifecycleFailed,
+                "the established session's owner no longer listens for cancellation",
+            ),
+        },
+        Err(cause) => LaunchOutcome::CancellationUndelivered {
+            acknowledgement,
+            cause,
+        },
+    }
 }
 
 /// After an interruption the launcher waits this long for a conclusive reply.
@@ -140,9 +168,7 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
             Ok(Some(body)) => {
                 break match serde_json::from_slice::<Reply>(&body) {
                     Ok(Reply::Established(acknowledgement)) if interrupted => {
-                        let _ =
-                            crate::session_control::request_cancellation(&acknowledgement.run_dir);
-                        LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
+                        cancel_established(acknowledgement)
                     }
                     Ok(Reply::Established(acknowledgement)) => {
                         LaunchOutcome::Established(acknowledgement)
@@ -163,8 +189,7 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
     // exactly the acknowledged session.
     let outcome = match outcome {
         LaunchOutcome::Established(acknowledgement) if crate::cancellation::signal_received() => {
-            let _ = crate::session_control::request_cancellation(&acknowledgement.run_dir);
-            LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
+            cancel_established(acknowledgement)
         }
         outcome => outcome,
     };
@@ -377,6 +402,47 @@ fn read_frame_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_cancellation_reports_whether_it_reached_the_owner() {
+        use std::os::unix::fs::DirBuilderExt;
+        let run_dir = std::env::temp_dir()
+            .join(format!(
+                "nixfied-launch-cancel-{}-{}",
+                std::process::id(),
+                crate::token::random_hex().unwrap()
+            ))
+            .join("runs")
+            .join("session");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&run_dir)
+            .unwrap();
+        let acknowledgement = || Acknowledgement {
+            run_id: "session".into(),
+            run_dir: run_dir.clone(),
+            logs_dir: run_dir.join("logs"),
+        };
+        assert!(matches!(
+            cancel_established(acknowledgement()),
+            LaunchOutcome::CancellationUndelivered { cause, .. }
+                if cause.code == ErrorCode::LifecycleFailed
+        ));
+
+        let token = crate::cancellation::CancellationToken::new();
+        let control = crate::session_control::SessionControl::establish(&run_dir, &token).unwrap();
+        assert!(matches!(
+            cancel_established(acknowledgement()),
+            LaunchOutcome::CanceledAfterEstablishment(_)
+        ));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !token.is_canceled() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(token.is_canceled());
+        drop(control);
+    }
 
     #[test]
     fn frames_reject_truncation_trailing_bytes_and_oversize() {

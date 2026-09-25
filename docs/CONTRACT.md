@@ -319,7 +319,9 @@ when the manifest/runtime contract changes.
   the launch outcome is uncertain. A termination signal to the launcher
   half-closes its channel (abandonment) and waits up to 10 s for a conclusive
   reply: a rejection is reported, and an establishment that won the race is
-  canceled through that session's own FIFO; both exit `CANCELED`. A rejected,
+  canceled through that session's own FIFO; both exit `CANCELED`. If that
+  cancellation request reaches no owner, the launcher reports
+  `LIFECYCLE_FAILED` with the acknowledged `runId` and `runDir`. A rejected,
   abandoned, or uncertain owner is reaped within one second when it exits.
   Reply failure after the commit never cancels the session; `down` and signals
   remain its cancellation inputs.
