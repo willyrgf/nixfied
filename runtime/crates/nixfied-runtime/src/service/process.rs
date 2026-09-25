@@ -279,6 +279,15 @@ impl ReadyService {
             .teardown(registry, timeout_ms, Teardown::Stop(Some(cancellation)))
     }
 }
+/// A session checkpoint across started services: the first departure fails it.
+pub fn check_services_live<'a>(
+    services: impl IntoIterator<Item = &'a ReadyService>,
+) -> RuntimeResult<()> {
+    services
+        .into_iter()
+        .try_for_each(ReadyService::check_liveness)
+}
+
 impl std::fmt::Debug for ReadyService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReadyService")

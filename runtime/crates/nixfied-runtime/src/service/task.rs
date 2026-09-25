@@ -14,7 +14,8 @@ use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
     CapturedExec, CapturedExecOutcome, ExecSubstitution, Invocation, InvocationFailure,
-    ReadyService, SlotEndpoints, TerminationReason, resolve_exec_cwd, spawn_gated_captured_exec,
+    ReadyService, SlotEndpoints, TerminationReason, check_services_live, resolve_exec_cwd,
+    spawn_gated_captured_exec,
 };
 use crate::service::registry::{
     InvocationOwner, TaskTerminalStatus, ensure_service_instance_probe_ready,
@@ -115,16 +116,16 @@ impl<'a> RunContext<'a> {
     }
 }
 
-/// Run a task gated on the readiness of every service it declares in
-/// `dependsOnServicesReady` (which may be empty). The run-level context comes from
-/// `run_context`; the first dependency, if any, is the primary that provides
-/// `${port}`/`${host}` substitution.
+/// Run a task gated on the readiness of every service it requires (which may
+/// be none) among the session's `started` services, all of which it observes.
+/// The run-level context comes from `run_context`; the first required service,
+/// if any, is the primary that provides `${port}`/`${host}` substitution.
 #[allow(clippy::too_many_arguments)]
 pub fn run_dependent_task_cancellable(
     placement: &HostPlacement,
     registry: &mut Registry,
     run_context: RunContext<'_>,
-    dependencies: &[&ReadyService],
+    started: &[&ReadyService],
     node_id: &str,
     occurrence: u64,
     task: &ExecTask,
@@ -133,19 +134,9 @@ pub fn run_dependent_task_cancellable(
 ) -> Result<TaskExecution, TaskExecutionError> {
     cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
-    ensure_task_dependencies(registry, task, dependencies).map_err(TaskExecutionError::before)?;
-    check_services_live(dependencies).map_err(TaskExecutionError::before)?;
-    let declared_dependencies: Vec<_> = task
-        .requires
-        .iter()
-        .map(|name| {
-            dependencies
-                .iter()
-                .copied()
-                .find(|service| service.service_name() == name.as_str())
-                .expect("declared dependency checked above")
-        })
-        .collect();
+    let declared_dependencies =
+        required_services(registry, task, started).map_err(TaskExecutionError::before)?;
+    check_services_live(started.iter().copied()).map_err(TaskExecutionError::before)?;
     // The first dependency is the primary, providing bare ${port}/${host};
     // every declared dependency is addressable by name via ${port:<serviceId>}
     // and ${host:<serviceId>}. A task with no services runs in the run context
@@ -228,7 +219,7 @@ pub fn run_dependent_task_cancellable(
             .to_string()
         },
     };
-    let started = Instant::now();
+    let began = Instant::now();
     let pending = spawn_gated_captured_exec(
         &CapturedExec {
             authority: registry.authority(),
@@ -254,10 +245,10 @@ pub fn run_dependent_task_cancellable(
             // The gate's own process group has the leader's pid as its id.
             |pid| format!("process-{}-task-{node_id}-{pid}-{pid}", run_context.run_id),
             cancellation,
-            &mut || check_services_live(dependencies),
+            &mut || check_services_live(started.iter().copied()),
         )
         .map_err(|failure| task_failure(task, failure))?;
-    let duration_ms = elapsed_ms(started);
+    let duration_ms = elapsed_ms(began);
     let (exit_code, terminal_status) = task_terminal(task, &outcome);
     let success = terminal_status == TaskTerminalStatus::Succeeded;
     let timed_out = terminal_status == TaskTerminalStatus::TimedOut;
@@ -398,37 +389,37 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-fn check_services_live(services: &[&ReadyService]) -> RuntimeResult<()> {
-    for service in services {
-        service.check_liveness()?;
-    }
-    Ok(())
-}
-
-/// Verify every service the task declares as a dependency is among the started
-/// services and in a task-ready state. A task may depend on more than one service.
-fn ensure_task_dependencies(
+/// Resolve every service the task requires among the started services, each
+/// in a task-ready state.
+fn required_services<'s>(
     registry: &Registry,
     task: &ExecTask,
-    dependencies: &[&ReadyService],
-) -> RuntimeResult<()> {
-    for service_name in &task.requires {
-        let service = dependencies
-            .iter()
-            .find(|service| service.service_name() == service_name.as_str())
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::DependencyUnavailable,
-                    format!("task dependency {service_name} was not among the started services"),
-                )
-            })?;
-        ensure_service_instance_probe_ready(
-            registry,
-            service_name.as_str(),
-            &service.info().service_instance_id,
-        )?;
-    }
-    Ok(())
+    started: &[&'s ReadyService],
+) -> RuntimeResult<Vec<&'s ReadyService>> {
+    task.requires
+        .iter()
+        .map(|name| {
+            let service = started
+                .iter()
+                .copied()
+                .find(|service| service.service_name() == name.as_str())
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::DependencyUnavailable,
+                        format!(
+                            "task {} requires service {name}, which is not among the started services",
+                            task.task_id
+                        ),
+                    )
+                })?;
+            ensure_service_instance_probe_ready(
+                registry,
+                name.as_str(),
+                &service.info().service_instance_id,
+            )?;
+            Ok(service)
+        })
+        .collect()
 }
 
 fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
