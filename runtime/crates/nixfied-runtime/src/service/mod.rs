@@ -64,8 +64,9 @@ pub(crate) use process::{
     process_is_live_with_start_identity, process_present,
 };
 pub(crate) use registry::{
-    InvocationIdentity, InvocationOwner, ProcessRecord, StopPolicy, TaskTerminalStatus,
-    mark_invocation_finished, mark_process_escape, mark_service_stopped, settle_unresolved_process,
+    InvocationIdentity, InvocationOwner, ProcessRecord, ServiceTerminal, StopPolicy,
+    TaskTerminalStatus, mark_invocation_finished, mark_process_escape, settle_service_terminal,
+    settle_unresolved_process,
 };
 
 #[cfg(test)]

@@ -33,13 +33,12 @@ use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, Ownership,
-    ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, StopPolicy,
-    TaskTerminalStatus, VerifiedEndpointActivation, activate_service_ready,
-    mark_invocation_finished, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_stopped, read_service_snapshot, record_capture_outcome,
-    record_invocation_canceling, record_invocation_observed, record_invocation_started,
-    record_service_canceling, record_service_lifecycle_event, record_service_start,
-    record_service_start_intent, settle_service_start,
+    ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, ServiceTerminal,
+    StopPolicy, TaskTerminalStatus, VerifiedEndpointActivation, activate_service_ready,
+    mark_invocation_finished, mark_process_escape, read_service_snapshot, record_capture_outcome,
+    record_event, record_invocation_canceling, record_invocation_observed,
+    record_invocation_started, record_service_start, record_service_start_intent,
+    settle_service_start, settle_service_terminal,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -780,11 +779,12 @@ impl OwnedService {
                 },
             },
             Teardown::Cancel(reason) => {
-                let intent = record_service_canceling(
+                let intent = record_event(
                     registry,
-                    &self.info.run_id,
-                    &self.info.service_instance_id,
-                    &self.info.process_key,
+                    "service.canceling",
+                    Some(&self.info.run_id),
+                    Some(&self.info.service_instance_id),
+                    Some(&self.info.process_key),
                     &self.info.computed_manifest_hash,
                     &self.event_payload(serde_json::json!({ "reason": reason })),
                 );
@@ -822,25 +822,28 @@ impl OwnedService {
                 // meanwhile decides the terminal record.
                 let payload = self
                     .event_payload(serde_json::json!({ "reason": "run canceled during shutdown" }));
-                record_service_canceling(
+                record_event(
                     registry,
-                    &self.info.run_id,
-                    &self.info.service_instance_id,
-                    &self.info.process_key,
+                    "service.canceling",
+                    Some(&self.info.run_id),
+                    Some(&self.info.service_instance_id),
+                    Some(&self.info.process_key),
                     &self.info.computed_manifest_hash,
                     &payload,
                 )?;
-                mark_service_canceled(
+                settle_service_terminal(
                     registry,
                     &self.info.run_id,
                     &self.info.service_instance_id,
                     &self.info.process_key,
                     &self.info.computed_manifest_hash,
-                    &payload,
-                    ServiceSettlement {
-                        ownership: Ownership::Settled,
-                        capture: CaptureOutcome::Complete,
-                    },
+                    ServiceTerminal::Canceled(
+                        &payload,
+                        ServiceSettlement {
+                            ownership: Ownership::Settled,
+                            capture: CaptureOutcome::Complete,
+                        },
+                    ),
                 )?;
                 let error = canceled_error();
                 stop_failed(registry, &error);
@@ -849,13 +852,13 @@ impl OwnedService {
             Teardown::Stop(_) if containment.is_ok() && capture.is_ok() => {
                 match self.escape_error() {
                     None => {
-                        mark_service_stopped(
+                        settle_service_terminal(
                             registry,
                             &self.info.run_id,
                             &self.info.service_instance_id,
                             &self.info.process_key,
                             &self.info.computed_manifest_hash,
-                            Some(CaptureOutcome::Complete),
+                            ServiceTerminal::Stopped(Some(CaptureOutcome::Complete)),
                         )?;
                         return record_lifecycle_success(registry, &context, &stop_record);
                     }
@@ -909,18 +912,16 @@ impl OwnedService {
                 "message": error.message.as_str(),
             }))
         });
-        let mark = match terminal {
-            Terminal::Canceled => mark_service_canceled,
-            Terminal::Failed => mark_service_failed,
-        };
-        let settled = mark(
+        let settled = settle_service_terminal(
             registry,
             &self.info.run_id,
             &self.info.service_instance_id,
             &self.info.process_key,
             &self.info.computed_manifest_hash,
-            &payload,
-            settlement,
+            match terminal {
+                Terminal::Canceled => ServiceTerminal::Canceled(&payload, settlement),
+                Terminal::Failed => ServiceTerminal::Failed(&payload, settlement),
+            },
         );
         match completion_error(settled, Ok(()), error) {
             Some(error) => Err(error),
@@ -1018,7 +1019,7 @@ impl OwnedService {
             "escalatedToKill": escalated,
             "timeoutMs": timeout_ms,
         }));
-        let _ = record_service_lifecycle_event(
+        let _ = record_event(
             registry,
             "service.stop.signaled",
             Some(self.info.run_id.as_str()),
@@ -2447,7 +2448,7 @@ fn record_lifecycle_started(
         "class": record.class,
     }))
     .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
-    record_service_lifecycle_event(
+    record_event(
         registry,
         "service.lifecycle.started",
         context.run_id.as_deref(),
@@ -2503,7 +2504,7 @@ fn record_lifecycle_terminal(
         "message": error.map(|error| error.message.as_str()),
     }))
     .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
-    record_service_lifecycle_event(
+    record_event(
         registry,
         "service.lifecycle.terminal",
         context.run_id.as_deref(),

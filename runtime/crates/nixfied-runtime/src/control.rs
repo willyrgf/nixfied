@@ -10,11 +10,11 @@ use crate::registry::session::{record_interrupted_sessions, record_recovered_ses
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity, RegistryReader};
 use crate::service::{
-    InvocationIdentity, InvocationOwner, Leader, ProcessRecord, StopPolicy, StoredProcessIdentity,
-    TaskTerminalStatus, contain, mark_invocation_finished, mark_process_escape,
-    mark_service_stopped, poll_until, process_escape_start_identity, process_group_has_live_member,
+    InvocationIdentity, InvocationOwner, Leader, ProcessRecord, ServiceTerminal, StopPolicy,
+    StoredProcessIdentity, TaskTerminalStatus, contain, mark_invocation_finished,
+    mark_process_escape, poll_until, process_escape_start_identity, process_group_has_live_member,
     process_is_live_with_identity, process_is_live_with_start_identity, process_present,
-    settle_unresolved_process,
+    settle_service_terminal, settle_unresolved_process,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
@@ -713,13 +713,13 @@ fn mark_port_stale(
 fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     if let Some(service_instance_id) = row.service_instance_id.as_deref() {
         // Recovery proves process death, never a predecessor's capture outcome.
-        return mark_service_stopped(
+        return settle_service_terminal(
             registry,
             &row.run_id,
             service_instance_id,
             &row.process_key,
             &row.computed_manifest_hash,
-            None,
+            ServiceTerminal::Stopped(None),
         );
     }
     let payload_json = serde_json::json!({
