@@ -551,7 +551,13 @@ pub fn observe_registry(
 
 /// The registry identity of the schema-level registry tests.
 pub fn registry_identity() -> RegistryIdentity {
-    RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
+    RegistryIdentity::for_slot(
+        "minimal",
+        "dev",
+        0,
+        "nixfied-runtime-abi:1",
+        "nixfied-toolchain:1",
+    )
 }
 
 /// The placement of `run_id` in `selected_slot`.

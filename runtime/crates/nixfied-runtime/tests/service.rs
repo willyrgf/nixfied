@@ -259,7 +259,7 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
     let unexpected_key = format!("{}:unexpected", service.info().service_instance_id);
     fixture
         .registry
-        .connection_mut()
+        .connection()
         .execute(
             "
             INSERT INTO ports (
@@ -326,7 +326,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
         .expect("service should start before ready activation");
     fixture
         .registry
-        .connection_mut()
+        .connection()
         .execute(
             "UPDATE ports SET owner_process_key = 'process-racer' WHERE service_instance_id = ?1",
             [&service.info().service_instance_id],
@@ -356,7 +356,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
     assert_eq!(raced, ("running".into(), "process-racer".into()));
     fixture
         .registry
-        .connection_mut()
+        .connection()
         .execute(
             "UPDATE ports SET owner_process_key = ?2 WHERE service_instance_id = ?1",
             rusqlite::params![
@@ -3052,8 +3052,10 @@ impl ServiceFixture {
             default_placement(&manifest, "run-service", &tmp.path).expect("layout should derive");
         let registry = Registry::open_or_create(
             registry_guard(&placement),
-            &RegistryIdentity::default_slot(
+            &RegistryIdentity::for_slot(
                 &manifest.project.project_id,
+                "dev",
+                0,
                 &manifest.runtime_abi,
                 &manifest.toolchain_id,
             ),
@@ -3130,7 +3132,7 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
         .expect("fixture service should stop cleanly");
     fixture
         .registry
-        .connection_mut()
+        .connection()
         .execute(
             "UPDATE ports SET status = 'active', owner_process_key = 'missing-process-owner' WHERE service_instance_id = ?1",
             [&service_instance_id],
@@ -4278,8 +4280,8 @@ fn mark_started_service_escape(
     payload_json: &str,
 ) {
     let transaction = registry
-        .connection_mut()
-        .transaction()
+        .connection()
+        .unchecked_transaction()
         .expect("failed to begin escaped-process fixture transaction");
     let process_rows = transaction
         .execute(

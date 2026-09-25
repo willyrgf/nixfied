@@ -386,8 +386,10 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let placement = common::default_placement(&manifest, "evidence-test", &tmp.path).unwrap();
         let mut registry = Registry::open_or_create(
             common::registry_guard(&placement),
-            &RegistryIdentity::default_slot(
+            &RegistryIdentity::for_slot(
                 &manifest.project.project_id,
+                "dev",
+                0,
                 &manifest.runtime_abi,
                 &manifest.toolchain_id,
             ),

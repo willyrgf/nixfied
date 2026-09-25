@@ -453,9 +453,9 @@ mod tests {
         let mut registry = Registry::open_or_create(
             crate::state::ownership::fixture_guard(
                 &root,
-                &RegistryIdentity::default_slot("test", "abi", "toolchain"),
+                &RegistryIdentity::for_slot("test", "dev", 0, "abi", "toolchain"),
             ),
-            &RegistryIdentity::default_slot("test", "abi", "toolchain"),
+            &RegistryIdentity::for_slot("test", "dev", 0, "abi", "toolchain"),
         )
         .unwrap();
         registry

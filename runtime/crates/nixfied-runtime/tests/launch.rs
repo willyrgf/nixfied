@@ -257,8 +257,13 @@ fn startup_descriptor_is_closed_in_the_executed_workload() {
 }
 
 fn owner_registry(root: &std::path::Path) -> nixfied_runtime::registry::Registry {
-    let identity =
-        nixfied_runtime::registry::RegistryIdentity::default_slot("launch", "abi", "toolchain");
+    let identity = nixfied_runtime::registry::RegistryIdentity::for_slot(
+        "launch",
+        "dev",
+        0,
+        "abi",
+        "toolchain",
+    );
     let placement =
         nixfied_runtime::state::placement::derive_slot_placement("launch", "dev", 0, "run", root)
             .unwrap();
@@ -493,8 +498,10 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     let placement = default_placement(&manifest, "gated-task", &root.path).unwrap();
     let mut registry = Registry::open_or_create(
         registry_guard(&placement),
-        &RegistryIdentity::default_slot(
+        &RegistryIdentity::for_slot(
             &manifest.project.project_id,
+            "dev",
+            0,
             &manifest.runtime_abi,
             &manifest.toolchain_id,
         ),

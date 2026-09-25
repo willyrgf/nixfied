@@ -313,8 +313,13 @@ fn records_and_checks_selected_slot_registry_identity() {
     assert_eq!(slot, 1);
     drop(registry);
 
-    let wrong_slot =
-        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1");
+    let wrong_slot = RegistryIdentity::for_slot(
+        "minimal",
+        "dev",
+        0,
+        "nixfied-runtime-abi:1",
+        "nixfied-toolchain:1",
+    );
     let error = RegistryReader::open_existing(&path, &wrong_slot)
         .err()
         .expect("slot mismatch should fail");

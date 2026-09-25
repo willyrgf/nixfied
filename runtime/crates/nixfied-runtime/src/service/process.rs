@@ -3170,7 +3170,7 @@ mod tests {
             let root = crate::test_support::TestDir::new("capture-failure");
             let authority = crate::state::ownership::fixture_guard(
                 &root,
-                &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+                &crate::registry::RegistryIdentity::for_slot("test", "dev", 0, "abi", "toolchain"),
             );
             let child = spawn_gated_captured_exec(
                 &CapturedExec {
@@ -3242,7 +3242,7 @@ mod tests {
         let root = crate::test_support::TestDir::new("bounded");
         let authority = crate::state::ownership::fixture_guard(
             &root,
-            &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+            &crate::registry::RegistryIdentity::for_slot("test", "dev", 0, "abi", "toolchain"),
         );
         let marker = root.join("survived");
         let stdout = root.join("stdout");
@@ -3292,7 +3292,7 @@ mod tests {
         let root = crate::test_support::TestDir::new("bounded-abort");
         let authority = crate::state::ownership::fixture_guard(
             &root,
-            &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+            &crate::registry::RegistryIdentity::for_slot("test", "dev", 0, "abi", "toolchain"),
         );
         let executable = std::env::var("NIXFIED_TEST_SLEEP").unwrap();
         let missing = root.join("missing-program");
