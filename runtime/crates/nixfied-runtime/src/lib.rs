@@ -14,6 +14,7 @@ pub mod output;
 pub mod redaction;
 pub mod registry;
 pub mod service;
+pub mod session_control;
 pub mod slot;
 mod spawn;
 pub mod state;

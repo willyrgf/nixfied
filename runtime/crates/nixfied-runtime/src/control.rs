@@ -2,13 +2,14 @@ use crate::registry::records::{StoredEndpoint as PortRow, read_open_endpoints};
 use crate::registry::sqlite::RegistryContext;
 use std::path::Path;
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
+use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::session::{record_interrupted_sessions, record_recovered_sessions};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
-use crate::registry::{Registry, RegistryReader};
+use crate::registry::{Registry, RegistryIdentity, RegistryReader};
 use crate::service::{
     ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
     mark_service_stopped, mark_task_finished, process_escape_start_identity,
@@ -16,6 +17,9 @@ use crate::service::{
     process_is_live_with_start_identity, release_unresolved_escape_ports, terminate_process_group,
     terminate_process_tree_with_snapshot,
 };
+use crate::session_control::{CancellationDelivery, request_cancellation};
+use crate::state::HostPlacement;
+use crate::state::ownership::SlotGuard;
 use crate::state::{
     CleanupMode, CleanupOutcome, RetentionOutcome, StateIdentity, apply_retention,
     clean_marked_state,
@@ -40,11 +44,104 @@ pub struct ProcessObservation {
     pub live: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownReport {
+    /// The live session that received this command's cancellation request and
+    /// then settled; absent when no live owner was reached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canceled_run_id: Option<String>,
     pub stopped: Vec<String>,
     pub stale: Vec<String>,
+}
+
+/// Request cancellation of the slot's live session through its own FIFO and
+/// observe that same session until it settles; otherwise recover a dead owner
+/// under exclusive slot authority. A request never targets a successor, and a
+/// timeout reports incomplete shutdown without signaling anything itself.
+pub fn down(
+    placement: &HostPlacement,
+    registry_identity: &RegistryIdentity,
+    state: &StateIdentity,
+    timeout_ms: u64,
+) -> RuntimeResult<DownReport> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let registry_path = placement.registry_path();
+    if RegistryReader::open_existing(&registry_path, registry_identity)?.is_none()
+        && !placement.registry_dir.join("slot.lock").exists()
+    {
+        return Ok(DownReport::default());
+    }
+    let mut selected: Option<String> = None;
+    let mut requested = false;
+    loop {
+        if selected.is_none()
+            && let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
+        {
+            selected = latest_unfinished_session(&reader)?;
+            if let Some(run_id) = &selected {
+                requested =
+                    request_cancellation(&placement.registry_dir.join("runs").join(run_id))?
+                        == CancellationDelivery::Requested;
+            }
+        }
+        if requested
+            && let Some(run_id) = &selected
+            && let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
+            && session_settled(&reader, run_id)?
+        {
+            return Ok(DownReport {
+                canceled_run_id: selected,
+                ..DownReport::default()
+            });
+        }
+        if let Some(guard) = SlotGuard::try_acquire(placement, &CancellationToken::new())? {
+            let mut registry = Registry::open_or_create(guard, registry_identity)?;
+            let recovered = recover_slot(&mut registry, &placement.state_base, state, timeout_ms);
+            let closed = registry.close();
+            let mut report = match (recovered, closed) {
+                (Ok(report), Ok(())) => report.down,
+                (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
+                (Err(error), Err(close)) => return Err(error.with_cause(close)),
+            };
+            report.canceled_run_id = selected.filter(|_| requested);
+            return Ok(report);
+        }
+        if std::time::Instant::now() >= deadline {
+            let mut error = RuntimeError::new(
+                ErrorCode::LifecycleFailed,
+                "the slot's session did not finish before the down timeout; its owner still holds the slot",
+            );
+            if let Some(run_id) = &selected {
+                error = error.with_detail("runId", run_id);
+            }
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn latest_unfinished_session(reader: &RegistryReader) -> RuntimeResult<Option<String>> {
+    reader
+        .connection()
+        .query_row(
+            "SELECT run_id FROM runs WHERE finalization = 'unfinished' ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)
+}
+
+fn session_settled(reader: &RegistryReader, run_id: &str) -> RuntimeResult<bool> {
+    reader
+        .connection()
+        .query_row(
+            "SELECT finalization = 'complete' FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)
 }
 
 /// A reconciled observation is evidence at a moment, not authority to signal.
@@ -187,7 +284,11 @@ pub fn down_owned_process_groups(
         settle_down_process(registry, &row)?;
         stopped.push(row.process_key);
     }
-    Ok(DownReport { stopped, stale })
+    Ok(DownReport {
+        canceled_run_id: None,
+        stopped,
+        stale,
+    })
 }
 
 /// What exclusive predecessor recovery settled before any new work.

@@ -28,6 +28,20 @@ impl SlotGuard {
         placement: &HostPlacement,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<Self> {
+        Self::try_acquire(placement, cancellation)?.ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::CleanupRefused,
+                "slot is already owned by another session",
+            )
+        })
+    }
+
+    /// Like [`Self::acquire`], but contention is an explicit `None` so an
+    /// observer can keep waiting without mistaking it for another failure.
+    pub fn try_acquire(
+        placement: &HostPlacement,
+        cancellation: &CancellationToken,
+    ) -> RuntimeResult<Option<Self>> {
         cancellation.check()?;
         // HostPlacement currently has public fields. Validate its entire slot
         // relation before bootstrapping rather than trusting a constructed path.
@@ -99,10 +113,7 @@ impl SlotGuard {
                 continue;
             }
             if error.kind() == io::ErrorKind::WouldBlock {
-                return Err(RuntimeError::new(
-                    ErrorCode::CleanupRefused,
-                    "slot is already owned by another session",
-                ));
+                return Ok(None);
             }
             return Err(acquisition_error(error));
         }
@@ -118,7 +129,7 @@ impl SlotGuard {
             ancestors,
         };
         guard.validate()?;
-        Ok(guard)
+        Ok(Some(guard))
     }
 
     pub(crate) fn check_identity(

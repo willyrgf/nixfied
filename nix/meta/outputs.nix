@@ -194,8 +194,10 @@ in
         (required "live" boolean "Native host liveness observation.")
       ]
     )
-    (record (local "DownReport") "NoDecoder" "Native down result after reconciliation and termination."
+    (record (local "DownReport") "NoDecoder"
+      "Native down result: a canceled live session, or dead-owner recovery."
       [
+        (omitted "canceledRunId" text "The live session that received the request and settled.")
         (required "stopped" (list text) "Process keys stopped by native control.")
         (required "stale" (list text) "Process keys classified stale by native reconciliation.")
       ]

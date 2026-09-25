@@ -122,6 +122,7 @@ struct RunSession<'a> {
     direct_selected: bool,
     evidence: RunEvidence,
     diagnostic_failures: Vec<RuntimeError>,
+    control: nixfied_runtime::session_control::SessionControl,
 }
 
 struct FailureAccumulator {
@@ -332,6 +333,10 @@ impl<'a> RunSession<'a> {
             nodes: node_results,
             run_summary_path: run_summary_path.clone(),
         };
+        // Remove the session's control endpoint while the slot is still held.
+        if let Err(error) = self.control.shutdown() {
+            failures.push(error);
+        }
         if let Err(error) = self.registry.close() {
             failures.push(error);
         }
@@ -784,6 +789,12 @@ fn run_m0_placed(
         .leaf(options.task.as_str())
         .is_some();
 
+    // The session's cancellation endpoint exists before the session is
+    // published, so `down` can reach every session it can select.
+    let control = nixfied_runtime::session_control::SessionControl::establish(
+        &placement.run_dir,
+        cancellation,
+    )?;
     // Record the run row before any service starts, so even a service-less
     // selection (a task tree whose leaves require nothing) leaves durable run
     // evidence for `ps`/reconcile. Service transitions require this exact row
@@ -829,6 +840,7 @@ fn run_m0_placed(
         direct_selected,
         evidence: RunEvidence::default(),
         diagnostic_failures,
+        control,
     };
     macro_rules! finish_run {
         ($error:expr, $extra_services:expr) => {{
@@ -1508,22 +1520,33 @@ fn run_control_admitted(
             &manifest.runtime_abi,
             &manifest.toolchain_id,
         );
-        if matches!(command, ControlCommand::Ps) {
-            let report = match RegistryReader::open_existing(&placement.registry_path(), &identity)?
-            {
-                Some(reader) => nixfied_runtime::control::ps(&reader)?,
-                None => nixfied_runtime::control::PsReport {
-                    processes: Vec::new(),
-                },
-            };
-            return print_json(&report);
+        let state = StateIdentity::from_selected_slot(admission, &selected_slot);
+        match command {
+            ControlCommand::Ps => {
+                let report =
+                    match RegistryReader::open_existing(&placement.registry_path(), &identity)? {
+                        Some(reader) => nixfied_runtime::control::ps(&reader)?,
+                        None => nixfied_runtime::control::PsReport {
+                            processes: Vec::new(),
+                        },
+                    };
+                return print_json(&report);
+            }
+            ControlCommand::Down => {
+                return print_json(&nixfied_runtime::control::down(
+                    &placement,
+                    &identity,
+                    &state,
+                    options.timeout_ms,
+                )?);
+            }
+            ControlCommand::Clean => {}
         }
         let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
             &placement,
             &CancellationToken::new(),
         )?;
         let mut registry = Registry::open_or_create(guard, &identity)?;
-        let state = StateIdentity::from_selected_slot(admission, &selected_slot);
         let operation = (|| {
             let recovery = nixfied_runtime::control::recover_slot(
                 &mut registry,
@@ -1531,27 +1554,21 @@ fn run_control_admitted(
                 &state,
                 options.timeout_ms,
             )?;
-            match command {
-                ControlCommand::Ps => unreachable!("read-only command returned before acquisition"),
-                ControlCommand::Down => print_json(&recovery.down),
-                ControlCommand::Clean => {
-                    let cleaned = run_slot_clean(
-                        admission,
-                        &placement,
-                        &mut registry,
-                        &selected_slot,
-                        options.cleanup_mode,
-                    )?;
-                    // Recovery may already have applied the predecessor's
-                    // run-scoped retention; report that deletion, not absence.
-                    match (recovery.retention, cleaned) {
-                        (
-                            nixfied_runtime::state::RetentionOutcome::Deleted(deleted),
-                            nixfied_runtime::state::CleanupOutcome::Absent { .. },
-                        ) => print_json(&deleted),
-                        (_, cleaned) => print_json(&cleaned),
-                    }
-                }
+            let cleaned = run_slot_clean(
+                admission,
+                &placement,
+                &mut registry,
+                &selected_slot,
+                options.cleanup_mode,
+            )?;
+            // Recovery may already have applied the predecessor's run-scoped
+            // retention; report that deletion, not the later absence.
+            match (recovery.retention, cleaned) {
+                (
+                    nixfied_runtime::state::RetentionOutcome::Deleted(deleted),
+                    nixfied_runtime::state::CleanupOutcome::Absent { .. },
+                ) => print_json(&deleted),
+                (_, cleaned) => print_json(&cleaned),
             }
         })();
         let release = registry.close();

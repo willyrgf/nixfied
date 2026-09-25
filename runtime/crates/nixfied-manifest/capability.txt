@@ -55,6 +55,9 @@ placement-components: original-bytes single-normal no-slash no-nul no-dot no-dot
 # The hidden runtime command surfaces every manifest exposes. `manifest-check` is the
 # generated project-app name for `check`; installation is outside the manifest ABI.
 surface: check run ps down clean
+# down requests cancellation of one selected live session through its own FIFO
+# and observes that session; a dead owner is recovered only under slot authority.
+session-cancellation: runs-session-control-fifo any-byte-cancels separate-keeper-writer scoped-receiver-token-only nonblocking-sender select-once never-successor observe-selected-settlement dead-owner-recovery-under-slot timeout-reports-incomplete no-pid-signaling endpoint-removed-before-release
 # Private bootstrap mode, not an adopter app or manifest command. It dispatches
 # before ordinary admission and receives exactly one bounded execution request.
 internal-workload-gate: __workload-gate connected-unix-stream-fd NXG1 u32be-length json-unix-bytes max-1048576 write-half-eof deadline-10000ms failure-exit-125
