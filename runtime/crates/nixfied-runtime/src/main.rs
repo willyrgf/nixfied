@@ -950,7 +950,7 @@ fn run_placed(
     let preparation = prepare_slot_state(&identity, &mut registry)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.
-    let _run_dir = registry.authority().claim_run_dir(placement)?;
+    let run_dir = registry.authority().claim_run_dir(placement)?;
 
     let direct_selected = admission
         .common()
@@ -961,6 +961,7 @@ fn run_placed(
     // The session's cancellation endpoint exists before the session is
     // published, so `down` can reach every session it can select.
     let control = nixfied_runtime::session_control::SessionControl::establish(
+        run_dir,
         &placement.run_dir,
         cancellation,
     )?;

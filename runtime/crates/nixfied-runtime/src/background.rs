@@ -315,7 +315,12 @@ mod tests {
         ));
 
         let token = crate::cancellation::CancellationToken::new();
-        let control = crate::session_control::SessionControl::establish(&run_dir, &token).unwrap();
+        let control = crate::session_control::SessionControl::establish(
+            crate::filesystem::Directory::private_anchor(&run_dir).unwrap(),
+            &run_dir,
+            &token,
+        )
+        .unwrap();
         assert!(matches!(
             cancel_established(acknowledgement()),
             LaunchOutcome::CanceledAfterEstablishment(_)
