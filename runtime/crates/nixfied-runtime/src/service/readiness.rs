@@ -12,8 +12,8 @@ use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
     CapturedExec, CapturedExecFailure, CapturedExecOutcome, CapturedExecTransition,
-    CapturedReleaseFailure, RenderedInvocation, get_process_group, platform_start_identity,
-    resolve_exec_cwd, spawn_gated_captured_exec,
+    RenderedInvocation, get_process_group, platform_start_identity, resolve_exec_cwd,
+    spawn_gated_captured_exec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,8 +191,8 @@ pub(crate) fn exec_probe_attempt(
             },
         )
         .map_err(|failure| match failure {
-            CapturedReleaseFailure::Unregistered(error) => *error,
-            CapturedReleaseFailure::Registered(failure) => {
+            crate::launch::Refusal::Unregistered(error) => *error,
+            crate::launch::Refusal::Registered(failure) => {
                 settle_probe_failure(registry, identity, failure)
             }
         })?;

@@ -14,8 +14,8 @@ use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
     CapturedExec, CapturedExecFailure, CapturedExecOutcome, CapturedExecTransition,
-    CapturedReleaseFailure, ExecSubstitution, ReadyService, SlotEndpoints, TerminationReason,
-    get_process_group, platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
+    ExecSubstitution, ReadyService, SlotEndpoints, TerminationReason, get_process_group,
+    platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
 };
 use crate::service::registry::{
     InvocationProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready,
@@ -272,8 +272,8 @@ pub fn run_dependent_task_cancellable(
             },
         )
         .map_err(|failure| match failure {
-            CapturedReleaseFailure::Unregistered(error) => TaskExecutionError::before(*error),
-            CapturedReleaseFailure::Registered(failure) => {
+            crate::launch::Refusal::Unregistered(error) => TaskExecutionError::before(*error),
+            crate::launch::Refusal::Registered(failure) => {
                 settle_task_failure(registry, &run_context, task, &process_key, failure)
             }
         })?;
@@ -634,8 +634,7 @@ mod tests {
         )
         .unwrap()
         .register_and_release(|_| Ok(()), || Ok(()))
-        .map_err(CapturedReleaseFailure::into_error)
-        .unwrap();
+        .unwrap_or_else(|_| panic!("the captured child should be released"));
         let pgid = child.pid() as i32;
         let cancellation = CancellationToken::new();
         cancellation.cancel();
