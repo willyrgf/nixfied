@@ -345,7 +345,7 @@ fn persistence_alone_authorizes_deletion_and_purge_overrides_only_retention() {
         let fixture = StateFixture::new();
         let mut registry = fixture.registry();
         let mut identity = fixture.identity.clone();
-        identity.persistence = persistence.clone();
+        identity.persistence = persistence;
         let marker = StateMarker::slot(&identity).unwrap();
         write_marker(&fixture, &marker);
 

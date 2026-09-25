@@ -46,9 +46,9 @@ pub(super) fn check_source(
         codebase_id: codebase.codebase_id.as_str().to_string(),
         logical_root: codebase.logical_root.clone(),
         observed_root,
-        source_mode: codebase.source_mode.clone(),
+        source_mode: codebase.source_mode,
         source_identity: codebase.source_identity.clone(),
-        dirty_policy: codebase.source_policy.dirty_policy.clone(),
+        dirty_policy: codebase.source_policy.dirty_policy,
         admission_fingerprint_policy: codebase.source_policy.admission_fingerprint_policy.clone(),
     })
 }

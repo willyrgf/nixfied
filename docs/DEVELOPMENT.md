@@ -126,6 +126,8 @@ Manifest wire declarations live in `nix/meta/manifest.nix`; runtime output wire
 descriptions and error/status vocabularies live in `nix/meta/outputs.nix`.
 Manifest boundary types and closed vocabularies are generated; runtime output
 structs and borrowed views are written in their native Rust owner modules.
+Declarations name only a generated type and its owner file; `nix/meta/rust.nix`
+applies one fixed visibility and derive convention to every generated type.
 The structural checker retains wire coverage, Nix construction and reference
 checks without prescribing private output layout. Closed enum members come
 from `capability.txt`. Native identifier,

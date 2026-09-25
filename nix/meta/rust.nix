@@ -1,9 +1,24 @@
 # Deterministic projection of the checked structure into native owner scopes.
+# Every wire type has one fixed representation: public records with public
+# fields derive Debug, Clone, PartialEq and Eq; closed unit vocabularies also
+# derive Copy. Declarations never choose Rust visibility or derives.
 { lib }:
 checked:
 let
   quote = import ./rust-quote.nix { inherit lib; };
-  visibility = value: if value == "private" then "" else "${value} ";
+  recordDerives = [
+    "Debug"
+    "Clone"
+    "PartialEq"
+    "Eq"
+  ];
+  vocabularyDerives = [
+    "Debug"
+    "Clone"
+    "Copy"
+    "PartialEq"
+    "Eq"
+  ];
   optional = field: field.decode.kind == "Optional";
   owned =
     value:
@@ -101,7 +116,7 @@ let
   renderRecord = record: ''
     #[derive(${
       lib.concatStringsSep ", " (
-        record.rust.derives
+        recordDerives
         ++ [ "serde::Serialize" ]
         ++ lib.optional (record.decoder != "NoDecoder") "serde::Deserialize"
       )
@@ -109,9 +124,9 @@ let
     #[serde(rename_all = "camelCase"${
       lib.optionalString (record.decoder == "RejectUnknown") ", deny_unknown_fields"
     })]
-    ${visibility record.rust.visibility}struct ${record.rust.name} {
+    pub struct ${record.rust.name} {
     ${lib.concatMapStrings (field: ''
-      ${attributes record field}${visibility field.rust.visibility}${field.rust.name}: ${fieldType record field},
+      ${attributes record field}pub ${field.rust.name}: ${fieldType record field},
     '') record.fields}
     }
     ${lib.concatMapStrings (helper record) record.fields}
@@ -132,12 +147,12 @@ let
       ''
         #[derive(${
           lib.concatStringsSep ", " (
-            vocabulary.rust.derives
+            vocabularyDerives
             ++ [ "serde::Serialize" ]
             ++ lib.optional (vocabulary.decoder == "Closed") "serde::Deserialize"
           )
         })]
-        ${visibility vocabulary.rust.visibility}enum ${vocabulary.rust.name} {
+        pub enum ${vocabulary.rust.name} {
         ${lib.concatMapStrings (member: ''
           #[serde(rename = ${quote member})]
           ${checked.variant member},

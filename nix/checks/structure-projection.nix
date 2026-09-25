@@ -6,16 +6,14 @@ let
   field =
     name: value: presence:
     d.field name value { kind = presence; } "Synthetic policy test field.";
-  record = name: emission: decoder: fields: {
+  record = name: decoder: fields: {
     identity = d.local name;
     description = "Synthetic Rust projection test.";
     inherit decoder fields;
     producer = "None";
     rust = {
-      inherit name emission;
+      inherit name;
       file = "fixture.rs";
-      visibility = "private";
-      derives = [ "Debug" ];
     };
   };
   text = {
@@ -25,18 +23,15 @@ let
     inventory = { };
     vocabularies = [ ];
     records = [
-      (record "EscapingFixture" "Owned" "RejectUnknown" [
+      (record "EscapingFixture" "RejectUnknown" [
         (
           (field (builtins.fromJSON ''"wire\u0001\b\f\r\n\t\"\\b\\u0001 λ"'') text "Required")
           // {
-            rust = {
-              name = "ordinary";
-              visibility = "private";
-            };
+            rust.name = "ordinary";
           }
         )
       ])
-      (record "PresenceFixture" "Owned" "RejectUnknown" [
+      (record "PresenceFixture" "RejectUnknown" [
         (field "optional" text "Optional")
         (field "details" {
           kind = "OpenJson";

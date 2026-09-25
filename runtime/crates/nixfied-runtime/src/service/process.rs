@@ -625,7 +625,7 @@ impl OwnedService {
                 pid: self.info.pid,
                 pgid: self.info.pgid,
                 platform_start: self.info.platform_start_identity.as_deref(),
-                containment: self.service.containment.clone(),
+                containment: self.service.containment,
                 tracked_processes: &[],
             },
         )
@@ -654,7 +654,7 @@ impl OwnedService {
                     pid: self.info.pid,
                     pgid: self.info.pgid,
                     platform_start: self.info.platform_start_identity.as_deref(),
-                    containment: self.service.containment.clone(),
+                    containment: self.service.containment,
                     tracked_processes: &tracked_processes,
                 },
             ),
@@ -1228,7 +1228,7 @@ fn proven_nixfied_owner(
                     pid: process.pid,
                     pgid: process.pgid,
                     platform_start: process.platform_start.as_deref(),
-                    containment: requested_service.containment.clone(),
+                    containment: requested_service.containment,
                     tracked_processes: &[],
                 },
             ),
@@ -1471,7 +1471,7 @@ pub(super) fn start_service_with_lock_root(
         stop: StopPolicy {
             signal: stop_signal_number(service.stop.signal),
             timeout_ms: service.stop.timeout.as_millis() as u64,
-            containment: service.containment.clone(),
+            containment: service.containment,
         },
     };
     cancellation.check()?;

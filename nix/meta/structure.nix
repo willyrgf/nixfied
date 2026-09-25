@@ -117,41 +117,15 @@ let
       ) "invalid local record identity" "local/${value.name}"
     else
       fail "unknown record identity form";
-  visibility =
-    value:
-    builtins.elem value [
-      "pub"
-      "pub(crate)"
-      "private"
-    ];
-  derivesValid =
-    derives:
-    builtins.isList derives
-    && lib.unique derives == derives
-    && builtins.all (
-      derive:
-      builtins.elem derive [
-        "Debug"
-        "Clone"
-        "Copy"
-        "PartialEq"
-        "Eq"
-      ]
-    ) derives;
   binding =
     rust:
     require (
-      exact [ "file" "name" "emission" "visibility" "derives" ] rust
+      exact [ "file" "name" ] rust
       && nonBlank (rust.file or null)
       && lib.hasSuffix ".rs" rust.file
       && !(lib.hasPrefix "/" rust.file)
       && !(builtins.elem ".." (lib.splitString "/" rust.file))
       && ident (rust.name or null)
-      && visibility (rust.visibility or null)
-      && derivesValid (rust.derives or null)
-      && builtins.elem (rust.emission or null) [
-        "Owned"
-      ]
     ) "invalid Rust record binding" rust;
   normalizeVocabulary =
     declaration:
@@ -193,24 +167,9 @@ let
           status = lib.hasPrefix "status " declaration.coordinate;
         in
         require (
-          rust.emission == "Owned"
-          && lib.unique variants == variants
+          lib.unique variants == variants
           && builtins.all ident variants
-          && (
-            !status
-            || (
-              declaration.decoder == "NoDecoder"
-              && rust.visibility == "pub"
-              &&
-                builtins.sort builtins.lessThan rust.derives == [
-                  "Clone"
-                  "Copy"
-                  "Debug"
-                  "Eq"
-                  "PartialEq"
-                ]
-            )
-          )
+          && (!status || declaration.decoder == "NoDecoder")
           && (
             declaration.coordinate != "error-code"
             || (
@@ -378,7 +337,6 @@ let
       policy = policies.${kind} or (fail "unsupported field presence");
       rust = {
         name = snake field.name;
-        visibility = if record ? rust then record.rust.visibility else "private";
       }
       // (field.rust or { });
       normalized =
@@ -419,7 +377,7 @@ let
       && (kind != "OmitEmpty" || record.decoder == "NoDecoder")
       && (
         !(record ? rust)
-        || (exact [ "name" "visibility" ] rust && ident rust.name && visibility rust.visibility)
+        || (exact [ "name" ] rust && ident rust.name)
       )
       && (
         !record.produced

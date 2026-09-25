@@ -28,9 +28,6 @@ let
           kind = "Required";
         };
         nixEncode = "RequiredPresent";
-        rust = {
-          visibility = "pub";
-        };
       }
     ];
   };

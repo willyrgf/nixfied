@@ -52,34 +52,15 @@ let
     rust = {
       file = "crates/nixfied-manifest/src/generated/types.rs";
       name = if name == "Invocation" then "InvocationSpec" else name;
-      emission = "Owned";
-      visibility = "pub";
-      derives = [
-        "Debug"
-        "Clone"
-        "PartialEq"
-        "Eq"
-      ];
     };
   };
-  vocabulary = name: copy: description: {
+  vocabulary = name: description: {
     coordinate = if name == "StopSignal" then "signal" else "enum ${name}";
     decoder = "Closed";
     inherit description;
     rust = {
       inherit name;
       file = "crates/nixfied-manifest/src/generated/types.rs";
-      emission = "Owned";
-      visibility = "pub";
-      derives = [
-        "Debug"
-        "Clone"
-      ]
-      ++ lib.optional copy "Copy"
-      ++ [
-        "PartialEq"
-        "Eq"
-      ];
     };
   };
   probeRecord =
@@ -94,32 +75,32 @@ let
 in
 {
   vocabularies = [
-    (vocabulary "ClosureKind" false "Declared role of a realised executable closure.")
-    (vocabulary "ClosureEffect" false
+    (vocabulary "ClosureKind" "Declared role of a realised executable closure.")
+    (vocabulary "ClosureEffect"
       "Attested effect classes; native admission validates their coherence."
     )
-    (vocabulary "StdinPolicy" true "Closed stdin or inherited runtime-command stdin.")
-    (vocabulary "ProbeKind" true
+    (vocabulary "StdinPolicy" "Closed stdin or inherited runtime-command stdin.")
+    (vocabulary "ProbeKind"
       "TCP endpoint probe or bounded exec probe; native lowering checks the discriminator."
     )
-    (vocabulary "TaskKind" true
+    (vocabulary "TaskKind"
       "Leaf invocation or static composite DAG; native lowering checks the discriminator."
     )
-    (vocabulary "TaskDefaultOutput" true
+    (vocabulary "TaskDefaultOutput"
       "Default output for a directly selected task; native Default remains Summary."
     )
-    (vocabulary "SecretSourceKind" true
+    (vocabulary "SecretSourceKind"
       "Runtime secret resolver kind; no secret values are serialized."
     )
-    (vocabulary "ContainmentRequirement" false
+    (vocabulary "ContainmentRequirement"
       "Required process-group or descendant-tree containment strength."
     )
-    (vocabulary "SourceMode" false
+    (vocabulary "SourceMode"
       "Source identity interpretation: immutable snapshot/input or live workspace."
     )
-    (vocabulary "DirtyPolicy" false "Policy for uncommitted live-workspace source changes.")
-    (vocabulary "PersistencePolicy" false "The sole application-data retention policy.")
-    (vocabulary "StopSignal" true "The closed set of graceful shutdown signals the runtime can send.")
+    (vocabulary "DirtyPolicy" "Policy for uncommitted live-workspace source changes.")
+    (vocabulary "PersistencePolicy" "The sole application-data retention policy.")
+    (vocabulary "StopSignal" "The closed set of graceful shutdown signals the runtime can send.")
   ];
   records = [
     (record "Manifest" "The sole required semantic artifact admitted independently by the runtime." [
