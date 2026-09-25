@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, EntryKind, FileIdentity};
 use crate::state::marker::{StateIdentity, StateMarker};
-use crate::state::ownership::SlotGuard;
+use crate::state::ownership::{SlotGuard, refuse_network_filesystem};
 use crate::state::placement::normal_component;
 
 pub(crate) const MARKER: &CStr = c".nixfied-state.json";
@@ -101,6 +101,7 @@ impl ApplicationTree {
                 let root = parent
                     .open_owned_child(&self.name)
                     .map_err(|error| self.io_error(error))?;
+                refuse_network_filesystem(&root)?;
                 let identity = root.identity().map_err(|error| self.io_error(error))?;
                 Ok(Observed::Present {
                     parent,
@@ -140,6 +141,7 @@ impl ApplicationTree {
             }
             .map_err(|error| self.write_error(error))?;
         }
+        refuse_network_filesystem(&directory)?;
         Ok(directory)
     }
 
