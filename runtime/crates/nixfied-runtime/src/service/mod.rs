@@ -51,7 +51,7 @@ impl StoredProcessIdentity {
 
 pub use process::{
     PrepareRunner, ReadinessFailure, ReadyService, SelectedEndpoint, ServiceInfo, ServiceSelection,
-    SlotEndpoints, StartingService, run_slot_clean, start_service_for_slot,
+    SlotEndpoints, StartingService, check_services_live, run_slot_clean, start_service_for_slot,
 };
 pub use registry::record_run_created;
 pub use task::{

@@ -19,8 +19,8 @@ use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
     PrepareRunner, ReadyService, RunContext, SelectedEndpoint, ServiceSelection, TaskExecution,
-    TaskExecutionError, TaskRun, record_run_created, run_dependent_task_cancellable,
-    run_slot_clean, start_service_for_slot,
+    TaskExecutionError, TaskRun, check_services_live, record_run_created,
+    run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -1108,12 +1108,7 @@ fn run_m0_placed(
                 }) as PrepareRunner<'_>
             });
 
-        let session_checkpoint = || {
-            for service in &session.started {
-                service.check_liveness()?;
-            }
-            Ok(())
-        };
+        let observe_started = || check_services_live(&session.started);
         let current_service = match start_service_for_slot(
             admission,
             placement,
@@ -1127,7 +1122,7 @@ fn run_m0_placed(
                 slot_endpoints: &slot_endpoints,
                 run_timeout_ms: options.timeout_ms,
                 cancellation,
-                session_checkpoint: &session_checkpoint,
+                session_checkpoint: &observe_started,
                 prepare_runner,
             },
         ) {
@@ -1136,12 +1131,7 @@ fn run_m0_placed(
                 finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
-        let mut checkpoint = || {
-            for service in &session.started {
-                service.check_liveness()?;
-            }
-            Ok(())
-        };
+        let mut checkpoint = observe_started;
         let mut current_service =
             match current_service.ready(&mut session.registry, cancellation, &mut checkpoint) {
                 Ok(service) => service,
@@ -1432,26 +1422,6 @@ fn execute_node(
     };
     let occurrence = evidence.allocate_occurrence().map_err(decorate)?;
     let task = node.task;
-    for name in &task.requires {
-        started
-            .iter()
-            .find(|service| service.service_name() == name.as_str())
-            .ok_or_else(|| {
-                decorate(RuntimeError::new(
-                    nixfied_runtime::ErrorCode::DependencyUnavailable,
-                    match role {
-                        NodeRole::Prepare => format!(
-                            "prepare node {} requires service {name} which is not started yet",
-                            node.node_id
-                        ),
-                        NodeRole::Root { .. } => format!(
-                            "task {} depends on service {name} which was not started",
-                            task.task_id
-                        ),
-                    },
-                ))
-            })?;
-    }
     if matches!(role, NodeRole::Prepare) {
         diagnostics.write(format_args!(
             "  prepare node {} ({})",
@@ -1490,10 +1460,7 @@ fn execute_node(
     // Checkpoint before settling success: a service exit observed after the
     // task's own exit still fails the node and the session.
     let service_failure = match &error {
-        None => started
-            .iter()
-            .try_for_each(ReadyService::check_liveness)
-            .err(),
+        None => check_services_live(started).err(),
         Some(_) => None,
     };
     let observed = if task_run.canceled {
