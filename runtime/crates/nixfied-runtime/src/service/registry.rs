@@ -111,6 +111,18 @@ pub(crate) enum TaskTerminalStatus {
     Canceled,
 }
 
+impl TaskTerminalStatus {
+    /// The execution outcome this terminal status records.
+    pub(crate) fn execution_outcome(self) -> crate::registry::session::ExecutionOutcome {
+        use crate::registry::session::ExecutionOutcome;
+        match self {
+            Self::Succeeded => ExecutionOutcome::Succeeded,
+            Self::Failed | Self::TimedOut => ExecutionOutcome::Failed,
+            Self::Canceled => ExecutionOutcome::Canceled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServiceStartOutcome {
     Canceled,
@@ -732,24 +744,6 @@ pub(crate) fn record_service_lifecycle_event(
     Ok(())
 }
 
-pub(crate) fn record_task_canceling(
-    registry: &mut Registry,
-    run_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    payload_json: &str,
-) -> RuntimeResult<()> {
-    record_canceling(
-        registry,
-        run_id,
-        None,
-        process_key,
-        computed_manifest_hash,
-        "task.canceling",
-        payload_json,
-    )
-}
-
 pub(crate) fn mark_service_failed(
     registry: &mut Registry,
     run_id: &str,
@@ -984,13 +978,6 @@ pub(crate) struct InvocationIdentity<'a> {
     pub owner: InvocationOwner<'a>,
 }
 
-pub(crate) fn record_task_started(
-    registry: &mut Registry,
-    process: &InvocationProcessRecord<'_>,
-) -> RuntimeResult<()> {
-    record_invocation_started(registry, process, InvocationOwner::Task)
-}
-
 pub(crate) fn record_invocation_started(
     registry: &mut Registry,
     process: &InvocationProcessRecord<'_>,
@@ -1063,27 +1050,6 @@ pub(crate) fn record_invocation_started(
     Ok(())
 }
 
-pub(crate) fn record_task_observed(
-    registry: &mut Registry,
-    run_id: &str,
-    process_key: &str,
-    manifest_hash: &str,
-    outcome: crate::registry::session::ExecutionOutcome,
-    exit_code: Option<i32>,
-) -> RuntimeResult<()> {
-    record_invocation_observed(
-        registry,
-        InvocationIdentity {
-            run_id,
-            process_key,
-            manifest_hash,
-            owner: InvocationOwner::Task,
-        },
-        outcome,
-        exit_code,
-    )
-}
-
 pub(crate) fn record_invocation_observed(
     registry: &mut Registry,
     invocation: InvocationIdentity<'_>,
@@ -1148,32 +1114,11 @@ pub(crate) fn record_invocation_observed(
     transaction.commit().map_err(sql_error)
 }
 
-pub(crate) fn mark_task_finished(
-    registry: &mut Registry,
-    run_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    terminal_status: TaskTerminalStatus,
-    payload_json: &str,
-    capture: Option<CaptureOutcome>,
-) -> RuntimeResult<()> {
-    mark_invocation_finished(
-        registry,
-        InvocationIdentity {
-            run_id,
-            process_key,
-            manifest_hash: computed_manifest_hash,
-            owner: InvocationOwner::Task,
-        },
-        terminal_status,
-        payload_json,
-        capture,
-    )
-}
-
-pub(crate) fn record_probe_canceling(
+/// Termination intent of a registered task or probe, before any signal.
+pub(crate) fn record_invocation_canceling(
     registry: &mut Registry,
     invocation: InvocationIdentity<'_>,
+    payload_json: &str,
 ) -> RuntimeResult<()> {
     record_canceling(
         registry,
@@ -1181,8 +1126,11 @@ pub(crate) fn record_probe_canceling(
         None,
         invocation.process_key,
         invocation.manifest_hash,
-        "probe.canceling",
-        "{}",
+        match invocation.owner {
+            InvocationOwner::Task => "task.canceling",
+            InvocationOwner::Probe(_) => "probe.canceling",
+        },
+        payload_json,
     )
 }
 
@@ -1650,6 +1598,19 @@ mod tests {
             .expect("startup intent should commit");
     }
 
+    fn task_invocation<'a>(
+        run_id: &'a str,
+        process_key: &'a str,
+        manifest_hash: &'a str,
+    ) -> InvocationIdentity<'a> {
+        InvocationIdentity {
+            run_id,
+            process_key,
+            manifest_hash,
+            owner: InvocationOwner::Task,
+        }
+    }
+
     fn record_started(registry: &mut Registry) {
         insert_run(registry, RUN_ID);
         record_intent(registry, RUN_ID);
@@ -1683,7 +1644,7 @@ mod tests {
             command_json: "{}",
             computed_manifest_hash: MANIFEST_HASH,
         };
-        let error = record_task_started(registry, &task).unwrap_err();
+        let error = record_invocation_started(registry, &task, InvocationOwner::Task).unwrap_err();
         assert_eq!(error.code, ErrorCode::LifecycleFailed);
         let error = record_service_start(
             registry,
@@ -1709,7 +1670,7 @@ mod tests {
         let mut fixture = TestRegistry::new();
         let registry = &mut fixture.registry;
         insert_run(registry, RUN_ID);
-        record_task_started(
+        record_invocation_started(
             registry,
             &InvocationProcessRecord {
                 source: fixture_source("task"),
@@ -1721,6 +1682,7 @@ mod tests {
                 command_json: "{}",
                 computed_manifest_hash: MANIFEST_HASH,
             },
+            InvocationOwner::Task,
         )
         .unwrap();
 
@@ -1730,11 +1692,9 @@ mod tests {
             (RUN_ID, PROCESS_KEY, "other-manifest"),
         ] {
             assert!(
-                record_task_observed(
+                record_invocation_observed(
                     registry,
-                    run,
-                    process,
-                    manifest,
+                    task_invocation(run, process, manifest),
                     ExecutionOutcome::Succeeded,
                     Some(7),
                 )
@@ -1752,11 +1712,9 @@ mod tests {
             )
             .unwrap();
         assert!(
-            record_task_observed(
+            record_invocation_observed(
                 registry,
-                RUN_ID,
-                PROCESS_KEY,
-                MANIFEST_HASH,
+                task_invocation(RUN_ID, PROCESS_KEY, MANIFEST_HASH),
                 ExecutionOutcome::Succeeded,
                 Some(7),
             )
@@ -1776,22 +1734,18 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_observation")
             .unwrap();
 
-        record_task_observed(
+        record_invocation_observed(
             registry,
-            RUN_ID,
-            PROCESS_KEY,
-            MANIFEST_HASH,
+            task_invocation(RUN_ID, PROCESS_KEY, MANIFEST_HASH),
             ExecutionOutcome::Succeeded,
             Some(7),
         )
         .unwrap();
         for outcome in [ExecutionOutcome::Succeeded, ExecutionOutcome::Failed] {
             assert!(
-                record_task_observed(
+                record_invocation_observed(
                     registry,
-                    RUN_ID,
-                    PROCESS_KEY,
-                    MANIFEST_HASH,
+                    task_invocation(RUN_ID, PROCESS_KEY, MANIFEST_HASH),
                     outcome,
                     Some(1),
                 )

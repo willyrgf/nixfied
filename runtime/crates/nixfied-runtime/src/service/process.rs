@@ -32,11 +32,14 @@ use crate::service::endpoint::{
 use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
-    EndpointRecord, Ownership, ProcessRecord, ServiceRecord, ServiceSettlement,
-    ServiceStartOutcome, StopPolicy, VerifiedEndpointActivation, activate_service_ready,
-    mark_process_escape, mark_service_canceled, mark_service_failed, mark_service_stopped,
-    read_service_snapshot, record_service_canceling, record_service_lifecycle_event,
-    record_service_start, record_service_start_intent, settle_service_start,
+    EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, Ownership,
+    ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, StopPolicy,
+    TaskTerminalStatus, VerifiedEndpointActivation, activate_service_ready,
+    mark_invocation_finished, mark_process_escape, mark_service_canceled, mark_service_failed,
+    mark_service_stopped, read_service_snapshot, record_capture_outcome,
+    record_invocation_canceling, record_invocation_observed, record_invocation_started,
+    record_service_canceling, record_service_lifecycle_event, record_service_start,
+    record_service_start_intent, settle_service_start,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -1583,24 +1586,8 @@ pub(super) fn start_service_with_lock_root(
             error
         }
     };
-    let observed = (|| {
-        let pgid = get_process_group(pid)?;
-        if pgid != pid as i32 {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                "service launcher process group changed",
-            ));
-        }
-        let start = platform_start_identity(pid).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ProcEscape,
-                "service launcher start identity is unavailable",
-            )
-        })?;
-        Ok((pgid, Some(start)))
-    })();
-    let (pgid, platform_start) = match observed {
-        Ok(identity) => identity,
+    let (pgid, platform_start) = match leader_identity(pid, "service") {
+        Ok((pgid, start)) => (pgid, Some(start)),
         Err(error) => {
             let mut child = OwnedChild::from(pending.abort());
             return Err(fail_unrecorded(
@@ -2207,6 +2194,175 @@ impl Drop for OwnedCapturedChild {
             let _ = self.finish(None);
         }
     }
+}
+
+/// One registered task or probe invocation: its owner, evidence, and how its
+/// captured outcomes are recorded.
+pub(crate) struct Invocation<'a> {
+    pub owner: InvocationOwner<'a>,
+    pub run_id: &'a str,
+    pub manifest_hash: &'a str,
+    pub source: &'a crate::output::EvidenceSource,
+    pub command_json: &'a str,
+    /// The exit code and terminal status a captured outcome records.
+    pub terminal: &'a dyn Fn(&CapturedExecOutcome) -> (Option<i32>, TaskTerminalStatus),
+    /// The canceling-intent payload for the owned process group.
+    pub canceling: &'a dyn Fn(i32, &TerminationReason) -> String,
+}
+
+/// A failed invocation. Any registered row is already settled from the
+/// contained facts, or keeps its obligation with its capture outcome recorded.
+pub(crate) struct InvocationFailure {
+    pub error: Box<RuntimeError>,
+    /// The outcome observed before the failure, if any.
+    pub outcome: Option<CapturedExecOutcome>,
+}
+
+impl Invocation<'_> {
+    pub fn identity<'k>(&'k self, process_key: &'k str) -> InvocationIdentity<'k> {
+        InvocationIdentity {
+            run_id: self.run_id,
+            process_key,
+            manifest_hash: self.manifest_hash,
+            owner: self.owner,
+        }
+    }
+
+    /// Register the gated child's verified group and start identity, release
+    /// it under `checkpoint` and cancellation, and complete it. Returns the
+    /// process key with the observed outcome; the caller records the
+    /// successful terminal.
+    pub fn run(
+        &self,
+        registry: &mut Registry,
+        pending: PendingCapturedChild,
+        process_key: impl FnOnce(u32) -> String,
+        cancellation: &CancellationToken,
+        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
+    ) -> Result<(String, CapturedExecOutcome), InvocationFailure> {
+        let unregistered = |error| InvocationFailure {
+            error,
+            outcome: None,
+        };
+        let pid = pending.pid();
+        let process_key = process_key(pid);
+        let identity = self.identity(&process_key);
+        let role = match self.owner {
+            InvocationOwner::Task => "task",
+            InvocationOwner::Probe(_) => "probe",
+        };
+        let released = pending.register_and_release(
+            |_| {
+                let (pgid, start) = leader_identity(pid, role)?;
+                let start_identity =
+                    super::StoredProcessIdentity::encode(pid, pgid, Some(&start), None);
+                record_invocation_started(
+                    registry,
+                    &InvocationProcessRecord {
+                        source: self.source,
+                        run_id: self.run_id,
+                        process_key: &process_key,
+                        pid,
+                        pgid,
+                        start_identity: &start_identity,
+                        command_json: self.command_json,
+                        computed_manifest_hash: self.manifest_hash,
+                    },
+                    self.owner,
+                )
+            },
+            || {
+                cancellation.check()?;
+                checkpoint()
+            },
+        );
+        let child = match released {
+            Ok(child) => child,
+            Err(Refusal::Unregistered(error)) => return Err(unregistered(error)),
+            Err(Refusal::Registered(failure)) => {
+                return Err(self.settle(registry, identity, failure));
+            }
+        };
+        let pgid = pid as i32;
+        let outcome = child
+            .complete(
+                cancellation,
+                &mut *checkpoint,
+                |transition| match transition {
+                    CapturedExecTransition::Observed(outcome) => {
+                        let (exit_code, terminal) = (self.terminal)(outcome);
+                        record_invocation_observed(
+                            registry,
+                            identity,
+                            terminal.execution_outcome(),
+                            exit_code,
+                        )
+                    }
+                    CapturedExecTransition::Terminating(reason) => record_invocation_canceling(
+                        registry,
+                        identity,
+                        &(self.canceling)(pgid, &reason),
+                    ),
+                },
+            )
+            .map_err(|failure| self.settle(registry, identity, failure))?;
+        Ok((process_key, outcome))
+    }
+
+    /// A settled child leaves only terminal evidence; an unsettled child keeps
+    /// its obligation and records its capture outcome for recovery.
+    fn settle(
+        &self,
+        registry: &mut Registry,
+        identity: InvocationIdentity<'_>,
+        failure: CapturedExecFailure,
+    ) -> InvocationFailure {
+        let error = *failure.error;
+        let recorded = if failure.settled {
+            let status = failure
+                .outcome
+                .as_ref()
+                .map_or(TaskTerminalStatus::Canceled, |outcome| {
+                    (self.terminal)(outcome).1
+                });
+            let payload =
+                serde_json::json!({ "interrupted": true, "code": error.code }).to_string();
+            mark_invocation_finished(registry, identity, status, &payload, Some(failure.capture))
+        } else {
+            record_capture_outcome(
+                registry,
+                identity.run_id,
+                identity.process_key,
+                failure.capture,
+            )
+        };
+        InvocationFailure {
+            error: Box::new(match recorded {
+                Ok(()) => error,
+                Err(recording) => error.with_cause(recording),
+            }),
+            outcome: failure.outcome,
+        }
+    }
+}
+
+/// A launched leader's group and start identity. The gate made it its own
+/// group leader before exec; any other group is an escape.
+fn leader_identity(pid: u32, role: &str) -> RuntimeResult<(i32, String)> {
+    let pgid = pid as i32;
+    if get_process_group(pid)? != pgid {
+        return Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("{role} launcher process group changed"),
+        ));
+    }
+    let start = platform_start_identity(pid).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("{role} launcher start identity is unavailable"),
+        )
+    })?;
+    Ok((pgid, start))
 }
 
 /// Capture is ordered stdout then stderr. Preserve that order when containment
