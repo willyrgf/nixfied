@@ -518,7 +518,41 @@ fn large_simultaneous_streams_present_exactly() {
 
     assert_success(&output);
     assert_eq!(output.stdout, stdout);
-    assert_stream_contains(&output.stderr, &stderr, "stderr");
+    // Live presentation merges runtime diagnostics into stderr wherever the
+    // captured stderr had reached, possibly inside the task's bytes.
+    let diagnostics =
+        fs::read(find_named(&fixture.state_base, "diagnostics.log").unwrap()).unwrap();
+    assert!(
+        interleaves(&output.stderr, &diagnostics, &stderr),
+        "stderr is not exactly the diagnostics interleaved with the task stderr"
+    );
+}
+
+/// Whether `merged` is exactly `first` and `second` interleaved, each in order.
+fn interleaves(merged: &[u8], first: &[u8], second: &[u8]) -> bool {
+    if merged.len() != first.len() + second.len() {
+        return false;
+    }
+    // Every count of `first` bytes that can explain the merged prefix.
+    let mut taken = vec![0_usize];
+    for (position, byte) in merged.iter().enumerate() {
+        let mut next = Vec::new();
+        for &from_first in &taken {
+            if first.get(from_first) == Some(byte) {
+                next.push(from_first + 1);
+            }
+            if second.get(position - from_first) == Some(byte) {
+                next.push(from_first);
+            }
+        }
+        next.sort_unstable();
+        next.dedup();
+        if next.is_empty() {
+            return false;
+        }
+        taken = next;
+    }
+    true
 }
 
 #[test]
@@ -546,7 +580,17 @@ fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_delivery() {
 
     assert_eq!(output.status.code(), Some(38));
     assert!(output.stdout.is_empty());
-    assert_stream_contains(&output.stderr, &stderr, "stderr");
+    // The command's own error document follows the presented streams.
+    let diagnostics =
+        fs::read(find_named(&fixture.state_base, "diagnostics.log").unwrap()).unwrap();
+    let presented = output
+        .stderr
+        .get(..diagnostics.len() + stderr.len())
+        .unwrap();
+    assert!(
+        interleaves(presented, &diagnostics, &stderr),
+        "stderr is not exactly the diagnostics interleaved with the task stderr"
+    );
     let diagnostic = String::from_utf8_lossy(&output.stderr);
     assert!(diagnostic.contains("OUTPUT_PROJECTION_FAILED"));
     assert!(diagnostic.contains("broken-pipe"));
