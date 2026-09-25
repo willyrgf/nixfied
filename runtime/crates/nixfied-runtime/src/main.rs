@@ -231,7 +231,19 @@ impl<'a> RunSession<'a> {
                 .as_ref()
                 .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
         let had_initial_failure = !failures.is_empty();
-        while let Some(service) = self.started.pop() {
+        loop {
+            // Observe every remaining service before signaling the next one: a
+            // service that exited during teardown fails from its own exit, even
+            // under cancellation, and never settles as a deliberate stop.
+            while let Some(index) = self.started.iter().position(|service| service.exited()) {
+                let service = self.started.remove(index);
+                if let Err(error) = service.stop(&mut self.registry, self.options.timeout_ms) {
+                    failures.push(error);
+                }
+            }
+            let Some(service) = self.started.pop() else {
+                break;
+            };
             let result = if canceled {
                 service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
             } else if had_initial_failure {

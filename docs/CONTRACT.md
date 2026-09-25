@@ -294,7 +294,10 @@ when the manifest/runtime contract changes.
   names it commits. After source registration closes, no process may register
   a new source.
 - Service teardown observes pending exits before recording stop intent; an exit
-  observed then remains an unexpected failure. The stop lifecycle start event is
+  observed then remains an unexpected failure. Before it signals each service,
+  ordered teardown observes every remaining service, so a service that exits
+  while another stops, or during canceled teardown, settles as failed from its
+  own exit and never as stopped or canceled. The stop lifecycle start event is
   the durable stop intent and precedes every stop signal; its recording failure
   still contains and reaps the service. An unexpected service exit, including
   status zero, fails the session with `DEPENDENCY_UNAVAILABLE`.

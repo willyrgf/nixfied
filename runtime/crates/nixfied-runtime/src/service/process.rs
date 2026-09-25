@@ -238,6 +238,11 @@ impl ReadyService {
     pub fn check_liveness(&self) -> RuntimeResult<()> {
         self.owned.check_liveness()
     }
+    /// Non-blocking: the foreground child exited on its own, or its state is
+    /// unobservable. Its own stop then settles it as a failure.
+    pub fn exited(&self) -> bool {
+        !matches!(self.owned.child.observe(), Ok(None))
+    }
     pub fn check_health(
         &mut self,
         registry: &mut Registry,

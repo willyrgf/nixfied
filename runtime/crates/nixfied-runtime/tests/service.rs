@@ -5066,3 +5066,431 @@ fn platform_start_for_test(pid: u32) -> Option<String> {
     let start_time_ticks = fields_after_comm.split_whitespace().nth(19)?;
     Some(format!("linux-start-ticks:{start_time_ticks}"))
 }
+
+/// Clone the fixture's `synthetic` service under `name` with its own endpoint
+/// and start arguments.
+fn add_service_clone(value: &mut Value, name: &str, start_args: &[&str], connects_to: &[&str]) {
+    let mut service = value["services"]["synthetic"].clone();
+    for operation in ["start", "ready", "health", "stop", "clean"] {
+        service["lifecycle"][operation]["operationId"] =
+            json!(format!("service.{name}.{operation}"));
+    }
+    let run = service["lifecycle"]["start"]["invocation"]["run"]
+        .as_array_mut()
+        .expect("start run is an array");
+    run.truncate(1);
+    run.extend(start_args.iter().map(|arg| json!(arg)));
+    let endpoint = format!("{name}-tcp");
+    service["endpoints"] =
+        json!({ endpoint.clone(): { "endpointId": endpoint, "host": "127.0.0.1" } });
+    service["primaryEndpoint"] = json!(endpoint);
+    service["logRefs"] = json!([format!("service.{name}")]);
+    service["connectsTo"] = json!(connects_to);
+    value["services"][name] = service;
+}
+
+/// Clone the fixture's `smoke` task under `name` with its own arguments.
+fn add_task_clone(value: &mut Value, name: &str, requires: &[&str], args: &[&str]) {
+    let mut task = value["tasks"]["smoke"].clone();
+    task["operationId"] = json!(format!("task.{name}.run"));
+    task["requires"] = json!(requires);
+    task["logRefs"] = json!([format!("task.{name}")]);
+    let run = task["invocation"]["run"]
+        .as_array_mut()
+        .expect("task run is an array");
+    run.truncate(1);
+    run.extend(args.iter().map(|arg| json!(arg)));
+    value["tasks"][name] = task;
+}
+
+fn read_registry(state_base: &Path) -> rusqlite::Connection {
+    let path = find_named(state_base, "registry.sqlite3").expect("a registry must exist");
+    rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("registry should open read-only")
+}
+
+#[test]
+fn diamond_service_dependency_starts_once_per_session_without_borrowing() {
+    let port = available_port_window(3);
+    let mut value = test_child_listener_value(port);
+    value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 2);
+    let listen = ["listen", "127.0.0.1", "${port}", "hold"];
+    add_service_clone(&mut value, "left", &listen, &["synthetic"]);
+    add_service_clone(&mut value, "right", &listen, &["synthetic"]);
+    add_task_clone(&mut value, "via-left", &["left"], &["exit", "0"]);
+    add_task_clone(&mut value, "via-right", &["right"], &["exit", "0"]);
+    value["tasks"]["diamond"] = json!({
+        "kind": "composite",
+        "steps": {
+            "a": { "task": "via-left" },
+            "b": { "task": "via-right" }
+        }
+    });
+    let manifest: Manifest = serde_json::from_value(value).expect("diamond manifest should parse");
+    let fixture = RuntimeFixture::new(&manifest);
+
+    let mut shared = Vec::new();
+    for _ in 0..2 {
+        let output = fixture
+            .command("run", &["--task", "diamond", "--output", "json"])
+            .output()
+            .expect("runtime should run");
+        assert!(
+            output.status.success(),
+            "diamond run failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run: Value = serde_json::from_slice(&output.stdout).expect("run output is JSON");
+        assert_eq!(run["services"].as_array().map(Vec::len), Some(3));
+        let connection = read_registry(&fixture.state_base);
+        let run_id: String = connection
+            .query_row(
+                "SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let rows: Vec<(String, String, String, String)> = connection
+            .prepare(
+                "SELECT service_name, process_key, status, ownership FROM processes
+                 WHERE role = 'service' AND run_id = ?1 ORDER BY service_name",
+            )
+            .unwrap()
+            .query_map([&run_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let names: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+        assert_eq!(
+            names,
+            ["left", "right", "synthetic"],
+            "the shared dependency starts exactly once in its session"
+        );
+        for (name, _, status, ownership) in &rows {
+            assert_eq!(
+                (status.as_str(), ownership.as_str()),
+                ("stopped", "settled"),
+                "{name}"
+            );
+        }
+        shared.push(rows[2].1.clone());
+    }
+    assert_ne!(
+        shared[0], shared[1],
+        "each session starts its own shared dependency; none is borrowed"
+    );
+    let total: i64 = read_registry(&fixture.state_base)
+        .query_row(
+            "SELECT count(*) FROM processes WHERE role = 'service' AND service_name = 'synthetic'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 2);
+}
+
+#[test]
+fn finished_composite_step_does_not_finalize_the_running_session() {
+    let port = available_port_window(1);
+    let barrier = TempDir::new();
+    let reached = barrier.path.join("second-step-running");
+    let release = barrier.path.join("second-step-release");
+    let mut value = test_child_listener_value(port);
+    set_task_run_args(&mut value, &["exit", "0"]);
+    add_task_clone(
+        &mut value,
+        "gate",
+        &[],
+        &[
+            "prepare",
+            reached.to_str().unwrap(),
+            release.to_str().unwrap(),
+        ],
+    );
+    value["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "steps": {
+            "first": { "task": "smoke" },
+            "second": { "task": "gate", "dependsOn": ["first"] }
+        }
+    });
+    let manifest: Manifest = serde_json::from_value(value).expect("pipeline manifest should parse");
+    let fixture = RuntimeFixture::new(&manifest);
+    let child = fixture
+        .command("run", &["--task", "pipeline", "--output", "json"])
+        .spawn()
+        .expect("runtime should spawn");
+    assert!(
+        wait_for_path(&reached, Duration::from_secs(10)),
+        "the second step should start"
+    );
+
+    let connection = read_registry(&fixture.state_base);
+    let (outcome, finalization, output): (Option<String>, String, String) = connection
+        .query_row(
+            "SELECT execution_outcome, finalization, output FROM runs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (outcome, finalization.as_str(), output.as_str()),
+        (None, "unfinished", "unsealed"),
+        "a finished step never settles the session"
+    );
+    let steps: Vec<String> = connection
+        .prepare("SELECT status FROM processes WHERE role = 'task' ORDER BY rowid")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(steps.len(), 2, "{steps:?}");
+    assert_ne!(steps[0], "running", "the first step finished: {steps:?}");
+    assert_eq!(steps[1], "running", "{steps:?}");
+    drop(connection);
+
+    let ps = fixture.command("ps", &[]).output().expect("ps should run");
+    assert!(
+        ps.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ps.stderr)
+    );
+    let report: Value = serde_json::from_slice(&ps.stdout).expect("ps output is JSON");
+    let live = report["processes"]
+        .as_array()
+        .expect("ps processes array")
+        .iter()
+        .filter(|process| process["live"] == json!(true))
+        .count();
+    assert_eq!(live, 2, "ps reports the running session: {report}");
+
+    fs::write(&release, b"go").unwrap();
+    let output = wait_for_child_output(child, Duration::from_secs(15));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (outcome, finalization, output): (Option<String>, String, String) =
+        read_registry(&fixture.state_base)
+            .query_row(
+                "SELECT execution_outcome, finalization, output FROM runs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+    assert_eq!(
+        (outcome.as_deref(), finalization.as_str(), output.as_str()),
+        (Some("succeeded"), "complete", "sealed")
+    );
+}
+
+#[test]
+fn owner_killed_during_readiness_leaves_an_obligation_the_successor_settles() {
+    let port = available_port_window(1);
+    let child_program = test_child();
+    let mut value = exec_probe_fixture_value(
+        child_program.to_str().unwrap(),
+        &[
+            "listen",
+            "127.0.0.1",
+            "${port}",
+            "ready-on-marker",
+            "${stateDir}/listener-bound",
+            "${stateDir}/ready-ack",
+            "${stateDir}/ready-flag",
+        ],
+        port,
+        json!(["-c", "test -e \"$1\"", "probe", "${stateDir}/ready-flag"]),
+        400,
+    );
+    set_task_run_args(&mut value, &["exit", "0"]);
+    let manifest: Manifest = serde_json::from_value(value).expect("manifest should parse");
+    let fixture = RuntimeFixture::new(&manifest);
+    let mut owner = fixture
+        .command("run", &["--task", "smoke"])
+        .spawn()
+        .expect("runtime should spawn");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let bound = loop {
+        if let Some(path) = find_named(&fixture.state_base, "listener-bound") {
+            break path;
+        }
+        assert!(Instant::now() < deadline, "service should bind");
+        thread::sleep(Duration::from_millis(20));
+    };
+    // The service is registered and running; readiness waits on the ack.
+    let (pgid, status): (i32, String) = read_registry(&fixture.state_base)
+        .query_row(
+            "SELECT pgid, status FROM processes WHERE role = 'service'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "running",
+        "the service is between registration and readiness"
+    );
+    assert_eq!(
+        unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    owner.wait().unwrap();
+    assert!(
+        process_group_has_non_zombie_member(pgid),
+        "the orphaned service outlives its killed owner"
+    );
+    assert!(!bound.with_file_name("ready-flag").exists());
+
+    let down = fixture
+        .command("down", &[])
+        .output()
+        .expect("down should run");
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert!(
+        !process_group_has_non_zombie_member(pgid),
+        "the successor terminates the recorded service group"
+    );
+    let connection = read_registry(&fixture.state_base);
+    let (status, ownership): (String, String) = connection
+        .query_row(
+            "SELECT status, ownership FROM processes WHERE role = 'service'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(ownership, "settled", "status {status}");
+    assert!(
+        !matches!(status.as_str(), "starting" | "running" | "ready"),
+        "{status}"
+    );
+    let open: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(open, 0, "the successor releases the service endpoints");
+    let finalization: String = connection
+        .query_row("SELECT finalization FROM runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(finalization, "complete");
+}
+
+/// `anchor` exits zero once `synthetic` (which starts after it and so stops
+/// before it) receives its stop signal, which it ignores.
+fn teardown_failure_manifest(stopping: &Path, task_args: &[&str]) -> Manifest {
+    let port = available_port_window(2);
+    let started = temp_marker("nixfied-teardown-started");
+    let mut value = test_child_fixture_value(
+        &[
+            "term-block",
+            "127.0.0.1",
+            "${port}",
+            started.to_str().unwrap(),
+            stopping.to_str().unwrap(),
+        ],
+        port,
+    );
+    value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
+    value["services"]["synthetic"]["lifecycle"]["stop"]["timeoutMs"] = json!(3000);
+    value["services"]["synthetic"]["connectsTo"] = json!(["anchor"]);
+    add_service_clone(
+        &mut value,
+        "anchor",
+        &[
+            "listen",
+            "127.0.0.1",
+            "${port}",
+            "exit-zero-on-marker",
+            stopping.to_str().unwrap(),
+        ],
+        &[],
+    );
+    set_task_run_args(&mut value, task_args);
+    serde_json::from_value(value).expect("teardown manifest should parse")
+}
+
+fn service_statuses(state_base: &Path) -> Vec<(String, String, String)> {
+    read_registry(state_base)
+        .prepare(
+            "SELECT service_name, status, ownership FROM processes
+             WHERE role = 'service' ORDER BY service_name",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+#[test]
+fn service_exit_during_ordered_teardown_fails_the_run() {
+    let stopping = temp_marker("nixfied-teardown-stopping");
+    let fixture = RuntimeFixture::new(teardown_failure_manifest(&stopping, &["exit", "0"]));
+    let output = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .arg("--timeout-ms")
+        .arg("5000")
+        .output()
+        .expect("runtime should run");
+    let _ = fs::remove_file(&stopping);
+    assert!(
+        !output.status.success(),
+        "an unexpected exit during teardown fails the run"
+    );
+    let error = stderr_json(&output.stderr);
+    assert!(error.to_string().contains("exited before stop"), "{error}");
+    assert_eq!(
+        service_statuses(&fixture.state_base),
+        [
+            ("anchor".into(), "failed".into(), "settled".into()),
+            ("synthetic".into(), "stopped".into(), "settled".into()),
+        ]
+    );
+}
+
+#[test]
+fn service_exit_during_canceled_teardown_is_a_failure_not_a_cancellation() {
+    let stopping = temp_marker("nixfied-canceled-teardown-stopping");
+    let fixture = RuntimeFixture::new(teardown_failure_manifest(&stopping, &["block"]));
+    let child = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .arg("--timeout-ms")
+        .arg("3000")
+        .spawn()
+        .expect("runtime should spawn");
+    wait_for_task_process_row(&fixture.state_base, Duration::from_secs(10));
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    let output = wait_for_child_output(child, Duration::from_secs(15));
+    let _ = fs::remove_file(&stopping);
+    // The observed failure outranks the cancellation, which stays a cause.
+    let error = stderr_json(&output.stderr);
+    assert_eq!(error["code"], json!("PROC_ESCAPE"), "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("exited before stop")),
+        "{error}"
+    );
+    assert_eq!(error["causes"][0]["code"], json!("CANCELED"), "{error}");
+    assert_eq!(
+        service_statuses(&fixture.state_base),
+        [
+            ("anchor".into(), "failed".into(), "settled".into()),
+            ("synthetic".into(), "canceled".into(), "settled".into()),
+        ],
+        "the dependency exited on its own before its cancellation signal"
+    );
+}
