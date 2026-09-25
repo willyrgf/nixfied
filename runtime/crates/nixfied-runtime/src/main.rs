@@ -1472,9 +1472,18 @@ fn execute_node(
         }
         Err(TaskExecutionError::AfterTerminal { error, evidence }) => (*evidence, Some(*error)),
     };
+    // Checkpoint before settling success: a service exit observed after the
+    // task's own exit still fails the node and the session.
+    let service_failure = match &error {
+        None => started
+            .iter()
+            .try_for_each(ReadyService::check_liveness)
+            .err(),
+        Some(_) => None,
+    };
     let observed = if task_run.canceled {
         ExecutionOutcome::Canceled
-    } else if task_run.success {
+    } else if task_run.success && service_failure.is_none() {
         ExecutionOutcome::Succeeded
     } else {
         ExecutionOutcome::Failed
@@ -1508,15 +1517,19 @@ fn execute_node(
             ));
         }
     }
-    match error {
-        Some(error) => Err(NodeFailure {
+    match (error, service_failure) {
+        (Some(error), _) => Err(NodeFailure {
             error: Box::new(decorate(attach_task_evidence(
                 error,
                 &evidence.tasks[index.0],
             ))),
             observed: Some(observed),
         }),
-        None => Ok(()),
+        (None, Some(error)) => Err(NodeFailure {
+            error: Box::new(error),
+            observed: Some(observed),
+        }),
+        (None, None) => Ok(()),
     }
 }
 
