@@ -8,7 +8,8 @@ use crate::admission::RunAdmission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::ExecTask;
-use crate::output::{EvidenceMode, ReplayTicket};
+use crate::output::{EvidenceSource, SourcePresentation};
+use crate::redaction::CaptureOutcome;
 use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
@@ -18,7 +19,8 @@ use crate::service::process::{
 };
 use crate::service::registry::{
     InvocationProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready,
-    mark_task_finished, record_task_canceling, record_task_observed, record_task_started,
+    mark_task_finished, record_capture_outcome, record_task_canceling, record_task_observed,
+    record_task_started,
 };
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
@@ -41,32 +43,11 @@ pub struct TaskRun {
 }
 
 #[derive(Debug)]
-pub enum CompletedEvidence {
-    Captured(TaskRun),
-    Replayable { task: TaskRun, ticket: ReplayTicket },
-}
-
-impl CompletedEvidence {
-    pub fn task_run(&self) -> &TaskRun {
-        match self {
-            Self::Captured(task) | Self::Replayable { task, .. } => task,
-        }
-    }
-
-    pub fn into_task_and_replay(self) -> (TaskRun, Option<ReplayTicket>) {
-        match self {
-            Self::Captured(task) => (task, None),
-            Self::Replayable { task, ticket } => (task, Some(ticket)),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum TaskExecution {
-    Succeeded(CompletedEvidence),
+    Succeeded(TaskRun),
     Failed {
         error: RuntimeError,
-        evidence: CompletedEvidence,
+        evidence: TaskRun,
     },
 }
 
@@ -79,7 +60,7 @@ pub enum TaskExecutionError {
     },
     AfterTerminal {
         error: Box<RuntimeError>,
-        evidence: Box<CompletedEvidence>,
+        evidence: Box<TaskRun>,
     },
 }
 
@@ -88,7 +69,7 @@ impl TaskExecutionError {
         Self::BeforeTerminal(Box::new(error))
     }
 
-    fn after(error: RuntimeError, evidence: CompletedEvidence) -> Self {
+    fn after(error: RuntimeError, evidence: TaskRun) -> Self {
         Self::AfterTerminal {
             error: Box::new(error),
             evidence: Box::new(evidence),
@@ -150,7 +131,7 @@ pub fn run_dependent_task_cancellable(
     occurrence: u64,
     task: &ExecTask,
     cancellation: &CancellationToken,
-    evidence: EvidenceMode,
+    presentation: SourcePresentation,
 ) -> Result<TaskExecution, TaskExecutionError> {
     cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
@@ -196,12 +177,14 @@ pub fn run_dependent_task_cancellable(
         secrets: run_context.admission.secrets(),
     };
     let exec = &task.exec;
-    let stdout_path = placement
-        .logs_dir
-        .join(format!("task.{occurrence}.stdout.log"));
-    let stderr_path = placement
-        .logs_dir
-        .join(format!("task.{occurrence}.stderr.log"));
+    let evidence = EvidenceSource::in_logs(
+        &placement.logs_dir,
+        node_id,
+        presentation,
+        &format!("task.{occurrence}"),
+    );
+    let stdout_path = evidence.stdout.clone();
+    let stderr_path = evidence.stderr.clone();
     let args = substitution
         .args(&exec.args)
         .map_err(TaskExecutionError::before)?;
@@ -269,6 +252,7 @@ pub fn run_dependent_task_cancellable(
                 record_task_started(
                     registry,
                     &InvocationProcessRecord {
+                        source: &evidence,
                         run_id: run_context.run_id,
                         process_key: &process_key,
                         pid,
@@ -347,9 +331,14 @@ pub fn run_dependent_task_cancellable(
                     run_context.admission.common().computed_manifest_hash(),
                     status,
                     &payload,
+                    Some(failure.capture),
                 ) {
                     error = error.with_cause(settlement);
                 }
+            } else if let Err(recording) =
+                record_capture_outcome(registry, run_context.run_id, &process_key, failure.capture)
+            {
+                error = error.with_cause(recording);
             }
             if let Some(outcome) = failure.outcome {
                 let (_, terminal) = task_terminal(task, &outcome);
@@ -385,17 +374,11 @@ pub fn run_dependent_task_cancellable(
             .summary_path
             .with_file_name(format!("summary.{occurrence}.json")),
     };
-    let evidence = match evidence {
-        EvidenceMode::CaptureOnly => CompletedEvidence::Captured(run),
-        EvidenceMode::ReplaySelected => CompletedEvidence::Replayable {
-            ticket: ReplayTicket::open(&run.stdout_path, &run.stderr_path),
-            task: run,
-        },
-    };
-    if let Err(error) = write_summary(evidence.task_run(), run_context.redactor) {
+    let evidence = run;
+    if let Err(error) = write_summary(&evidence, run_context.redactor) {
         return Err(TaskExecutionError::after(error, evidence));
     }
-    let mut payload_value = match serde_json::to_value(evidence.task_run()) {
+    let mut payload_value = match serde_json::to_value(&evidence) {
         Ok(value) => value,
         Err(error) => {
             return Err(TaskExecutionError::after(
@@ -421,6 +404,7 @@ pub fn run_dependent_task_cancellable(
         run_context.admission.common().computed_manifest_hash(),
         terminal_status,
         &payload_json,
+        Some(CaptureOutcome::Complete),
     ) {
         return Err(TaskExecutionError::after(error, evidence));
     }

@@ -136,8 +136,10 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                             &[
                                 "--task",
                                 if composite { "pipeline" } else { "smoke" },
+                                // Capture settlement is the subject; presentation
+                                // of the retained safe prefix has its own proofs.
                                 "--output",
-                                if composite { "json" } else { "task-output" },
+                                "json",
                             ],
                         )
                         .env("NIXFIED_CAPTURE_SECRET", "abcdef")
@@ -164,9 +166,11 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                         "capture must not wait for escaped writers"
                     );
                     assert!(!output.status.success());
+                    // Live presentation may show safe redacted bytes before
+                    // capture completes; it never shows a possible secret.
                     assert!(
-                        output.stdout.is_empty(),
-                        "incomplete capture must not replay safe prefix files"
+                        !output.stdout.windows(6).any(|window| window == b"abcdef"),
+                        "presentation never shows an undecided secret"
                     );
                     assert_eq!(
                         unsafe { libc::kill(survivor.0, 0) },
@@ -190,8 +194,10 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                         let before = fs::read(&path).unwrap();
                         assert!(!before.is_empty());
                         if secret && activity == "idle" {
-                            assert_eq!(before, b"safe-dat");
+                            // Only the suffix that may still become the secret is discarded.
+                            assert_eq!(before, b"safe-data-");
                         }
+
                         // The survivor remains alive with writers. Returned evidence is closed.
                         std::thread::sleep(Duration::from_millis(30));
                         assert_eq!(fs::read(path).unwrap(), before);
@@ -207,6 +213,19 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
                 "SELECT execution_outcome, exit_code FROM processes WHERE service_instance_id IS NULL",
                 [], |row| Ok((row.get(0)?, row.get(1)?)),
             ).unwrap();
+                    let (capture, sealed): (String, String) = connection
+                        .query_row(
+                            "SELECT p.capture, r.output FROM processes p JOIN runs r USING (run_id)
+                             WHERE p.service_instance_id IS NULL",
+                            [],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        capture, "incomplete",
+                        "delivery never upgrades incomplete capture"
+                    );
+                    assert_eq!(sealed, "sealed");
                     assert_eq!(
                         observed,
                         (if accepted { "succeeded" } else { "failed" }.into(), 7)
@@ -837,9 +856,8 @@ fn service_failure_interrupts_another_services_exec_probe() {
 }
 
 #[test]
-fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
-    use std::io::Read;
-    let count = 1024 * 1024;
+fn stalled_stdout_reader_blocks_neither_settlement_nor_slot_release() {
+    let count = 4 * 1024 * 1024;
     let manifest = task_manifest(&[
         "output".into(),
         "repeat".into(),
@@ -853,49 +871,154 @@ fn cancellation_during_replay_is_recorded_once_and_finishes_cleanup() {
         .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .unwrap();
-    // A byte on the runtime's stdout proves task capture finished and replay
-    // started. Keep the large pipe blocked until the signal has been sent.
-    let mut stdout = child.stdout.take().unwrap();
-    let mut first = [0];
-    stdout.read_exact(&mut first).unwrap();
-    assert_eq!(first, [b'x']);
+    // Hold the caller's stdout open without ever reading it.
+    let stalled = child.stdout.take().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let registry = fixture
+        .state_base
+        .join("registry/runtime-test/dev/0/registry.sqlite3");
+    loop {
+        let settled = rusqlite::Connection::open_with_flags(
+            &registry,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT finalization = 'complete' AND output = 'sealed' FROM runs",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .ok()
+        })
+        .unwrap_or(false);
+        if settled {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a stalled reader must not delay session settlement"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the command keeps presenting after settlement"
+    );
+    // Slot release follows the seal without waiting for the reader: another
+    // owner acquires it while this command is still presenting.
+    let clean = loop {
+        let clean = run_control(&fixture, "clean");
+        if clean.status.success() || std::time::Instant::now() >= deadline {
+            break clean;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        clean.status.success(),
+        "{}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    assert!(child.try_wait().unwrap().is_none());
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let reader = std::thread::spawn(move || {
-        let mut bytes = vec![first[0]];
-        stdout.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
     let output = wait_for_child_output(child, Duration::from_secs(10));
-    assert_eq!(reader.join().unwrap(), vec![b'x'; count]);
-    assert_eq!(output.status.code(), Some(27));
+    drop(stalled);
+    assert_eq!(output.status.code(), Some(38));
     let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(diagnostic.matches("CANCELED").count(), 1, "{diagnostic}");
-    let registry = rusqlite::Connection::open(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-    )
-    .unwrap();
-    let unfinished: i64 = registry
-        .query_row(
-            "SELECT (SELECT count(*) FROM processes WHERE status IN ('starting','running','ready'))
-              + (SELECT count(*) FROM ports WHERE status IN ('reserved','active'))",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        unfinished, 0,
-        "cancellation must continue process and endpoint cleanup"
+    assert!(
+        diagnostic.contains("OUTPUT_PROJECTION_FAILED"),
+        "{diagnostic}"
     );
     assert_eq!(
         stored_execution_outcome(&fixture),
         "succeeded",
-        "late cancellation must not rewrite completed execution"
+        "interrupted delivery never rewrites the settled session"
     );
+}
+
+#[test]
+fn live_task_output_arrives_before_the_task_finishes_and_down_ends_it() {
+    use std::io::Read;
+    let marker = tempfile_marker("live-output");
+    let mut manifest = leaf_task_manifest(&[
+        "output".into(),
+        "hex-block".into(),
+        hex(b"live stdout\n"),
+        hex(b"live stderr\n"),
+        marker.to_string_lossy().into_owned(),
+    ]);
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut live = vec![0_u8; b"live stdout\n".len()];
+    stdout.read_exact(&mut live).unwrap();
+    assert_eq!(
+        live, b"live stdout\n",
+        "output is presented while the task runs"
+    );
+    assert!(child.try_wait().unwrap().is_none());
+    let down = run_control(&fixture, "down");
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let output = wait_for_child_output(child, Duration::from_secs(10));
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    assert!(
+        rest.is_empty(),
+        "the exact task bytes are shown once: {rest:?}"
+    );
+    assert_eq!(output.status.code(), Some(27));
+    assert_stream_contains(&output.stderr, b"live stderr\n", "stderr");
+    assert_eq!(stored_execution_outcome(&fixture), "canceled");
+}
+
+#[test]
+fn summary_mode_labels_live_sources_on_stderr_and_keeps_stdout_empty() {
+    let manifest = leaf_task_manifest(&[
+        "output".into(),
+        "hex".into(),
+        hex(b"first\nsecond"),
+        hex(b"problem\n"),
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let output = run(&fixture, &["--task", "smoke", "--output", "summary"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    for line in [
+        &b"[smoke] first\n"[..],
+        b"[smoke] second\n",
+        b"[smoke:err] problem\n",
+        b"  ok smoke (smoke)",
+        b"  result: ok 1 passed",
+    ] {
+        assert_stream_contains(&output.stderr, line, "stderr");
+    }
+}
+
+fn run_control(fixture: &RuntimeFixture, command: &str) -> Output {
+    fixture
+        .command(command, &[])
+        .stdout(std::process::Stdio::piped())
+        .output()
+        .unwrap()
 }
 
 #[test]

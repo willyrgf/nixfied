@@ -125,7 +125,7 @@ in
       }
       absent
       (
-        visible "Select ${presentation.choices modes} (default: task default or ${mode "Summary"})\n${mode "TaskOutput"} requires one directly selected leaf and replays redacted output" "<mode>"
+        visible "Select ${presentation.choices modes} (default: task default or ${mode "Summary"})\n${mode "TaskOutput"} requires one directly selected leaf and presents its redacted output live" "<mode>"
       )
     )
   ] 26 "output-schema/run-json")

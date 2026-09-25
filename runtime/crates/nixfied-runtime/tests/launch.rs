@@ -523,7 +523,7 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
             .leaf("smoke")
             .unwrap(),
         &nixfied_runtime::cancellation::CancellationToken::new(),
-        nixfied_runtime::output::EvidenceMode::CaptureOnly,
+        nixfied_runtime::output::SourcePresentation::Shown,
     )
     .expect_err("registration must fail");
     assert_eq!(

@@ -7,6 +7,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::admission::RunAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::output::EvidenceSource;
+use crate::redaction::CaptureOutcome;
 use crate::registry::events::{EventInsert, append_event, insert_event};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity};
@@ -17,6 +19,7 @@ use super::{StoredProcessIdentity, TrackedProcessIdentity};
 pub(crate) struct ServiceRecord<'a> {
     pub(crate) service_instance_id: &'a str,
     pub(crate) service_name: &'a str,
+    pub(crate) source: &'a EvidenceSource,
 }
 
 /// Endpoint evidence recorded atomically with its owning service process.
@@ -61,6 +64,7 @@ pub(crate) struct ServiceSnapshot {
 }
 
 pub(crate) struct InvocationProcessRecord<'a> {
+    pub(crate) source: &'a EvidenceSource,
     pub(crate) run_id: &'a str,
     pub(crate) process_key: &'a str,
     pub(crate) pid: u32,
@@ -134,6 +138,13 @@ pub fn record_run_created(
     placement: &HostPlacement,
 ) -> RuntimeResult<()> {
     let source_json = serde_json::to_string(&admission.source()).map_err(json_error)?;
+    // The owner's own process identity is recovery evidence for its session.
+    let owner = std::process::id();
+    let owner_identity = serde_json::json!({
+        "pid": owner,
+        "platformStart": crate::service::platform_start_identity(owner),
+    })
+    .to_string();
     let RegistryContext {
         connection,
         identity,
@@ -146,8 +157,8 @@ pub fn record_run_created(
             INSERT INTO runs (
               run_id, environment, slot, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              summary_path, owner_identity, diagnostic_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ",
             params![
                 run_id,
@@ -161,6 +172,8 @@ pub fn record_run_created(
                 admission.common().target_json(),
                 source_json,
                 placement.summary_path.display().to_string(),
+                owner_identity,
+                crate::output::DIAGNOSTIC_SOURCE,
             ],
         )
         .map_err(sql_error)?;
@@ -242,8 +255,9 @@ pub(crate) fn record_service_start(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, service_name, role
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service')
+              command_json, run_id, service_instance_id, status, service_name, role,
+              source_label, presentation, stdout_path, stderr_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service', ?12, ?13, ?14, ?15)
             ",
             params![
                 process.process_key,
@@ -257,6 +271,10 @@ pub(crate) fn record_service_start(
                 service.service_instance_id,
                 ProcessStatus::Running.as_str(),
                 service.service_name,
+                service.source.label,
+                service.source.presentation.as_str(),
+                service.source.stdout_relative,
+                service.source.stderr_relative,
             ],
         )
         .map_err(sql_error)?;
@@ -479,14 +497,21 @@ pub(crate) fn mark_service_stopped(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Stopped,
+        ServiceTerminal::Stopped(CaptureOutcome::Complete),
     )
 }
 
 enum ServiceTerminal<'a> {
-    Stopped,
-    Canceled(&'a str, Ownership),
-    Failed(&'a str, Ownership),
+    Stopped(CaptureOutcome),
+    Canceled(&'a str, Ownership, CaptureOutcome),
+    Failed(&'a str, Ownership, CaptureOutcome),
+}
+
+/// What the owner proved when a service reached a terminal status.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ServiceSettlement {
+    pub(crate) ownership: Ownership,
+    pub(crate) capture: CaptureOutcome,
 }
 
 /// Whether the owner proved that a process and its captured writers are gone.
@@ -522,27 +547,38 @@ fn settle_service_terminal(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let (process_status, event_type, payload_json, ownership) = match terminal {
-        ServiceTerminal::Stopped => (
+    let (process_status, event_type, payload_json, ownership, capture) = match terminal {
+        ServiceTerminal::Stopped(capture) => (
             ProcessStatus::Stopped,
             "service.stopped",
             "{}",
             Ownership::Settled,
+            capture,
         ),
-        ServiceTerminal::Canceled(payload, ownership) => (
+        ServiceTerminal::Canceled(payload, ownership, capture) => (
             ProcessStatus::Canceled,
             "service.canceled",
             payload,
             ownership,
+            capture,
         ),
-        ServiceTerminal::Failed(payload, ownership) => {
-            (ProcessStatus::Failed, "service.failed", payload, ownership)
-        }
+        ServiceTerminal::Failed(payload, ownership, capture) => (
+            ProcessStatus::Failed,
+            "service.failed",
+            payload,
+            ownership,
+            capture,
+        ),
     };
     transaction
         .execute(
-            "UPDATE processes SET status = ?2, ownership = ?3 WHERE process_key = ?1",
-            params![process_key, process_status.as_str(), ownership.as_str()],
+            "UPDATE processes SET status = ?2, ownership = ?3, capture = ?4 WHERE process_key = ?1",
+            params![
+                process_key,
+                process_status.as_str(),
+                ownership.as_str(),
+                capture.as_str()
+            ],
         )
         .map_err(sql_error)?;
     if ownership == Ownership::Settled {
@@ -623,7 +659,7 @@ pub(crate) fn mark_service_canceled(
     process_key: &str,
     computed_manifest_hash: &str,
     payload_json: &str,
-    ownership: Ownership,
+    settlement: ServiceSettlement,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
@@ -631,7 +667,7 @@ pub(crate) fn mark_service_canceled(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Canceled(payload_json, ownership),
+        ServiceTerminal::Canceled(payload_json, settlement.ownership, settlement.capture),
     )
 }
 
@@ -690,7 +726,7 @@ pub(crate) fn mark_service_failed(
     process_key: &str,
     computed_manifest_hash: &str,
     payload_json: &str,
-    ownership: Ownership,
+    settlement: ServiceSettlement,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
@@ -698,8 +734,32 @@ pub(crate) fn mark_service_failed(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Failed(payload_json, ownership),
+        ServiceTerminal::Failed(payload_json, settlement.ownership, settlement.capture),
     )
+}
+
+/// Record a process's checked capture outcome learned outside a terminal
+/// settlement. Unknown or incomplete capture never becomes complete later.
+pub(crate) fn record_capture_outcome(
+    registry: &mut Registry,
+    run_id: &str,
+    process_key: &str,
+    capture: CaptureOutcome,
+) -> RuntimeResult<()> {
+    let RegistryContext { connection, .. } = registry.context()?;
+    let changed = connection
+        .execute(
+            "UPDATE processes SET capture = ?3 WHERE process_key = ?1 AND run_id = ?2 AND capture = 'pending'",
+            params![process_key, run_id, capture.as_str()],
+        )
+        .map_err(sql_error)?;
+    if changed != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "capture outcome must settle exactly one pending process source",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn mark_process_escape(
@@ -923,8 +983,9 @@ pub(crate) fn record_invocation_started(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, role, service_name
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)
+              command_json, run_id, service_instance_id, status, role, service_name,
+              source_label, presentation, stdout_path, stderr_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ",
             params![
                 process.process_key,
@@ -938,6 +999,10 @@ pub(crate) fn record_invocation_started(
                 ProcessStatus::Running.as_str(),
                 owner.role().as_str(),
                 owner.service_name(),
+                process.source.label,
+                process.source.presentation.as_str(),
+                process.source.stdout_relative,
+                process.source.stderr_relative,
             ],
         )
         .map_err(sql_error)?;
@@ -1053,6 +1118,7 @@ pub(crate) fn mark_task_finished(
     computed_manifest_hash: &str,
     terminal_status: TaskTerminalStatus,
     payload_json: &str,
+    capture: Option<CaptureOutcome>,
 ) -> RuntimeResult<()> {
     mark_invocation_finished(
         registry,
@@ -1064,6 +1130,7 @@ pub(crate) fn mark_task_finished(
         },
         terminal_status,
         payload_json,
+        capture,
     )
 }
 
@@ -1082,11 +1149,14 @@ pub(crate) fn record_probe_canceling(
     )
 }
 
+/// `capture` is the owner's checked outcome; recovery settlement passes `None`
+/// and never invents a capture result for a predecessor's source.
 pub(crate) fn mark_invocation_finished(
     registry: &mut Registry,
     invocation: InvocationIdentity<'_>,
     terminal_status: TaskTerminalStatus,
     payload_json: &str,
+    capture: Option<CaptureOutcome>,
 ) -> RuntimeResult<()> {
     let InvocationIdentity {
         run_id,
@@ -1116,8 +1186,8 @@ pub(crate) fn mark_invocation_finished(
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     let changed = transaction.execute(
-        "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
-        params![process_key, process_status.as_str(), run_id, owner.role().as_str(), identity.environment, identity.slot],
+        "UPDATE processes SET status = ?2, ownership = 'settled', capture = coalesce(?7, capture) WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
+        params![process_key, process_status.as_str(), run_id, owner.role().as_str(), identity.environment, identity.slot, capture.map(CaptureOutcome::as_str)],
     ).map_err(sql_error)?;
     if changed != 1 {
         return Err(RuntimeError::new(
@@ -1421,7 +1491,7 @@ fn json_error(error: serde_json::Error) -> RuntimeError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::thread;
@@ -1470,10 +1540,20 @@ mod tests {
         }
     }
 
+    fn fixture_source(stem: &str) -> &'static EvidenceSource {
+        Box::leak(Box::new(EvidenceSource::in_logs(
+            Path::new("/run/logs"),
+            stem,
+            crate::output::SourcePresentation::Shown,
+            stem,
+        )))
+    }
+
     fn service_record() -> ServiceRecord<'static> {
         ServiceRecord {
             service_instance_id: SERVICE_ID,
             service_name: "service",
+            source: fixture_source("service"),
         }
     }
 
@@ -1504,8 +1584,8 @@ mod tests {
                 INSERT INTO runs (
                   run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
                   runtime_abi, toolchain_id, generator_json, target_json, source_json,
-                  summary_path
-                ) VALUES (?1, ?2, ?3, NULL, '/manifest', ?4, ?5, ?6, '{}', '{}', '{}', NULL)
+                  summary_path, owner_identity, diagnostic_path
+                ) VALUES (?1, ?2, ?3, NULL, '/manifest', ?4, ?5, ?6, '{}', '{}', '{}', NULL, '{}', 'diagnostics.log')
                 ",
                 params![
                     run_id,
@@ -1548,6 +1628,7 @@ mod tests {
         record_task_started(
             registry,
             &InvocationProcessRecord {
+                source: fixture_source("task"),
                 run_id: RUN_ID,
                 process_key: PROCESS_KEY,
                 pid: 123,
@@ -1851,9 +1932,11 @@ mod tests {
             .execute_batch(
                 "INSERT INTO processes (
                 process_key, environment, slot, pid, pgid, start_identity,
-                command_json, run_id, service_instance_id, status, service_name, role
+                command_json, run_id, service_instance_id, status, service_name, role,
+                source_label, presentation, stdout_path, stderr_path
              ) SELECT 'z-second', environment, slot, pid, pgid, 'invalid-json',
-                      command_json, run_id, service_instance_id, status, service_name, role FROM processes;",
+                      command_json, run_id, service_instance_id, status, service_name, role,
+                      source_label, presentation, stdout_path || '.2', stderr_path || '.2' FROM processes;",
             )
             .unwrap();
         let error = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap_err();

@@ -707,6 +707,7 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
             },
             TaskTerminalStatus::Canceled,
             &payload_json,
+            None,
         );
     }
     mark_task_finished(
@@ -716,6 +717,7 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
         &row.computed_manifest_hash,
         TaskTerminalStatus::Canceled,
         &payload_json,
+        None,
     )
 }
 

@@ -347,7 +347,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Rust formatting/lint only | rustfmt + Clippy commands above |
 | `nixfied-manifest` shape/validation | manifest crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
-| Task-output replay/projection | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
+| Live presentation and output sealing | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/build change | CLI/runtime/install builds |
 | Static docs, selectors or reference relationships | focused metadata/reference checks + `.#gate -- --dirty` for downstream/source isolation |

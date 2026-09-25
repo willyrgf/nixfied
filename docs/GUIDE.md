@@ -338,13 +338,21 @@ paths. For automation that consumes the runtime's structured result, use
 `--output json`; use `--output both` when you also want the human projection.
 When a caller needs the selected leaf program's own output, use `task-output`.
 
-The default run projection is `summary`: it writes human progress, the result
-summary, and evidence paths to stderr while leaving stdout empty. A task may
+The default run projection is `summary`: it shows human progress and the live
+output of executed tasks, preparation, and services on stderr, one
+`[label] line` (or `[label:err] line`) at a time, followed by the result summary
+and evidence paths; stdout stays empty. A long-running task such as an HTTP
+server shows its output while its database services keep running. A task may
 declare `defaultOutput = "task-output"` to make its direct application
 interface the default. Explicit `--output <mode>` always wins. `--output json`
-writes structured output to stdout; `--output both` requests both projections
-explicitly. Child stdout/stderr is captured in redacted run log files and is not
-replayed inline.
+writes structured output to stdout with no live logs; `--output both` adds the
+structured result on stdout to the live human output. All child output is also
+kept in redacted run log files.
+
+Live output is shown by a small helper process that reads those redacted files.
+The session never waits for your terminal: if you stop reading, services are
+still observed, torn down, and the slot is released; the command then keeps
+presenting the remaining output. Ctrl-C ends both the session and its display.
 
 For an application-shaped leaf, request the already redacted captured bytes
 explicitly:
@@ -355,8 +363,8 @@ nix run .#run -- --task simulate --output task-output < request.json
 
 `task-output` requires one directly selected leaf and writes its exact captured
 stdout to stdout and its exact captured stderr among runtime diagnostics on
-stderr. It preserves binary bytes and missing final newlines, and replays on
-success, task failure, timeout, and cancellation. Check the command status
+stderr, live while the task runs. It preserves binary bytes and missing final
+newlines on success, task failure, timeout, and cancellation. Check the command status
 before treating stdout as a valid result; a child exit accepted by
 `exitPolicy.successCodes` still returns success. Requesting `task-output` for a
 composite is rejected before runtime state or child side effects. Use `summary`,
@@ -366,8 +374,8 @@ captured bytes.
 If a descendant keeps an output pipe open after child cleanup, capture stops
 after a shared one-second shutdown deadline and reports `SECRET_LEAK_BLOCKED`.
 The diagnostic names the incomplete stream. Safe prefix log files remain for
-inspection, but the runtime publishes no completed task evidence or replay for
-that task. This diagnostic does not mean a secret was observed leaking, or that
+inspection (and may already have been shown), but the runtime records the
+capture as incomplete and publishes no completed task evidence for that task. This diagnostic does not mean a secret was observed leaking, or that
 every escaped descendant was terminated; inspect the program's child-process
 behavior along with the retained logs.
 There are no mode-specific flag aliases. There is no framework `logs`

@@ -111,11 +111,24 @@ impl Redactor {
         self.scan(input, input.len()).0
     }
 
+    /// Emit every byte whose interpretation can no longer change. Only the
+    /// suffix that is still a proper prefix of some secret stays pending, so
+    /// whole-buffer longest-first replacement holds across chunk boundaries.
     fn redact_available(&self, pending: &mut Vec<u8>) -> Vec<u8> {
-        let keep = self.max_pattern_len().saturating_sub(1);
-        let (out, consumed) = self.scan(pending, pending.len().saturating_sub(keep));
+        let (out, consumed) = self.scan(pending, self.undecided_start(pending));
         pending.drain(..consumed);
         out
+    }
+
+    fn undecided_start(&self, input: &[u8]) -> usize {
+        (0..input.len())
+            .find(|&start| {
+                let rest = &input[start..];
+                self.patterns
+                    .iter()
+                    .any(|pattern| pattern.len() > rest.len() && pattern.starts_with(rest))
+            })
+            .unwrap_or(input.len())
     }
 
     // The limit bounds match starts, not match ends. A longest-first match may
@@ -141,13 +154,6 @@ impl Redactor {
         }
         (out, consumed)
     }
-
-    fn max_pattern_len(&self) -> usize {
-        self.patterns
-            .first()
-            .map(|pattern| pattern.len())
-            .unwrap_or(0)
-    }
 }
 
 pub(crate) const CAPTURE_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -169,16 +175,39 @@ impl RedactedLogRelays {
         }
     }
 
-    pub fn shutdown(self, deadline: Instant) -> RuntimeResult<()> {
+    /// Settle both writers under one deadline and report the checked outcome:
+    /// complete only when both streams reached EOF and every safe byte was
+    /// written; incomplete when writers closed with a safe prefix; otherwise
+    /// unknown.
+    pub fn shutdown(self, deadline: Instant) -> (CaptureOutcome, RuntimeResult<()>) {
         // Publish to both before joining either: progress never extends the budget.
         self.stdout.shutdown_at(deadline);
         self.stderr.shutdown_at(deadline);
-        let stdout = self.stdout.join();
-        let stderr = self.stderr.join();
-        match (stdout, stderr) {
+        let (stdout_outcome, stdout) = self.stdout.join_outcome();
+        let (stderr_outcome, stderr) = self.stderr.join_outcome();
+        let result = match (stdout, stderr) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
             (Err(stdout), Err(stderr)) => Err(stdout.with_cause(stderr)),
+        };
+        (stdout_outcome.max(stderr_outcome), result)
+    }
+}
+
+/// The checked capture outcome of one process's retained stdout/stderr files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CaptureOutcome {
+    Complete,
+    Incomplete,
+    Unknown,
+}
+
+impl CaptureOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Incomplete => "incomplete",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -226,7 +255,7 @@ enum CaptureCompletion {
 
 enum WorkerState {
     Running(JoinHandle<RuntimeResult<CaptureCompletion>>),
-    Finished(RuntimeResult<()>),
+    Finished(CaptureOutcome, RuntimeResult<()>),
 }
 
 struct CaptureWorker {
@@ -242,14 +271,19 @@ impl CaptureWorker {
     fn checked_join(
         &self,
         handle: JoinHandle<RuntimeResult<CaptureCompletion>>,
-    ) -> RuntimeResult<()> {
+    ) -> (CaptureOutcome, RuntimeResult<()>) {
         match handle.join() {
-            Ok(Ok(CaptureCompletion::Eof)) => Ok(()),
-            Ok(Ok(CaptureCompletion::Incomplete)) => Err(self.stream.incomplete()),
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(leak_blocked(
-                "redaction relay panicked before proving captured output was scrubbed",
-            )),
+            Ok(Ok(CaptureCompletion::Eof)) => (CaptureOutcome::Complete, Ok(())),
+            Ok(Ok(CaptureCompletion::Incomplete)) => {
+                (CaptureOutcome::Incomplete, Err(self.stream.incomplete()))
+            }
+            Ok(Err(error)) => (CaptureOutcome::Unknown, Err(error)),
+            Err(_) => (
+                CaptureOutcome::Unknown,
+                Err(leak_blocked(
+                    "redaction relay panicked before proving captured output was scrubbed",
+                )),
+            ),
         }
     }
     fn check(&self) -> RuntimeResult<()> {
@@ -258,14 +292,18 @@ impl CaptureWorker {
             let Some(WorkerState::Running(handle)) = state.take() else {
                 unreachable!()
             };
-            *state = Some(WorkerState::Finished(self.checked_join(handle)));
+            let (outcome, result) = self.checked_join(handle);
+            *state = Some(WorkerState::Finished(outcome, result));
         }
         match state.as_ref().expect("capture state is owned") {
             WorkerState::Running(_) => Ok(()),
-            WorkerState::Finished(result) => result.clone(),
+            WorkerState::Finished(_, result) => result.clone(),
         }
     }
     fn join(self) -> RuntimeResult<()> {
+        self.join_outcome().1
+    }
+    fn join_outcome(self) -> (CaptureOutcome, RuntimeResult<()>) {
         let state = self
             .state
             .borrow_mut()
@@ -273,7 +311,7 @@ impl CaptureWorker {
             .expect("capture state is consumed once");
         match state {
             WorkerState::Running(handle) => self.checked_join(handle),
-            WorkerState::Finished(result) => result,
+            WorkerState::Finished(outcome, result) => (outcome, result),
         }
     }
 }
@@ -296,18 +334,6 @@ pub struct RedactedChildOutput {
 pub(crate) enum LogFileMode {
     New,
     Replace,
-}
-
-/// Long-lived services without secrets preserve direct-file output across
-/// runtime interruption. Bounded task/probe evidence never uses this path.
-pub(crate) fn direct_service_output(
-    stdout_path: &Path,
-    stderr_path: &Path,
-) -> RuntimeResult<(Stdio, Stdio)> {
-    Ok((
-        Stdio::from(create_log_file(stdout_path, false, LogFileMode::Replace)?),
-        Stdio::from(create_log_file(stderr_path, false, LogFileMode::Replace)?),
-    ))
 }
 
 pub(crate) fn child_output(
@@ -592,6 +618,7 @@ mod tests {
         drop(err);
         RedactedLogRelays { stdout, stderr }
             .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT)
+            .1
             .unwrap();
         assert_eq!(std::fs::read(out_path).unwrap(), b"[REDACTED]-tail");
         assert_eq!(std::fs::read(err_path).unwrap(), b"\x00\xffbinary");
@@ -698,8 +725,38 @@ mod tests {
         drop(err);
         let settled = relays
             .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT)
+            .1
             .unwrap_err();
         assert_eq!(settled.message, error.message);
+    }
+
+    #[test]
+    fn incremental_redaction_holds_back_only_a_possible_secret_prefix() {
+        let redactor = Redactor {
+            patterns: vec![b"secret-longer".to_vec(), b"secret".to_vec()],
+        };
+        for (input, emitted, pending) in [
+            (&b"plain text"[..], &b"plain text"[..], &b""[..]),
+            (b"value: sec", b"value: ", b"sec"),
+            // "secret" matches now but "secret-longer" may still arrive.
+            (b"x secret-lo", b"x ", b"secret-lo"),
+            (b"x secret!", b"x [REDACTED]!", b""),
+            (b"x secret-longer tail", b"x [REDACTED] tail", b""),
+        ] {
+            let mut buffer = input.to_vec();
+            assert_eq!(redactor.redact_available(&mut buffer), emitted, "{input:?}");
+            assert_eq!(buffer, pending, "{input:?}");
+        }
+        // Chunk-split input redacts exactly like the whole buffer.
+        let whole = b"a secret-longer b secret c secre";
+        for split in 0..whole.len() {
+            let mut pending = whole[..split].to_vec();
+            let mut output = redactor.redact_available(&mut pending);
+            pending.extend_from_slice(&whole[split..]);
+            output.extend(redactor.redact_available(&mut pending));
+            output.extend(redactor.redact_bytes(&pending));
+            assert_eq!(output, redactor.redact_bytes(whole), "split {split}");
+        }
     }
 
     #[test]
@@ -722,10 +779,10 @@ mod tests {
             )
             .unwrap();
         });
-        let error = result
-            .recv_timeout(Duration::from_secs(3))
-            .unwrap()
-            .unwrap_err();
+        let (outcome, result) = result.recv_timeout(Duration::from_secs(3)).unwrap();
+        // Writers closed with a safe prefix: incomplete, never complete.
+        assert_eq!(outcome, CaptureOutcome::Incomplete);
+        let error = result.unwrap_err();
         assert!(started.elapsed() < Duration::from_millis(1000));
         assert_eq!(
             error.message,
@@ -736,12 +793,12 @@ mod tests {
             error.causes[0].message,
             "captured stderr did not reach EOF before shutdown deadline"
         );
-        assert_eq!(std::fs::read(&out_path).unwrap(), b"safe-dat");
-        assert_eq!(std::fs::read(&err_path).unwrap(), b"safe-dat");
+        assert_eq!(std::fs::read(&out_path).unwrap(), b"safe-data-");
+        assert_eq!(std::fs::read(&err_path).unwrap(), b"safe-data-");
         assert!(out.write_all(b"def").is_err());
         assert!(err.write_all(b"def").is_err());
-        assert_eq!(std::fs::read(out_path).unwrap(), b"safe-dat");
-        assert_eq!(std::fs::read(err_path).unwrap(), b"safe-dat");
+        assert_eq!(std::fs::read(out_path).unwrap(), b"safe-data-");
+        assert_eq!(std::fs::read(err_path).unwrap(), b"safe-data-");
     }
 
     #[test]
@@ -757,7 +814,8 @@ mod tests {
         thread::spawn(move || {
             done.send(
                 RedactedLogRelays { stdout, stderr }
-                    .shutdown(Instant::now() + Duration::from_millis(100)),
+                    .shutdown(Instant::now() + Duration::from_millis(100))
+                    .1,
             )
             .unwrap();
         });

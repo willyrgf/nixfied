@@ -33,6 +33,13 @@ impl CancellationToken {
     }
 }
 
+/// Whether this process received SIGINT, SIGTERM, or SIGHUP. Unlike a
+/// session token, a FIFO request never sets it, so command-scoped presentation
+/// keeps draining after a remote `down`.
+pub fn signal_received() -> bool {
+    PROCESS_SIGNAL_CANCELED.load(Ordering::SeqCst)
+}
+
 pub fn canceled_error() -> RuntimeError {
     RuntimeError::new(ErrorCode::Canceled, "run was canceled")
 }

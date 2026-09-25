@@ -14,7 +14,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
@@ -55,7 +55,12 @@ const SCHEMA_SQL: &str = "
               target_json TEXT NOT NULL,
               source_json TEXT NOT NULL,
               summary_path TEXT,
-              CHECK (finalization != 'complete' OR execution_outcome IS NOT NULL)
+              owner_identity TEXT NOT NULL,
+              diagnostic_path TEXT NOT NULL,
+              sources TEXT NOT NULL DEFAULT 'open' CHECK (sources IN ('open', 'closed')),
+              output TEXT NOT NULL DEFAULT 'unsealed' CHECK (output IN ('unsealed', 'sealed')),
+              CHECK (finalization != 'complete' OR execution_outcome IS NOT NULL),
+              CHECK (output = 'unsealed' OR sources = 'closed')
             );
 
             CREATE TABLE processes (
@@ -74,6 +79,13 @@ const SCHEMA_SQL: &str = "
               exit_code INTEGER,
               status TEXT NOT NULL,
               ownership TEXT NOT NULL DEFAULT 'unresolved' CHECK (ownership IN ('unresolved', 'settled')),
+              source_label TEXT NOT NULL CHECK (length(source_label) > 0),
+              presentation TEXT NOT NULL CHECK (presentation IN ('selected', 'shown', 'hidden')),
+              stdout_path TEXT NOT NULL,
+              stderr_path TEXT NOT NULL,
+              capture TEXT NOT NULL DEFAULT 'pending' CHECK (capture IN ('pending', 'complete', 'incomplete', 'unknown')),
+              UNIQUE (run_id, stdout_path),
+              UNIQUE (run_id, stderr_path),
               CHECK (ownership = 'unresolved' OR status NOT IN ('starting', 'running', 'ready')),
               CHECK ((role = 'service') = (service_instance_id IS NOT NULL)),
               CHECK ((role = 'task') = (service_name IS NULL)),
