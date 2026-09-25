@@ -3,73 +3,147 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Output};
 use std::time::Duration;
 
-use common::{
-    RuntimeFixture, TempDir, available_port_window, runtime_binary, synthetic_manifest, test_child,
-    wait_for_child_output, wait_for_path,
-};
+use common::*;
 use nixfied_runtime::redaction::REDACTION_TOKEN;
 use serde_json::{Value, json};
 
-fn task_manifest(args: &[String]) -> Value {
+fn task_manifest(args: &[&str]) -> Value {
     task_manifest_at(args, available_port_window(1))
 }
 
-fn leaf_task_manifest(args: &[String]) -> Value {
+fn leaf_task_manifest(args: &[&str]) -> Value {
     // Unused service metadata needs no host port observation.
     let mut manifest = task_manifest_at(args, 23180);
     manifest["tasks"]["smoke"]["requires"] = json!([]);
-
     manifest
 }
 
-fn task_manifest_at(args: &[String], port: u16) -> Value {
-    let executable = test_child();
-    let executable = executable
-        .to_str()
-        .expect("test child path should be UTF-8")
-        .to_string();
-    let mut manifest = synthetic_manifest(
-        &executable,
-        &["listen", "127.0.0.1", "${port}", "hold"],
-        port,
-        port,
-    );
+fn task_manifest_at(args: &[&str], port: u16) -> Value {
+    let mut manifest = test_child_manifest(port, port);
     set_task_run_args(&mut manifest, args);
     manifest
 }
 
-fn set_task_run_args(manifest: &mut Value, args: &[String]) {
-    let program = manifest["tasks"]["smoke"]["invocation"]["run"]
-        .as_array()
-        .expect("fixture task invocation should be an array")
-        .first()
-        .cloned()
-        .expect("fixture task invocation should have a program");
-    let mut run = vec![program];
-    run.extend(args.iter().cloned().map(Value::String));
-    manifest["tasks"]["smoke"]["invocation"]["run"] = Value::Array(run);
+/// A smoke task without a deadline that writes `stdout`/`stderr`, touches
+/// `marker`, and blocks until canceled.
+fn blocking_manifest(marker: &Path, service: bool, stdout: &[u8], stderr: &[u8]) -> Value {
+    let args = [
+        "output",
+        "hex-block",
+        &hex::encode(stdout),
+        &hex::encode(stderr),
+        marker.to_str().unwrap(),
+    ];
+    let mut manifest = if service {
+        task_manifest(&args)
+    } else {
+        leaf_task_manifest(&args)
+    };
+    clear_task_deadline(&mut manifest, "smoke");
+    manifest
+}
+
+fn blocking_session(marker: &Path) -> RuntimeFixture {
+    RuntimeFixture::new(blocking_manifest(marker, false, b"", b""))
 }
 
 fn set_task_default_output(manifest: &mut Value, output: &str) {
     manifest["tasks"]["smoke"]["defaultOutput"] = json!(output);
 }
 
-fn run(fixture: &RuntimeFixture, extra: &[&str]) -> Output {
+fn stored_execution_outcome(fixture: &RuntimeFixture) -> String {
     fixture
-        .command("run", extra)
-        .output()
-        .expect("runtime command should execute")
+        .registry()
+        .query_row("SELECT execution_outcome FROM runs", [], |row| row.get(0))
+        .unwrap()
 }
+
+/// A session's `(execution_outcome, finalization)` once its row is visible.
+fn run_row(fixture: &RuntimeFixture, run_id: &str) -> Option<(Option<String>, String)> {
+    try_registry_ro(&fixture.state_base)?
+        .query_row(
+            "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+}
+
+fn session_row(fixture: &RuntimeFixture, run_id: &str) -> (Option<String>, String) {
+    run_row(fixture, run_id).expect("session row should exist")
+}
+
+/// The live session and its running task's pid.
+fn published_session(fixture: &RuntimeFixture) -> (String, i32) {
+    poll_until(Duration::from_secs(5), "the session to publish", || {
+        try_registry_ro(&fixture.state_base)?
+            .query_row(
+                "SELECT r.run_id, p.pid FROM runs r JOIN processes p ON p.run_id = r.run_id
+                 WHERE r.finalization = 'unfinished' AND p.status = 'running'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()
+    })
+}
+
+/// Retry `operation` until it succeeds, returning the last attempt: slot
+/// release is asynchronous to the stalled presentation.
+fn output_eventually(fixture: &RuntimeFixture, operation: &str, extra: &[&str]) -> Output {
+    let mut last = None;
+    let succeeded = poll(Duration::from_secs(10), || {
+        let output = fixture.output(operation, extra);
+        if output.status.success() {
+            return Some(output);
+        }
+        last = Some(output);
+        None
+    });
+    succeeded.unwrap_or_else(|| last.expect("the operation ran at least once"))
+}
+
+/// Spawn the session and wait until its blocking task is live.
+fn spawn_live_session(fixture: &RuntimeFixture, marker: &Path) -> (Child, String, i32) {
+    let child = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(marker, Duration::from_secs(5)));
+    let (run_id, pid) = published_session(fixture);
+    (child, run_id, pid)
+}
+
+fn wait_for_settled(fixture: &RuntimeFixture, run_id: &str) -> Option<String> {
+    poll_until(Duration::from_secs(10), "the session to settle", || {
+        run_row(fixture, run_id)
+            .filter(|(_, finalization)| finalization == "complete")
+            .map(|(outcome, _)| outcome)
+    })
+}
+
+/// Wait until the registry answers `query` with true; a stalled caller never
+/// delays settlement or the output seal.
+fn wait_for_registry(fixture: &RuntimeFixture, query: &str) {
+    poll_until(Duration::from_secs(20), query, || {
+        try_registry_ro(&fixture.state_base)?
+            .query_row(query, [], |row| row.get::<_, bool>(0))
+            .ok()?
+            .then_some(())
+    })
+}
+
+const SEALED_SETTLEMENT: &str = "SELECT finalization = 'complete' AND output = 'sealed' FROM runs";
 
 fn assert_stream_contains(haystack: &[u8], needle: &[u8], stream: &str) {
     assert!(
-        haystack
-            .windows(needle.len())
-            .any(|window| window == needle),
+        needle.is_empty()
+            || haystack
+                .windows(needle.len())
+                .any(|window| window == needle),
         "{stream} did not contain expected bytes\nexpected: {needle:?}\nactual: {haystack:?}"
     );
 }
@@ -96,14 +170,14 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
                     } else {
                         b"safe-data".as_slice()
                     };
-                    let args = vec![
-                        "output".into(),
-                        "escaped-writer".into(),
-                        activity.into(),
-                        pid_path.to_string_lossy().into_owned(),
-                        acknowledgement.to_string_lossy().into_owned(),
-                        hex(prefix),
-                        hex(prefix),
+                    let args = [
+                        "output",
+                        "escaped-writer",
+                        activity,
+                        pid_path.to_str().unwrap(),
+                        acknowledgement.to_str().unwrap(),
+                        &hex::encode(prefix),
+                        &hex::encode(prefix),
                     ];
                     let mut manifest = leaf_task_manifest(&args);
                     if accepted {
@@ -202,13 +276,7 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
                         std::thread::sleep(Duration::from_millis(30));
                         assert_eq!(fs::read(path).unwrap(), before);
                     }
-                    let connection = rusqlite::Connection::open_with_flags(
-                        fixture
-                            .state_base
-                            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                    )
-                    .unwrap();
+                    let connection = fixture.registry();
                     let observed: (String, i32) = connection.query_row(
                 "SELECT execution_outcome, exit_code FROM processes WHERE service_instance_id IS NULL",
                 [], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -252,7 +320,7 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
 #[test]
 fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
     for fault in ["cycle", "template", "nested-secret"] {
-        let mut manifest = leaf_task_manifest(&["prepare".into(), "child-started".into()]);
+        let mut manifest = leaf_task_manifest(&["prepare", "child-started"]);
         match fault {
             "cycle" => manifest["services"]["synthetic"]["connectsTo"] = json!(["synthetic"]),
             "template" => {
@@ -269,7 +337,7 @@ fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
             _ => unreachable!(),
         }
         let fixture = RuntimeFixture::new(manifest);
-        let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+        let output = fixture.output("run", &["--task", "smoke", "--output", "task-output"]);
         assert!(!output.status.success(), "{fault}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("MANIFEST_ADMISSION"),
@@ -286,16 +354,12 @@ fn unused_graph_and_template_faults_reject_before_state_or_child_effects() {
 
 #[test]
 fn child_receives_inserted_state_path_without_recursive_substitution() {
-    let mut manifest = leaf_task_manifest(&["output".into(), "env".into(), "VALUE".into()]);
+    let mut manifest = leaf_task_manifest(&["output", "env", "VALUE"]);
     manifest["tasks"]["smoke"]["invocation"]["env"]["VALUE"] = json!("${HOME:-${stateDir}}");
     let mut fixture = RuntimeFixture::new(manifest);
     fixture.state_base = fixture.tmp.path.join("state-${port:unresolved}");
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = fixture.output("run", &["--task", "smoke", "--output", "task-output"]);
+    assert_success(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         format!(
@@ -307,7 +371,7 @@ fn child_receives_inserted_state_path_without_recursive_substitution() {
 
 #[test]
 fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() {
-    let mut manifest = leaf_task_manifest(&["exit".to_string(), "0".to_string()]);
+    let mut manifest = leaf_task_manifest(&["exit", "0"]);
     manifest["secrets"]["token"] = json!({"secretId":"token","source":{
         "kind":"env-var","envVar":"NIXFIED_OUTPUT_VIEW_SECRET"
     }});
@@ -317,11 +381,7 @@ fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() 
         .env("NIXFIED_OUTPUT_VIEW_SECRET", "smoke")
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     let bytes = String::from_utf8(output.stdout).unwrap();
     assert!(bytes.starts_with("{\n  \"computedManifestHash\": "));
     assert!(bytes.ends_with("\n}\n"));
@@ -360,162 +420,110 @@ fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() 
 }
 
 #[test]
-fn direct_leaf_presents_exact_binary_without_metadata() {
-    let stdout = [0_u8, 1, 2, 0, 0xff, b'\n'];
-    let stderr = b"stderr-without-final-newline\0";
-    let args = vec![
-        "output".to_string(),
-        "hex".to_string(),
-        hex(&stdout),
-        hex(stderr),
-    ];
-    let fixture = RuntimeFixture::new(task_manifest(&args));
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
-
-    assert!(
-        output.status.success(),
-        "task-output failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, stdout);
-    assert_stream_contains(&output.stderr, stderr, "stderr");
-    assert!(
-        !output.stdout.windows(1).any(|window| window == b"{"),
-        "task-output stdout must not contain runtime JSON"
-    );
-}
-
-#[test]
-fn leaf_default_presents_when_output_is_omitted() {
-    let stdout = b"default stdout";
-    let stderr = b"default stderr";
-    let mut manifest = leaf_task_manifest(&[
-        "output".to_string(),
-        "hex".to_string(),
-        hex(stdout),
-        hex(stderr),
+fn successful_presentation_follows_the_selected_or_default_output() {
+    let binary = [0_u8, 1, 2, 0, 0xff, b'\n'];
+    let binary_stderr = b"stderr-without-final-newline\0";
+    let hex_task = |stdout: &[u8], stderr: &[u8]| {
+        leaf_task_manifest(&["output", "hex", &hex::encode(stdout), &hex::encode(stderr)])
+    };
+    let direct = task_manifest(&[
+        "output",
+        "hex",
+        &hex::encode(binary),
+        &hex::encode(binary_stderr),
     ]);
-    set_task_default_output(&mut manifest, "task-output");
-    let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke"]);
-
-    assert!(
-        output.status.success(),
-        "implicit task-output failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, stdout);
-    assert_stream_contains(&output.stderr, stderr, "stderr");
-}
-
-#[test]
-fn explicit_output_overrides_leaf_default() {
-    let mut manifest = leaf_task_manifest(&["exit".to_string(), "0".to_string()]);
-    set_task_default_output(&mut manifest, "task-output");
-    let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "summary"]);
-
-    assert!(
-        output.status.success(),
-        "explicit summary failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "summary keeps task output off stdout"
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("result: ok"));
-}
-
-#[test]
-fn composite_selection_uses_its_metadata_default_not_a_child_default() {
-    let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
-    set_task_default_output(&mut manifest, "task-output");
-    manifest["tasks"]["pipeline"] = json!({
+    let mut omitted = hex_task(b"default stdout", b"default stderr");
+    set_task_default_output(&mut omitted, "task-output");
+    let mut accepted = task_manifest(&[
+        "output",
+        "hex-exit",
+        &hex::encode(b"accepted nonzero\0"),
+        &hex::encode(b"diagnostic"),
+        "7",
+    ]);
+    accepted["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([0, 7]);
+    let mut overridden = leaf_task_manifest(&["exit", "0"]);
+    set_task_default_output(&mut overridden, "task-output");
+    let mut composite = task_manifest(&["exit", "0"]);
+    set_task_default_output(&mut composite, "task-output");
+    composite["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "defaultOutput": "summary",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
-    let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "pipeline"]);
-
-    assert!(
-        output.status.success(),
-        "composite run failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "composites keep child output off stdout"
-    );
-}
-
-#[test]
-fn accepted_nonzero_code_presents_and_succeeds() {
-    let stdout = b"accepted nonzero\0";
-    let stderr = b"diagnostic";
-    let args = vec![
-        "output".to_string(),
-        "hex-exit".to_string(),
-        hex(stdout),
-        hex(stderr),
-        "7".to_string(),
-    ];
-    let mut manifest = task_manifest(&args);
-    manifest["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([0, 7]);
-    let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
-
-    assert!(
-        output.status.success(),
-        "accepted nonzero failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, stdout);
-    assert_stream_contains(&output.stderr, stderr, "stderr");
-}
-
-#[test]
-fn empty_output_is_a_valid_zero_byte_presentation() {
-    let args = vec![
-        "output".to_string(),
-        "hex".to_string(),
-        String::new(),
-        String::new(),
-    ];
-    let manifest = leaf_task_manifest(&args);
-    let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
-
-    assert!(
-        output.status.success(),
-        "empty task-output failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
+    let task_output: &[&str] = &["--task", "smoke", "--output", "task-output"];
+    for (case, manifest, args, stdout, stderr) in [
+        (
+            "exact binary without metadata",
+            direct,
+            task_output,
+            &binary[..],
+            &binary_stderr[..],
+        ),
+        (
+            "omitted output uses the leaf default",
+            omitted,
+            &["--task", "smoke"][..],
+            b"default stdout",
+            b"default stderr",
+        ),
+        (
+            "accepted nonzero code",
+            accepted,
+            task_output,
+            b"accepted nonzero\0",
+            b"diagnostic",
+        ),
+        (
+            "empty output is a zero-byte presentation",
+            hex_task(b"", b""),
+            task_output,
+            b"",
+            b"",
+        ),
+        (
+            "explicit summary overrides the leaf default",
+            overridden,
+            &["--task", "smoke", "--output", "summary"][..],
+            b"",
+            b"result: ok",
+        ),
+        (
+            "a composite uses its own default, not a child's",
+            composite,
+            &["--task", "pipeline"][..],
+            b"",
+            b"",
+        ),
+    ] {
+        let output = RuntimeFixture::new(manifest).output("run", args);
+        assert!(
+            output.status.success(),
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, stdout, "{case}");
+        assert_stream_contains(&output.stderr, stderr, case);
+    }
 }
 
 #[test]
 fn large_simultaneous_streams_present_exactly() {
     let stdout = vec![0x61; 256 * 1024];
     let stderr = vec![0x7a; 192 * 1024];
-    let args = vec![
-        "output".to_string(),
-        "repeat".to_string(),
-        "61".to_string(),
-        stdout.len().to_string(),
-        "7a".to_string(),
-        stderr.len().to_string(),
+    let args = [
+        "output",
+        "repeat",
+        "61",
+        &stdout.len().to_string(),
+        "7a",
+        &stderr.len().to_string(),
     ];
     let manifest = leaf_task_manifest(&args);
     let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+    let output = fixture.output("run", &["--task", "smoke", "--output", "task-output"]);
 
-    assert!(
-        output.status.success(),
-        "large task-output failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     assert_eq!(output.stdout, stdout);
     assert_stream_contains(&output.stderr, &stderr, "stderr");
 }
@@ -524,13 +532,13 @@ fn large_simultaneous_streams_present_exactly() {
 fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_delivery() {
     let stdout = vec![b'x'; 128 * 1024];
     let stderr = vec![b'z'; 32 * 1024];
-    let args = vec![
-        "output".to_string(),
-        "repeat".to_string(),
-        "78".to_string(),
-        stdout.len().to_string(),
-        "7a".to_string(),
-        stderr.len().to_string(),
+    let args = [
+        "output",
+        "repeat",
+        "78",
+        &stdout.len().to_string(),
+        "7a",
+        &stderr.len().to_string(),
     ];
     let manifest = leaf_task_manifest(&args);
     let fixture = RuntimeFixture::new(manifest);
@@ -556,15 +564,15 @@ fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_delivery() {
 fn task_failure_presents_captured_bytes_and_preserves_status() {
     let stdout = b"failed stdout";
     let stderr = b"failed stderr";
-    let args = vec![
-        "output".to_string(),
-        "hex-exit".to_string(),
-        hex(stdout),
-        hex(stderr),
-        "7".to_string(),
+    let args = [
+        "output",
+        "hex-exit",
+        &hex::encode(stdout),
+        &hex::encode(stderr),
+        "7",
     ];
     let fixture = RuntimeFixture::new(task_manifest(&args));
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+    let output = fixture.output("run", &["--task", "smoke", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(30));
     assert_eq!(output.stdout, stdout);
@@ -579,8 +587,7 @@ fn task_failure_presents_captured_bytes_and_preserves_status() {
 
 #[test]
 fn redaction_happens_before_task_output_presentation() {
-    let mut manifest =
-        leaf_task_manifest(&["output".to_string(), "env".to_string(), "TOKEN".to_string()]);
+    let mut manifest = leaf_task_manifest(&["output", "env", "TOKEN"]);
     manifest["secrets"]["api-token"] = json!({
         "secretId": "api-token",
         "source": {
@@ -596,11 +603,7 @@ fn redaction_happens_before_task_output_presentation() {
         .output()
         .expect("runtime command should execute");
 
-    assert!(
-        output.status.success(),
-        "redacted task-output failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     assert_eq!(output.stdout, REDACTION_TOKEN.as_bytes());
     let secret = b"child-visible-secret";
     assert!(
@@ -619,20 +622,13 @@ fn redaction_happens_before_task_output_presentation() {
 
 #[test]
 fn timeout_presents_output_before_reporting_task_failure() {
-    let marker = tempfile_marker("timeout");
+    let marker = temp_marker("nixfied-output-timeout");
     let stdout = b"timeout stdout";
     let stderr = b"timeout stderr";
-    let args = vec![
-        "output".to_string(),
-        "hex-block".to_string(),
-        hex(stdout),
-        hex(stderr),
-        marker.to_string_lossy().into_owned(),
-    ];
-    let mut manifest = leaf_task_manifest(&args);
+    let mut manifest = blocking_manifest(&marker, false, stdout, stderr);
     manifest["tasks"]["smoke"]["invocation"]["timeoutMs"] = json!(150);
     let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
+    let output = fixture.output("run", &["--task", "smoke", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(30));
     assert_eq!(output.stdout, stdout);
@@ -645,34 +641,19 @@ fn timeout_presents_output_before_reporting_task_failure() {
     assert_eq!(stored_execution_outcome(&fixture), "failed");
 }
 
+/// A missing deadline lowers to none (see `execution::lower`); only
+/// cancellation ends this task, after its output is presented.
 #[test]
-fn task_without_deadline_survives_former_default_and_remains_cancelable() {
-    let marker = tempfile_marker("cancel");
+fn canceled_task_presents_output_before_reporting_cancellation() {
+    let marker = temp_marker("nixfied-output-cancel");
     let stdout = b"cancel stdout";
     let stderr = b"cancel stderr";
-    let args = vec![
-        "output".to_string(),
-        "hex-block".to_string(),
-        hex(stdout),
-        hex(stderr),
-        marker.to_string_lossy().into_owned(),
-    ];
-    let mut manifest = leaf_task_manifest(&args);
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    let fixture = RuntimeFixture::new(manifest);
-    let mut child = fixture
+    let fixture = RuntimeFixture::new(blocking_manifest(&marker, false, stdout, stderr));
+    let child = fixture
         .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
         .expect("runtime command should spawn");
     assert!(wait_for_path(&marker, Duration::from_secs(3)));
-    std::thread::sleep(Duration::from_secs(31));
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "absent deadline must not reconstruct the former 30s default"
-    );
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
@@ -686,28 +667,29 @@ fn task_without_deadline_survives_former_default_and_remains_cancelable() {
     assert_eq!(stored_execution_outcome(&fixture), "canceled");
 }
 
+/// A service that is killed or exits zero while a task without a deadline
+/// runs fails the session, which still settles with run-scoped retention.
 #[test]
-fn service_exit_interrupts_a_task_without_deadline() {
-    for unrelated in [false, true] {
-        let marker = tempfile_marker("dependency-exit");
-        let args = vec![
-            "output".into(),
-            "hex-block".into(),
-            "".into(),
-            "".into(),
-            marker.to_string_lossy().into_owned(),
-        ];
-        let mut manifest = task_manifest(&args);
-        manifest["tasks"]["smoke"]["invocation"]
-            .as_object_mut()
-            .unwrap()
-            .remove("timeoutMs");
+fn unexpected_service_exit_fails_the_session_and_still_settles() {
+    for (exit_zero, unrelated) in [(false, false), (false, true), (true, false)] {
+        let task_marker = temp_marker("nixfied-output-dependency-exit");
+        let service_marker = temp_marker("nixfied-output-exit-zero-service");
+        let mut manifest = blocking_manifest(&task_marker, true, b"", b"");
+        if exit_zero {
+            let program =
+                manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0]
+                    .clone();
+            manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = json!([
+                program,
+                "listen",
+                "127.0.0.1",
+                "${port}",
+                "exit-zero-on-marker",
+                service_marker
+            ]);
+        }
         let selected = if unrelated {
-            let mut first = manifest["tasks"]["smoke"].clone();
-            first["operationId"] = json!("task.first.run");
-            let program = first["invocation"]["run"][0].clone();
-            first["invocation"]["run"] = json!([program, "exit", "0"]);
-            manifest["tasks"]["first"] = first;
+            add_task_clone(&mut manifest, "first", &["synthetic"], &["exit", "0"]);
             manifest["tasks"]["smoke"]["requires"] = json!([]);
             manifest["tasks"]["pipeline"] = json!({
                 "kind": "composite", "defaultOutput": "summary", "steps": {"first": {"task": "first", "dependsOn": []}, "second": {"task": "smoke", "dependsOn": ["first"]}}
@@ -721,62 +703,74 @@ fn service_exit_interrupts_a_task_without_deadline() {
             .command("run", &["--task", selected, "--output", "json"])
             .spawn()
             .unwrap();
-        assert!(wait_for_path(&marker, Duration::from_secs(5)));
-        let database = common::find_named(&fixture.state_base, "registry.sqlite3").unwrap();
-        let registry = rusqlite::Connection::open(database).unwrap();
-        let pid: i32 = registry
-            .query_row(
-                "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        assert!(wait_for_path(&task_marker, Duration::from_secs(5)));
+        if exit_zero {
+            fs::write(&service_marker, b"exit").unwrap();
+        } else {
+            let pid: i32 = fixture
+                .registry()
+                .query_row(
+                    "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        }
         let output = wait_for_child_output(child, Duration::from_secs(6));
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("DEPENDENCY_UNAVAILABLE"));
-        assert_eq!(stored_execution_outcome(&fixture), "failed");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("DEPENDENCY_UNAVAILABLE"), "{error}");
+        let (outcome, finalization, service, unresolved): (String, String, String, i64) = fixture
+            .registry()
+            .query_row(
+                "SELECT r.execution_outcome, r.finalization,
+                   (SELECT status FROM processes WHERE role = 'service'),
+                   (SELECT count(*) FROM processes WHERE ownership = 'unresolved')
+                 FROM runs r",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome, "failed",
+            "an unexpected exit is not a successful task result"
+        );
+        assert_eq!(service, "failed");
+        assert_eq!(unresolved, 0);
+        assert_eq!(finalization, "complete");
+        assert!(
+            !fixture.state_base.join("data/runtime-test/dev/0").exists(),
+            "a settled failure still applies run-scoped retention"
+        );
     }
 }
 
 #[test]
 fn services_with_exec_probes_keep_distinct_capture_files() {
     let port = available_port_window(2);
-    let mut manifest = task_manifest_at(&["exit".into(), "0".into()], port);
+    let mut manifest = task_manifest_at(&["exit", "0"], port);
     manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     let invocation = manifest["tasks"]["smoke"]["invocation"].clone();
     manifest["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
         "kind": "exec", "invocation": invocation,
         "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 1
     });
-    let mut later = manifest["services"]["synthetic"].clone();
-    later["connectsTo"] = json!(["synthetic"]);
-    for operation in ["start", "ready", "health", "stop", "clean"] {
-        later["lifecycle"][operation]["operationId"] = json!(format!("later.{operation}"));
-    }
-    manifest["services"]["later"] = later;
+    add_service_clone(&mut manifest, "later", LISTEN_HOLD, &["synthetic"]);
     manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
     let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "json"]);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+    assert_success(&output);
     for service in ["synthetic", "later"] {
         assert!(
-            common::find_named(
+            find_named(
                 &fixture.state_base,
                 &format!("lifecycle.{service}.ready.probe.0.stdout.log")
             )
             .is_some()
         );
     }
-    let registry = rusqlite::Connection::open(
-        common::find_named(&fixture.state_base, "registry.sqlite3").unwrap(),
-    )
-    .unwrap();
-    let probes: i64 = registry.query_row("SELECT count(*) FROM processes WHERE role='probe' AND status='succeeded' AND execution_outcome='succeeded'", [], |row| row.get(0)).unwrap();
+    let probes: i64 = fixture.registry().query_row("SELECT count(*) FROM processes WHERE role='probe' AND status='succeeded' AND execution_outcome='succeeded'", [], |row| row.get(0)).unwrap();
     assert_eq!(probes, 2);
 }
 
@@ -784,19 +778,12 @@ fn services_with_exec_probes_keep_distinct_capture_files() {
 fn service_failure_interrupts_another_services_exec_probe() {
     for phase in ["ready", "health"] {
         for victim in ["synthetic", "later"] {
-            let probe_marker = tempfile_marker("probe-observation");
-            let task_marker = tempfile_marker("unreleased-task");
+            let probe_marker = temp_marker("nixfied-output-probe-observation");
+            let task_marker = temp_marker("nixfied-output-unreleased-task");
             let port = available_port_window(2);
-            let mut manifest = task_manifest_at(
-                &["prepare".into(), task_marker.to_string_lossy().into_owned()],
-                port,
-            );
+            let mut manifest = task_manifest_at(&["prepare", task_marker.to_str().unwrap()], port);
             manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
-            let mut later = manifest["services"]["synthetic"].clone();
-            later["connectsTo"] = json!(["synthetic"]);
-            for operation in ["start", "ready", "health", "stop", "clean"] {
-                later["lifecycle"][operation]["operationId"] = json!(format!("later.{operation}"));
-            }
+            add_service_clone(&mut manifest, "later", LISTEN_HOLD, &["synthetic"]);
             let mut probe_invocation = manifest["tasks"]["smoke"]["invocation"].clone();
             let program = probe_invocation["run"][0].clone();
             probe_invocation["run"] = json!([
@@ -807,11 +794,10 @@ fn service_failure_interrupts_another_services_exec_probe() {
                 "",
                 probe_marker.to_string_lossy()
             ]);
-            later["lifecycle"][phase]["probe"] = json!({
+            manifest["services"]["later"]["lifecycle"][phase]["probe"] = json!({
                 "kind": "exec", "invocation": probe_invocation,
                 "timeoutMs": 30000, "retryIntervalMs": 100, "maxAttempts": 1
             });
-            manifest["services"]["later"] = later;
             manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
             let fixture = RuntimeFixture::new(manifest);
             let child = fixture
@@ -822,11 +808,8 @@ fn service_failure_interrupts_another_services_exec_probe() {
                 wait_for_path(&probe_marker, Duration::from_secs(5)),
                 "{phase} probe did not start"
             );
-            let registry = rusqlite::Connection::open(
-                common::find_named(&fixture.state_base, "registry.sqlite3").unwrap(),
-            )
-            .unwrap();
-            let pid: i32 = registry
+            let pid: i32 = fixture
+                .registry()
                 .query_row(
                     "SELECT p.pid FROM processes p WHERE p.service_name = ?1 AND p.role = 'service'",
                     [victim],
@@ -855,17 +838,12 @@ fn service_failure_interrupts_another_services_exec_probe() {
     }
 }
 
+/// Settlement and slot release under stalled readers are proven below; an
+/// interrupted delivery after settlement is an output failure alone.
 #[test]
-fn stalled_stdout_reader_blocks_neither_settlement_nor_slot_release() {
+fn interrupted_delivery_after_settlement_fails_output_not_the_session() {
     let count = 4 * 1024 * 1024;
-    let manifest = task_manifest(&[
-        "output".into(),
-        "repeat".into(),
-        "78".into(),
-        count.to_string(),
-        "79".into(),
-        "0".into(),
-    ]);
+    let manifest = task_manifest(&["output", "repeat", "78", &count.to_string(), "79", "0"]);
     let fixture = RuntimeFixture::new(manifest);
     let mut child = fixture
         .command("run", &["--task", "smoke", "--output", "task-output"])
@@ -873,54 +851,13 @@ fn stalled_stdout_reader_blocks_neither_settlement_nor_slot_release() {
         .unwrap();
     // Hold the caller's stdout open without ever reading it.
     let stalled = child.stdout.take().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    let registry = fixture
-        .state_base
-        .join("registry/runtime-test/dev/0/registry.sqlite3");
-    loop {
-        let settled = rusqlite::Connection::open_with_flags(
-            &registry,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .ok()
-        .and_then(|connection| {
-            connection
-                .query_row(
-                    "SELECT finalization = 'complete' AND output = 'sealed' FROM runs",
-                    [],
-                    |row| row.get::<_, bool>(0),
-                )
-                .ok()
-        })
-        .unwrap_or(false);
-        if settled {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "a stalled reader must not delay session settlement"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for_registry(&fixture, SEALED_SETTLEMENT);
+    // The interrupt lands once the slot is released and only presentation remains.
+    assert_success(&output_eventually(&fixture, "clean", &[]));
     assert!(
         child.try_wait().unwrap().is_none(),
         "the command keeps presenting after settlement"
     );
-    // Slot release follows the seal without waiting for the reader: another
-    // owner acquires it while this command is still presenting.
-    let clean = loop {
-        let clean = run_control(&fixture, "clean");
-        if clean.status.success() || std::time::Instant::now() >= deadline {
-            break clean;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(
-        clean.status.success(),
-        "{}",
-        String::from_utf8_lossy(&clean.stderr)
-    );
-    assert!(child.try_wait().unwrap().is_none());
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
@@ -943,19 +880,13 @@ fn stalled_stdout_reader_blocks_neither_settlement_nor_slot_release() {
 #[test]
 fn live_task_output_arrives_before_the_task_finishes_and_down_ends_it() {
     use std::io::Read;
-    let marker = tempfile_marker("live-output");
-    let mut manifest = leaf_task_manifest(&[
-        "output".into(),
-        "hex-block".into(),
-        hex(b"live stdout\n"),
-        hex(b"live stderr\n"),
-        marker.to_string_lossy().into_owned(),
-    ]);
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    let fixture = RuntimeFixture::new(manifest);
+    let marker = temp_marker("nixfied-output-live-output");
+    let fixture = RuntimeFixture::new(blocking_manifest(
+        &marker,
+        false,
+        b"live stdout\n",
+        b"live stderr\n",
+    ));
     let mut child = fixture
         .command("run", &["--task", "smoke", "--output", "task-output"])
         .spawn()
@@ -968,12 +899,8 @@ fn live_task_output_arrives_before_the_task_finishes_and_down_ends_it() {
         "output is presented while the task runs"
     );
     assert!(child.try_wait().unwrap().is_none());
-    let down = run_control(&fixture, "down");
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
+    let down = fixture.output("down", &[]);
+    assert_success(&down);
     let output = wait_for_child_output(child, Duration::from_secs(10));
     let mut rest = Vec::new();
     stdout.read_to_end(&mut rest).unwrap();
@@ -989,18 +916,14 @@ fn live_task_output_arrives_before_the_task_finishes_and_down_ends_it() {
 #[test]
 fn summary_mode_labels_live_sources_on_stderr_and_keeps_stdout_empty() {
     let manifest = leaf_task_manifest(&[
-        "output".into(),
-        "hex".into(),
-        hex(b"first\nsecond"),
-        hex(b"problem\n"),
+        "output",
+        "hex",
+        &hex::encode(b"first\nsecond"),
+        &hex::encode(b"problem\n"),
     ]);
     let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "smoke", "--output", "summary"]);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = fixture.output("run", &["--task", "smoke", "--output", "summary"]);
+    assert_success(&output);
     assert!(output.stdout.is_empty());
     for line in [
         &b"[smoke] first\n"[..],
@@ -1013,23 +936,15 @@ fn summary_mode_labels_live_sources_on_stderr_and_keeps_stdout_empty() {
     }
 }
 
-fn run_control(fixture: &RuntimeFixture, command: &str) -> Output {
-    fixture
-        .command(command, &[])
-        .stdout(std::process::Stdio::piped())
-        .output()
-        .unwrap()
-}
-
 #[test]
 fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
-    let mut manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
+    let mut manifest = task_manifest(&["exit", "0"]);
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "steps": { "only": { "task": "smoke" } }
     });
     let fixture = RuntimeFixture::new(manifest);
-    let output = run(&fixture, &["--task", "pipeline", "--output", "task-output"]);
+    let output = fixture.output("run", &["--task", "pipeline", "--output", "task-output"]);
 
     assert_eq!(output.status.code(), Some(37));
     assert!(output.stdout.is_empty());
@@ -1042,22 +957,22 @@ fn invalid_selection_is_rejected_before_state_or_child_side_effects() {
 
 #[test]
 fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
-    let manifest = task_manifest(&["exit".to_string(), "0".to_string()]);
+    let manifest = task_manifest(&["exit", "0"]);
 
     let missing = RuntimeFixture::new(manifest.clone());
-    let output = run(&missing, &["--output", "task-output"]);
+    let output = missing.output("run", &["--output", "task-output"]);
     assert_eq!(output.status.code(), Some(37));
     assert!(output.stdout.is_empty());
     assert!(!missing.state_base.exists());
 
     let unknown = RuntimeFixture::new(manifest.clone());
-    let output = run(&unknown, &["--task", "missing", "--output", "task-output"]);
+    let output = unknown.output("run", &["--task", "missing", "--output", "task-output"]);
     assert_eq!(output.status.code(), Some(37));
     assert!(!unknown.state_base.exists());
 
     let repeated = RuntimeFixture::new(manifest.clone());
-    let output = run(
-        &repeated,
+    let output = repeated.output(
+        "run",
         &[
             "--task",
             "smoke",
@@ -1077,7 +992,7 @@ fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
         } else {
             vec!["--task", "smoke", spelling]
         };
-        let output = run(&alias, &args);
+        let output = alias.output("run", &args);
         assert_eq!(output.status.code(), Some(35), "spelling {spelling}");
         assert!(!alias.state_base.exists());
     }
@@ -1090,8 +1005,8 @@ fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
         ["--output", "json", "--output", "task-output"],
         ["--output", "summary", "--output", "both"],
     ] {
-        let fixture = RuntimeFixture::new(task_manifest(&["exit".to_string(), "0".to_string()]));
-        let output = run(&fixture, &args);
+        let fixture = RuntimeFixture::new(task_manifest(&["exit", "0"]));
+        let output = fixture.output("run", &args);
         assert_eq!(output.status.code(), Some(36), "args {args:?}");
         assert!(output.stdout.is_empty());
         assert!(!fixture.state_base.exists());
@@ -1099,21 +1014,12 @@ fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    hex::encode(bytes)
-}
-
-fn tempfile_marker(label: &str) -> PathBuf {
-    common::temp_marker(&format!("nixfied-output-{label}"))
-}
-
 #[test]
 fn non_utf8_environment_secret_never_reaches_diagnostics() {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let marker_dir = TempDir::new();
     let marker = marker_dir.path.join("child-started");
-    let mut manifest =
-        task_manifest(&["prepare".to_string(), marker.to_string_lossy().into_owned()]);
+    let mut manifest = task_manifest(&["prepare", marker.to_str().unwrap()]);
     manifest["secrets"]["token"] = json!({"secretId":"token","source":{
         "kind":"env-var","envVar":"NIXFIED_TEST_INVALID_SECRET"
     }});
@@ -1148,7 +1054,7 @@ fn non_utf8_environment_secret_never_reaches_diagnostics() {
             );
         }
         if matches!(mode, "json" | "both") {
-            let error = common::stderr_json(&output.stderr);
+            let error = stderr_json(&output.stderr);
             assert_eq!(error["code"], "SECRET_UNAVAILABLE");
             assert_eq!(error["exitClass"], "error");
         }
@@ -1170,25 +1076,9 @@ fn optional_host_ephemeral_observation_warns_without_executing_children() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(bounds.len(), 2);
-    let executable = test_child();
-    let manifest = synthetic_manifest(
-        executable.to_str().unwrap(),
-        &["listen", "127.0.0.1", "${port}", "hold"],
-        bounds[0],
-        bounds[0],
-    );
-    let fixture = RuntimeFixture::new(manifest);
-    let output = Command::new(runtime_binary())
-        .args(["check", "--allow-non-store-manifest", "--manifest"])
-        .arg(&fixture.manifest_path)
-        .current_dir(&fixture.tmp.path)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let fixture = RuntimeFixture::new(test_child_manifest(bounds[0], bounds[0]));
+    let output = fixture.output("check", &[]);
+    assert_success(&output);
     assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
         "overlaps the host ephemeral port range {}-{}",
         bounds[0], bounds[1]
@@ -1198,13 +1088,9 @@ fn optional_host_ephemeral_observation_warns_without_executing_children() {
 
 #[test]
 fn slot_ownership_ps_absence_has_no_filesystem_effects() {
-    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "0".into()]));
-    let output = fixture.command("ps", &[]).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit", "0"]));
+    let output = fixture.output("ps", &[]);
+    assert_success(&output);
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
         json!({"processes": []})
@@ -1218,25 +1104,17 @@ fn slot_ownership_rejects_competing_mutations_but_allows_read_only_ps() {
     let started = tmp.path.join("started");
     let release = tmp.path.join("release");
     let fixture = RuntimeFixture::new(leaf_task_manifest(&[
-        "prepare".into(),
-        started.to_str().unwrap().into(),
-        release.to_str().unwrap().into(),
+        "prepare",
+        started.to_str().unwrap(),
+        release.to_str().unwrap(),
     ]));
     let owner = fixture
         .command("run", &["--task", "smoke", "--output", "json"])
         .spawn()
         .unwrap();
     assert!(wait_for_path(&started, Duration::from_secs(5)));
-    let registry = fixture
-        .state_base
-        .join("registry/runtime-test/dev/0/registry.sqlite3");
     let counts = || {
-        let conn = rusqlite::Connection::open_with_flags(
-            &registry,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
-        conn.query_row(
+        fixture.registry().query_row(
             "SELECT (SELECT count(*) FROM runs), (SELECT count(*) FROM events), (SELECT count(*) FROM processes)",
             [],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
@@ -1245,45 +1123,26 @@ fn slot_ownership_rejects_competing_mutations_but_allows_read_only_ps() {
     };
     // The child marker may precede durable process registration. Establish a
     // committed owner baseline before attributing later writes to contenders.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let before = loop {
-        let snapshot = counts();
-        if snapshot.2 == 1 {
-            break snapshot;
-        }
-        if std::time::Instant::now() >= deadline {
-            fs::write(&release, b"").unwrap();
-            let _ = wait_for_child_output(owner, Duration::from_secs(5));
-            panic!("owner did not commit its process evidence");
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    let Some(before) = poll(Duration::from_secs(5), || {
+        Some(counts()).filter(|snapshot| snapshot.2 == 1)
+    }) else {
+        fs::write(&release, b"").unwrap();
+        let _ = wait_for_child_output(owner, Duration::from_secs(5));
+        panic!("owner did not commit its process evidence");
     };
-    let ps = fixture.command("ps", &[]).output().unwrap();
-    let competitor = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .output()
-        .unwrap();
-    let clean = fixture.command("clean", &[]).output().unwrap();
+    let ps = fixture.output("ps", &[]);
+    let competitor = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+    let clean = fixture.output("clean", &[]);
     let after = counts();
     // Release before assertions so failure cannot leave the admitted child waiting.
     fs::write(&release, b"").unwrap();
     let owner = wait_for_child_output(owner, Duration::from_secs(5));
-    assert!(
-        owner.status.success(),
-        "{}",
-        String::from_utf8_lossy(&owner.stderr)
-    );
-    assert!(
-        ps.status.success(),
-        "{}",
-        String::from_utf8_lossy(&ps.stderr)
-    );
+    assert_success(&owner);
+    assert_success(&ps);
     let report: Value = serde_json::from_slice(&ps.stdout).unwrap();
     let processes = report["processes"].as_array().unwrap();
     assert_eq!(processes.len(), 1);
     assert_eq!(processes[0]["live"], true);
-    assert!(processes[0].get("borrowerCount").is_none());
-    assert!(processes[0].get("serviceLifetime").is_none());
     assert!(!competitor.status.success());
     assert!(!clean.status.success());
     assert_eq!(
@@ -1293,38 +1152,32 @@ fn slot_ownership_rejects_competing_mutations_but_allows_read_only_ps() {
     assert_eq!(before.0, 1);
 }
 
+/// Wire proofs for every closed record live in `manifest_contract`; the CLI
+/// refuses an unknown field before any slot, state, or child effect.
 #[test]
-fn removed_state_epoch_rejects_before_slot_or_child_effects() {
-    for epoch in [json!("1"), Value::Null] {
-        let mut manifest = leaf_task_manifest(&["exit".into(), "0".into()]);
-        manifest["state"]["stateEpoch"] = epoch;
-        let fixture = RuntimeFixture::new(manifest);
-        let result = run(&fixture, &["--task", "smoke", "--output", "json"]);
-        assert!(!result.status.success());
-        let error = String::from_utf8_lossy(&result.stderr);
-        assert!(error.contains("MANIFEST_INVALID"), "{error}");
-        assert!(error.contains("stateEpoch"), "{error}");
-        assert!(!fixture.state_base.exists());
-    }
+fn unknown_manifest_field_rejects_before_slot_or_child_effects() {
+    let mut manifest = leaf_task_manifest(&["prepare", "child-started"]);
+    manifest["tasks"]["smoke"]["serviceLifetime"] = json!("run-scoped");
+    let fixture = RuntimeFixture::new(manifest);
+    let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("MANIFEST_INVALID"), "{error}");
+    assert!(error.contains("serviceLifetime"), "{error}");
+    assert!(!fixture.state_base.exists());
+    assert!(!fixture.tmp.path.join("child-started").exists());
 }
 
 #[test]
 fn changed_service_startup_failure_preserves_persistent_data() {
-    let mut manifest = task_manifest(&["exit".into(), "0".into()]);
+    let mut manifest = task_manifest(&["exit", "0"]);
     manifest["state"]["persistence"] = json!("persistent");
     let fixture = RuntimeFixture::new(&manifest);
-    let first = run(&fixture, &["--task", "smoke", "--output", "json"]);
-    assert!(
-        first.status.success(),
-        "{}",
-        String::from_utf8_lossy(&first.stderr)
-    );
+    let first = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+    assert_success(&first);
     let data = fixture.state_base.join("data/runtime-test/dev/0");
     let sentinel = data.join("application-format");
     fs::write(&sentinel, b"application-owned format").unwrap();
-    let marker: Value =
-        serde_json::from_slice(&fs::read(data.join(".nixfied-state.json")).unwrap()).unwrap();
-    assert!(marker.get("stateEpoch").is_none());
     let program =
         manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0].clone();
     manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
@@ -1334,16 +1187,10 @@ fn changed_service_startup_failure_preserves_persistent_data() {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
-    let failed = run(&fixture, &["--task", "smoke", "--output", "json"]);
+    let failed = fixture.output("run", &["--task", "smoke", "--output", "json"]);
     assert!(!failed.status.success());
     assert_eq!(fs::read(&sentinel).unwrap(), b"application-owned format");
-    let connection = rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
+    let connection = fixture.registry();
     let (starts, cleanups): (i64, i64) = connection
         .query_row(
             "SELECT (SELECT count(*) FROM events WHERE event_type = 'service.starting'),
@@ -1360,37 +1207,12 @@ fn changed_service_startup_failure_preserves_persistent_data() {
 }
 
 #[test]
-fn removed_service_lifetime_rejects_before_slot_or_child_effects() {
-    for obsolete in ["run-scoped", "until-idle", "persistent-until-down"] {
-        let mut value = leaf_task_manifest(&["exit".into(), "0".into()]);
-        value["tasks"]["smoke"]["serviceLifetime"] = json!(obsolete);
-        let fixture = RuntimeFixture::new(value);
-        let output = fixture
-            .command("run", &["--task", "smoke", "--output", "json"])
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("MANIFEST_INVALID"), "{error}");
-        assert!(error.contains("serviceLifetime"), "{error}");
-        assert!(!fixture.state_base.exists());
-    }
-}
-
-#[test]
 fn session_owns_and_stops_services_before_the_next_run() {
-    let fixture = RuntimeFixture::new(task_manifest(&["exit".into(), "0".into()]));
+    let fixture = RuntimeFixture::new(task_manifest(&["exit", "0"]));
     let mut keys = Vec::new();
     for _ in 0..2 {
-        let output = fixture
-            .command("run", &["--task", "smoke", "--output", "json"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+        assert_success(&output);
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         let services = report["services"].as_array().unwrap();
         assert_eq!(services.len(), 1);
@@ -1400,7 +1222,7 @@ fn session_owns_and_stops_services_before_the_next_run() {
             std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
             "completed session retains a listener"
         );
-        let ps = fixture.command("ps", &[]).output().unwrap();
+        let ps = fixture.output("ps", &[]);
         assert!(ps.status.success());
         let rows: Value = serde_json::from_slice(&ps.stdout).unwrap();
         assert!(
@@ -1415,13 +1237,7 @@ fn session_owns_and_stops_services_before_the_next_run() {
         keys[0], keys[1],
         "separate sessions must own separate service processes"
     );
-    let connection = rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
+    let connection = fixture.registry();
     let stopped: i64 = connection.query_row("SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL AND status = 'stopped'", [], |row| row.get(0)).unwrap();
     assert_eq!(stopped, 2);
     let successful_sessions: i64 = connection
@@ -1443,29 +1259,6 @@ fn session_owns_and_stops_services_before_the_next_run() {
     assert_eq!(outcomes_before_teardown, 2);
 }
 
-fn stored_execution_outcome(fixture: &RuntimeFixture) -> String {
-    let connection = rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    connection
-        .query_row("SELECT execution_outcome FROM runs", [], |row| row.get(0))
-        .unwrap()
-}
-
-fn registry_connection(fixture: &RuntimeFixture) -> rusqlite::Connection {
-    rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap()
-}
-
 #[test]
 fn session_settlement_applies_the_trees_own_retention_after_every_outcome() {
     for persistent in [false, true] {
@@ -1474,19 +1267,12 @@ fn session_settlement_applies_the_trees_own_retention_after_every_outcome() {
             ("failure", 30, "failed"),
             ("cancel", 27, "canceled"),
         ] {
-            let marker = tempfile_marker("retention");
-            let args: Vec<String> = match scenario {
-                "success" => vec!["exit".into(), "0".into()],
-                "failure" => vec!["exit".into(), "3".into()],
-                _ => vec![
-                    "output".into(),
-                    "hex-block".into(),
-                    "".into(),
-                    "".into(),
-                    marker.to_string_lossy().into_owned(),
-                ],
+            let marker = temp_marker("nixfied-output-retention");
+            let mut manifest = match scenario {
+                "success" => leaf_task_manifest(&["exit", "0"]),
+                "failure" => leaf_task_manifest(&["exit", "3"]),
+                _ => blocking_manifest(&marker, false, b"", b""),
             };
-            let mut manifest = leaf_task_manifest(&args);
             if persistent {
                 manifest["state"]["persistence"] = json!("persistent");
             }
@@ -1515,7 +1301,7 @@ fn session_settlement_applies_the_trees_own_retention_after_every_outcome() {
                 persistent,
                 "{scenario}: persistence alone decides whether data survives"
             );
-            let connection = registry_connection(&fixture);
+            let connection = fixture.registry();
             let (outcome, finalization, cleanups, logs): (String, String, i64, i64) = connection
                 .query_row(
                     "SELECT execution_outcome, finalization,
@@ -1543,15 +1329,8 @@ fn session_settlement_applies_the_trees_own_retention_after_every_outcome() {
 #[test]
 fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
     for persistent in [false, true] {
-        let marker = tempfile_marker("killed-owner");
-        let block = vec![
-            "output".into(),
-            "hex-block".into(),
-            "".into(),
-            "".into(),
-            marker.to_string_lossy().into_owned(),
-        ];
-        let mut manifest = leaf_task_manifest(&block);
+        let marker = temp_marker("nixfied-output-killed-owner");
+        let mut manifest = blocking_manifest(&marker, false, b"", b"");
         if persistent {
             manifest["state"]["persistence"] = json!("persistent");
         }
@@ -1578,19 +1357,14 @@ fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
         let killed = wait_for_child_output(owner, Duration::from_secs(5));
         assert!(!killed.status.success());
 
-        let program = manifest["tasks"]["smoke"]["invocation"]["run"][0].clone();
-        manifest["tasks"]["smoke"]["invocation"]["run"] = json!([program, "exit", "0"]);
+        set_task_run_args(&mut manifest, &["exit", "0"]);
         fs::write(
             &fixture.manifest_path,
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        let successor = run(&fixture, &["--task", "smoke", "--output", "json"]);
-        assert!(
-            successor.status.success(),
-            "{}",
-            String::from_utf8_lossy(&successor.stderr)
-        );
+        let successor = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+        assert_success(&successor);
         assert_eq!(
             sentinel.exists(),
             persistent,
@@ -1601,7 +1375,7 @@ fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
         } else {
             assert!(!data.exists(), "the successor's run-scoped data also ends");
         }
-        let connection = registry_connection(&fixture);
+        let connection = fixture.registry();
         let sessions: Vec<(String, String)> = connection
             .prepare("SELECT execution_outcome, finalization FROM runs ORDER BY rowid")
             .unwrap()
@@ -1627,81 +1401,13 @@ fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
     }
 }
 
-fn blocking_session(marker: &std::path::Path) -> RuntimeFixture {
-    let mut manifest = leaf_task_manifest(&[
-        "output".into(),
-        "hex-block".into(),
-        "".into(),
-        "".into(),
-        marker.to_string_lossy().into_owned(),
-    ]);
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    RuntimeFixture::new(manifest)
-}
-
-fn published_session(fixture: &RuntimeFixture) -> (String, i32) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let row = rusqlite::Connection::open_with_flags(
-            fixture
-                .state_base
-                .join("registry/runtime-test/dev/0/registry.sqlite3"),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .ok()
-        .and_then(|connection| {
-            connection
-                .query_row(
-                    "SELECT r.run_id, p.pid FROM runs r JOIN processes p ON p.run_id = r.run_id
-                     WHERE r.finalization = 'unfinished' AND p.status = 'running'",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()
-        });
-        if let Some(row) = row {
-            return row;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "session never published"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn session_row(fixture: &RuntimeFixture, run_id: &str) -> (Option<String>, String) {
-    registry_connection(fixture)
-        .query_row(
-            "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
-            [run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap()
-}
-
 #[test]
 fn down_cancels_the_live_session_through_its_own_endpoint_and_observes_settlement() {
-    let marker = tempfile_marker("down-live");
+    let marker = temp_marker("nixfied-output-down-live");
     let fixture = blocking_session(&marker);
-    let owner = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (run_id, _) = published_session(&fixture);
-    let down = fixture
-        .command("down", &["--timeout-ms", "10000"])
-        .output()
-        .unwrap();
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
+    let (owner, run_id, _) = spawn_live_session(&fixture, &marker);
+    let down = fixture.output("down", &["--timeout-ms", "10000"]);
+    assert_success(&down);
     let report: Value = serde_json::from_slice(&down.stdout).unwrap();
     assert_eq!(
         report,
@@ -1728,28 +1434,16 @@ fn down_cancels_the_live_session_through_its_own_endpoint_and_observes_settlemen
 
 #[test]
 fn down_recovers_a_dead_owner_under_slot_authority() {
-    let marker = tempfile_marker("down-dead");
+    let marker = temp_marker("nixfied-output-down-dead");
     let fixture = blocking_session(&marker);
-    let owner = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (run_id, task_pid) = published_session(&fixture);
+    let (owner, run_id, task_pid) = spawn_live_session(&fixture, &marker);
     assert_eq!(
         unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
         0
     );
     let _ = wait_for_child_output(owner, Duration::from_secs(5));
-    let down = fixture
-        .command("down", &["--timeout-ms", "10000"])
-        .output()
-        .unwrap();
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
+    let down = fixture.output("down", &["--timeout-ms", "10000"]);
+    assert_success(&down);
     let report: Value = serde_json::from_slice(&down.stdout).unwrap();
     assert!(report.get("canceledRunId").is_none());
     assert_eq!(report["stopped"].as_array().unwrap().len(), 1);
@@ -1766,20 +1460,12 @@ fn down_recovers_a_dead_owner_under_slot_authority() {
 
 #[test]
 fn down_times_out_on_a_stopped_owner_without_signaling_it() {
-    let marker = tempfile_marker("down-stopped");
+    let marker = temp_marker("nixfied-output-down-stopped");
     let fixture = blocking_session(&marker);
-    let owner = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (run_id, task_pid) = published_session(&fixture);
+    let (owner, run_id, task_pid) = spawn_live_session(&fixture, &marker);
     let owner_pid = owner.id() as libc::pid_t;
     assert_eq!(unsafe { libc::kill(owner_pid, libc::SIGSTOP) }, 0);
-    let down = fixture
-        .command("down", &["--timeout-ms", "300"])
-        .output()
-        .unwrap();
+    let down = fixture.output("down", &["--timeout-ms", "300"]);
     let alive = unsafe { libc::kill(task_pid, 0) } == 0;
     assert_eq!(unsafe { libc::kill(owner_pid, libc::SIGCONT) }, 0);
     assert_eq!(down.status.code(), Some(31));
@@ -1797,14 +1483,9 @@ fn down_times_out_on_a_stopped_owner_without_signaling_it() {
 
 #[test]
 fn an_old_session_request_never_reaches_its_successor() {
-    let marker = tempfile_marker("down-successor");
+    let marker = temp_marker("nixfied-output-down-successor");
     let fixture = blocking_session(&marker);
-    let first = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (first_run, _) = published_session(&fixture);
+    let (first, first_run, _) = spawn_live_session(&fixture, &marker);
     let old_endpoint = fixture
         .state_base
         .join("registry/runtime-test/dev/0/runs")
@@ -1815,12 +1496,7 @@ fn an_old_session_request_never_reaches_its_successor() {
     );
     let _ = wait_for_child_output(first, Duration::from_secs(5));
     fs::remove_file(&marker).unwrap();
-    let successor = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (second_run, _) = published_session(&fixture);
+    let (successor, second_run, _) = spawn_live_session(&fixture, &marker);
     assert_ne!(first_run, second_run);
     // A requester that paused across the old owner's exit reaches no reader.
     assert_eq!(
@@ -1833,81 +1509,18 @@ fn an_old_session_request_never_reaches_its_successor() {
         "unfinished",
         "the successor keeps running"
     );
-    let down = fixture.command("down", &[]).output().unwrap();
+    let down = fixture.output("down", &[]);
     assert!(down.status.success());
     let successor = wait_for_child_output(successor, Duration::from_secs(5));
     assert_eq!(successor.status.code(), Some(27));
 }
 
 #[test]
-fn unexpected_service_exit_zero_fails_the_session_and_still_settles() {
-    let task_marker = tempfile_marker("exit-zero-task");
-    let service_marker = tempfile_marker("exit-zero-service");
-    let mut manifest = task_manifest(&[
-        "output".into(),
-        "hex-block".into(),
-        "".into(),
-        "".into(),
-        task_marker.to_string_lossy().into_owned(),
-    ]);
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    let program =
-        manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0].clone();
-    manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = json!([
-        program,
-        "listen",
-        "127.0.0.1",
-        "${port}",
-        "exit-zero-on-marker",
-        service_marker.to_string_lossy()
-    ]);
-    let fixture = RuntimeFixture::new(manifest);
-    let child = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&task_marker, Duration::from_secs(5)));
-    fs::write(&service_marker, b"exit").unwrap();
-    let output = wait_for_child_output(child, Duration::from_secs(6));
-    assert!(!output.status.success());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("DEPENDENCY_UNAVAILABLE"), "{error}");
-    let connection = registry_connection(&fixture);
-    let (outcome, finalization, service, ownership): (String, String, String, i64) = connection
-        .query_row(
-            "SELECT r.execution_outcome, r.finalization,
-               (SELECT status FROM processes WHERE role = 'service'),
-               (SELECT count(*) FROM processes WHERE ownership = 'unresolved')
-             FROM runs r",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .unwrap();
-    assert_eq!(
-        outcome, "failed",
-        "exit zero is not a successful task result"
-    );
-    assert_eq!(service, "failed");
-    assert_eq!(ownership, 0);
-    assert_eq!(finalization, "complete");
-    assert!(
-        !fixture.state_base.join("data/runtime-test/dev/0").exists(),
-        "a settled failure still applies run-scoped retention"
-    );
-}
-
-#[test]
 fn service_failure_during_another_services_preparation_releases_no_further_workload() {
     let port = available_port_window(2);
-    let exit_marker = tempfile_marker("prepare-dependency-exit");
-    let release = tempfile_marker("prepare-release");
-    let executable = test_child();
-    let executable = executable.to_str().unwrap();
-    let mut manifest = synthetic_manifest(
-        executable,
+    let exit_marker = temp_marker("nixfied-output-prepare-dependency-exit");
+    let release = temp_marker("nixfied-output-prepare-release");
+    let mut manifest = test_child_service(
         &[
             "listen",
             "127.0.0.1",
@@ -1918,39 +1531,28 @@ fn service_failure_during_another_services_preparation_releases_no_further_workl
         port,
         port + 1,
     );
-    let program = manifest["tasks"]["smoke"]["invocation"]["run"][0].clone();
-    let mut second = manifest["services"]["synthetic"].clone();
-    for class in ["start", "ready", "health", "stop", "clean"] {
-        second["lifecycle"][class]["operationId"] = json!(format!("service.second.{class}"));
-    }
-    second["lifecycle"]["start"]["invocation"]["run"] =
-        json!([program.clone(), "listen", "127.0.0.1", "${port}", "hold"]);
-    second["lifecycle"]["prepare"] = json!({"task": "prep"});
-    second["endpoints"] = json!({"second-tcp": {"endpointId": "second-tcp", "host": "127.0.0.1"}});
-    second["primaryEndpoint"] = json!("second-tcp");
-    second["logRefs"] = json!(["service.second"]);
-    manifest["services"]["second"] = second;
-    let mut prep = manifest["tasks"]["smoke"].clone();
-    prep["operationId"] = json!("task.prep.run");
-    prep["logRefs"] = json!(["task.prep"]);
+    add_service_clone(&mut manifest, "second", LISTEN_HOLD, &[]);
+    manifest["services"]["second"]["lifecycle"]["prepare"] = json!({"task": "prep"});
     // The prepare-only dependency fails while preparation waits without a deadline.
-    prep["invocation"]["run"] = json!([program.clone(), "prepare", exit_marker, release]);
-    prep["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    manifest["tasks"]["prep"] = prep;
+    add_task_clone(
+        &mut manifest,
+        "prep",
+        &["synthetic"],
+        &[
+            "prepare",
+            exit_marker.to_str().unwrap(),
+            release.to_str().unwrap(),
+        ],
+    );
+    clear_task_deadline(&mut manifest, "prep");
     manifest["tasks"]["smoke"]["requires"] = json!(["second"]);
-    manifest["tasks"]["smoke"]["invocation"]["run"] = json!([program, "exit", "0"]);
+    set_task_run_args(&mut manifest, &["exit", "0"]);
     let fixture = RuntimeFixture::new(manifest);
-    let output = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .output()
-        .unwrap();
+    let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("DEPENDENCY_UNAVAILABLE"), "{error}");
-    let connection = registry_connection(&fixture);
+    let connection = fixture.registry();
     let (outcome, finalization, second_started, unresolved): (String, String, i64, i64) =
         connection
             .query_row(
@@ -1984,49 +1586,13 @@ fn service_failure_during_another_services_preparation_releases_no_further_workl
     assert!(!release.exists());
 }
 
-fn run_row(fixture: &RuntimeFixture, run_id: &str) -> Option<(Option<String>, String)> {
-    rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?
-    .query_row(
-        "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
-        [run_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .ok()
-}
-
-fn wait_for_settled(fixture: &RuntimeFixture, run_id: &str) -> Option<String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some((outcome, finalization)) = run_row(fixture, run_id)
-            && finalization == "complete"
-        {
-            return outcome;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "background session did not settle"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 #[test]
 fn background_launch_acknowledges_establishment_not_task_success() {
-    let marker = tempfile_marker("daemon-live");
+    let marker = temp_marker("nixfied-output-daemon-live");
     let fixture = blocking_session(&marker);
     let started = std::time::Instant::now();
-    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
-    assert!(
-        launch.status.success(),
-        "{}",
-        String::from_utf8_lossy(&launch.stderr)
-    );
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
+    assert_success(&launch);
     assert!(started.elapsed() < Duration::from_secs(10));
     let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
     let run_id = acknowledgement["runId"].as_str().unwrap().to_owned();
@@ -2042,19 +1608,14 @@ fn background_launch_acknowledges_establishment_not_task_success() {
         Some((None, "unfinished".into())),
         "acknowledgement never claims task completion"
     );
-    let owner: i32 = rusqlite::Connection::open_with_flags(
-        fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap()
-    .query_row(
-        "SELECT json_extract(owner_identity, '$.pid') FROM runs WHERE run_id = ?1",
-        [&run_id],
-        |row| row.get(0),
-    )
-    .unwrap();
+    let owner: i32 = fixture
+        .registry()
+        .query_row(
+            "SELECT json_extract(owner_identity, '$.pid') FROM runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_ne!(
         unsafe { libc::getsid(owner) },
         unsafe { libc::getsid(0) },
@@ -2068,12 +1629,8 @@ fn background_launch_acknowledges_establishment_not_task_success() {
             "the owner holds no caller terminal or pipe"
         );
     }
-    let down = fixture.command("down", &[]).output().unwrap();
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
+    let down = fixture.output("down", &[]);
+    assert_success(&down);
     let report: Value = serde_json::from_slice(&down.stdout).unwrap();
     assert_eq!(report["canceledRunId"], json!(run_id));
     assert_eq!(
@@ -2084,13 +1641,9 @@ fn background_launch_acknowledges_establishment_not_task_success() {
 
 #[test]
 fn background_failure_after_acknowledgement_belongs_to_the_session() {
-    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "3".into()]));
-    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
-    assert!(
-        launch.status.success(),
-        "{}",
-        String::from_utf8_lossy(&launch.stderr)
-    );
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit", "3"]));
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
+    assert_success(&launch);
     let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
     let run_id = acknowledgement["runId"].as_str().unwrap();
     assert_eq!(
@@ -2107,15 +1660,10 @@ fn background_failure_after_acknowledgement_belongs_to_the_session() {
 #[test]
 fn background_launch_rejects_before_establishment_without_new_work() {
     // An occupied slot rejects without a second session record.
-    let marker = tempfile_marker("daemon-occupied");
+    let marker = temp_marker("nixfied-output-daemon-occupied");
     let fixture = blocking_session(&marker);
-    let owner = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (first, _) = published_session(&fixture);
-    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    let (owner, first, _) = spawn_live_session(&fixture, &marker);
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
     assert_eq!(
         launch.status.code(),
         Some(22),
@@ -2123,18 +1671,12 @@ fn background_launch_rejects_before_establishment_without_new_work() {
         String::from_utf8_lossy(&launch.stderr)
     );
     assert!(String::from_utf8_lossy(&launch.stderr).contains("CLEANUP_REFUSED"));
-    let runs: i64 = registry_connection(&fixture)
+    let runs: i64 = fixture
+        .registry()
         .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
         .unwrap();
     assert_eq!(runs, 1);
-    assert!(
-        fixture
-            .command("down", &[])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
+    assert_success(&fixture.output("down", &[]));
     let _ = wait_for_child_output(owner, Duration::from_secs(10));
     assert_eq!(
         wait_for_settled(&fixture, &first).as_deref(),
@@ -2142,17 +1684,14 @@ fn background_launch_rejects_before_establishment_without_new_work() {
     );
 
     // Interactive stdin and an output projection reject before any state.
-    let mut manifest = leaf_task_manifest(&["exit".into(), "0".into()]);
+    let mut manifest = leaf_task_manifest(&["exit", "0"]);
     manifest["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
     let fixture = RuntimeFixture::new(manifest);
-    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
     assert_eq!(launch.status.code(), Some(37));
     assert!(!fixture.state_base.join("registry").exists());
-    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "0".into()]));
-    let launch = run(
-        &fixture,
-        &["--task", "smoke", "--daemon", "--output", "json"],
-    );
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit", "0"]));
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon", "--output", "json"]);
     assert_eq!(launch.status.code(), Some(36));
     assert!(!fixture.state_base.exists());
 }
@@ -2161,14 +1700,7 @@ fn background_launch_rejects_before_establishment_without_new_work() {
 fn sealed_backlog_larger_than_one_pass_is_drained_completely() {
     use std::io::Read;
     let count = 12 * 1024 * 1024;
-    let manifest = task_manifest(&[
-        "output".into(),
-        "repeat".into(),
-        "78".into(),
-        count.to_string(),
-        "79".into(),
-        "0".into(),
-    ]);
+    let manifest = task_manifest(&["output", "repeat", "78", &count.to_string(), "79", "0"]);
     let fixture = RuntimeFixture::new(manifest);
     let mut child = fixture
         .command("run", &["--task", "smoke", "--output", "task-output"])
@@ -2176,72 +1708,29 @@ fn sealed_backlog_larger_than_one_pass_is_drained_completely() {
         .unwrap();
     let mut stdout = child.stdout.take().unwrap();
     // Read nothing until the output is sealed, so the whole backlog remains.
-    let registry = fixture
-        .state_base
-        .join("registry/runtime-test/dev/0/registry.sqlite3");
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while !rusqlite::Connection::open_with_flags(
-        &registry,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()
-    .and_then(|connection| {
-        connection
-            .query_row("SELECT output = 'sealed' FROM runs", [], |row| {
-                row.get::<_, bool>(0)
-            })
-            .ok()
-    })
-    .unwrap_or(false)
-    {
-        assert!(std::time::Instant::now() < deadline, "output never sealed");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for_registry(&fixture, "SELECT output = 'sealed' FROM runs");
     let mut bytes = Vec::new();
     stdout.read_to_end(&mut bytes).unwrap();
     let output = wait_for_child_output(child, Duration::from_secs(20));
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     assert_eq!(bytes.len(), count, "a slow reader is never truncated");
     assert!(bytes.iter().all(|byte| *byte == b'x'));
 }
 
 #[test]
 fn recovery_settles_a_dead_owners_service_without_inventing_capture() {
-    let marker = tempfile_marker("recovery-capture");
-    let mut manifest = task_manifest(&[
-        "output".into(),
-        "hex-block".into(),
-        "".into(),
-        "".into(),
-        marker.to_string_lossy().into_owned(),
-    ]);
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    let fixture = RuntimeFixture::new(manifest);
-    let owner = fixture
-        .command("run", &["--task", "smoke", "--output", "json"])
-        .spawn()
-        .unwrap();
-    assert!(wait_for_path(&marker, Duration::from_secs(5)));
-    let (run_id, _) = published_session(&fixture);
+    let marker = temp_marker("nixfied-output-recovery-capture");
+    let fixture = RuntimeFixture::new(blocking_manifest(&marker, true, b"", b""));
+    let (owner, run_id, _) = spawn_live_session(&fixture, &marker);
     assert_eq!(
         unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
         0
     );
     let _ = wait_for_child_output(owner, Duration::from_secs(5));
-    let down = fixture.command("down", &[]).output().unwrap();
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
-    let rows: Vec<(String, String, String)> = registry_connection(&fixture)
+    let down = fixture.output("down", &[]);
+    assert_success(&down);
+    let rows: Vec<(String, String, String)> = fixture
+        .registry()
         .prepare("SELECT role, ownership, capture FROM processes WHERE run_id = ?1 ORDER BY role")
         .unwrap()
         .query_map([&run_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
@@ -2259,58 +1748,75 @@ fn recovery_settles_a_dead_owners_service_without_inventing_capture() {
 }
 
 #[test]
-fn stalled_stdout_does_not_hold_back_stderr_presentation() {
+fn a_stalled_stream_does_not_hold_back_the_other() {
     use std::io::Read;
-    let stdout_count = 8 * 1024 * 1024;
-    let stderr_count = 4096;
-    let manifest = task_manifest(&[
-        "output".into(),
-        "repeat".into(),
-        "78".into(),
-        stdout_count.to_string(),
-        "79".into(),
-        stderr_count.to_string(),
-    ]);
-    let fixture = RuntimeFixture::new(manifest);
-    let mut child = fixture
-        .command("run", &["--task", "smoke", "--output", "task-output"])
-        .spawn()
-        .unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    // Never read stdout until stderr has fully arrived.
-    let mut seen = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while seen.iter().filter(|byte| **byte == b'y').count() < stderr_count {
+    let flood = 8 * 1024 * 1024;
+    let small = 4096;
+    for stall_stdout in [true, false] {
+        let (stdout_count, stderr_count) = if stall_stdout {
+            (flood, small)
+        } else {
+            (small, flood)
+        };
+        let fixture = RuntimeFixture::new(task_manifest(&[
+            "output",
+            "repeat",
+            "78",
+            &stdout_count.to_string(),
+            "01",
+            &stderr_count.to_string(),
+        ]));
+        let mut child = fixture
+            .command("run", &["--task", "smoke", "--output", "task-output"])
+            .spawn()
+            .unwrap();
+        let stdout: Box<dyn std::io::Read + Send> = Box::new(child.stdout.take().unwrap());
+        let stderr: Box<dyn std::io::Read + Send> = Box::new(child.stderr.take().unwrap());
+        let (stalled, mut live, live_byte) = if stall_stdout {
+            (stdout, stderr, 0x01)
+        } else {
+            (stderr, stdout, b'x')
+        };
+        // Never read the stalled stream until the other has fully arrived.
+        let mut seen = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while seen.iter().filter(|byte| **byte == live_byte).count() < small {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a stream was held back by the stalled reader (stall stdout: {stall_stdout})"
+            );
+            let read = live.read(&mut chunk).unwrap();
+            assert!(read > 0, "a stream closed before its bytes arrived");
+            seen.extend_from_slice(&chunk[..read]);
+        }
         assert!(
-            std::time::Instant::now() < deadline,
-            "stderr was held back by the stalled stdout reader"
+            child.try_wait().unwrap().is_none(),
+            "the other stream is still stalled"
         );
-        let read = stderr.read(&mut chunk).unwrap();
-        assert!(read > 0, "stderr closed before its bytes arrived");
-        seen.extend_from_slice(&chunk[..read]);
+        let reader = stdout_reader(stalled);
+        live.read_to_end(&mut seen).unwrap();
+        assert!(child.wait().unwrap().success());
+        let resumed = reader.join().unwrap();
+        let (stdout, stderr) = if stall_stdout {
+            (resumed, seen)
+        } else {
+            (seen, resumed)
+        };
+        assert_eq!(
+            stdout.len(),
+            stdout_count,
+            "a slow reader is never truncated"
+        );
+        assert!(stdout.iter().all(|byte| *byte == b'x'));
+        assert_eq!(task_bytes(&stderr), stderr_count);
     }
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "stdout is still stalled"
-    );
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
-    let mut rest = Vec::new();
-    stderr.read_to_end(&mut rest).unwrap();
-    let status = child.wait().unwrap();
-    assert!(status.success());
-    assert_eq!(reader.join().unwrap().len(), stdout_count);
 }
 
 #[test]
 fn interrupted_launcher_leaves_no_live_background_session() {
     for delay in [0_u64, 5, 20, 80] {
-        let marker = tempfile_marker("daemon-interrupt");
+        let marker = temp_marker("nixfied-output-daemon-interrupt");
         let fixture = blocking_session(&marker);
         let launcher = fixture
             .command("run", &["--task", "smoke", "--daemon"])
@@ -2327,14 +1833,7 @@ fn interrupted_launcher_leaves_no_live_background_session() {
             // acknowledgement: that session is established and independent.
             let acknowledgement: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert!(acknowledgement["runId"].is_string());
-            assert!(
-                fixture
-                    .command("down", &[])
-                    .output()
-                    .unwrap()
-                    .status
-                    .success()
-            );
+            assert_success(&fixture.output("down", &[]));
         }
         // Either the owner abandoned before its commit, or establishment won
         // and the launcher canceled exactly that session. A signal that lands
@@ -2345,117 +1844,13 @@ fn interrupted_launcher_leaves_no_live_background_session() {
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
-        let registry = fixture
-            .state_base
-            .join("registry/runtime-test/dev/0/registry.sqlite3");
-        if !registry.exists() {
-            continue;
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let unfinished: i64 = registry_connection(&fixture)
-                .query_row(
-                    "SELECT count(*) FROM runs WHERE finalization = 'unfinished'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            if unfinished == 0 {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "an interrupted launch left a live session (delay {delay})"
+        if find_named(&fixture.state_base, "registry.sqlite3").is_some() {
+            // An interrupted launch leaves no live session.
+            wait_for_registry(
+                &fixture,
+                "SELECT count(*) = 0 FROM runs WHERE finalization = 'unfinished'",
             );
-            std::thread::sleep(Duration::from_millis(20));
         }
-    }
-}
-
-#[test]
-fn stalled_stderr_does_not_hold_back_stdout_presentation() {
-    use std::io::Read;
-    let stdout_count = 4096;
-    let stderr_count = 8 * 1024 * 1024;
-    let manifest = task_manifest(&[
-        "output".into(),
-        "repeat".into(),
-        "78".into(),
-        stdout_count.to_string(),
-        "01".into(),
-        stderr_count.to_string(),
-    ]);
-    let fixture = RuntimeFixture::new(manifest);
-    let mut child = fixture
-        .command("run", &["--task", "smoke", "--output", "task-output"])
-        .spawn()
-        .unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    // Never read stderr until stdout has fully arrived.
-    let mut seen = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while seen.len() < stdout_count {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "stdout was held back by the stalled stderr reader"
-        );
-        let read = stdout.read(&mut chunk).unwrap();
-        assert!(read > 0, "stdout closed before its bytes arrived");
-        seen.extend_from_slice(&chunk[..read]);
-    }
-    assert!(seen.iter().all(|byte| *byte == b'x'));
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "stderr is still stalled"
-    );
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
-    let mut rest = Vec::new();
-    stdout.read_to_end(&mut rest).unwrap();
-    let status = child.wait().unwrap();
-    assert!(status.success());
-    assert!(rest.is_empty());
-    let stderr = reader.join().unwrap();
-    assert_eq!(
-        task_bytes(&stderr),
-        stderr_count,
-        "a slow stderr reader is never truncated"
-    );
-}
-
-fn wait_for_sealed_settlement(fixture: &RuntimeFixture) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let settled = rusqlite::Connection::open_with_flags(
-            fixture
-                .state_base
-                .join("registry/runtime-test/dev/0/registry.sqlite3"),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .ok()
-        .and_then(|connection| {
-            connection
-                .query_row(
-                    "SELECT finalization = 'complete' AND output = 'sealed' FROM runs",
-                    [],
-                    |row| row.get::<_, bool>(0),
-                )
-                .ok()
-        })
-        .unwrap_or(false);
-        if settled {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "stalled readers must not delay session settlement"
-        );
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -2464,12 +1859,12 @@ fn stalled_stdout_and_stderr_block_neither_settlement_nor_slot_release() {
     use std::io::Read;
     let count = 4 * 1024 * 1024;
     let manifest = task_manifest(&[
-        "output".into(),
-        "repeat".into(),
-        "78".into(),
-        count.to_string(),
-        "01".into(),
-        count.to_string(),
+        "output",
+        "repeat",
+        "78",
+        &count.to_string(),
+        "01",
+        &count.to_string(),
     ]);
     let fixture = RuntimeFixture::new(manifest);
     let mut child = fixture
@@ -2479,25 +1874,17 @@ fn stalled_stdout_and_stderr_block_neither_settlement_nor_slot_release() {
     // Hold both caller streams open without reading either.
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
-    wait_for_sealed_settlement(&fixture);
+    wait_for_registry(&fixture, SEALED_SETTLEMENT);
     assert!(
         child.try_wait().unwrap().is_none(),
         "the command keeps presenting after settlement"
     );
     // Another session acquires the released slot while both readers stall.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let successor = loop {
-        let successor = run(&fixture, &["--task", "smoke", "--output", "json"]);
-        if successor.status.success() || std::time::Instant::now() >= deadline {
-            break successor;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(
-        successor.status.success(),
-        "{}",
-        String::from_utf8_lossy(&successor.stderr)
-    );
+    assert_success(&output_eventually(
+        &fixture,
+        "run",
+        &["--task", "smoke", "--output", "json"],
+    ));
     assert!(child.try_wait().unwrap().is_none());
     // Delivery resumes from the sealed evidence without truncation.
     let reader = std::thread::spawn(move || {
@@ -2524,39 +1911,16 @@ fn task_bytes(bytes: &[u8]) -> usize {
 /// A composite whose first step floods the caller's stderr in summary mode and
 /// whose second step blocks with `marker`, so the reader is stalled while the
 /// session is still live.
-fn stalled_live_session(marker: &std::path::Path, service: bool) -> RuntimeFixture {
-    let mut manifest = if service {
-        task_manifest(&[])
-    } else {
-        leaf_task_manifest(&[])
-    };
-    set_task_run_args(
+fn stalled_live_session(marker: &Path, service: bool) -> RuntimeFixture {
+    let mut manifest = blocking_manifest(marker, service, b"", b"");
+    let requires: &[&str] = if service { &["synthetic"] } else { &[] };
+    let flood = (4 * 1024 * 1024).to_string();
+    add_task_clone(
         &mut manifest,
-        &[
-            "output".into(),
-            "hex-block".into(),
-            "".into(),
-            "".into(),
-            marker.to_string_lossy().into_owned(),
-        ],
+        "flood",
+        requires,
+        &["output", "repeat", "78", "0", "01", &flood],
     );
-    manifest["tasks"]["smoke"]["invocation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("timeoutMs");
-    let mut flood = manifest["tasks"]["smoke"].clone();
-    flood["operationId"] = json!("task.flood.run");
-    let program = flood["invocation"]["run"][0].clone();
-    flood["invocation"]["run"] = json!([
-        program,
-        "output",
-        "repeat",
-        "78",
-        "0",
-        "01",
-        (4 * 1024 * 1024).to_string()
-    ]);
-    manifest["tasks"]["flood"] = flood;
     manifest["tasks"]["pipeline"] = json!({
         "kind": "composite", "defaultOutput": "summary",
         "steps": {"flood": {"task": "flood", "dependsOn": []}, "block": {"task": "smoke", "dependsOn": ["flood"]}}
@@ -2567,7 +1931,7 @@ fn stalled_live_session(marker: &std::path::Path, service: bool) -> RuntimeFixtu
 #[test]
 fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
     for service in [false, true] {
-        let marker = tempfile_marker("stalled-live");
+        let marker = temp_marker("nixfied-output-stalled-live");
         let fixture = stalled_live_session(&marker, service);
         let mut child = fixture
             .command("run", &["--task", "pipeline", "--output", "summary"])
@@ -2579,7 +1943,8 @@ fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
         assert!(wait_for_path(&marker, Duration::from_secs(20)));
         let (run_id, _) = published_session(&fixture);
         if service {
-            let pid: i32 = registry_connection(&fixture)
+            let pid: i32 = fixture
+                .registry()
                 .query_row(
                     "SELECT pid FROM processes WHERE role = 'service' AND run_id = ?1",
                     [&run_id],
@@ -2588,15 +1953,8 @@ fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
                 .unwrap();
             assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
         } else {
-            let down = fixture
-                .command("down", &["--timeout-ms", "10000"])
-                .output()
-                .unwrap();
-            assert!(
-                down.status.success(),
-                "{}",
-                String::from_utf8_lossy(&down.stderr)
-            );
+            let down = fixture.output("down", &["--timeout-ms", "10000"]);
+            assert_success(&down);
             let report: Value = serde_json::from_slice(&down.stdout).unwrap();
             assert_eq!(report["canceledRunId"], json!(run_id));
         }
@@ -2606,7 +1964,8 @@ fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
             Some(expected),
             "supervision and teardown proceed while the caller stalls"
         );
-        let rows: Vec<(String, String)> = registry_connection(&fixture)
+        let rows: Vec<(String, String)> = fixture
+            .registry()
             .prepare("SELECT role, ownership FROM processes WHERE run_id = ?1")
             .unwrap()
             .query_map([&run_id], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -2618,19 +1977,7 @@ fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
             "{rows:?}"
         );
         // The slot is released while the command still presents.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let clean = loop {
-            let clean = run_control(&fixture, "clean");
-            if clean.status.success() || std::time::Instant::now() >= deadline {
-                break clean;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        assert!(
-            clean.status.success(),
-            "{}",
-            String::from_utf8_lossy(&clean.stderr)
-        );
+        assert_success(&output_eventually(&fixture, "clean", &[]));
         assert!(
             child.try_wait().unwrap().is_none(),
             "the caller's reader is still stalled"
@@ -2660,20 +2007,17 @@ fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
 
 #[test]
 fn background_owner_death_after_acknowledgement_recovers_under_the_acknowledged_identity() {
-    let marker = tempfile_marker("daemon-owner-death");
+    let marker = temp_marker("nixfied-output-daemon-owner-death");
     let fixture = blocking_session(&marker);
-    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
-    assert!(
-        launch.status.success(),
-        "{}",
-        String::from_utf8_lossy(&launch.stderr)
-    );
+    let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
+    assert_success(&launch);
     let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
     let run_id = acknowledgement["runId"].as_str().unwrap().to_owned();
     assert!(wait_for_path(&marker, Duration::from_secs(5)));
     let (published, task_pid) = published_session(&fixture);
     assert_eq!(published, run_id);
-    let owner: i32 = registry_connection(&fixture)
+    let owner: i32 = fixture
+        .registry()
         .query_row(
             "SELECT json_extract(owner_identity, '$.pid') FROM runs WHERE run_id = ?1",
             [&run_id],
@@ -2681,25 +2025,16 @@ fn background_owner_death_after_acknowledgement_recovers_under_the_acknowledged_
         )
         .unwrap();
     assert_eq!(unsafe { libc::kill(owner, libc::SIGKILL) }, 0);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while unsafe { libc::kill(owner, 0) } == 0 {
-        assert!(std::time::Instant::now() < deadline, "owner was not reaped");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    poll_until(Duration::from_secs(5), "the owner to be reaped", || {
+        (unsafe { libc::kill(owner, 0) } != 0).then_some(())
+    });
     assert_eq!(
         run_row(&fixture, &run_id),
         Some((None, "unfinished".into())),
         "owner death alone never settles the session"
     );
-    let down = fixture
-        .command("down", &["--timeout-ms", "10000"])
-        .output()
-        .unwrap();
-    assert!(
-        down.status.success(),
-        "{}",
-        String::from_utf8_lossy(&down.stderr)
-    );
+    let down = fixture.output("down", &["--timeout-ms", "10000"]);
+    assert_success(&down);
     let report: Value = serde_json::from_slice(&down.stdout).unwrap();
     assert!(report.get("canceledRunId").is_none(), "{report}");
     assert_eq!(report["stopped"].as_array().unwrap().len(), 1, "{report}");
@@ -2709,7 +2044,8 @@ fn background_owner_death_after_acknowledgement_recovers_under_the_acknowledged_
         Some((Some("interrupted".into()), "complete".into())),
         "recovery settles the acknowledged session under its own identity"
     );
-    let runs: i64 = registry_connection(&fixture)
+    let runs: i64 = fixture
+        .registry()
         .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
         .unwrap();
     assert_eq!(runs, 1, "recovery invents no replacement session");

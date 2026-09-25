@@ -3,31 +3,33 @@ use std::io;
 use std::net::TcpListener;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, Command, Output};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use nixfied_manifest::{Manifest, ValidatedManifest};
 use serde_json::{Value, json};
 
 mod common;
 use common::*;
 
-static ENDPOINT_TESTS: Mutex<()> = Mutex::new(());
+/// Endpoint scenarios race real host ports; run them one at a time.
+fn serial() -> MutexGuard<'static, ()> {
+    static ENDPOINT_TESTS: Mutex<()> = Mutex::new(());
+    ENDPOINT_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 #[test]
 fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
-    let root_a = temp.path.join("root-a");
-    let root_b = temp.path.join("root-b");
-    let first = HeldSession::start(&manifest, &root_a);
+    let fixture = endpoint_fixture(port, false, true, "hold");
+    let root_a = fixture.tmp.path.join("root-a");
+    let root_b = fixture.tmp.path.join("root-b");
+    let first = HeldSession::start(&fixture, &root_a);
     assert!(find_named(&root_a, "endpoint-prepare-sentinel").is_some());
-    let blocked = run_command(&manifest, &root_b).output().unwrap();
+    let blocked = run_command(&fixture, &root_b).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
@@ -36,7 +38,7 @@ fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
     );
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
     first.finish();
-    let second = HeldSession::start(&manifest, &root_b);
+    let second = HeldSession::start(&fixture, &root_b);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_some());
     second.finish();
     // Run-scoped data ends with its session; the application tree is gone.
@@ -45,42 +47,34 @@ fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
 
 #[test]
 fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
-    let root_a = temp.path.join("root-a");
-    let root_b = temp.path.join("root-b");
+    let fixture = endpoint_fixture(port, true, false, "hold");
+    let root_a = fixture.tmp.path.join("root-a");
+    let root_b = fixture.tmp.path.join("root-b");
 
-    let winner = spawn_run(&manifest, &root_a);
+    let winner = spawn_run(&fixture, &root_a);
     let sentinel = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("root A should enter prepare while retaining the lock");
-    let loser = spawn_run(&manifest, &root_b);
+    let loser = spawn_run(&fixture, &root_b);
     let loser_output = wait_for_child_output(loser, Duration::from_secs(5));
     assert_port_conflict(&loser_output, "startup-lock-contended", port);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
 
     fs::write(sentinel.with_file_name("endpoint-prepare-ack"), b"continue").unwrap();
     let winner_output = wait_for_child_output(winner, Duration::from_secs(20));
-    assert_success(&winner_output, "lock winner");
+    assert_success(&winner_output);
 }
 
 #[test]
 fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
-    let root_a = temp.path.join("root-a");
-    let root_b = temp.path.join("root-b");
+    let fixture = endpoint_fixture(port, true, false, "hold");
+    let root_a = fixture.tmp.path.join("root-a");
+    let root_b = fixture.tmp.path.join("root-b");
 
-    let runtime = spawn_run(&manifest, &root_a);
+    let runtime = spawn_run(&fixture, &root_a);
     let sentinel_a = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("first runtime should block in prepare");
     let runtime_pid = runtime.id();
@@ -98,7 +92,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     )
     .unwrap();
 
-    let successor = spawn_run(&manifest, &root_b);
+    let successor = spawn_run(&fixture, &root_b);
     let sentinel_b = wait_for_named(&root_b, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("successor should acquire the released kernel lock");
     fs::write(
@@ -106,24 +100,17 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
         b"continue",
     )
     .unwrap();
-    assert_success(
-        &wait_for_child_output(successor, Duration::from_secs(20)),
-        "successor after runtime SIGKILL",
-    );
+    assert_success(&wait_for_child_output(successor, Duration::from_secs(20)));
 }
 
 #[test]
 fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, true, false, "hold");
-    let root = temp.path.join("root");
+    let fixture = endpoint_fixture(port, true, false, "hold");
+    let root = fixture.tmp.path.join("root");
 
-    let runtime = spawn_run(&manifest, &root);
+    let runtime = spawn_run(&fixture, &root);
     let sentinel = wait_for_named(&root, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("runtime should finish preflight and enter prepare");
     let external = TcpListener::bind(("127.0.0.1", port))
@@ -146,19 +133,15 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
 
 #[test]
 fn external_exact_and_wildcard_listeners_fail_before_prepare() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
+    let _serial = serial();
     for address in ["127.0.0.1", "0.0.0.0"] {
-        let temp = TempDir::new();
         let external = TcpListener::bind((address, 0)).unwrap();
         enable_address_reuse(&external);
         let port = external.local_addr().unwrap().port();
-        let manifest = write_endpoint_manifest(&temp.path, &child, port, false, false, "hold");
-        let root = temp.path.join("root");
+        let fixture = endpoint_fixture(port, false, false, "hold");
+        let root = fixture.tmp.path.join("root");
 
-        let output = run_command(&manifest, &root).output().unwrap();
+        let output = run_command(&fixture, &root).output().unwrap();
         let error = assert_port_conflict(&output, "listener-occupied", port);
         assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
         assert!(
@@ -171,35 +154,28 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
 
 #[test]
 fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &child, port, false, false, "active-close");
-    let root = temp.path.join("root");
+    let fixture = endpoint_fixture(port, false, false, "active-close");
+    let root = fixture.tmp.path.join("root");
 
-    let first = run_command(&manifest, &root).output().unwrap();
-    assert_success(&first, "first active-close lifecycle");
+    let first = run_command(&fixture, &root).output().unwrap();
+    assert_success(&first);
     assert_nonreusable_bind_is_occupied(port);
 
-    let second = run_command(&manifest, &root).output().unwrap();
-    assert_success(&second, "immediate lifecycle repeat");
+    let second = run_command(&fixture, &root).output().unwrap();
+    assert_success(&second);
 }
 
 #[test]
 fn lost_listener_does_not_grant_a_second_session_execution_rights() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "close");
-    let root = temp.path.join("root");
-    let first = HeldSession::start(&manifest, &root);
+    let fixture = endpoint_fixture(port, false, true, "close");
+    let root = fixture.tmp.path.join("root");
+    let first = HeldSession::start(&fixture, &root);
     let (pid, first_key) = service_process(&root);
-    let blocked = run_command(&manifest, &root).output().unwrap();
+    let blocked = run_command(&fixture, &root).output().unwrap();
     assert_error_code(&blocked, "CLEANUP_REFUSED", 22);
     assert_eq!(
         unsafe { libc::kill(pid, 0) },
@@ -207,25 +183,22 @@ fn lost_listener_does_not_grant_a_second_session_execution_rights() {
         "refusal must not signal the owner"
     );
     first.finish();
-    let second = HeldSession::start(&manifest, &root);
+    let second = HeldSession::start(&fixture, &root);
     assert_ne!(service_process(&root).1, first_key);
     second.finish();
 }
 
 #[test]
 fn active_session_blocks_replacement_without_mutating_owner_evidence() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
-    let root = temp.path.join("root");
-    let owner = HeldSession::start(&manifest, &root);
+    let fixture = endpoint_fixture(port, false, true, "hold");
+    let root = fixture.tmp.path.join("root");
+    let owner = HeldSession::start(&fixture, &root);
     let (pid, key) = service_process(&root);
     let before = service_evidence(&root, &key);
     assert_error_code(
-        &run_command(&manifest, &root).output().unwrap(),
+        &run_command(&fixture, &root).output().unwrap(),
         "CLEANUP_REFUSED",
         22,
     );
@@ -236,23 +209,21 @@ fn active_session_blocks_replacement_without_mutating_owner_evidence() {
 
 #[test]
 fn interrupted_starting_service_is_cleaned_before_fresh_start_not_adopted() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "hold");
-    let root = temp.path.join("root");
-    let mut predecessor = HeldSession::start(&manifest, &root);
+    let fixture = endpoint_fixture(port, false, true, "hold");
+    let root = fixture.tmp.path.join("root");
+    let mut predecessor = HeldSession::start(&fixture, &root);
     let (_, old_key) = service_process(&root);
     predecessor.crash();
-    registry_connection(&root)
+    rusqlite::Connection::open(find_named(&root, "registry.sqlite3").unwrap())
+        .unwrap()
         .execute(
             "UPDATE processes SET status = 'starting' WHERE process_key = ?1",
             [&old_key],
         )
         .unwrap();
-    let successor = HeldSession::start(&manifest, &root);
+    let successor = HeldSession::start(&fixture, &root);
     assert_ne!(service_process(&root).1, old_key);
     assert_eq!(
         service_evidence(&root, &old_key),
@@ -263,18 +234,15 @@ fn interrupted_starting_service_is_cleaned_before_fresh_start_not_adopted() {
 
 #[test]
 fn outside_listener_survives_predecessor_recovery_and_reports_conflict() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(1);
-    let manifest = write_endpoint_manifest(&temp.path, &test_child(), port, false, true, "close");
-    let root = temp.path.join("root");
-    let mut predecessor = HeldSession::start(&manifest, &root);
+    let fixture = endpoint_fixture(port, false, true, "close");
+    let root = fixture.tmp.path.join("root");
+    let mut predecessor = HeldSession::start(&fixture, &root);
     let (_, old_key) = service_process(&root);
     let external = TcpListener::bind(("127.0.0.1", port)).unwrap();
     predecessor.crash();
-    let blocked = run_command(&manifest, &root).output().unwrap();
+    let blocked = run_command(&fixture, &root).output().unwrap();
     let error = assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(
         error["details"]["portConflict"]
@@ -287,21 +255,23 @@ fn outside_listener_survives_predecessor_recovery_and_reports_conflict() {
     );
     assert_eq!(external.local_addr().unwrap().port(), port);
     drop(external);
-    HeldSession::start(&manifest, &root).finish();
+    HeldSession::start(&fixture, &root).finish();
 }
 
 #[test]
 fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
-    let _serial = ENDPOINT_TESTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let child = test_child();
-    let temp = TempDir::new();
+    let _serial = serial();
     let port = available_port_window(2);
-    let manifest = write_multi_endpoint_manifest(&temp.path, &child, port);
-    let root = temp.path.join("root");
+    let mut manifest = endpoint_manifest(port, false, false, "hold");
+    manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
+    manifest["services"]["synthetic"]["endpoints"]["admin"] = json!({
+        "endpointId": "admin",
+        "host": "127.0.0.1"
+    });
+    let fixture = RuntimeFixture::new(manifest);
+    let root = fixture.tmp.path.join("root");
 
-    let first = run_command(&manifest, &root).output().unwrap();
+    let first = run_command(&fixture, &root).output().unwrap();
     let first_error = stderr_json(&first.stderr);
     assert_eq!(
         first.status.code(),
@@ -332,7 +302,7 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
 
     // A second full attempt reaches the same truthful readiness result rather
     // than startup-lock contention, proving all guards left the failed start.
-    let second = run_command(&manifest, &root).output().unwrap();
+    let second = run_command(&fixture, &root).output().unwrap();
     let second_error = stderr_json(&second.stderr);
     assert_eq!(
         second.status.code(),
@@ -342,156 +312,84 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
     assert_eq!(second_error["code"], json!("READINESS_TIMEOUT"));
 }
 
-fn write_endpoint_manifest(
-    directory: &Path,
-    child: &Path,
+/// The same manifest shared by independent state roots under one fixture.
+fn endpoint_fixture(
     port: u16,
     blocking_prepare: bool,
     hold_session: bool,
     listener_behavior: &str,
-) -> PathBuf {
-    write_manifest(
-        directory,
-        endpoint_manifest(
-            child,
-            port,
-            blocking_prepare,
-            hold_session,
-            listener_behavior,
-        ),
-    )
+) -> RuntimeFixture {
+    RuntimeFixture::new(endpoint_manifest(
+        port,
+        blocking_prepare,
+        hold_session,
+        listener_behavior,
+    ))
 }
 
 fn endpoint_manifest(
-    child: &Path,
     port: u16,
     blocking_prepare: bool,
     hold_session: bool,
     listener_behavior: &str,
 ) -> Value {
-    let closure_root = closure_root_for_store_executable(child)
-        .expect("store executable should have a closure root");
-    let executable_name = child
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("test child should have a UTF-8 file name");
-    let mut value = synthetic_manifest(
-        &child.to_string_lossy(),
-        &["listen", "127.0.0.1", "${port}", "hold"],
-        port,
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-
-    value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
-    let (start_run, task_run) = match listener_behavior {
-        "hold" => (
-            json!([executable_name, "listen", "127.0.0.1", "${port}", "hold"]),
-            json!([executable_name, "connect", "127.0.0.1", "${port}", "close"]),
-        ),
+    let (start_args, task_args): (&[&str], &[&str]) = match listener_behavior {
+        "hold" => (LISTEN_HOLD, &["connect", "127.0.0.1", "${port}", "close"]),
         "active-close" => (
-            json!([
-                executable_name,
-                "listen",
-                "127.0.0.1",
-                "${port}",
-                "active-close"
-            ]),
-            json!([
-                executable_name,
-                "connect",
-                "127.0.0.1",
-                "${port}",
-                "wait-eof"
-            ]),
+            &["listen", "127.0.0.1", "${port}", "active-close"],
+            &["connect", "127.0.0.1", "${port}", "wait-eof"],
         ),
         "close" => (
-            json!([
-                executable_name,
+            &[
                 "listen",
                 "127.0.0.1",
                 "${port}",
                 "close-on-marker",
                 "${stateDir}/endpoint-listener-close",
-                "${stateDir}/endpoint-listener-closed"
-            ]),
-            json!([
-                executable_name,
+                "${stateDir}/endpoint-listener-closed",
+            ],
+            &[
                 "connect",
                 "127.0.0.1",
                 "${port}",
                 "close-and-signal",
                 "${stateDir}/endpoint-listener-close",
-                "${stateDir}/endpoint-listener-closed"
-            ]),
+                "${stateDir}/endpoint-listener-closed",
+            ],
         ),
         behavior => panic!("unsupported endpoint listener behavior {behavior:?}"),
     };
-    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = start_run;
-    value["tasks"]["smoke"]["invocation"]["run"] = task_run;
-    let mut prepare = value["tasks"]["smoke"].clone();
-    prepare["operationId"] = json!("task.endpoint-prepare.run");
-    prepare["requires"] = json!([]);
-
-    prepare["logRefs"] = json!(["task.endpoint-prepare"]);
-    prepare["invocation"]["run"] = if blocking_prepare {
-        json!([
-            executable_name,
-            "prepare",
-            "${stateDir}/endpoint-prepare-sentinel",
-            "${stateDir}/endpoint-prepare-ack"
-        ])
+    let mut value = test_child_service(start_args, port, port);
+    set_task_run_args(&mut value, task_args);
+    let sentinel = "${stateDir}/endpoint-prepare-sentinel";
+    if blocking_prepare {
+        add_endpoint_prepare(
+            &mut value,
+            &["prepare", sentinel, "${stateDir}/endpoint-prepare-ack"],
+        );
     } else {
-        json!([
-            executable_name,
-            "prepare",
-            "${stateDir}/endpoint-prepare-sentinel"
-        ])
-    };
-    value["tasks"]["endpoint-prepare"] = prepare;
+        add_endpoint_prepare(&mut value, &["prepare", sentinel]);
+    }
     if hold_session {
-        let mut client = value["tasks"]["smoke"].clone();
-        client["operationId"] = json!("task.endpoint-client.run");
-        let mut wait = client.clone();
-        wait["operationId"] = json!("task.endpoint-wait.run");
-        wait["invocation"]["run"] = json!([
-            executable_name,
-            "prepare",
-            "${stateDir}/endpoint-session-active",
-            "${stateDir}/endpoint-session-ack"
-        ]);
-        wait["invocation"]
-            .as_object_mut()
-            .unwrap()
-            .remove("timeoutMs");
-        value["tasks"]["endpoint-client"] = client;
-        value["tasks"]["endpoint-wait"] = wait;
+        add_task_clone(&mut value, "endpoint-client", &["synthetic"], task_args);
+        add_task_clone(
+            &mut value,
+            "endpoint-wait",
+            &["synthetic"],
+            &[
+                "prepare",
+                "${stateDir}/endpoint-session-active",
+                "${stateDir}/endpoint-session-ack",
+            ],
+        );
+        clear_task_deadline(&mut value, "endpoint-wait");
         value["tasks"]["smoke"] = json!({
             "kind": "composite",
             "steps": {"client": {"task": "endpoint-client"},
                       "wait": {"task": "endpoint-wait", "dependsOn": ["client"]}}
         });
     }
-
     value
-}
-
-fn write_manifest(directory: &Path, value: Value) -> PathBuf {
-    let manifest: Manifest = serde_json::from_value(value).expect("endpoint manifest should parse");
-    ValidatedManifest::try_from(manifest.clone()).expect("endpoint manifest should validate");
-    let path = directory.join("endpoint-manifest.json");
-    fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
-    path
-}
-
-fn write_multi_endpoint_manifest(directory: &Path, child: &Path, port: u16) -> PathBuf {
-    let mut value = endpoint_manifest(child, port, false, false, "hold");
-    value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
-    value["services"]["synthetic"]["endpoints"]["admin"] = json!({
-        "endpointId": "admin",
-        "host": "127.0.0.1"
-    });
-    write_manifest(directory, value)
 }
 
 fn enable_address_reuse(listener: &TcpListener) {
@@ -543,50 +441,25 @@ fn assert_nonreusable_bind_is_occupied(port: u16) {
     );
 }
 
-fn run_command(manifest: &Path, state_root: &Path) -> Command {
-    let mut command = runtime_command("run", manifest, state_root);
-    command.args([
-        "--task",
-        "smoke",
-        "--timeout-ms",
-        "20000",
-        "--output",
-        "json",
-    ]);
-    command
+fn run_command(fixture: &RuntimeFixture, state_root: &Path) -> Command {
+    fixture.command_at(
+        state_root,
+        "run",
+        &[
+            "--task",
+            "smoke",
+            "--timeout-ms",
+            "20000",
+            "--output",
+            "json",
+        ],
+    )
 }
 
-fn down_command(manifest: &Path, state_root: &Path) -> Command {
-    runtime_command("down", manifest, state_root)
-}
-
-fn runtime_command(action: &str, manifest: &Path, state_root: &Path) -> Command {
-    let mut command = Command::new(runtime_binary());
-    command
-        .arg(action)
-        .arg("--allow-non-store-manifest")
-        .arg("--manifest")
-        .arg(manifest)
-        .env("NIXFIED_STATE_DIR", state_root)
-        .current_dir(manifest.parent().unwrap())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
-}
-
-fn spawn_run(manifest: &Path, state_root: &Path) -> Child {
-    run_command(manifest, state_root)
+fn spawn_run(fixture: &RuntimeFixture, state_root: &Path) -> Child {
+    run_command(fixture, state_root)
         .spawn()
         .expect("runtime should spawn")
-}
-
-fn assert_success(output: &Output, label: &str) {
-    assert!(
-        output.status.success(),
-        "{label} failed\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 fn assert_port_conflict(output: &Output, reason: &str, port: u16) -> Value {
@@ -624,12 +497,12 @@ fn assert_error_code(output: &Output, code: &str, exit_code: i32) -> Value {
 /// explicitly completes or interrupts it. Unwinding still cleans owned children.
 struct HeldSession {
     runtime: Option<Child>,
-    manifest: PathBuf,
-    root: PathBuf,
+    down: Command,
+    data: PathBuf,
 }
 
 impl HeldSession {
-    fn start(manifest: &Path, root: &Path) -> Self {
+    fn start(fixture: &RuntimeFixture, root: &Path) -> Self {
         let data = root.join("data/runtime-test/dev/0");
         for marker in [
             "endpoint-session-active",
@@ -644,22 +517,16 @@ impl HeldSession {
             }
         }
         let mut session = Self {
-            runtime: Some(spawn_run(manifest, root)),
-            manifest: manifest.to_path_buf(),
-            root: root.to_path_buf(),
+            runtime: Some(spawn_run(fixture, root)),
+            down: fixture.command_at(root, "down", &[]),
+            data,
         };
         if !wait_for_path(
-            &data.join("endpoint-session-active"),
+            &session.data.join("endpoint-session-active"),
             Duration::from_secs(5),
         ) {
-            if session
-                .runtime
-                .as_mut()
-                .unwrap()
-                .try_wait()
-                .unwrap()
-                .is_some()
-            {
+            let runtime = session.runtime.as_mut().unwrap();
+            if runtime.try_wait().unwrap().is_some() {
                 let output = session.runtime.take().unwrap().wait_with_output().unwrap();
                 panic!(
                     "session did not reach held task: {}",
@@ -671,34 +538,21 @@ impl HeldSession {
         // The application marker can precede process registration until gated
         // spawn is implemented. These recovery scenarios deliberately interrupt
         // after durable registration, not in that still-unclosed interval.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let registered: i64 = registry_connection(root)
+        poll_until(Duration::from_secs(5), "held task registration", || {
+            let registered: i64 = registry_ro(root)
                 .query_row(
                     "SELECT count(*) FROM processes WHERE service_instance_id IS NULL AND status = 'running'",
                     [], |row| row.get(0),
                 ).unwrap();
-            if registered == 1 {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "held task was never registered"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            (registered == 1).then_some(())
+        });
         session
     }
 
     fn finish(mut self) {
-        fs::write(
-            self.root
-                .join("data/runtime-test/dev/0/endpoint-session-ack"),
-            b"finish",
-        )
-        .unwrap();
+        fs::write(self.data.join("endpoint-session-ack"), b"finish").unwrap();
         let output = wait_for_child_output(self.runtime.take().unwrap(), Duration::from_secs(20));
-        assert_success(&output, "held session completion");
+        assert_success(&output);
     }
 
     fn crash(&mut self) {
@@ -718,35 +572,30 @@ impl Drop for HeldSession {
             unsafe {
                 libc::kill(runtime.id() as libc::pid_t, libc::SIGTERM);
             }
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            while matches!(runtime.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            if matches!(runtime.try_wait(), Ok(None)) {
+            if poll(Duration::from_secs(10), || {
+                runtime.try_wait().ok().flatten()
+            })
+            .is_none()
+            {
                 let _ = runtime.kill();
             }
             let _ = runtime.wait();
         }
         // A crashed runtime can leave recorded children. This dedicated fixture
         // root is ours; control must reacquire its slot before signaling them.
-        let _ = down_command(&self.manifest, &self.root).output();
+        let _ = self.down.output();
     }
 }
 
-fn registry_connection(root: &Path) -> rusqlite::Connection {
-    rusqlite::Connection::open(find_named(root, "registry.sqlite3").expect("registry exists"))
-        .unwrap()
-}
-
 fn service_process(root: &Path) -> (libc::pid_t, String) {
-    registry_connection(root).query_row(
+    registry_ro(root).query_row(
         "SELECT pid, process_key FROM processes WHERE service_instance_id IS NOT NULL AND status = 'ready'",
         [], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap()
 }
 
 fn service_evidence(root: &Path, process: &str) -> (String, String) {
-    registry_connection(root).query_row(
+    registry_ro(root).query_row(
         "SELECT p.status, ep.status FROM processes p JOIN ports ep ON ep.owner_process_key = p.process_key
          WHERE p.process_key = ?1", [process], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap()

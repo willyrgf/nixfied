@@ -380,30 +380,6 @@ fn persistence_alone_authorizes_deletion_and_purge_overrides_only_retention() {
     }
 }
 
-#[test]
-fn purge_still_refuses_active_registry_refs() {
-    let fixture = StateFixture::new();
-    let mut registry = fixture.registry();
-    let mut persistent = fixture.identity.clone();
-    persistent.persistence = PersistencePolicy::Persistent;
-    write_marker(&fixture, &StateMarker::slot(&persistent).unwrap());
-    registry
-        .connection_mut()
-        .execute_batch(
-            "INSERT INTO processes (
-               process_key, environment, slot, pid, pgid, start_identity, command_json,
-               run_id, status, role
-             , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group')",
-        )
-        .expect("active process should be inserted");
-
-    let error = clean_marked_state(&persistent, &mut registry, CleanupMode::Purge)
-        .expect_err("purge must still refuse active refs");
-
-    assert_eq!(error.code, ErrorCode::CleanupRefused);
-    assert!(fixture.layout.state_root.exists());
-}
-
 #[cfg(unix)]
 #[test]
 fn cleanup_refuses_a_symlinked_root_and_unlinks_tree_symlinks_without_following() {
@@ -436,19 +412,25 @@ fn cleanup_refuses_a_symlinked_root_and_unlinks_tree_symlinks_without_following(
 }
 
 #[test]
-fn cleanup_refuses_active_registry_refs() {
-    assert_cleanup_refused_with_active_ref(
-        "INSERT INTO processes (
-           process_key, environment, slot, pid, pgid, start_identity, command_json,
-           run_id, status, role
-         , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group')",
-    );
-    assert_cleanup_refused_with_active_ref(
-        "INSERT INTO ports (
-           endpoint_key, environment, slot, service_instance_id, address, port,
-           status, owner_process_key
-         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 23080, 'reserved', 'process-1')",
-    );
+fn cleanup_and_purge_refuse_active_registry_refs() {
+    let process: fn(&rusqlite::Connection) = |connection| {
+        seed_process(connection, SeedProcess::default());
+    };
+    let port: fn(&rusqlite::Connection) = |connection| {
+        seed_port(
+            connection,
+            "endpoint-1",
+            "service-1",
+            23080,
+            "reserved",
+            "process-1",
+        );
+    };
+    for seed in [process, port] {
+        for purge in [false, true] {
+            assert_cleanup_refused_with_active_ref(seed, purge);
+        }
+    }
 }
 
 #[test]
@@ -512,37 +494,24 @@ fn cleanup_deletes_matching_inactive_state_and_reports_later_absence() {
 fn clean_reconciles_stale_refs_before_marker_owned_delete() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
-    registry
-        .connection_mut()
-        .execute_batch(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            , owner_identity, diagnostic_path) VALUES (
-              'run-stale', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
-              'computed-hash', 'nixfied-runtime-abi:1',
-              'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            , '{}', 'diagnostics.log');
-            INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
-              'process-stale', 'dev', 0, 999999, 999999,
-              '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale', 'service-stale', 'running', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
-            INSERT INTO ports (
-              endpoint_key, environment, slot, service_instance_id, address, port,
-              status, owner_process_key
-            ) VALUES (
-              'service-stale:endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 23190,
-              'active', 'process-stale'
-            );
-            ",
-        )
-        .expect("stale refs should be inserted");
+    seed_run(registry.connection(), "run-stale", None);
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "process-stale",
+            run_id: "run-stale",
+            service: Some(("service-stale", "synthetic")),
+            ..SeedProcess::default()
+        },
+    );
+    seed_port(
+        registry.connection(),
+        "service-stale:endpoint-stale",
+        "service-stale",
+        23190,
+        "active",
+        "process-stale",
+    );
 
     let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
         .expect("stale refs should reconcile before cleanup");
@@ -842,37 +811,26 @@ fn a_failed_completion_commit_after_root_removal_resumes_the_same_operation() {
 fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
-    registry
-        .connection_mut()
-        .execute_batch(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            , owner_identity, diagnostic_path) VALUES (
-              'run-stale-port', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
-              'computed-hash', 'nixfied-runtime-abi:1',
-              'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            , '{}', 'diagnostics.log');
-            INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
-              'process-stale-port', 'dev', 0, 999998, 999998,
-              '{\"platformStart\":\"missing\"}', '{}',
-              'run-stale-port', 'service-stale-port', 'stopped', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
-            INSERT INTO ports (
-              endpoint_key, environment, slot, service_instance_id, address, port,
-              status, owner_process_key
-            ) VALUES (
-              'service-stale-port:endpoint', 'dev', 0, 'service-stale-port', '127.0.0.1', 23191,
-              'active', 'process-stale-port'
-            );
-            ",
-        )
-        .expect("stale port refs should be inserted");
+    seed_run(registry.connection(), "run-stale-port", None);
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "process-stale-port",
+            run_id: "run-stale-port",
+            pid: 999_998,
+            status: "stopped",
+            service: Some(("service-stale-port", "synthetic")),
+            ..SeedProcess::default()
+        },
+    );
+    seed_port(
+        registry.connection(),
+        "service-stale-port:endpoint",
+        "service-stale-port",
+        23191,
+        "active",
+        "process-stale-port",
+    );
 
     let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
         .expect("stale port should reconcile before cleanup");
@@ -901,16 +859,21 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     assert_eq!((ownership.as_str(), settled_events), ("settled", 1));
 }
 
-fn assert_cleanup_refused_with_active_ref(sql: &str) {
+/// Purge overrides only retention: persistent data still refuses while refs are active.
+fn assert_cleanup_refused_with_active_ref(seed: fn(&rusqlite::Connection), purge: bool) {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
-    registry
-        .connection_mut()
-        .execute_batch(sql)
-        .expect("active ref should be inserted");
+    let mut identity = fixture.identity.clone();
+    let mode = if purge {
+        identity.persistence = PersistencePolicy::Persistent;
+        write_marker(&fixture, &StateMarker::slot(&identity).unwrap());
+        CleanupMode::Purge
+    } else {
+        CleanupMode::Standard
+    };
+    seed(registry.connection());
 
-    let error = fixture
-        .clean(&mut registry, CleanupMode::Standard)
+    let error = clean_marked_state(&identity, &mut registry, mode)
         .expect_err("active registry refs should refuse cleanup");
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
@@ -1093,7 +1056,7 @@ fn manifest() -> Manifest {
 }
 
 fn fixture_manifest() -> Value {
-    common::test_child_manifest(23080, 23090)
+    test_child_manifest(23080, 23090)
 }
 
 #[test]
@@ -1188,28 +1151,18 @@ fn cleanup_rejects_application_ancestry_redirected_into_evidence() {
 fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
-    registry
-        .connection_mut()
-        .execute_batch(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json, summary_path
-            , owner_identity, diagnostic_path) VALUES (
-              'run-escaped', 'dev', 0, 'failed', '/nix/store/test-manifest/manifest.json',
-              'computed-hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            , '{}', 'diagnostics.log');
-            INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, ownership, service_name, role
-            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
-              'process-escaped', 'dev', 0, 999997, 999997,
-              '{\"platformStart\":\"missing\"}', '{}',
-              'run-escaped', 'service-escaped', 'escaped', 'unresolved', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
-            ",
-        )
-        .unwrap();
+    seed_run(registry.connection(), "run-escaped", Some("failed"));
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "process-escaped",
+            run_id: "run-escaped",
+            pid: 999_997,
+            status: "escaped",
+            service: Some(("service-escaped", "synthetic")),
+            ..SeedProcess::default()
+        },
+    );
 
     let refused = fixture
         .clean(&mut registry, CleanupMode::Purge)
@@ -1238,11 +1191,11 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
     let mut registry = fixture.registry();
     let member_pid = fixture.tmp.path.join("member.pid");
     // The leader exits at once; its sleeping group member keeps running.
-    let mut leader = std::process::Command::new(common::test_shell())
+    let mut leader = std::process::Command::new(test_shell())
         .arg("-c")
         .arg(format!(
             "{} 30 & echo $! > {}; exit 0",
-            common::test_sleep(),
+            test_sleep(),
             member_pid.display()
         ))
         .process_group(0)
@@ -1250,7 +1203,7 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
         .unwrap();
     let leader_pid = leader.id();
     assert!(leader.wait().unwrap().success());
-    assert!(common::wait_for_path(
+    assert!(wait_for_path(
         &member_pid,
         std::time::Duration::from_secs(5)
     ));
@@ -1259,34 +1212,17 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
         .trim()
         .parse()
         .unwrap();
-    registry
-        .connection_mut()
-        .execute(
-            "INSERT INTO runs (
-               run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
-               runtime_abi, toolchain_id, generator_json, target_json, source_json, summary_path,
-               owner_identity, diagnostic_path
-             ) VALUES (
-               'run-leader', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
-               'computed-hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1', '{}', '{}', '[]',
-               NULL, '{}', 'diagnostics.log'
-             )",
-            [],
-        )
-        .unwrap();
-    registry
-        .connection_mut()
-        .execute(
-            "INSERT INTO processes (
-               process_key, environment, slot, pid, pgid, start_identity, command_json,
-               run_id, status, role, source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
-             ) VALUES (
-               'process-leader', 'dev', 0, ?1, ?1, '{\"platformStart\":\"gone\"}', '{}',
-               'run-leader', 'running', 'task', 'fixture', 'hidden', 'logs/a', 'logs/b', 15, 1000, 'process-group'
-             )",
-            [leader_pid],
-        )
-        .unwrap();
+    seed_run(registry.connection(), "run-leader", None);
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "process-leader",
+            run_id: "run-leader",
+            pid: leader_pid.into(),
+            start_identity: r#"{"platformStart":"gone"}"#,
+            ..SeedProcess::default()
+        },
+    );
 
     let refused = fixture
         .clean(&mut registry, CleanupMode::Standard)
@@ -1297,14 +1233,11 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
 
     let report = nixfied_runtime::control::down_owned_process_groups(&mut registry, 2000).unwrap();
     assert_eq!(report.stopped, ["process-leader"]);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while unsafe { libc::kill(member, 0) } == 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "recovery must stop the member"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    poll_until(
+        std::time::Duration::from_secs(5),
+        "recovery to stop the member",
+        || (unsafe { libc::kill(member, 0) } != 0).then_some(()),
+    );
     fixture
         .clean(&mut registry, CleanupMode::Standard)
         .expect("settled obligations permit deletion");
