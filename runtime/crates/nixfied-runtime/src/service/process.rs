@@ -1705,9 +1705,10 @@ pub(super) fn start_service_with_lock_root(
     Ok(started)
 }
 
-/// Clean every declared service of the slot, then clean the marker-owned slot
-/// state once. Membership does not exist; every declared service may have left
-/// slot evidence, so each one's clean lifecycle operation is recorded. Each is
+/// Clean the marker-owned slot state once for every declared service of the
+/// slot. Membership does not exist; every declared service may have left slot
+/// evidence, so each one's clean lifecycle operation is recorded: started
+/// before the deletion and terminal with its actual outcome after it. Each is
 /// a marker-gated runtime cleanup primitive (no exec).
 pub fn run_slot_clean(
     admission: &ControlAdmission,
@@ -1715,40 +1716,39 @@ pub fn run_slot_clean(
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    for service in admission.execution_manifest().services().values() {
-        record_service_clean(admission, registry, service)?;
+    let operations = admission
+        .execution_manifest()
+        .services()
+        .values()
+        .map(|service| {
+            let context = LifecycleEventContext {
+                run_id: None,
+                service_name: service.name.to_string(),
+                service_instance_id: None,
+                process_key: None,
+                computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
+            };
+            (
+                context,
+                LifecycleRecord::from_meta(&service.clean.meta, "clean"),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (context, record) in &operations {
+        record_lifecycle_started(registry, context, record)?;
     }
-    clean_marked_slot_state(admission, registry, selected_slot, mode)
-}
-
-/// Record the marker-gated clean lifecycle operation for one service.
-fn record_service_clean(
-    admission: &ControlAdmission,
-    registry: &mut Registry,
-    service: &ExecService,
-) -> RuntimeResult<()> {
-    let record = LifecycleRecord::from_meta(&service.clean.meta, "clean");
-    let lifecycle_context = LifecycleEventContext {
-        run_id: None,
-        service_name: service.name.to_string(),
-        service_instance_id: None,
-        process_key: None,
-        computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
-    };
-    record_lifecycle_started(registry, &lifecycle_context, &record)?;
-    record_lifecycle_success(registry, &lifecycle_context, &record)
-}
-
-/// Clean the marker-owned state root for the selected slot.
-fn clean_marked_slot_state(
-    admission: &ControlAdmission,
-    registry: &mut Registry,
-    selected_slot: &SelectedSlot<'_>,
-    mode: CleanupMode,
-) -> RuntimeResult<CleanupOutcome> {
-    let identity = StateIdentity::from_selected_slot(admission, selected_slot);
     // The caller already performed exclusive predecessor recovery.
-    clean_marked_state(&identity, registry, mode)
+    let identity = StateIdentity::from_selected_slot(admission, selected_slot);
+    let outcome = clean_marked_state(&identity, registry, mode);
+    for (context, record) in &operations {
+        match &outcome {
+            Ok(_) => record_lifecycle_success(registry, context, record)?,
+            Err(error) => {
+                let _ = record_lifecycle_failure(registry, context, record, error);
+            }
+        }
+    }
+    outcome
 }
 
 fn settle_reserved_failure(

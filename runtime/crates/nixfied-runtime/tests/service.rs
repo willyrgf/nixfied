@@ -369,6 +369,37 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
 }
 
 #[test]
+fn refused_slot_clean_records_a_failed_clean_terminal() {
+    let port = available_port_window(1);
+    let mut fixture = test_child_listener_fixture(port);
+    let selected = select_slot(fixture.admission.common().manifest(), None)
+        .expect("default slot should select");
+    let mut identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
+    identity.persistence = nixfied_manifest::PersistencePolicy::Persistent;
+    commit_slot_marker(&fixture.registry, &identity).expect("slot marker should be written");
+
+    let error = run_slot_clean(
+        fixture.admission.common(),
+        &mut fixture.registry,
+        &selected,
+        CleanupMode::Standard,
+    )
+    .expect_err("persistent state requires purge");
+
+    assert_eq!(error.code, ErrorCode::CleanupRefused);
+    assert!(fixture.placement.state_root().exists());
+    let clean: Vec<_> = lifecycle_events(&fixture.registry)
+        .into_iter()
+        .filter(|event| event.class == "clean")
+        .collect();
+    assert_eq!(clean.len(), 2);
+    assert_eq!(clean[0].event_type, "service.lifecycle.started");
+    assert_eq!(clean[1].event_type, "service.lifecycle.terminal");
+    assert_ne!(clean[1].terminal_result.as_deref(), Some("cleaned"));
+    assert_eq!(clean[1].error_code.as_deref(), Some("CLEANUP_REFUSED"));
+}
+
+#[test]
 fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
