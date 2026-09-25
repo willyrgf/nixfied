@@ -3,12 +3,14 @@
 //! code is expected here rather than a sign of rot.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -383,8 +385,41 @@ pub fn unique_suffix() -> u128 {
     now + u128::from(NEXT_ID.fetch_add(1, Ordering::Relaxed))
 }
 
+/// Loopback ports this process handed out, never reused, with the flocks that
+/// keep other test processes off them for this process's lifetime.
+struct PortReservations {
+    ports: BTreeSet<u16>,
+    locks: Vec<fs::File>,
+}
+
+static PORT_RESERVATIONS: Mutex<PortReservations> = Mutex::new(PortReservations {
+    ports: BTreeSet::new(),
+    locks: Vec::new(),
+});
+
+/// Flock `port` in a harness-owned directory beside the fixed production lock
+/// root, so concurrent test processes never share one endpoint; `None` when
+/// another process holds it.
+fn lock_test_port(port: u16) -> Option<fs::File> {
+    let directory =
+        Path::new("/tmp").join(format!("nixfied-test-ports-{}", unsafe { libc::geteuid() }));
+    fs::create_dir_all(&directory).expect("test port lock directory should be created");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(directory.join(port.to_string()))
+        .expect("test port lock file should open");
+    file.try_lock().ok().map(|()| file)
+}
+
+/// A window of `width` consecutive free loopback ports reserved for this test:
+/// no other caller in this process or in a concurrent test process gets them.
 pub fn available_port_window(width: u16) -> u16 {
     assert!(width > 0, "port window width must be positive");
+    let mut reservations = PORT_RESERVATIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     for _ in 0..256 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
         let start = listener.local_addr().expect("local addr").port();
@@ -392,10 +427,21 @@ pub fn available_port_window(width: u16) -> u16 {
         let Some(end) = start.checked_add(width - 1) else {
             continue;
         };
+        if (start..=end).any(|port| reservations.ports.contains(&port)) {
+            continue;
+        }
+        let Some(locks) = (start..=end)
+            .map(lock_test_port)
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
         let held = (start..=end)
             .map(|port| TcpListener::bind(("127.0.0.1", port)))
             .collect::<Result<Vec<_>, _>>();
         if held.is_ok() {
+            reservations.ports.extend(start..=end);
+            reservations.locks.extend(locks);
             return start;
         }
     }
