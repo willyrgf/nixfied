@@ -84,8 +84,10 @@ pub enum DeliveryOutcome {
     Delivered,
     /// A caller stream failed; the issues describe which and how.
     Failed(Vec<ProjectionIssue>),
-    /// Presentation was stopped before completion.
-    Interrupted,
+    /// A termination signal ended the drain before completion.
+    Canceled,
+    /// The presentation helper failed or could not be observed.
+    HelperFailed,
     /// No trustworthy seal was observed, so completeness is unknown.
     Unknown,
 }
@@ -170,25 +172,22 @@ impl CommandPresenter {
                 return DeliveryOutcome::Unknown;
             };
             match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
+                Ok(Some(status)) => break status,
                 Ok(None) if crate::cancellation::signal_count() > signals => {
                     let _ = self.channel.write(&[CANCEL]);
                     self.kill_and_reap();
-                    break None;
+                    return DeliveryOutcome::Canceled;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(20)),
                 Err(_) => {
                     self.kill_and_reap();
-                    break None;
+                    return DeliveryOutcome::HelperFailed;
                 }
             }
         };
         self.child = None;
-        let Some(status) = status else {
-            return DeliveryOutcome::Interrupted;
-        };
         if !status.success() {
-            return DeliveryOutcome::Interrupted;
+            return DeliveryOutcome::HelperFailed;
         }
         match read_frame(&mut self.channel, Instant::now() + Duration::from_secs(1))
             .ok()
@@ -224,12 +223,20 @@ impl DeliveryOutcome {
                 "live output delivery failed",
                 issues,
             )),
-            Self::Interrupted if session_canceled => None,
-            Self::Interrupted => Some(crate::output::projection_error(
-                "live output delivery was interrupted",
+            Self::Canceled | Self::HelperFailed if session_canceled => None,
+            Self::Canceled => Some(crate::output::projection_error(
+                "live output delivery was canceled",
                 vec![ProjectionIssue::named(
                     OutputStream::Stdout,
-                    "interrupted",
+                    "canceled",
+                    Path::new("<presenter>"),
+                )],
+            )),
+            Self::HelperFailed => Some(crate::output::projection_error(
+                "the live output presenter failed",
+                vec![ProjectionIssue::named(
+                    OutputStream::Stdout,
+                    "presenter-failed",
                     Path::new("<presenter>"),
                 )],
             )),

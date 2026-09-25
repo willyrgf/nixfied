@@ -512,10 +512,14 @@ when the manifest/runtime contract changes.
   a checked capture outcome (`complete`,
   `incomplete`, or `unknown`); then it releases the slot. The command then lets
   the helper drain the sealed sources with no default deadline. A termination
-  signal received during the drain ends it; a signal that already canceled the
-  session, or a remote `down`, does not truncate the retained final output. Delivery is
-  command-local: a failed, interrupted, or unconfirmed (unsealed) delivery of a
-  successful session fails the command with `OUTPUT_PROJECTION_FAILED` without
+  signal received during the drain ends it; a signal sent to the runtime process
+  that already canceled the session, or a remote `down`, does not truncate the
+  final drain. The helper shares the caller's process group and keeps default
+  termination actions, so a terminal interrupt (Ctrl-C) also ends the display at
+  once; the retained evidence files stay complete. Delivery is
+  command-local: a failed, canceled, helper-failed, or unconfirmed (unsealed)
+  delivery of a successful session fails the command with
+  `OUTPUT_PROJECTION_FAILED`, naming which one, without
   rewriting any session record; a canceled session stays `CANCELED`. A slow
   healthy reader is never truncated; a stalled reader cannot delay settlement
   or slot release. Displayed safe prefixes never upgrade incomplete capture.
