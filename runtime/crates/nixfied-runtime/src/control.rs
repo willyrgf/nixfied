@@ -14,8 +14,8 @@ use crate::service::{
     ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
     mark_service_stopped, mark_task_finished, process_escape_start_identity,
     process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, settle_unresolved_process, terminate_process_group,
-    terminate_process_tree_with_snapshot,
+    process_is_live_with_start_identity, process_present, settle_unresolved_process,
+    terminate_process_group, terminate_process_tree_with_snapshot,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
@@ -290,6 +290,28 @@ pub fn down_owned_process_groups(
                 error,
             ));
         }
+        // Group termination cannot reach descendants that left the group. An
+        // exiting leader may briefly remain observable, so wait a bounded time.
+        let settle_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut live = row.reconciled_liveness()?;
+        while live && std::time::Instant::now() < settle_deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            live = row.reconciled_liveness()?;
+        }
+        if live {
+            return Err(settle_control_escape(
+                registry,
+                &row,
+                escape_start_identity.as_deref(),
+                RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!(
+                        "process {} still has a live tracked descendant after group termination",
+                        row.process_key
+                    ),
+                ),
+            ));
+        }
         settle_down_process(registry, &row)?;
         stopped.push(row.process_key);
     }
@@ -360,15 +382,26 @@ impl ProcessRow {
         )
     }
 
+    /// A recorded process is gone only when its leader, every member of its
+    /// process group, and every tracked descendant are gone. Leader exit alone
+    /// never settles ownership.
     fn reconciled_liveness(&self) -> RuntimeResult<bool> {
-        if !self.unsettled {
-            return self.is_live();
+        if self.is_live()? {
+            return Ok(true);
         }
-        if process_is_live_with_start_identity(
-            self.pid,
-            self.start_identity.platform_start.as_deref(),
-        )? || process_group_has_live_member(self.pgid)?
+        // An escaped leader may have left its recorded group.
+        if self.unsettled
+            && process_is_live_with_start_identity(
+                self.pid,
+                self.start_identity.platform_start.as_deref(),
+            )?
         {
+            return Ok(true);
+        }
+        // A PID is never reused while its process group exists. So a present
+        // leader with another identity means reuse, and that group is not ours;
+        // an absent leader leaves any surviving group members ours.
+        if !process_present(self.pid)? && process_group_has_live_member(self.pgid)? {
             return Ok(true);
         }
         for tracked in &self.start_identity.tracked_processes {
@@ -677,12 +710,14 @@ fn mark_port_stale(
 
 fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     if let Some(service_instance_id) = row.service_instance_id.as_deref() {
+        // Recovery proves process death, never a predecessor's capture outcome.
         return mark_service_stopped(
             registry,
             &row.run_id,
             service_instance_id,
             &row.process_key,
             &row.computed_manifest_hash,
+            None,
         );
     }
     let payload_json = serde_json::json!({

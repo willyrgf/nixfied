@@ -936,6 +936,7 @@ impl OwnedService {
             &self.info.service_instance_id,
             &self.info.process_key,
             &self.info.computed_manifest_hash,
+            Some(CaptureOutcome::Complete),
         )?;
         record_lifecycle_success(registry, &context, &stop_record)
     }
@@ -2479,6 +2480,11 @@ pub(crate) fn process_is_live_with_identity(
         return Ok(false);
     }
     Ok(!process_is_zombie(pid))
+}
+
+/// Whether any non-zombie process currently holds `pid`, whatever its identity.
+pub(crate) fn process_present(pid: u32) -> RuntimeResult<bool> {
+    Ok(process_group(pid)?.is_some() && !process_is_zombie(pid))
 }
 
 pub(crate) fn process_is_live_with_start_identity(

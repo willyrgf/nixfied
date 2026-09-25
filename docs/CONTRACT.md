@@ -270,8 +270,11 @@ when the manifest/runtime contract changes.
   gone; then `settled`. Active statuses are always unresolved. A contained and
   capture-settled terminal records `settled`; an escape or unsettled capture
   keeps `unresolved` even after the leader exits, with or without endpoint
-  evidence. Recovery settles an unresolved terminal row only after proving its
-  death or terminating its recorded tree. Deletion, state preparation, and new
+  evidence. Recovery settles a row only after its leader, its process group
+  (when the leader PID is gone), and its tracked descendants are gone, waiting
+  up to one second after termination; a present leader PID with another start
+  identity is PID reuse, so that group is not signaled. Recovery never records
+  a capture outcome for a predecessor's source. Deletion, state preparation, and new
   service startup refuse while any obligation is unresolved. `ps` reports
   `ownership`. A task or probe interrupted by a session failure after
   containment, reaping, and capture settlement records a terminal status and
@@ -464,7 +467,8 @@ when the manifest/runtime contract changes.
 - Finalization never waits for delivery: after teardown, retention, and
   finalization, the owner closes source registration, writes the run summary
   and footer, closes the diagnostic writer, and publishes the output seal only
-  when every source recorded a checked capture outcome (`complete`,
+  when the run summary and diagnostic writes succeeded and every source recorded
+  a checked capture outcome (`complete`,
   `incomplete`, or `unknown`); then it releases the slot. The command then lets
   the helper drain the sealed sources with no default deadline. A termination
   signal received during the drain ends it; a signal that already canceled the

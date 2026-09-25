@@ -2144,3 +2144,104 @@ fn background_launch_rejects_before_establishment_without_new_work() {
     assert_eq!(launch.status.code(), Some(36));
     assert!(!fixture.state_base.exists());
 }
+
+#[test]
+fn sealed_backlog_larger_than_one_pass_is_drained_completely() {
+    use std::io::Read;
+    let count = 12 * 1024 * 1024;
+    let manifest = task_manifest(&[
+        "output".into(),
+        "repeat".into(),
+        "78".into(),
+        count.to_string(),
+        "79".into(),
+        "0".into(),
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    // Read nothing until the output is sealed, so the whole backlog remains.
+    let registry = fixture
+        .state_base
+        .join("registry/runtime-test/dev/0/registry.sqlite3");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !rusqlite::Connection::open_with_flags(
+        &registry,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()
+    .and_then(|connection| {
+        connection
+            .query_row("SELECT output = 'sealed' FROM runs", [], |row| {
+                row.get::<_, bool>(0)
+            })
+            .ok()
+    })
+    .unwrap_or(false)
+    {
+        assert!(std::time::Instant::now() < deadline, "output never sealed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut bytes = Vec::new();
+    stdout.read_to_end(&mut bytes).unwrap();
+    let output = wait_for_child_output(child, Duration::from_secs(20));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(bytes.len(), count, "a slow reader is never truncated");
+    assert!(bytes.iter().all(|byte| *byte == b'x'));
+}
+
+#[test]
+fn recovery_settles_a_dead_owners_service_without_inventing_capture() {
+    let marker = tempfile_marker("recovery-capture");
+    let mut manifest = task_manifest(&[
+        "output".into(),
+        "hex-block".into(),
+        "".into(),
+        "".into(),
+        marker.to_string_lossy().into_owned(),
+    ]);
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    let fixture = RuntimeFixture::new(manifest);
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (run_id, _) = published_session(&fixture);
+    assert_eq!(
+        unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    let _ = wait_for_child_output(owner, Duration::from_secs(5));
+    let down = fixture.command("down", &[]).output().unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let rows: Vec<(String, String, String)> = registry_connection(&fixture)
+        .prepare("SELECT role, ownership, capture FROM processes WHERE run_id = ?1 ORDER BY role")
+        .unwrap()
+        .query_map([&run_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(rows.iter().any(|(role, ..)| role == "service"));
+    for (role, ownership, capture) in rows {
+        assert_eq!(ownership, "settled", "{role}");
+        assert_eq!(
+            capture, "pending",
+            "recovery proves death, never the predecessor's capture ({role})"
+        );
+    }
+}

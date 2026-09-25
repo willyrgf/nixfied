@@ -1091,3 +1091,86 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
         .unwrap();
     assert_eq!(ownership, "settled");
 }
+
+#[test]
+fn leader_exit_alone_never_settles_a_live_process_group() {
+    use std::os::unix::process::CommandExt;
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let member_pid = fixture.tmp.path.join("member.pid");
+    // The leader exits at once; its sleeping group member keeps running.
+    let mut leader = std::process::Command::new(common::test_shell())
+        .arg("-c")
+        .arg(format!(
+            "{} 30 & echo $! > {}; exit 0",
+            common::test_sleep(),
+            member_pid.display()
+        ))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let leader_pid = leader.id();
+    assert!(leader.wait().unwrap().success());
+    assert!(common::wait_for_path(
+        &member_pid,
+        std::time::Duration::from_secs(5)
+    ));
+    let member: i32 = fs::read_to_string(&member_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    registry
+        .connection_mut()
+        .execute(
+            "INSERT INTO runs (
+               run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
+               runtime_abi, toolchain_id, generator_json, target_json, source_json, summary_path,
+               owner_identity, diagnostic_path
+             ) VALUES (
+               'run-leader', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
+               'computed-hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1', '{}', '{}', '[]',
+               NULL, '{}', 'diagnostics.log'
+             )",
+            [],
+        )
+        .unwrap();
+    registry
+        .connection_mut()
+        .execute(
+            "INSERT INTO processes (
+               process_key, environment, slot, pid, pgid, start_identity, command_json,
+               run_id, status, role, source_label, presentation, stdout_path, stderr_path
+             ) VALUES (
+               'process-leader', 'dev', 0, ?1, ?1, '{\"platformStart\":\"gone\"}', '{}',
+               'run-leader', 'running', 'task', 'fixture', 'hidden', 'logs/a', 'logs/b'
+             )",
+            [leader_pid],
+        )
+        .unwrap();
+
+    let refused = clean_reconciled_state(
+        &mut registry,
+        &fixture.layout.state_base,
+        &fixture.identity,
+        CleanupMode::Standard,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::CleanupRefused);
+    assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
+    assert_eq!(unsafe { libc::kill(member, 0) }, 0, "the member still runs");
+
+    let report = nixfied_runtime::control::down_owned_process_groups(&mut registry, 2000).unwrap();
+    assert_eq!(report.stopped, ["process-leader"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while unsafe { libc::kill(member, 0) } == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "recovery must stop the member"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect("settled obligations permit deletion");
+}

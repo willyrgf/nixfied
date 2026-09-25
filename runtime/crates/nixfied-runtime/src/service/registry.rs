@@ -490,6 +490,7 @@ pub(crate) fn mark_service_stopped(
     service_instance_id: &str,
     process_key: &str,
     computed_manifest_hash: &str,
+    capture: Option<CaptureOutcome>,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
@@ -497,12 +498,13 @@ pub(crate) fn mark_service_stopped(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Stopped(CaptureOutcome::Complete),
+        ServiceTerminal::Stopped(capture),
     )
 }
 
 enum ServiceTerminal<'a> {
-    Stopped(CaptureOutcome),
+    /// `None` from recovery: the predecessor's capture outcome stays as recorded.
+    Stopped(Option<CaptureOutcome>),
     Canceled(&'a str, Ownership, CaptureOutcome),
     Failed(&'a str, Ownership, CaptureOutcome),
 }
@@ -560,24 +562,25 @@ fn settle_service_terminal(
             "service.canceled",
             payload,
             ownership,
-            capture,
+            Some(capture),
         ),
         ServiceTerminal::Failed(payload, ownership, capture) => (
             ProcessStatus::Failed,
             "service.failed",
             payload,
             ownership,
-            capture,
+            Some(capture),
         ),
     };
     transaction
         .execute(
-            "UPDATE processes SET status = ?2, ownership = ?3, capture = ?4 WHERE process_key = ?1",
+            "UPDATE processes SET status = ?2, ownership = ?3, capture = coalesce(?4, capture)
+             WHERE process_key = ?1",
             params![
                 process_key,
                 process_status.as_str(),
                 ownership.as_str(),
-                capture.as_str()
+                capture.map(CaptureOutcome::as_str)
             ],
         )
         .map_err(sql_error)?;
@@ -1908,6 +1911,7 @@ mod tests {
             SERVICE_ID,
             PROCESS_KEY,
             MANIFEST_HASH,
+            Some(CaptureOutcome::Complete),
         )
         .unwrap();
         let evidence: (String, String) = fixture
