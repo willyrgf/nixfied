@@ -42,15 +42,10 @@ fn local_check_and_run_records_preserve_required_and_omitted_members() {
 #[test]
 fn aggregate_summary_keeps_native_pretty_bytes_and_write_failure() {
     let tmp = common::TempDir::new();
-    let placement = nixfied_runtime::state::HostPlacement {
-        state_base: tmp.path.clone(),
-        state_root: tmp.path.clone(),
-        registry_dir: tmp.path.clone(),
-        run_dir: tmp.path.clone(),
-        logs_dir: tmp.path.clone(),
-        artifacts_dir: tmp.path.clone(),
-        summary_path: tmp.path.join("summary.json"),
-    };
+    let placement =
+        nixfied_runtime::state::derive_slot_placement("project", "dev", 0, "run", &tmp.path)
+            .unwrap();
+    std::fs::create_dir_all(placement.artifacts_dir()).unwrap();
     let redactor = Redactor::empty();
     let input = || RunSummary {
         placement: &placement,
@@ -366,7 +361,6 @@ fn failure_merge_preserves_priority_and_flattened_cause_order() {
 
 #[test]
 fn occurrence_collisions_preserve_files_and_terminal_evidence() {
-    use nixfied_runtime::state::derive_host_placement;
     use serde_json::json;
     for (collision, secret) in [
         ("stdout", false),
@@ -389,7 +383,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         }
         let manifest: nixfied_manifest::Manifest = serde_json::from_value(value).unwrap();
         let admission = common::fixture_admission(&manifest, &tmp.path);
-        let placement = derive_host_placement(&manifest, "evidence-test", &tmp.path).unwrap();
+        let placement = common::default_placement(&manifest, "evidence-test", &tmp.path).unwrap();
         let mut registry = Registry::open_or_create(
             common::registry_guard(&placement),
             &RegistryIdentity::default_slot(
@@ -404,13 +398,14 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let redactor = Redactor::from_secrets(admission.secrets());
         let cancellation = CancellationToken::new();
         let launcher = common::runtime_binary();
+        let state_root = placement.state_root();
         let context = NodeContext {
             placement: &placement,
             run: RunContext::new(
                 &launcher,
                 &admission,
                 "evidence-test",
-                &placement.state_root,
+                &state_root,
                 &redactor,
             ),
             cancellation: &cancellation,
@@ -424,13 +419,13 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
                 .unwrap(),
         };
         let conflicting = if collision == "summary" {
-            placement.summary_path.with_file_name("summary.0.json")
+            placement.summary_path().with_file_name("summary.0.json")
         } else {
-            placement.logs_dir.join(format!("task.0.{collision}.log"))
+            placement.logs_dir().join(format!("task.0.{collision}.log"))
         };
         std::fs::write(&conflicting, b"prior evidence").unwrap();
         let mut evidence = RunEvidence::default();
-        let mut diagnostics = SessionDiagnostics::create(&placement.run_dir, true).unwrap();
+        let mut diagnostics = SessionDiagnostics::create(&placement.run_dir(), true).unwrap();
         let error = execute_node(
             &context,
             &mut registry,
@@ -459,7 +454,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             assert_eq!(std::fs::read_to_string(&counter).unwrap(), "1");
             assert_eq!(
                 error.error.details["taskRun"]["stdoutPath"],
-                json!(placement.logs_dir.join("task.0.stdout.log"))
+                json!(placement.logs_dir().join("task.0.stdout.log"))
             );
         } else {
             assert!(evidence.tasks.is_empty());
@@ -486,11 +481,11 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let task = evidence.tasks.last().unwrap();
         assert_eq!(
             task.stdout_path,
-            placement.logs_dir.join("task.1.stdout.log")
+            placement.logs_dir().join("task.1.stdout.log")
         );
         assert_eq!(
             task.summary_path,
-            placement.summary_path.with_file_name("summary.1.json")
+            placement.summary_path().with_file_name("summary.1.json")
         );
         assert_eq!(
             evidence.tasks.len(),

@@ -10,7 +10,6 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, EntryKind, FileIdentity};
 use crate::state::marker::{StateIdentity, StateMarker};
 use crate::state::ownership::{SlotGuard, refuse_network_filesystem};
-use crate::state::placement::normal_component;
 
 pub(crate) const MARKER: &CStr = c".nixfied-state.json";
 const MARKER_LIMIT: usize = 64 * 1024;
@@ -42,26 +41,20 @@ impl ApplicationTree {
             &identity.environment,
             i64::from(identity.slot),
         )?;
-        let project = normal_component("projectId", &identity.project_id)?;
-        let environment = normal_component("environment", &identity.environment)?;
-        let slot = identity.slot.to_string();
-        let relative = Path::new("data")
-            .join(project)
-            .join(environment)
-            .join(&slot);
-        let component = |value: &std::ffi::OsStr| {
-            CString::new(std::os::unix::ffi::OsStrExt::as_bytes(value))
-                .map_err(|_| unowned("placement component contains NUL"))
+        let slot = guard.slot();
+        let relative = Path::new("data").join(slot.relative());
+        let component = |value: &str| {
+            CString::new(value).map_err(|_| unowned("placement component contains NUL"))
         };
         Ok(Self {
             path: guard.state_base().join(&relative),
             base: guard.state_base_directory()?,
             ancestry: [
                 c"data".to_owned(),
-                component(project.as_os_str())?,
-                component(environment.as_os_str())?,
+                component(slot.project())?,
+                component(slot.environment())?,
             ],
-            name: component(std::ffi::OsStr::new(&slot))?,
+            name: component(&slot.slot().to_string())?,
             relative: relative.to_string_lossy().into_owned(),
         })
     }

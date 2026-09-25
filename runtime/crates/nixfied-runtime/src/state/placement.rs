@@ -1,24 +1,102 @@
 use std::path::{Component, Path, PathBuf};
 
-use nixfied_manifest::Manifest;
-
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::slot::SelectedSlot;
 
+/// One placed slot. Its components are validated once; every placement path
+/// and the slot guard's authority derive from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotIdentity {
+    project: String,
+    environment: String,
+    slot: u32,
+}
+
+impl SlotIdentity {
+    pub fn new(project: &str, environment: &str, slot: u32) -> RuntimeResult<Self> {
+        normal_component("projectId", project)?;
+        normal_component("environment", environment)?;
+        Ok(Self {
+            project: project.to_owned(),
+            environment: environment.to_owned(),
+            slot,
+        })
+    }
+
+    pub fn project(&self) -> &str {
+        &self.project
+    }
+
+    pub fn environment(&self) -> &str {
+        &self.environment
+    }
+
+    pub fn slot(&self) -> u32 {
+        self.slot
+    }
+
+    /// Whether a registry or state identity names this slot.
+    pub(crate) fn names(&self, project: &str, environment: &str, slot: i64) -> bool {
+        self.project == project && self.environment == environment && i64::from(self.slot) == slot
+    }
+
+    /// The `project/environment/slot` path that both disjoint roots nest.
+    pub(crate) fn relative(&self) -> PathBuf {
+        Path::new(&self.project)
+            .join(&self.environment)
+            .join(self.slot.to_string())
+    }
+}
+
+/// The host paths of one session in one slot, derived on demand from the
+/// state base, the slot identity, and the run identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPlacement {
-    pub state_base: PathBuf,
-    pub state_root: PathBuf,
-    pub registry_dir: PathBuf,
-    pub run_dir: PathBuf,
-    pub logs_dir: PathBuf,
-    pub artifacts_dir: PathBuf,
-    pub summary_path: PathBuf,
+    state_base: PathBuf,
+    slot: SlotIdentity,
+    run_id: String,
 }
 
 impl HostPlacement {
+    pub fn state_base(&self) -> &Path {
+        &self.state_base
+    }
+
+    pub fn slot(&self) -> &SlotIdentity {
+        &self.slot
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    /// Application data and coordination/evidence have structurally disjoint roots.
+    pub fn state_root(&self) -> PathBuf {
+        self.state_base.join("data").join(self.slot.relative())
+    }
+
+    /// Cleanup evidence survives deletion of the parallel slot state tree.
+    pub fn registry_dir(&self) -> PathBuf {
+        self.state_base.join("registry").join(self.slot.relative())
+    }
+
     pub fn registry_path(&self) -> PathBuf {
-        self.registry_dir.join("registry.sqlite3")
+        self.registry_dir().join("registry.sqlite3")
+    }
+
+    pub fn run_dir(&self) -> PathBuf {
+        self.registry_dir().join("runs").join(&self.run_id)
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.run_dir().join("logs")
+    }
+
+    pub fn artifacts_dir(&self) -> PathBuf {
+        self.run_dir().join("artifacts")
+    }
+
+    pub fn summary_path(&self) -> PathBuf {
+        self.run_dir().join("summary.json")
     }
 }
 
@@ -28,10 +106,6 @@ pub fn state_base_from_env() -> RuntimeResult<PathBuf> {
     {
         return Ok(PathBuf::from(value));
     }
-    default_state_base()
-}
-
-pub fn default_state_base() -> RuntimeResult<PathBuf> {
     if let Some(value) = std::env::var_os("XDG_STATE_HOME")
         && !value.is_empty()
     {
@@ -51,30 +125,6 @@ pub fn default_state_base() -> RuntimeResult<PathBuf> {
     }
 }
 
-pub fn derive_host_placement(
-    manifest: &Manifest,
-    run_id: &str,
-    state_base: impl AsRef<Path>,
-) -> RuntimeResult<HostPlacement> {
-    let selected_slot = crate::slot::select_slot(manifest, None)?;
-    derive_host_placement_for_slot(manifest, &selected_slot, run_id, state_base)
-}
-
-pub fn derive_host_placement_for_slot(
-    manifest: &Manifest,
-    selected_slot: &SelectedSlot<'_>,
-    run_id: &str,
-    state_base: impl AsRef<Path>,
-) -> RuntimeResult<HostPlacement> {
-    derive_slot_placement(
-        &manifest.project.project_id,
-        selected_slot.environment,
-        selected_slot.slot,
-        run_id,
-        state_base,
-    )
-}
-
 /// Native slot placement shared by admitted execution and registry ownership.
 pub fn derive_slot_placement(
     project: &str,
@@ -90,29 +140,16 @@ pub fn derive_slot_placement(
             "state base cannot be empty",
         ));
     }
-    let project = normal_component("projectId", project)?;
-    let environment = normal_component("environment", environment)?;
-    let run_id = normal_component("runId", run_id)?;
-    let slot_relative = project.join(environment).join(slot.to_string());
-    let state_root = application_root(&state_base, project, environment, slot);
-    // Cleanup evidence survives deletion of the parallel slot state tree.
-    let registry_dir = state_base.join("registry").join(&slot_relative);
-    let run_dir = registry_dir.join("runs").join(run_id);
-    let logs_dir = run_dir.join("logs");
-    let artifacts_dir = run_dir.join("artifacts");
-    let summary_path = run_dir.join("summary.json");
+    let slot = SlotIdentity::new(project, environment, slot)?;
+    normal_component("runId", run_id)?;
     Ok(HostPlacement {
         state_base,
-        state_root,
-        registry_dir,
-        run_dir,
-        logs_dir,
-        artifacts_dir,
-        summary_path,
+        slot,
+        run_id: run_id.to_owned(),
     })
 }
 
-pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {
+fn normal_component(field: &str, value: &str) -> RuntimeResult<()> {
     let path = Path::new(value);
     let mut components = path.components();
     let normal = matches!(components.next(), Some(Component::Normal(part)) if part == value)
@@ -123,18 +160,5 @@ pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult
             format!("{field} must be a single normal path component without template syntax"),
         ));
     }
-    Ok(path)
-}
-
-/// Application data and coordination/evidence have structurally disjoint roots.
-pub(crate) fn application_root(
-    base: &Path,
-    project: &Path,
-    environment: &Path,
-    slot: u32,
-) -> PathBuf {
-    base.join("data")
-        .join(project)
-        .join(environment)
-        .join(slot.to_string())
+    Ok(())
 }

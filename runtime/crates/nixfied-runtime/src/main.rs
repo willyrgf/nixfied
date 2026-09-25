@@ -24,8 +24,7 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, apply_retention, derive_host_placement_for_slot, prepare_slot_state,
-    state_base_from_env,
+    StateIdentity, apply_retention, derive_slot_placement, prepare_slot_state, state_base_from_env,
 };
 use nixfied_runtime::{
     AdmissionContext, ControlAdmission, RunAdmission, RuntimeError, StoreOriginPolicy,
@@ -323,7 +322,7 @@ impl<'a> RunSession<'a> {
             &node_results,
             duration_ms,
             run_summary_path.as_deref(),
-            &self.placement.logs_dir,
+            &self.placement.logs_dir(),
         );
         // Close every evidence writer before publishing the seal; a failed
         // close or write leaves the output unsealed rather than claiming it.
@@ -835,9 +834,14 @@ fn run_admitted(
     if options.background {
         reject_interactive_stdin(&plan)?;
     }
-    let placement =
-        derive_host_placement_for_slot(manifest, &selected_slot, &run_id, &options.state_base)
-            .map_err(post_admission_error)?;
+    let placement = derive_slot_placement(
+        &manifest.project.project_id,
+        selected_slot.environment,
+        selected_slot.slot,
+        &run_id,
+        &options.state_base,
+    )
+    .map_err(post_admission_error)?;
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
@@ -866,8 +870,8 @@ fn enrich_run_error(
 ) -> RuntimeError {
     enrich_placed_error(error, placement, selected_slot)
         .with_detail("runId", run_id)
-        .with_detail("runDir", &placement.run_dir)
-        .with_detail("logsDir", &placement.logs_dir)
+        .with_detail("runDir", placement.run_dir())
+        .with_detail("logsDir", placement.logs_dir())
 }
 
 /// Lowering and admission prove that the execution plan is concrete. Any
@@ -895,9 +899,9 @@ fn enrich_placed_error(
     error
         .with_detail("environment", selected_slot.environment)
         .with_detail("slot", selected_slot.slot)
-        .with_detail("stateBase", &placement.state_base)
-        .with_detail("stateRoot", &placement.state_root)
-        .with_detail("registryDir", &placement.registry_dir)
+        .with_detail("stateBase", placement.state_base())
+        .with_detail("stateRoot", placement.state_root())
+        .with_detail("registryDir", placement.registry_dir())
         .with_detail("registryPath", placement.registry_path())
 }
 
@@ -921,6 +925,7 @@ fn run_placed(
         )
     })?;
     let manifest = admission.common().manifest();
+    let state_root = placement.state_root();
     let run_started = Instant::now();
     // Exclusive recovery settles every predecessor before the state marker
     // decision, independently of manifest provenance.
@@ -962,7 +967,7 @@ fn run_placed(
     // published, so `down` can reach every session it can select.
     let control = nixfied_runtime::session_control::SessionControl::establish(
         run_dir,
-        &placement.run_dir,
+        &placement.run_dir(),
         cancellation,
     )?;
     // The diagnostic source exists before the commit that registers it, so no
@@ -970,7 +975,7 @@ fn run_placed(
     // progress is retained evidence from here on; the presenter, not the
     // session owner, shows it while session duties remain.
     let mut diagnostics =
-        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
+        SessionDiagnostics::create(&placement.run_dir(), options.output_mode.emit_summary())?;
     // Observed abandonment before the commit prevents all new work. After the
     // commit the session is established and independent of its launcher.
     if let Some(establishment) = establishment.as_deref_mut() {
@@ -993,8 +998,8 @@ fn run_placed(
     if let Some(establishment) = establishment {
         establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
             run_id: run_id.to_owned(),
-            run_dir: placement.run_dir.clone(),
-            logs_dir: placement.logs_dir.clone(),
+            run_dir: placement.run_dir().clone(),
+            logs_dir: placement.logs_dir().clone(),
         });
     }
 
@@ -1056,7 +1061,7 @@ fn run_placed(
     {
         let init = PresenterInit {
             run_id: run_id.to_owned(),
-            run_dir: placement.run_dir.clone(),
+            run_dir: placement.run_dir().clone(),
             registry_path: placement.registry_path(),
             project_id: manifest.project.project_id.clone(),
             environment: selected_slot.environment.to_owned(),
@@ -1080,13 +1085,7 @@ fn run_placed(
             binding.service.prepare.as_ref().map(|_| {
                 let context = NodeContext {
                     placement,
-                    run: RunContext::new(
-                        &launcher,
-                        admission,
-                        run_id,
-                        &placement.state_root,
-                        redactor,
-                    ),
+                    run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
                     cancellation,
                 };
                 let evidence = &mut session.evidence;
@@ -1182,13 +1181,7 @@ fn run_placed(
 
     let context = NodeContext {
         placement,
-        run: RunContext::new(
-            &launcher,
-            admission,
-            run_id,
-            &placement.state_root,
-            redactor,
-        ),
+        run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
         cancellation,
     };
     for (index, node) in plan.nodes.iter().enumerate() {
@@ -1603,7 +1596,7 @@ struct RunSummary<'a> {
 /// started (with their resolved endpoints), and the per-node and per-task
 /// results — a complete, inspectable record of the run.
 fn write_run_summary(input: RunSummary<'_>) -> Result<PathBuf, RuntimeError> {
-    let path = input.placement.artifacts_dir.join("run-summary.json");
+    let path = input.placement.artifacts_dir().join("run-summary.json");
     let mut summary = serde_json::json!(RunSummaryOutput {
         run_id: input.run_id,
         success: input.run_succeeded && input.nodes.iter().all(|node| node.success),
@@ -1756,9 +1749,14 @@ fn run_control_admitted(
 ) -> Result<(), RuntimeError> {
     let manifest = admission.manifest();
     let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
-    let placement =
-        derive_host_placement_for_slot(manifest, &selected_slot, "control", &options.state_base)
-            .map_err(post_admission_error)?;
+    let placement = derive_slot_placement(
+        &manifest.project.project_id,
+        selected_slot.environment,
+        selected_slot.slot,
+        "control",
+        &options.state_base,
+    )
+    .map_err(post_admission_error)?;
     let result = (|| {
         let identity = RegistryIdentity::for_slot(
             &manifest.project.project_id,

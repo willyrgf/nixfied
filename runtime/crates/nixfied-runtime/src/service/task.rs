@@ -167,7 +167,7 @@ pub fn run_dependent_task_cancellable(
     };
     let exec = &task.exec;
     let evidence = EvidenceSource::in_logs(
-        &placement.logs_dir,
+        &placement.logs_dir(),
         node_id,
         presentation,
         &format!("task.{occurrence}"),
@@ -267,7 +267,7 @@ pub fn run_dependent_task_cancellable(
         stderr_path,
         // Repeated prepares may share a step path; each attempt owns its summary.
         summary_path: placement
-            .summary_path
+            .summary_path()
             .with_file_name(format!("summary.{occurrence}.json")),
     };
     let evidence = run;

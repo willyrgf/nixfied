@@ -1431,7 +1431,7 @@ pub(super) fn start_service_with_lock_root(
         own_primary: selected_endpoint,
         own_endpoints: &own_endpoints,
         named: &named,
-        state_root: &placement.state_root,
+        state_root: &placement.state_root(),
         secrets: admission.secrets(),
     };
     // Exec probe args/env are substituted once here, with the same scope as the
@@ -1459,7 +1459,7 @@ pub(super) fn start_service_with_lock_root(
         })
         .collect();
     let evidence = crate::output::EvidenceSource::in_logs(
-        &placement.logs_dir,
+        &placement.logs_dir(),
         service_name,
         crate::output::SourcePresentation::Shown,
         &format!("service.{service_name}"),
@@ -1671,7 +1671,7 @@ pub(super) fn start_service_with_lock_root(
             service: service.clone(),
             ready_probe,
             health_probe,
-            logs_dir: placement.logs_dir.clone(),
+            logs_dir: placement.logs_dir().clone(),
             source_root: source.observed_root.clone(),
             launcher: selection.launcher.to_owned(),
             next_probe_occurrence: 0,

@@ -68,7 +68,7 @@ pub fn down(
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let registry_path = placement.registry_path();
     if RegistryReader::open_existing(&registry_path, registry_identity)?.is_none()
-        && !placement.registry_dir.join("slot.lock").exists()
+        && !placement.registry_dir().join("slot.lock").exists()
     {
         return Ok(DownReport::default());
     }
@@ -81,7 +81,7 @@ pub fn down(
             selected = latest_unfinished_session(&reader)?;
             if let Some(run_id) = &selected {
                 requested =
-                    request_cancellation(&placement.registry_dir.join("runs").join(run_id))?
+                    request_cancellation(&placement.registry_dir().join("runs").join(run_id))?
                         == CancellationDelivery::Requested;
             }
         }

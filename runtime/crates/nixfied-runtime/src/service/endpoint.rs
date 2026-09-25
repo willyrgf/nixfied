@@ -1309,7 +1309,6 @@ mod tests {
         use crate::service::process::{ServiceSelection, start_service_with_lock_root};
         use crate::service::record_run_created;
         use crate::slot::select_slot;
-        use crate::state::derive_host_placement_for_slot;
         use nixfied_manifest::Manifest;
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
         use serde_json::json;
@@ -1341,16 +1340,17 @@ mod tests {
         context.invocation_root = InvocationRoot::Path(workspace.0.to_path_buf());
         let admission = crate::admit_run(&manifest_path, &context).unwrap();
         let selected = select_slot(&manifest, None).unwrap();
-        let placement = derive_host_placement_for_slot(
-            &manifest,
-            &selected,
+        let placement = crate::state::derive_slot_placement(
+            &manifest.project.project_id,
+            selected.environment,
+            selected.slot,
             "run-unsafe-lock-root",
             &workspace.0,
         )
         .unwrap();
         let mut registry = Registry::open_or_create(
             crate::state::ownership::fixture_guard(
-                &placement.state_base,
+                placement.state_base(),
                 &RegistryIdentity::for_slot(
                     &manifest.project.project_id,
                     selected.environment,
