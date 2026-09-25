@@ -199,16 +199,18 @@ pub fn evaluate_slot_marker(
 
 /// A missing marker only means a fresh slot when the state root is empty, or
 /// holds only temporaries of an interrupted first marker publication. Other
-/// content is state the runtime never claimed — adopting it would write a
-/// marker into an unowned tree that cleanup rightly refuses, so the run
-/// refuses it too.
-fn refuse_unmarked_state_root(tree: &ApplicationTree, root: &Directory) -> RuntimeResult<()> {
+/// content is state the runtime never claimed: preparation never adopts it and
+/// retention or cleanup never deletes it.
+pub(crate) fn refuse_unmarked_state_root(
+    tree: &ApplicationTree,
+    root: &Directory,
+) -> RuntimeResult<()> {
     for name in root.entry_names().map_err(|error| tree.io_error(error))? {
         if !interrupted_publication(root, &name).map_err(|error| tree.io_error(error))? {
             return Err(RuntimeError::new(
                 ErrorCode::StateUnowned,
                 format!(
-                    "state root {} exists without a state marker; refusing to adopt unmarked state",
+                    "state root {} exists without a state marker; refusing unmarked state",
                     tree.path.display()
                 ),
             ));

@@ -295,6 +295,14 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
     fs::write(&leftover, b"{").unwrap();
     let mut registry = slot_registry(&layout, &identity);
 
+    // Neither recovery's retention nor preparation treats it as owned data.
+    let recovery = nixfied_runtime::control::recover_slot(&mut registry, &identity, 1000)
+        .expect("a publication leftover blocks no recovery");
+    assert!(matches!(
+        recovery.retention,
+        nixfied_runtime::state::RetentionOutcome::Absent
+    ));
+    assert!(leftover.exists());
     prepare_slot_state(&identity, &mut registry).expect("a publication leftover is not data");
 
     assert!(!leftover.exists());
@@ -313,6 +321,8 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
         b"x",
     )
     .unwrap();
+    let error = nixfied_runtime::control::recover_slot(&mut registry, &identity, 1000).unwrap_err();
+    assert_eq!(error.code, ErrorCode::StateUnowned);
     let error = prepare_slot_state(&identity, &mut registry).unwrap_err();
     assert_eq!(error.code, ErrorCode::StateUnowned);
 }
