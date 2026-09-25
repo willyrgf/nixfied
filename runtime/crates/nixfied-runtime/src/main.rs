@@ -688,6 +688,11 @@ fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeErro
         LaunchOutcome::Interrupted => {
             Err(nixfied_runtime::cancellation::canceled_error().with_detail("runId", &run_id))
         }
+        LaunchOutcome::CanceledAfterEstablishment(acknowledgement) => {
+            Err(nixfied_runtime::cancellation::canceled_error()
+                .with_detail("runId", &acknowledgement.run_id)
+                .with_detail("runDir", &acknowledgement.run_dir))
+        }
     }
 }
 
@@ -889,6 +894,10 @@ fn run_m0_placed(
     let run_started = Instant::now();
     // Exclusive recovery settles every predecessor before the state marker
     // decision, independently of manifest provenance.
+    // Observed abandonment before slot acquisition starts no session work.
+    if let Some(establishment) = establishment.as_deref_mut() {
+        establishment.check_abandonment()?;
+    }
     let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(placement, cancellation)?;
     let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
     let mut registry = Registry::open_or_create(
@@ -908,6 +917,11 @@ fn run_m0_placed(
         &identity,
         options.timeout_ms,
     )?;
+    // Recovery effects already settled are kept; abandonment observed now
+    // still prevents any new generation or session.
+    if let Some(establishment) = establishment.as_deref_mut() {
+        establishment.check_abandonment()?;
+    }
     let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.

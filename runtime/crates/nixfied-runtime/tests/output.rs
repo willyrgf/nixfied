@@ -2294,3 +2294,68 @@ fn stalled_stdout_does_not_hold_back_stderr_presentation() {
     assert!(status.success());
     assert_eq!(reader.join().unwrap().len(), stdout_count);
 }
+
+#[test]
+fn interrupted_launcher_leaves_no_live_background_session() {
+    for delay in [0_u64, 5, 20, 80] {
+        let marker = tempfile_marker("daemon-interrupt");
+        let fixture = blocking_session(&marker);
+        let launcher = fixture
+            .command("run", &["--task", "smoke", "--daemon"])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(delay));
+        assert_eq!(
+            unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGTERM) },
+            0
+        );
+        let output = wait_for_child_output(launcher, Duration::from_secs(20));
+        if output.status.success() {
+            // The signal arrived after the launcher returned its
+            // acknowledgement: that session is established and independent.
+            let acknowledgement: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(acknowledgement["runId"].is_string());
+            assert!(
+                fixture
+                    .command("down", &[])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        // Either the owner abandoned before its commit, or establishment won
+        // and the launcher canceled exactly that session. A signal that lands
+        // before the launcher installs its handlers ends it by default action.
+        assert!(
+            matches!(output.status.code(), Some(0 | 27) | None),
+            "{:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let registry = fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3");
+        if !registry.exists() {
+            continue;
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let unfinished: i64 = registry_connection(&fixture)
+                .query_row(
+                    "SELECT count(*) FROM runs WHERE finalization = 'unfinished'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if unfinished == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "an interrupted launch left a live session (delay {delay})"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}

@@ -634,6 +634,10 @@ fn deleted_generation_reappearing_is_contradictory_history() {
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_eq!(read_marker(&fixture), marker);
     assert_eq!(cleanup_rows(&registry), 1);
+    // State preparation never adopts it as application data either.
+    let error = prepare_slot_state(&fixture.layout, &fixture.identity, &mut registry).unwrap_err();
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_eq!(read_marker(&fixture), marker);
 }
 
 #[test]

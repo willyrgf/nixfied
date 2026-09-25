@@ -73,10 +73,16 @@ pub enum LaunchOutcome {
     /// EOF, timeout, malformed reply, or owner death without a conclusive
     /// reply: the session may or may not have been established.
     Uncertain,
-    /// The launcher was interrupted before a reply; the owner observes the
-    /// closed channel and abandons startup unless it already committed.
+    /// The launcher was interrupted before a conclusive reply; completeness
+    /// of the owner's abandonment is unknown.
     Interrupted,
+    /// Establishment won the race with the launcher's interruption; the
+    /// launcher then requested cancellation of exactly that session.
+    CanceledAfterEstablishment(Acknowledgement),
 }
+
+/// After an interruption the launcher waits this long for a conclusive reply.
+const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
 /// Spawn the owner, send the request, and wait for one bounded reply. The
 /// launcher keeps its end open while waiting: closing it means abandonment.
@@ -119,15 +125,25 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
         let _ = owner.wait();
         return Err(failure("cannot deliver the background launch request"));
     }
-    let deadline = Instant::now() + wait;
+    let mut deadline = Instant::now() + wait;
     let mut received = Vec::new();
+    let mut interrupted = false;
     let outcome = loop {
-        if crate::cancellation::signal_received() {
-            break LaunchOutcome::Interrupted;
+        if !interrupted && crate::cancellation::signal_received() {
+            // Half-closing is the abandonment signal; the reply side stays
+            // open so a won race is still observed and canceled precisely.
+            interrupted = true;
+            let _ = channel.shutdown(std::net::Shutdown::Write);
+            deadline = Instant::now() + INTERRUPT_GRACE;
         }
         match read_frame_step(&mut channel, &mut received) {
             Ok(Some(body)) => {
                 break match serde_json::from_slice::<Reply>(&body) {
+                    Ok(Reply::Established(acknowledgement)) if interrupted => {
+                        let _ =
+                            crate::session_control::request_cancellation(&acknowledgement.run_dir);
+                        LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
+                    }
                     Ok(Reply::Established(acknowledgement)) => {
                         LaunchOutcome::Established(acknowledgement)
                     }
@@ -139,14 +155,25 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
                 };
             }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            Ok(None) | Err(_) if interrupted => break LaunchOutcome::Interrupted,
             Ok(None) | Err(_) => break LaunchOutcome::Uncertain,
         }
     };
-    // A rejected or already-exited owner is reaped here; an established owner
-    // continues and is adopted by the host when the launcher exits.
+    // An interruption that arrives with the acknowledgement still cancels
+    // exactly the acknowledged session.
+    let outcome = match outcome {
+        LaunchOutcome::Established(acknowledgement) if crate::cancellation::signal_received() => {
+            let _ = crate::session_control::request_cancellation(&acknowledgement.run_dir);
+            LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
+        }
+        outcome => outcome,
+    };
+    // A rejected, abandoned, or already-exited owner is reaped here; an
+    // established owner continues and is adopted by the host when the
+    // launcher exits.
     if matches!(
         outcome,
-        LaunchOutcome::Rejected(_) | LaunchOutcome::Uncertain
+        LaunchOutcome::Rejected(_) | LaunchOutcome::Uncertain | LaunchOutcome::Interrupted
     ) {
         let give_up = Instant::now() + REPLY_TIMEOUT;
         while Instant::now() < give_up {

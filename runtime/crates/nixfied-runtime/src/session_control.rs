@@ -45,9 +45,7 @@ impl SessionControl {
             )
         };
         let directory = open_directory(run_dir).map_err(|e| error("open", e))?;
-        let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-            .map_err(|_| error("name", io::Error::from(io::ErrorKind::InvalidInput)))?;
-        if unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) } != 0 {
+        if unsafe { libc::mkfifoat(directory.as_raw_fd(), CONTROL_FIFO.as_ptr(), 0o600) } != 0 {
             return Err(error("create", io::Error::last_os_error()));
         }
         let reader = open_fifo(&directory, libc::O_RDONLY).map_err(|e| error("open", e))?;
@@ -226,16 +224,59 @@ pub fn request_cancellation(run_dir: &Path) -> RuntimeResult<CancellationDeliver
     }
 }
 
-fn open_directory(path: &Path) -> io::Result<OwnedFd> {
-    let path = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in session path"))?;
-    let fd = unsafe {
+/// Open `<registry>/runs/<session>` through held directory descriptors. The
+/// managed `runs` and session components are never followed as symlinks and
+/// must be private directories of the effective user.
+fn open_directory(run_dir: &Path) -> io::Result<OwnedFd> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "invalid session path");
+    let session = run_dir.file_name().ok_or_else(invalid)?;
+    let runs = run_dir.parent().ok_or_else(invalid)?;
+    if runs.file_name() != Some(std::ffi::OsStr::new("runs")) {
+        return Err(invalid());
+    }
+    let anchor = runs.parent().ok_or_else(invalid)?;
+    let anchor = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(anchor.as_os_str()))
+        .map_err(|_| invalid())?;
+    let anchor = owned(unsafe {
         libc::open(
-            path.as_ptr(),
+            anchor.as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
-    };
-    owned(fd)
+    })?;
+    let runs = private_child(&anchor, c"runs")?;
+    let session = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(session))
+        .map_err(|_| invalid())?;
+    private_child(&runs, &session)
+}
+
+fn private_child(parent: &OwnedFd, name: &std::ffi::CStr) -> io::Result<OwnedFd> {
+    let bytes = name.to_bytes();
+    if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&b'/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid session component",
+        ));
+    }
+    let child = owned(unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    })?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe { libc::fstat(child.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fstat initialized the complete stat on success.
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_uid != unsafe { libc::geteuid() } || stat.st_mode & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "session directory is not private to the effective user",
+        ));
+    }
+    Ok(child)
 }
 
 /// Open the endpoint without following a symlink and verify it is a private
@@ -278,13 +319,22 @@ fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
 mod tests {
     use super::*;
 
+    /// A private `<registry>/runs/<session>` layout, as placement creates it.
     fn directory() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "nixfied-control-{}-{}",
-            std::process::id(),
-            crate::token::random_hex().unwrap()
-        ));
-        std::fs::create_dir(&path).unwrap();
+        use std::os::unix::fs::DirBuilderExt;
+        let path = std::env::temp_dir()
+            .join(format!(
+                "nixfied-control-{}-{}",
+                std::process::id(),
+                crate::token::random_hex().unwrap()
+            ))
+            .join("runs")
+            .join("session");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         path
     }
 
@@ -365,9 +415,14 @@ mod tests {
         assert!(request_cancellation(&dir).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
         assert_eq!(
-            request_cancellation(&dir.join("missing")).unwrap(),
+            request_cancellation(&dir.parent().unwrap().join("missing")).unwrap(),
             CancellationDelivery::Unavailable
         );
+        // A symlinked session directory is never followed.
+        let link = dir.parent().unwrap().join("linked");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(request_cancellation(&link).is_err());
+        assert!(SessionControl::establish(&link, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -304,7 +304,8 @@ when the manifest/runtime contract changes.
   stdio; it holds no slot guard or registry writer. The owner performs the same
   admission, acquisition, recovery, and establishment as a foreground run,
   rejects workloads that inherit interactive stdin, and checks for launcher
-  abandonment immediately before committing its run record. The committed run
+  abandonment before slot acquisition, after predecessor recovery, and
+  immediately before committing its run record. The committed run
   record is the establishment; the owner then replies with
   `{runId, runDir, logsDir}` and continues independently with no terminal
   presenter. The launcher prints that acknowledgement and exits 0: it means an
@@ -312,9 +313,16 @@ when the manifest/runtime contract changes.
   to the session's recorded outcome. A complete rejection reply reports the
   owner's pre-establishment error and exit code with no new workload. EOF,
   timeout, or a malformed reply is `LIFECYCLE_FAILED` with the original `runId`:
-  the launch outcome is uncertain. Reply failure after the commit never cancels
-  the session; `down` and signals remain its cancellation inputs.
-- Each session creates a private FIFO named `control` in its never-reused
+  the launch outcome is uncertain. A termination signal to the launcher
+  half-closes its channel (abandonment) and waits up to 10 s for a conclusive
+  reply: a rejection is reported, and an establishment that won the race is
+  canceled through that session's own FIFO; both exit `CANCELED`. A rejected,
+  abandoned, or uncertain owner is reaped within one second when it exits.
+  Reply failure after the commit never cancels the session; `down` and signals
+  remain its cancellation inputs.
+- Each session creates a private FIFO named `control` (with `mkfifoat` through
+  held `runs` and session directory descriptors that are never followed as
+  symlinks and must be private to the effective user) in its never-reused
   `runs/<runId>` evidence directory before publishing its run record, opens a
   reader and a separate keeper writer (both close-on-exec), and removes the
   endpoint while still holding the slot. Any byte requests cancellation; a
@@ -374,7 +382,8 @@ when the manifest/runtime contract changes.
   markerless nonempty root, a replaced root, or a different generation refuses
   without deletion. A failed step leaves the intent pending with a
   `cleanup.attempt-failed` event. A deleted generation reappearing refuses as
-  contradictory history. An absent root with nothing pending reports
+  contradictory history, and state preparation refuses to adopt it. An absent
+  root with nothing pending reports
   `result: absent` without attributing it to an older operation. These
   barriers support process-death recovery; host power-loss durability is not
   claimed.
