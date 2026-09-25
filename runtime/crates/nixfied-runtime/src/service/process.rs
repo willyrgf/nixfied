@@ -1021,12 +1021,7 @@ impl OwnedService {
                     Err(recording) => termination_error.with_cause(recording),
                 }
             }
-            Err(mut settlement_error) => {
-                settlement_error
-                    .causes
-                    .extend(termination_error.causes.drain(..));
-                settlement_error.with_cause(termination_error)
-            }
+            Err(settlement_error) => settlement_error.absorb(termination_error),
         }
     }
 
@@ -1114,11 +1109,7 @@ impl OwnedService {
         &mut self,
         containment: RuntimeResult<()>,
     ) -> (RuntimeResult<()>, RuntimeResult<()>) {
-        let reaped = reap_owned_child(&mut self.child);
-        let containment = match (containment, reaped) {
-            (Ok(()), result) | (result, Ok(())) => result,
-            (Err(error), Err(reap)) => Err(error.with_cause(reap)),
-        };
+        let containment = crate::error::both(containment, reap_owned_child(&mut self.child));
         let capture = self.shutdown_capture();
         (containment, capture)
     }
@@ -1867,11 +1858,7 @@ fn terminate_unrecorded_child(
         ContainmentRequirement::ProcessGroup => terminate_process_group(pgid, timeout_ms),
         ContainmentRequirement::ProcessTree => terminate_process_tree(pid, pgid, timeout_ms),
     };
-    let reaped = reap_owned_child(child);
-    match (containment, reaped) {
-        (Ok(()), result) | (result, Ok(())) => result,
-        (Err(error), Err(reap)) => Err(error.with_cause(reap)),
-    }
+    crate::error::both(containment, reap_owned_child(child))
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
@@ -2248,10 +2235,7 @@ impl OwnedCapturedChild {
             )),
             Ok(CapturedExecOutcome::Exited(_)) => Ok(()),
         };
-        let intent = match (recording, intent) {
-            (Ok(()), result) | (result, Ok(())) => result,
-            (Err(recording), Err(intent)) => Err(recording.with_cause(intent)),
-        };
+        let intent = crate::error::both(recording, intent);
         let (outcome, operation) = match observed {
             Ok(outcome) => (Some(outcome), intent.err()),
             // Shutdown consumes the retained capture failure; do not duplicate
@@ -2323,12 +2307,9 @@ fn completion_error(
             None => capture,
         });
     }
-    if let Some(mut operation) = operation {
+    if let Some(operation) = operation {
         primary = Some(match primary {
-            Some(mut error) => {
-                error.causes.extend(operation.causes.drain(..));
-                error.with_cause(operation)
-            }
+            Some(error) => error.absorb(operation),
             None => operation,
         });
     }
@@ -2339,11 +2320,7 @@ fn completion_error(
 /// Reaping is attempted even if group containment fails; it cannot erase that failure.
 pub(crate) fn terminate_and_reap(child: &mut OwnedChild, pgid: i32) -> RuntimeResult<()> {
     let containment = terminate_process_group(pgid, 1000);
-    let reaped = reap_owned_child(child);
-    match (containment, reaped) {
-        (Ok(()), result) | (result, Ok(())) => result,
-        (Err(error), Err(reap)) => Err(error.with_cause(reap)),
-    }
+    crate::error::both(containment, reap_owned_child(child))
 }
 
 fn reap_owned_child(child: &mut OwnedChild) -> RuntimeResult<()> {

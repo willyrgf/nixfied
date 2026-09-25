@@ -1,4 +1,5 @@
 use super::*;
+use nixfied_runtime::error::RuntimeCause;
 
 #[path = "../tests/common/mod.rs"]
 mod common;
