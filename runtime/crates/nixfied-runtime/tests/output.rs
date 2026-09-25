@@ -278,13 +278,13 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
                     }
                     let connection = fixture.registry();
                     let observed: (String, i32) = connection.query_row(
-                "SELECT execution_outcome, exit_code FROM processes WHERE service_instance_id IS NULL",
+                "SELECT execution_outcome, exit_code FROM processes WHERE role != 'service'",
                 [], |row| Ok((row.get(0)?, row.get(1)?)),
             ).unwrap();
                     let (capture, sealed): (String, String) = connection
                         .query_row(
                             "SELECT p.capture, r.output FROM processes p JOIN runs r USING (run_id)
-                             WHERE p.service_instance_id IS NULL",
+                             WHERE p.role != 'service'",
                             [],
                             |row| Ok((row.get(0)?, row.get(1)?)),
                         )
@@ -710,7 +710,7 @@ fn unexpected_service_exit_fails_the_session_and_still_settles() {
             let pid: i32 = fixture
                 .registry()
                 .query_row(
-                    "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL",
+                    "SELECT pid FROM processes WHERE role = 'service'",
                     [],
                     |row| row.get(0),
                 )
@@ -1248,7 +1248,13 @@ fn session_owns_and_stops_services_before_the_next_run() {
         "separate sessions must own separate service processes"
     );
     let connection = fixture.registry();
-    let stopped: i64 = connection.query_row("SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL AND status = 'stopped'", [], |row| row.get(0)).unwrap();
+    let stopped: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM processes WHERE role = 'service' AND status = 'stopped'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(stopped, 2);
     let successful_sessions: i64 = connection
         .query_row(

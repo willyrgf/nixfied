@@ -302,7 +302,7 @@ fn interrupted_run_recovers_then_provenance_refresh_proceeds() {
         SeedProcess {
             key: "process-interrupted",
             run_id: "run-interrupted",
-            service: Some(("service-interrupted", "synthetic")),
+            service: Some("synthetic"),
             ..SeedProcess::default()
         },
     );

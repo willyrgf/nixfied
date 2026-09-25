@@ -15,8 +15,11 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 
+// The registry is per slot: `registry_meta` binds its project, environment and
+// slot once, so no other row repeats them. Endpoint rows are immutable evidence
+// owned by one service process and settle with it.
 const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
               id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -29,23 +32,8 @@ const SCHEMA_SQL: &str = "
               created_at TEXT NOT NULL
             );
 
-            CREATE TABLE events (
-              seq INTEGER PRIMARY KEY,
-              at TEXT NOT NULL,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
-              event_type TEXT NOT NULL,
-              run_id TEXT,
-              service_instance_id TEXT,
-              process_key TEXT,
-              computed_manifest_hash TEXT,
-              payload_json TEXT NOT NULL
-            );
-
             CREATE TABLE runs (
               run_id TEXT PRIMARY KEY,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
               execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
               finalization TEXT NOT NULL DEFAULT 'unfinished' CHECK (finalization IN ('unfinished', 'complete')),
               manifest_path TEXT NOT NULL,
@@ -66,14 +54,11 @@ const SCHEMA_SQL: &str = "
 
             CREATE TABLE processes (
               process_key TEXT PRIMARY KEY,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
+              run_id TEXT NOT NULL REFERENCES runs (run_id),
               pid INTEGER NOT NULL,
               pgid INTEGER NOT NULL,
               start_identity TEXT NOT NULL,
               command_json TEXT NOT NULL,
-              run_id TEXT NOT NULL,
-              service_instance_id TEXT,
               service_name TEXT,
               role TEXT NOT NULL CHECK (role IN ('task', 'service', 'probe')),
               execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
@@ -90,8 +75,7 @@ const SCHEMA_SQL: &str = "
               containment TEXT NOT NULL CHECK (containment IN ('process-group', 'process-tree')),
               UNIQUE (run_id, stdout_path),
               UNIQUE (run_id, stderr_path),
-              CHECK (ownership = 'unresolved' OR status NOT IN ('starting', 'running', 'ready')),
-              CHECK ((role = 'service') = (service_instance_id IS NOT NULL)),
+              CHECK (ownership = 'unresolved' OR status NOT IN ('running', 'ready')),
               CHECK ((role = 'task') = (service_name IS NULL)),
               CHECK (service_name IS NULL OR length(service_name) > 0),
               CHECK (execution_outcome IS NOT NULL OR exit_code IS NULL),
@@ -99,14 +83,20 @@ const SCHEMA_SQL: &str = "
             );
 
             CREATE TABLE ports (
-              endpoint_key TEXT PRIMARY KEY,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
-              service_instance_id TEXT NOT NULL,
+              owner_process_key TEXT NOT NULL REFERENCES processes (process_key),
+              endpoint_id TEXT NOT NULL CHECK (length(endpoint_id) > 0),
               address TEXT NOT NULL,
-              port INTEGER NOT NULL,
-              status TEXT NOT NULL,
-              owner_process_key TEXT NOT NULL
+              port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+              PRIMARY KEY (owner_process_key, endpoint_id)
+            );
+
+            CREATE TABLE events (
+              seq INTEGER PRIMARY KEY,
+              at TEXT NOT NULL,
+              event_type TEXT NOT NULL,
+              run_id TEXT REFERENCES runs (run_id),
+              process_key TEXT REFERENCES processes (process_key),
+              payload_json TEXT NOT NULL
             );
 
             CREATE TABLE cleanups (

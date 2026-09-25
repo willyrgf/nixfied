@@ -465,7 +465,6 @@ in
       (entry "record" "output-schema/run-task")
       (entry "record" "output-schema/runtime-error-port-conflict")
       (entry "record" "output-schema/port-conflict-endpoint")
-      (entry "record" "output-schema/nixfied-owner")
     ];
     fragments = [
       (fragment ../../docs/CONTRACT.md "## Runtime error diagnostics")

@@ -102,7 +102,6 @@ fn cause_details(details: Value) -> Value {
         "foundRegistryIdentity",
         "logsDir",
         "mismatchedFields",
-        "nixfiedOwner",
         "portConflict",
         "projections",
         "registryDir",

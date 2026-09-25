@@ -1,24 +1,19 @@
-pub(crate) use crate::registry::records::StoredEndpoint as StoredServiceEndpoint;
-use crate::registry::records::read_open_endpoints;
-use crate::registry::session::{require_open_sources, require_run};
-use crate::registry::sql_error;
-use crate::registry::sqlite::RegistryContext;
-use nixfied_manifest::ContainmentRequirement;
 use std::collections::BTreeMap;
 
+use nixfied_manifest::ContainmentRequirement;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::output::EvidenceSource;
 use crate::redaction::CaptureOutcome;
 use crate::registry::Registry;
-use crate::registry::events::{EventInsert, append_event, insert_event};
-use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
-
-use super::{StoredProcessIdentity, TrackedProcessIdentity};
+use crate::registry::events::{EventInsert, insert_event};
+use crate::registry::session::{require_open_sources, require_run};
+use crate::registry::sql_error;
+use crate::registry::sqlite::RegistryContext;
+use crate::registry::status::{self, DbStatus, ProcessRole, ProcessStatus};
 
 pub(crate) struct ServiceRecord<'a> {
-    pub(crate) service_instance_id: &'a str,
     pub(crate) service_name: &'a str,
     pub(crate) source: &'a EvidenceSource,
     pub(crate) stop: StopPolicy,
@@ -62,10 +57,11 @@ impl StopPolicy {
     }
 }
 
-/// Endpoint evidence recorded atomically with its owning service process.
-/// Host startup locks and kernel preflight protect the earlier startup interval.
+/// Immutable endpoint evidence recorded atomically with its owning service
+/// process; it is settled exactly when that process is. Host startup locks and
+/// kernel preflight protect the earlier startup interval.
 pub(crate) struct EndpointRecord<'a> {
-    pub(crate) endpoint_key: &'a str,
+    pub(crate) endpoint_id: &'a str,
     pub(crate) address: &'a str,
     pub(crate) port: u16,
 }
@@ -78,29 +74,10 @@ pub(crate) struct ProcessRecord<'a> {
     pub(crate) command_json: &'a str,
 }
 
-pub(crate) struct VerifiedEndpointActivation<'a> {
-    pub(crate) endpoint_key: &'a str,
-    pub(crate) address: &'a str,
-    pub(crate) port: u16,
+/// A recorded endpoint whose exact listener ownership was verified at ready.
+pub(crate) struct VerifiedEndpoint<'a> {
+    pub(crate) endpoint: EndpointRecord<'a>,
     pub(crate) ownership_json: &'a str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StoredServiceProcess {
-    pub(crate) service_name: String,
-    pub(crate) process_key: String,
-    pub(crate) pid: u32,
-    pub(crate) pgid: i32,
-    pub(crate) platform_start: Option<String>,
-    pub(crate) tracked_processes: Vec<TrackedProcessIdentity>,
-    pub(crate) run_id: String,
-    pub(crate) status: ProcessStatus,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ServiceSnapshot {
-    pub(crate) process: Option<StoredServiceProcess>,
-    pub(crate) endpoints: Vec<StoredServiceEndpoint>,
 }
 
 pub(crate) struct InvocationProcessRecord<'a> {
@@ -142,77 +119,61 @@ pub(crate) enum ServiceStartOutcome {
     Failed,
 }
 
+/// The declared service a start event attributes before any process exists.
+fn service_payload(service_name: &str) -> String {
+    serde_json::json!({ "serviceId": service_name }).to_string()
+}
+
 /// Record startup intent under slot ownership before prepare or spawn.
 /// The run already exists; endpoint evidence is recorded with the child process.
 pub(crate) fn record_service_start_intent(
     registry: &mut Registry,
     run_id: &str,
     computed_manifest_hash: &str,
-    service_instance_id: &str,
+    service_name: &str,
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
-    read_open_endpoints(&transaction, None)?;
+    require_run(&transaction, run_id, computed_manifest_hash)?;
     ensure_predecessor_settled(&transaction, run_id)?;
-    refuse_active_service(&transaction, service_instance_id)?;
+    refuse_active_service(&transaction, run_id, service_name)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "service.start-intent",
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
             process_key: None,
-            computed_manifest_hash: Some(computed_manifest_hash),
-            payload_json: "{}",
+            payload_json: &service_payload(service_name),
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 /// Settle failed startup when no child exists, or after its containment is gone.
+/// A registered child's endpoint evidence settles with its process.
 pub(crate) fn settle_service_start(
     registry: &mut Registry,
     run_id: &str,
-    service_instance_id: &str,
+    service_name: &str,
     outcome: ServiceStartOutcome,
 ) -> RuntimeResult<()> {
     let event_type = match outcome {
         ServiceStartOutcome::Canceled => "service.start-canceled",
         ServiceStartOutcome::Failed => "service.start-failed",
     };
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
-    // Startup after process registration may already have endpoint evidence.
-    release_service_ports(&transaction, service_instance_id)?;
-    insert_event(
-        &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type,
-            run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
-            process_key: None,
-            computed_manifest_hash: None,
-            payload_json: "{}",
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    record_event(
+        registry,
+        event_type,
+        Some(run_id),
+        None,
+        &service_payload(service_name),
+    )
 }
 
 pub(crate) fn record_service_start(
@@ -225,38 +186,33 @@ pub(crate) fn record_service_start(
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let process_command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
+    require_run(&transaction, run_id, computed_manifest_hash)?;
     require_open_sources(&transaction, run_id)?;
     ensure_predecessor_settled(&transaction, run_id)?;
-    refuse_active_service(&transaction, service.service_instance_id)?;
+    refuse_active_service(&transaction, run_id, service.service_name)?;
     transaction
         .execute(
             "
             INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, service_name, role,
-              source_label, presentation, stdout_path, stderr_path,
-              stop_signal, stop_timeout_ms, containment
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service', ?12, ?13, ?14, ?15,
-                      ?16, ?17, ?18)
+              process_key, pid, pgid, start_identity, command_json, run_id,
+              status, service_name, role, source_label, presentation,
+              stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'service', ?9, ?10, ?11, ?12,
+                      ?13, ?14, ?15)
             ",
             params![
                 process.process_key,
-                identity.environment.as_str(),
-                identity.slot,
                 process.pid,
                 process.pgid,
                 process.start_identity,
                 process_command_json,
                 run_id,
-                service.service_instance_id,
                 ProcessStatus::Running.as_str(),
                 service.service_name,
                 service.source.label,
@@ -270,89 +226,57 @@ pub(crate) fn record_service_start(
         )
         .map_err(sql_error)?;
     for endpoint in endpoints {
-        ensure_no_active_port_transaction(&transaction, endpoint.address, endpoint.port)?;
         transaction
             .execute(
-                "INSERT INTO ports (
-                endpoint_key, environment, slot, service_instance_id, address, port,
-                status, owner_process_key
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO ports (owner_process_key, endpoint_id, address, port)
+                 VALUES (?1, ?2, ?3, ?4)",
                 params![
-                    endpoint.endpoint_key,
-                    identity.environment,
-                    identity.slot,
-                    service.service_instance_id,
+                    process.process_key,
+                    endpoint.endpoint_id,
                     endpoint.address,
                     endpoint.port,
-                    PortStatus::Reserved.as_str(),
-                    process.process_key
                 ],
             )
             .map_err(sql_error)?;
     }
     insert_event(
         &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type: "run.admitted",
-            run_id: Some(run_id),
-            service_instance_id: None,
-            process_key: None,
-            computed_manifest_hash: Some(computed_manifest_hash),
-            payload_json: "{}",
-        },
-    )?;
-    insert_event(
-        &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "service.starting",
             run_id: Some(run_id),
-            service_instance_id: Some(service.service_instance_id),
             process_key: Some(process.process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &process_command_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
+/// Commit readiness only when the verified endpoint set is exactly the
+/// evidence recorded with the process. Endpoint rows are never rewritten; the
+/// verification is recorded as `port.owner-verified` events.
 pub(crate) fn activate_service_ready(
     registry: &mut Registry,
     run_id: &str,
-    service_instance_id: &str,
     process_key: &str,
-    computed_manifest_hash: &str,
-    endpoints: &[VerifiedEndpointActivation<'_>],
+    endpoints: &[VerifiedEndpoint<'_>],
     lifecycle: (&str, &str, &str),
 ) -> RuntimeResult<()> {
     let (operation_id, operation_class, terminal_success) = lifecycle;
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let stored = stored_endpoint_map(&read_open_endpoints(
-        &transaction,
-        Some(service_instance_id),
-    )?);
+    let stored = recorded_endpoints(&transaction, process_key)?;
     let expected = endpoints
         .iter()
-        .map(|endpoint| {
+        .map(|verified| {
             (
-                endpoint.endpoint_key.to_string(),
-                (
-                    endpoint.address.to_string(),
-                    endpoint.port,
-                    PortStatus::Reserved.as_str().to_string(),
-                    process_key.to_string(),
-                ),
+                verified.endpoint.endpoint_id.to_owned(),
+                (verified.endpoint.address.to_owned(), verified.endpoint.port),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -360,54 +284,19 @@ pub(crate) fn activate_service_ready(
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             format!(
-                "ready endpoint evidence mismatch for {service_instance_id}: stored {stored:?}, expected {expected:?}"
+                "ready endpoint evidence mismatch for {process_key}: stored {stored:?}, expected {expected:?}"
             ),
         ));
     }
-    for endpoint in endpoints {
-        let changed = transaction
-            .execute(
-                "
-                UPDATE ports
-                SET status = ?5
-                WHERE endpoint_key = ?1
-                  AND service_instance_id = ?2
-                  AND address = ?3
-                  AND port = ?4
-                  AND status = ?6
-                  AND owner_process_key = ?7
-                ",
-                params![
-                    endpoint.endpoint_key,
-                    service_instance_id,
-                    endpoint.address,
-                    endpoint.port,
-                    PortStatus::Active.as_str(),
-                    PortStatus::Reserved.as_str(),
-                    process_key,
-                ],
-            )
-            .map_err(sql_error)?;
-        if changed != 1 {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "ready activation changed {changed} rows for endpoint {}",
-                    endpoint.endpoint_key
-                ),
-            ));
-        }
+    for verified in endpoints {
         insert_event(
             &transaction,
-            identity,
             redactor,
             EventInsert {
                 event_type: "port.owner-verified",
                 run_id: Some(run_id),
-                service_instance_id: Some(service_instance_id),
                 process_key: Some(process_key),
-                computed_manifest_hash: Some(computed_manifest_hash),
-                payload_json: endpoint.ownership_json,
+                payload_json: verified.ownership_json,
             },
         )?;
     }
@@ -416,11 +305,11 @@ pub(crate) fn activate_service_ready(
             "
             UPDATE processes
             SET status = ?4
-            WHERE process_key = ?1 AND service_instance_id = ?2 AND status = ?3
+            WHERE process_key = ?1 AND run_id = ?2 AND role = 'service' AND status = ?3
             ",
             params![
                 process_key,
-                service_instance_id,
+                run_id,
                 ProcessStatus::Running.as_str(),
                 ProcessStatus::Ready.as_str(),
             ],
@@ -434,14 +323,11 @@ pub(crate) fn activate_service_ready(
     }
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "service.probe-ready",
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -455,19 +341,15 @@ pub(crate) fn activate_service_ready(
     .to_string();
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "service.lifecycle.terminal",
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: &lifecycle_payload,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 /// A service's terminal record; the payload accompanies its event.
@@ -505,14 +387,11 @@ impl Ownership {
 pub(crate) fn settle_service_terminal(
     registry: &mut Registry,
     run_id: &str,
-    service_instance_id: &str,
     process_key: &str,
-    computed_manifest_hash: &str,
     terminal: ServiceTerminal<'_>,
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -541,36 +420,36 @@ pub(crate) fn settle_service_terminal(
             Some(settlement.capture),
         ),
     };
-    transaction
+    let changed = transaction
         .execute(
-            "UPDATE processes SET status = ?2, ownership = ?3, capture = coalesce(?4, capture)
-             WHERE process_key = ?1",
+            "UPDATE processes SET status = ?3, ownership = ?4, capture = coalesce(?5, capture)
+             WHERE process_key = ?1 AND run_id = ?2 AND role = 'service'",
             params![
                 process_key,
+                run_id,
                 process_status.as_str(),
                 ownership.as_str(),
                 capture.map(CaptureOutcome::as_str)
             ],
         )
         .map_err(sql_error)?;
-    if ownership == Ownership::Settled {
-        release_service_ports(&transaction, service_instance_id)?;
+    if changed != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("service settlement changed {changed} process rows for {process_key}"),
+        ));
     }
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type,
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 /// Append one event outside any other registry transition.
@@ -578,30 +457,17 @@ pub(crate) fn record_event(
     registry: &mut Registry,
     event_type: &str,
     run_id: Option<&str>,
-    service_instance_id: Option<&str>,
     process_key: Option<&str>,
-    computed_manifest_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context()?;
-    append_event(
-        connection,
-        identity,
-        redactor,
-        EventInsert {
+    registry
+        .append_event(EventInsert {
             event_type,
             run_id,
-            service_instance_id,
             process_key,
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
-        },
-    )?;
-    Ok(())
+        })
+        .map(|_| ())
 }
 
 /// Record a process's checked capture outcome learned outside a terminal
@@ -631,7 +497,6 @@ pub(crate) fn record_capture_outcome(
 pub(crate) fn mark_process_escape(
     registry: &mut Registry,
     run_id: &str,
-    service_instance_id: &str,
     process: &ProcessRecord<'_>,
     computed_manifest_hash: &str,
     platform_start: Option<&str>,
@@ -639,7 +504,6 @@ pub(crate) fn mark_process_escape(
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -650,18 +514,18 @@ pub(crate) fn mark_process_escape(
             &format!(
                 "
                 UPDATE processes
-                SET status = ?8, start_identity = ?7
+                SET status = ?7, start_identity = ?6
                 WHERE process_key = ?1
                   AND run_id = ?2
-                  AND service_instance_id = ?3
-                  AND pid = ?4
-                  AND pgid = ?5
-                  AND CAST(json_extract(start_identity, '$.pid') AS INTEGER) = ?4
-                  AND CAST(json_extract(start_identity, '$.pgid') AS INTEGER) = ?5
-                  AND json_extract(start_identity, '$.platformStart') IS ?6
-                  AND CAST(json_extract(?7, '$.pid') AS INTEGER) = ?4
-                  AND CAST(json_extract(?7, '$.pgid') AS INTEGER) = ?5
-                  AND json_extract(?7, '$.platformStart') IS ?6
+                  AND role = 'service'
+                  AND pid = ?3
+                  AND pgid = ?4
+                  AND CAST(json_extract(start_identity, '$.pid') AS INTEGER) = ?3
+                  AND CAST(json_extract(start_identity, '$.pgid') AS INTEGER) = ?4
+                  AND json_extract(start_identity, '$.platformStart') IS ?5
+                  AND CAST(json_extract(?6, '$.pid') AS INTEGER) = ?3
+                  AND CAST(json_extract(?6, '$.pgid') AS INTEGER) = ?4
+                  AND json_extract(?6, '$.platformStart') IS ?5
                   AND status IN ({})
                 ",
                 status::sql_in_list(status::PROCESS_ACTIVE)
@@ -669,7 +533,6 @@ pub(crate) fn mark_process_escape(
             params![
                 process.process_key,
                 run_id,
-                service_instance_id,
                 process.pid,
                 process.pgid,
                 platform_start,
@@ -687,37 +550,31 @@ pub(crate) fn mark_process_escape(
             ),
         ));
     }
-    require_run(&transaction, identity, run_id, computed_manifest_hash)?;
+    require_run(&transaction, run_id, computed_manifest_hash)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "service.proc-escape",
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
             process_key: Some(process.process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 /// Settle an unresolved terminal process after OS observation proves its
 /// recorded process, group, and tracked descendants are gone (or were
-/// terminated by the exclusive recovery owner). Endpoint evidence it still owns
-/// is released with it; the terminal status is retained as history.
+/// terminated by the exclusive recovery owner). Endpoint evidence it owns
+/// settles with it; the terminal status is retained as history.
 pub(crate) fn settle_unresolved_process(
     registry: &mut Registry,
     process_key: &str,
     run_id: &str,
-    computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -728,14 +585,10 @@ pub(crate) fn settle_unresolved_process(
             &format!(
                 "UPDATE processes SET ownership = 'settled'
                  WHERE process_key = ?1 AND run_id = ?2 AND ownership = 'unresolved'
-                   AND status NOT IN ({})
-                   AND EXISTS (
-                     SELECT 1 FROM runs r
-                     WHERE r.run_id = processes.run_id AND r.computed_manifest_hash = ?3
-                   )",
+                   AND status NOT IN ({})",
                 status::sql_in_list(status::PROCESS_ACTIVE)
             ),
-            params![process_key, run_id, computed_manifest_hash],
+            params![process_key, run_id],
         )
         .map_err(sql_error)?;
     if changed != 1 {
@@ -744,30 +597,17 @@ pub(crate) fn settle_unresolved_process(
             format!("unresolved process {process_key} no longer matches its recorded obligation"),
         ));
     }
-    transaction
-        .execute(
-            &format!(
-                "UPDATE ports SET status = ?2 WHERE owner_process_key = ?1 AND status IN ({})",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            params![process_key, PortStatus::Stale.as_str()],
-        )
-        .map_err(sql_error)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "process.ownership-settled",
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 #[derive(Clone, Copy)]
@@ -804,33 +644,23 @@ pub(crate) fn record_invocation_started(
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = connection.transaction().map_err(sql_error)?;
-    require_run(
-        &transaction,
-        identity,
-        process.run_id,
-        process.computed_manifest_hash,
-    )?;
+    require_run(&transaction, process.run_id, process.computed_manifest_hash)?;
     require_open_sources(&transaction, process.run_id)?;
     transaction
         .execute(
             "
             INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, role, service_name,
-              source_label, presentation, stdout_path, stderr_path,
-              stop_signal, stop_timeout_ms, containment
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                      ?16, ?17, ?18)
+              process_key, pid, pgid, start_identity, command_json, run_id,
+              status, role, service_name, source_label, presentation,
+              stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ",
             params![
                 process.process_key,
-                identity.environment.as_str(),
-                identity.slot,
                 process.pid,
                 process.pgid,
                 process.start_identity,
@@ -851,7 +681,6 @@ pub(crate) fn record_invocation_started(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: match owner {
@@ -859,14 +688,11 @@ pub(crate) fn record_invocation_started(
                 InvocationOwner::Probe(_) => "probe.running",
             },
             run_id: Some(process.run_id),
-            service_instance_id: None,
             process_key: Some(process.process_key),
-            computed_manifest_hash: Some(process.computed_manifest_hash),
             payload_json: &command_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
 pub(crate) fn record_invocation_observed(
@@ -883,25 +709,21 @@ pub(crate) fn record_invocation_observed(
     } = invocation;
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, identity, run_id, manifest_hash)?;
+    require_run(&transaction, run_id, manifest_hash)?;
     let changed = transaction
         .execute(
             "UPDATE processes SET execution_outcome = ?3, exit_code = ?4
-         WHERE process_key = ?1 AND run_id = ?2 AND service_instance_id IS NULL
-           AND execution_outcome IS NULL AND environment = ?5 AND slot = ?6 AND role = ?7",
+         WHERE process_key = ?1 AND run_id = ?2 AND execution_outcome IS NULL AND role = ?5",
             params![
                 process_key,
                 run_id,
                 outcome.as_str(),
                 exit_code,
-                identity.environment,
-                identity.slot,
                 owner.role().as_str()
             ],
         )
@@ -916,7 +738,6 @@ pub(crate) fn record_invocation_observed(
         serde_json::json!({"outcome": outcome.as_str(), "exitCode": exit_code}).to_string();
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: match owner {
@@ -924,9 +745,7 @@ pub(crate) fn record_invocation_observed(
                 InvocationOwner::Probe(_) => "probe.execution-observed",
             },
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: Some(process_key),
-            computed_manifest_hash: Some(manifest_hash),
             payload_json: &payload,
         },
     )?;
@@ -946,9 +765,7 @@ pub(crate) fn record_invocation_canceling(
             InvocationOwner::Probe(_) => "probe.canceling",
         },
         Some(invocation.run_id),
-        None,
         Some(invocation.process_key),
-        invocation.manifest_hash,
         payload_json,
     )
 }
@@ -965,8 +782,8 @@ pub(crate) fn mark_invocation_finished(
     let InvocationIdentity {
         run_id,
         process_key,
-        manifest_hash: computed_manifest_hash,
         owner,
+        ..
     } = invocation;
     let (process_status, event_type) = match terminal_status {
         TaskTerminalStatus::Succeeded => (ProcessStatus::Succeeded, "task.succeeded"),
@@ -985,14 +802,22 @@ pub(crate) fn mark_invocation_finished(
     };
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
-    let changed = transaction.execute(
-        "UPDATE processes SET status = ?2, ownership = 'settled', capture = coalesce(?7, capture) WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
-        params![process_key, process_status.as_str(), run_id, owner.role().as_str(), identity.environment, identity.slot, capture.map(CaptureOutcome::as_str)],
-    ).map_err(sql_error)?;
+    let changed = transaction
+        .execute(
+            "UPDATE processes SET status = ?2, ownership = 'settled', capture = coalesce(?5, capture)
+             WHERE process_key = ?1 AND run_id = ?3 AND role = ?4",
+            params![
+                process_key,
+                process_status.as_str(),
+                run_id,
+                owner.role().as_str(),
+                capture.map(CaptureOutcome::as_str)
+            ],
+        )
+        .map_err(sql_error)?;
     if changed != 1 {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
@@ -1001,135 +826,31 @@ pub(crate) fn mark_invocation_finished(
     }
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type,
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
             payload_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)
 }
 
-pub(crate) fn read_service_snapshot(
-    registry: &Registry,
-    service_instance_id: &str,
-) -> RuntimeResult<ServiceSnapshot> {
-    read_service_snapshot_conn(registry.connection(), service_instance_id)
-}
-
-fn read_service_snapshot_conn(
+/// The endpoint evidence recorded with one service process.
+fn recorded_endpoints(
     connection: &Connection,
-    service_instance_id: &str,
-) -> RuntimeResult<ServiceSnapshot> {
-    let process_rows = {
-        let mut statement = connection
-            .prepare(&format!(
-                "
-                SELECT p.process_key, p.pid, p.pgid, p.start_identity, p.run_id, p.status, p.service_name
-                FROM processes p
-                WHERE p.service_instance_id = ?1
-                  AND ({actionable})
-                ORDER BY p.process_key
-                ",
-                actionable = status::actionable_process_sql(),
-            ))
-            .map_err(sql_error)?;
-        statement
-            .query_map(params![service_instance_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, i32>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?
-    };
-    if process_rows.len() > 1 {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!(
-                "service instance {service_instance_id} has {} actionable process rows",
-                process_rows.len()
-            ),
-        ));
-    }
-    let process = process_rows
-        .into_iter()
-        .next()
-        .map(
-            |(
-                process_key,
-                pid,
-                pgid,
-                start_identity_json,
-                run_id,
-                process_status,
-                service_name,
-            )|
-             -> RuntimeResult<StoredServiceProcess> {
-                let start_identity = serde_json::from_str::<StoredProcessIdentity>(
-                    &start_identity_json,
-                )
-                .map_err(|error| {
-                    RuntimeError::new(
-                        ErrorCode::RegistryCorrupt,
-                        format!("invalid start identity for process {process_key}: {error}"),
-                    )
-                })?;
-                if service_name.is_empty() {
-                    return Err(RuntimeError::new(
-                        ErrorCode::RegistryCorrupt,
-                        "stored service label is empty",
-                    ));
-                }
-                Ok(StoredServiceProcess {
-                    service_name,
-                    process_key,
-                    pid,
-                    pgid,
-                    platform_start: start_identity.platform_start,
-                    tracked_processes: start_identity.tracked_processes,
-                    run_id,
-                    status: ProcessStatus::parse_db(&process_status)?,
-                })
-            },
-        )
-        .transpose()?;
-
-    let endpoints = read_open_endpoints(connection, Some(service_instance_id))?;
-
-    Ok(ServiceSnapshot { process, endpoints })
-}
-
-fn stored_endpoint_map(
-    endpoints: &[StoredServiceEndpoint],
-) -> BTreeMap<String, (String, u16, String, String)> {
-    endpoints
-        .iter()
-        .map(|endpoint| {
-            (
-                endpoint.endpoint_key.clone(),
-                (
-                    endpoint.address.clone(),
-                    endpoint.port,
-                    endpoint.status.as_str().to_owned(),
-                    endpoint.owner_process_key.clone(),
-                ),
-            )
+    process_key: &str,
+) -> RuntimeResult<BTreeMap<String, (String, u16)>> {
+    connection
+        .prepare("SELECT endpoint_id, address, port FROM ports WHERE owner_process_key = ?1")
+        .map_err(sql_error)?
+        .query_map([process_key], |row| {
+            Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
         })
-        .collect()
+        .map_err(sql_error)?
+        .collect::<Result<_, _>>()
+        .map_err(sql_error)
 }
 
 fn ensure_predecessor_settled(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
@@ -1157,23 +878,27 @@ fn ensure_predecessor_settled(transaction: &Transaction<'_>, run_id: &str) -> Ru
     Ok(())
 }
 
-/// A service instance starts at most once while an earlier process of it is
-/// still an ownership obligation.
-fn refuse_active_service(connection: &Connection, service_instance_id: &str) -> RuntimeResult<()> {
+/// A declared service starts at most once in a run while an earlier process
+/// of it is still an ownership obligation.
+fn refuse_active_service(
+    connection: &Connection,
+    run_id: &str,
+    service_name: &str,
+) -> RuntimeResult<()> {
     let existing: Option<String> = connection
         .query_row(
             &format!(
                 "
                 SELECT p.status
                 FROM processes p
-                WHERE p.service_instance_id = ?1
+                WHERE p.run_id = ?1 AND p.service_name = ?2 AND p.role = 'service'
                   AND ({actionable})
                 ORDER BY p.process_key
                 LIMIT 1
                 ",
                 actionable = status::actionable_process_sql(),
             ),
-            params![service_instance_id],
+            params![run_id, service_name],
             |row| row.get(0),
         )
         .optional()
@@ -1181,58 +906,10 @@ fn refuse_active_service(connection: &Connection, service_instance_id: &str) -> 
     match existing {
         Some(status) => Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            format!("service instance {service_instance_id} has actionable process {status}"),
+            format!("service {service_name} of run {run_id} has actionable process {status}"),
         )),
         None => Ok(()),
     }
-}
-
-fn ensure_no_active_port_transaction(
-    transaction: &Transaction<'_>,
-    address: &str,
-    port: u16,
-) -> RuntimeResult<()> {
-    let mut statement = transaction
-        .prepare(
-            "
-            SELECT endpoint_key, status FROM ports
-            WHERE address = ?1 AND port = ?2
-            ORDER BY endpoint_key
-            ",
-        )
-        .map_err(sql_error)?;
-    let rows = statement
-        .query_map(params![address, port], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(sql_error)?;
-    for row in rows {
-        let (endpoint_key, raw_status) = row.map_err(sql_error)?;
-        if status::PORT_OPEN.contains(&PortStatus::parse_db(&raw_status)?) {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!("endpoint {endpoint_key} already has active port {address}:{port}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn release_service_ports(
-    transaction: &rusqlite::Transaction<'_>,
-    service_instance_id: &str,
-) -> RuntimeResult<()> {
-    transaction
-        .execute(
-            "
-            UPDATE ports
-            SET status = ?2
-            WHERE service_instance_id = ?1
-            ",
-            params![service_instance_id, PortStatus::Released.as_str()],
-        )
-        .map_err(sql_error)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1247,7 +924,7 @@ mod tests {
 
     const RUN_ID: &str = "run-test";
     const MANIFEST_HASH: &str = "manifest-hash";
-    const SERVICE_ID: &str = "service-instance";
+    const SERVICE: &str = "service";
     const PROCESS_KEY: &str = "process-key";
     const START_IDENTITY: &str =
         r#"{"pid":123,"pgid":123,"platformStart":null,"trackedProcesses":[]}"#;
@@ -1289,8 +966,7 @@ mod tests {
 
     fn service_record() -> ServiceRecord<'static> {
         ServiceRecord {
-            service_instance_id: SERVICE_ID,
-            service_name: "service",
+            service_name: SERVICE,
             source: fixture_source("service"),
             stop: StopPolicy::INVOCATION,
         }
@@ -1308,7 +984,7 @@ mod tests {
 
     fn endpoint() -> EndpointRecord<'static> {
         EndpointRecord {
-            endpoint_key: "service-instance:endpoint",
+            endpoint_id: "endpoint",
             address: "127.0.0.1",
             port: 24222,
         }
@@ -1321,15 +997,13 @@ mod tests {
             .execute(
                 "
                 INSERT INTO runs (
-                  run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
+                  run_id, execution_outcome, manifest_path, computed_manifest_hash,
                   runtime_abi, toolchain_id, generator_json, target_json, source_json,
                   summary_path, owner_identity, diagnostic_path
-                ) VALUES (?1, ?2, ?3, NULL, '/manifest', ?4, ?5, ?6, '{}', '{}', '{}', NULL, '{}', 'diagnostics.log')
+                ) VALUES (?1, NULL, '/manifest', ?2, ?3, ?4, '{}', '{}', '{}', NULL, '{}', 'diagnostics.log')
                 ",
                 params![
                     run_id,
-                    identity.environment,
-                    identity.slot,
                     MANIFEST_HASH,
                     identity.runtime_abi,
                     identity.toolchain_id,
@@ -1339,7 +1013,7 @@ mod tests {
     }
 
     fn record_intent(registry: &mut Registry, run_id: &str) {
-        record_service_start_intent(registry, run_id, MANIFEST_HASH, SERVICE_ID)
+        record_service_start_intent(registry, run_id, MANIFEST_HASH, SERVICE)
             .expect("startup intent should commit");
     }
 
@@ -1530,21 +1204,24 @@ mod tests {
             .query_row("SELECT count(*) FROM ports", [], |row| row.get(0))
             .unwrap();
         assert_eq!(ports, 0);
-        let error = fixture
-            .registry
-            .connection()
-            .execute(
-                "INSERT INTO ports (endpoint_key, environment, slot, service_instance_id,
-                 address, port, status, owner_process_key)
-             VALUES ('service-instance:endpoint', 'dev', 0, 'service-instance',
-                 '127.0.0.1', 24222, 'reserved', NULL)",
-                [],
-            )
-            .unwrap_err();
-        assert_eq!(
-            error.sqlite_error_code(),
-            Some(rusqlite::ErrorCode::ConstraintViolation)
-        );
+        // Endpoint evidence cannot exist without an existing owning process.
+        for owner in ["NULL", "'absent-process'"] {
+            let error = fixture
+                .registry
+                .connection()
+                .execute(
+                    &format!(
+                        "INSERT INTO ports (owner_process_key, endpoint_id, address, port)
+                         VALUES ({owner}, 'endpoint', '127.0.0.1', 24222)"
+                    ),
+                    [],
+                )
+                .unwrap_err();
+            assert_eq!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::ConstraintViolation)
+            );
+        }
         record_service_start(
             &mut fixture.registry,
             RUN_ID,
@@ -1564,7 +1241,7 @@ mod tests {
 
     #[test]
     fn process_recording_requires_exact_run_provenance_before_mutation() {
-        for mutation in ["missing", "hash", "slot"] {
+        for mutation in ["missing", "hash"] {
             let mut fixture = TestRegistry::new();
             if mutation != "missing" {
                 insert_run(&fixture.registry, RUN_ID);
@@ -1573,7 +1250,6 @@ mod tests {
                     .connection()
                     .execute_batch(match mutation {
                         "hash" => "UPDATE runs SET computed_manifest_hash = 'other'",
-                        "slot" => "UPDATE runs SET slot = slot + 1",
                         _ => unreachable!(),
                     })
                     .unwrap();
@@ -1609,7 +1285,7 @@ mod tests {
         let lock = fixture.path().parent().unwrap().join("slot.lock");
         std::fs::rename(&lock, lock.with_file_name("displaced.lock")).unwrap();
         let error =
-            record_service_start_intent(&mut fixture.registry, RUN_ID, MANIFEST_HASH, SERVICE_ID)
+            record_service_start_intent(&mut fixture.registry, RUN_ID, MANIFEST_HASH, SERVICE)
                 .unwrap_err();
         assert_eq!(error.code, ErrorCode::StateUnowned);
         let events: i64 = fixture
@@ -1655,37 +1331,38 @@ mod tests {
     fn service_label_is_process_evidence_and_cannot_be_detached() {
         let mut fixture = TestRegistry::new();
         record_started(&mut fixture.registry);
-        let process = read_service_snapshot(&fixture.registry, SERVICE_ID)
-            .unwrap()
-            .process
+        let process: (String, String, String) = fixture
+            .registry
+            .connection()
+            .query_row(
+                "SELECT service_name, run_id, role FROM processes WHERE process_key = ?1",
+                [PROCESS_KEY],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
             .unwrap();
-        assert_eq!(process.service_name, "service");
-        assert_eq!(process.run_id, RUN_ID);
-        assert_eq!(process.process_key, PROCESS_KEY);
+        assert_eq!(process, (SERVICE.into(), RUN_ID.into(), "service".into()));
 
         for mutation in [
             "UPDATE processes SET service_name = NULL",
             "UPDATE processes SET service_name = ''",
-            "UPDATE processes SET service_instance_id = NULL",
+            "UPDATE processes SET run_id = 'absent-run'",
             "UPDATE processes SET role = NULL",
             "UPDATE processes SET role = 'unknown'",
             "UPDATE processes SET role = 'task'",
-            "UPDATE processes SET role = 'probe'",
         ] {
             assert!(
                 fixture
                     .registry
                     .connection()
                     .execute_batch(mutation)
-                    .is_err()
+                    .is_err(),
+                "{mutation}"
             );
         }
         settle_service_terminal(
             &mut fixture.registry,
             RUN_ID,
-            SERVICE_ID,
             PROCESS_KEY,
-            MANIFEST_HASH,
             ServiceTerminal::Stopped(Some(CaptureOutcome::Complete)),
         )
         .unwrap();
@@ -1702,36 +1379,19 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_multiplicity_and_start_conflict_keep_distinct_precedence() {
+    fn start_intent_refuses_an_actionable_process_of_the_same_service() {
         let mut fixture = TestRegistry::new();
         record_started(&mut fixture.registry);
-        fixture
-            .registry
-            .connection()
-            .execute_batch(
-                "INSERT INTO processes (
-                process_key, environment, slot, pid, pgid, start_identity,
-                command_json, run_id, service_instance_id, status, service_name, role,
-                source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
-             ) SELECT 'z-second', environment, slot, pid, pgid, 'invalid-json',
-                      command_json, run_id, service_instance_id, status, service_name, role,
-                      source_label, presentation, stdout_path || '.2', stderr_path || '.2', stop_signal, stop_timeout_ms, containment FROM processes;",
-            )
-            .unwrap();
-        let error = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap_err();
-        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-        assert_eq!(
-            error.message,
-            "service instance service-instance has 2 actionable process rows"
-        );
         let error =
-            record_service_start_intent(&mut fixture.registry, RUN_ID, MANIFEST_HASH, SERVICE_ID)
+            record_service_start_intent(&mut fixture.registry, RUN_ID, MANIFEST_HASH, SERVICE)
                 .unwrap_err();
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
         assert_eq!(
             error.message,
-            "service instance service-instance has actionable process running"
+            "service service of run run-test has actionable process running"
         );
+        // Another declared service of the same run is independent.
+        record_service_start_intent(&mut fixture.registry, RUN_ID, MANIFEST_HASH, "other").unwrap();
     }
 
     #[test]
@@ -1754,13 +1414,12 @@ mod tests {
             let result = activate_service_ready(
                 &mut fixture.registry,
                 RUN_ID,
-                SERVICE_ID,
                 PROCESS_KEY,
-                MANIFEST_HASH,
-                &[VerifiedEndpointActivation {
-                    endpoint_key: endpoint().endpoint_key,
-                    address,
-                    port: endpoint().port,
+                &[VerifiedEndpoint {
+                    endpoint: EndpointRecord {
+                        address,
+                        ..endpoint()
+                    },
                     ownership_json: "{}",
                 }],
                 ("service.ready", "ready", "ready"),
@@ -1771,74 +1430,76 @@ mod tests {
                 result.unwrap();
             }
         }
-        let snapshot = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap();
-        assert_eq!(snapshot.endpoints[0].address, "0:0:0:0:0:0:0:1");
-        assert_eq!(snapshot.endpoints[0].host.to_string(), "::1");
+        let stored: String = fixture
+            .registry
+            .connection()
+            .query_row("SELECT address FROM ports", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, "0:0:0:0:0:0:0:1");
     }
 
     #[test]
-    fn stored_endpoint_decoding_is_shared_by_ready_and_snapshot_reads() {
+    fn ready_activation_requires_the_exact_recorded_endpoint_set() {
         for mutation in [
-            "UPDATE ports SET endpoint_key = 'other:endpoint'",
-            "UPDATE ports SET endpoint_key = service_instance_id || ':'",
-            "UPDATE ports SET address = 'not-an-address'",
+            "UPDATE ports SET endpoint_id = 'other'",
             "UPDATE ports SET address = '0.0.0.0'",
-            "UPDATE ports SET port = -1",
+            "UPDATE ports SET port = port + 1",
+            "DELETE FROM ports",
+            "INSERT INTO ports (owner_process_key, endpoint_id, address, port)
+             SELECT owner_process_key, 'extra', address, port + 1 FROM ports",
+        ] {
+            let mut fixture = TestRegistry::new();
+            record_started(&mut fixture.registry);
+            fixture
+                .registry
+                .connection()
+                .execute_batch(mutation)
+                .unwrap();
+            let before: (i64, String) = fixture
+                .registry
+                .connection()
+                .query_row(
+                    "SELECT (SELECT count(*) FROM events), (SELECT status FROM processes)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let result = activate_service_ready(
+                &mut fixture.registry,
+                RUN_ID,
+                PROCESS_KEY,
+                &[VerifiedEndpoint {
+                    endpoint: endpoint(),
+                    ownership_json: "{}",
+                }],
+                ("service.ready", "ready", "ready"),
+            );
+            assert_eq!(
+                result.unwrap_err().code,
+                ErrorCode::RegistryCorrupt,
+                "{mutation}"
+            );
+            let after: (i64, String) = fixture
+                .registry
+                .connection()
+                .query_row(
+                    "SELECT (SELECT count(*) FROM events), (SELECT status FROM processes)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(after, before, "{mutation}");
+        }
+        // Stored endpoint evidence keeps a nonempty identity and a TCP port.
+        let fixture = TestRegistry::new();
+        let mut registry = fixture.registry;
+        record_started(&mut registry);
+        for mutation in [
+            "UPDATE ports SET endpoint_id = ''",
+            "UPDATE ports SET port = 0",
             "UPDATE ports SET port = 65536",
         ] {
-            for consumer in ["ready", "snapshot"] {
-                let mut fixture = TestRegistry::new();
-                record_started(&mut fixture.registry);
-                fixture
-                    .registry
-                    .connection()
-                    .execute_batch(mutation)
-                    .unwrap();
-                let before: (i64, i64, i64) = fixture
-                    .registry
-                    .connection()
-                    .query_row(
-                        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM processes),
-                            (SELECT count(*) FROM sqlite_master WHERE name = 'services')",
-                        [],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .unwrap();
-                let result = match consumer {
-                    "ready" => activate_service_ready(
-                        &mut fixture.registry,
-                        RUN_ID,
-                        SERVICE_ID,
-                        PROCESS_KEY,
-                        MANIFEST_HASH,
-                        &[VerifiedEndpointActivation {
-                            endpoint_key: endpoint().endpoint_key,
-                            address: "127.0.0.1",
-                            port: 24222,
-                            ownership_json: "{}",
-                        }],
-                        ("service.ready", "ready", "ready"),
-                    ),
-                    "snapshot" => read_service_snapshot(&fixture.registry, SERVICE_ID).map(|_| ()),
-                    _ => unreachable!(),
-                };
-                assert_eq!(
-                    result.unwrap_err().code,
-                    ErrorCode::RegistryCorrupt,
-                    "{consumer}: {mutation}"
-                );
-                let after: (i64, i64, i64) = fixture
-                    .registry
-                    .connection()
-                    .query_row(
-                        "SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM processes),
-                            (SELECT count(*) FROM sqlite_master WHERE name = 'services')",
-                        [],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .unwrap();
-                assert_eq!(after, before, "{consumer}: {mutation}");
-            }
+            assert!(registry.connection().execute_batch(mutation).is_err());
         }
     }
 
@@ -1916,62 +1577,6 @@ mod tests {
     }
 
     #[test]
-    fn process_registration_checks_every_matching_endpoint_before_writing() {
-        for (later_status, expected_code) in [
-            ("reserved", ErrorCode::RegistryCorrupt),
-            ("active", ErrorCode::RegistryCorrupt),
-            ("invalid-status", ErrorCode::RegistryCorrupt),
-        ] {
-            let mut fixture = TestRegistry::new();
-            insert_run(&fixture.registry, RUN_ID);
-            let registry_identity = fixture.registry.identity();
-            fixture
-                .registry
-                .connection()
-                .execute(
-                    "
-                    INSERT INTO ports (
-                      endpoint_key, environment, slot, service_instance_id, address, port, status, owner_process_key
-                    ) VALUES
-                      ('a:old', ?1, ?2, 'old-service', ?3, ?4, 'released', 'old-process'),
-                      ('z:existing', ?1, ?2, 'existing-service', ?3, ?4, ?5, 'existing-process')
-                    ",
-                    params![
-                        registry_identity.environment,
-                        registry_identity.slot,
-                        endpoint().address,
-                        endpoint().port,
-                        later_status,
-                    ],
-                )
-                .unwrap();
-
-            let error = record_service_start(
-                &mut fixture.registry,
-                RUN_ID,
-                MANIFEST_HASH,
-                &service_record(),
-                &process_record(123),
-                &[endpoint()],
-            )
-            .expect_err("a released row must not hide a later open or malformed row");
-            assert_eq!(error.code, expected_code, "status {later_status}");
-            let counts: (i64, i64, i64) = fixture
-                .registry
-                .connection()
-                .query_row(
-                    "SELECT (SELECT count(*) FROM ports),
-                            (SELECT count(*) FROM processes),
-                            (SELECT count(*) FROM events)",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .unwrap();
-            assert_eq!(counts, (2, 0, 0), "status {later_status}");
-        }
-    }
-
-    #[test]
     fn escape_settlement_requires_exact_evidence_and_rolls_back() {
         for mutation in [
             "missing-process",
@@ -1982,16 +1587,6 @@ mod tests {
             let mut fixture = TestRegistry::new();
             record_started(&mut fixture.registry);
             match mutation {
-                "missing-process" => {
-                    fixture
-                        .registry
-                        .connection()
-                        .execute(
-                            "DELETE FROM processes WHERE process_key = ?1",
-                            [PROCESS_KEY],
-                        )
-                        .unwrap();
-                }
                 "wrong-run" => {
                     fixture
                         .registry
@@ -2018,15 +1613,21 @@ mod tests {
                     .unwrap(),
                 _ => {}
             }
-            let process = process_record(if mutation == "wrong-process" {
-                124
-            } else {
-                123
-            });
+            let process = ProcessRecord {
+                process_key: if mutation == "missing-process" {
+                    "absent-process"
+                } else {
+                    PROCESS_KEY
+                },
+                ..process_record(if mutation == "wrong-process" {
+                    124
+                } else {
+                    123
+                })
+            };
             let error = mark_process_escape(
                 &mut fixture.registry,
                 RUN_ID,
-                SERVICE_ID,
                 &process,
                 MANIFEST_HASH,
                 None,
@@ -2042,14 +1643,39 @@ mod tests {
                     SELECT
                       (SELECT count(*) FROM processes WHERE status = 'running'),
                       (SELECT count(*) FROM runs WHERE execution_outcome IS NULL),
-                      (SELECT count(*) FROM ports WHERE status = 'reserved'),
+                      (SELECT count(*) FROM ports),
                       (SELECT count(*) FROM events WHERE event_type = 'service.proc-escape')
                     ",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .unwrap();
-            assert_eq!(state, ((mutation != "missing-process") as i64, 1, 1, 0));
+            assert_eq!(state, (1, 1, 1, 0));
+        }
+    }
+
+    #[test]
+    fn registry_rows_reference_their_run_and_process() {
+        let fixture = TestRegistry::new();
+        let connection = fixture.registry.connection();
+        for statement in [
+            "INSERT INTO processes (
+               process_key, pid, pgid, start_identity, command_json, run_id, status, role,
+               source_label, presentation, stdout_path, stderr_path, stop_signal,
+               stop_timeout_ms, containment
+             ) VALUES ('p', 1, 1, '{}', '{}', 'absent-run', 'running', 'task', 'task',
+                       'shown', 'out', 'err', 15, 1000, 'process-group')",
+            "INSERT INTO events (at, event_type, run_id, payload_json)
+             VALUES ('now', 'test', 'absent-run', '{}')",
+            "INSERT INTO events (at, event_type, process_key, payload_json)
+             VALUES ('now', 'test', 'absent-process', '{}')",
+        ] {
+            let error = connection.execute_batch(statement).unwrap_err();
+            assert_eq!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::ConstraintViolation),
+                "{statement}"
+            );
         }
     }
 }

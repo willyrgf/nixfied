@@ -274,18 +274,19 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   validate in a read snapshot before journal conversion. The same authored DDL
   creates the registry and defines its exact schema; added triggers, indexes,
   columns, or weakened constraints reject without repair. Writable connections
-  explicitly require and verify WAL, `synchronous=FULL`, and foreign-key checks.
+  explicitly require and verify WAL, `synchronous=FULL`, and foreign-key checks;
+  processes reference their run, endpoint rows their owning process, and events
+  their run and process.
   Darwin additionally requests and verifies `fullfsync` and
   `checkpoint_fullfsync`. These settings do not by themselves establish filesystem
   publication ordering or a tested host-power-loss guarantee.
 - **Liveness is observed against the OS** before being reported — `ps` confirms
   process identity (surviving PID reuse) before saying `running`/`stale`/etc., and
   writes nothing.
-- **Registry readers own stored representation.** Service and control paths share
-  endpoint decoding for status, service prefix, nonempty endpoint identity,
-  loopback address, and port representation. Raw address spelling remains available
-  for exact row comparisons and event bytes. Process registration and activation
-  retain their own complete-set and ownership checks within the relevant transaction.
+- **Registry readers own stored representation.** Endpoint rows are immutable:
+  one per owning process and endpoint id, with the raw address spelling for exact
+  comparison. Ready activation compares the complete recorded set with the
+  verified set within its transaction; no path rewrites endpoint rows.
   Shared actionable-process SQL preserves each caller's multiplicity and conflict
   rules. Observation returns typed facts; `ps` alone projects public strings.
   A live session is canceled only through its own control FIFO; recovery of a
@@ -296,12 +297,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   transition visibly selects its transaction
   mode and commits mutations with redacted events through one borrowed event record.
 - **Endpoint evidence belongs to a process.** Startup intent is recorded before
-  prepare. Endpoint rows are inserted atomically with the process row and name
-  that process explicitly. There are no ownerless reservations, service leases,
+  prepare. Endpoint rows are inserted atomically with the process row, are keyed
+  by that process, and settle with it. There are no ownerless reservations, service leases,
   owner tokens, heartbeat workers, or expiry sweeps. Unsafe or conflicting
   stored process evidence rejects before new startup.
 - **Session completion has one owner.** Workload transitions update local process
-  and endpoint evidence, never aggregate execution outcome. The live session
+  evidence, never aggregate execution outcome. The live session
   records its outcome before teardown. Recovery under the slot guard
   marks only unknown executions interrupted and preserves known outcomes.
   `SessionProgress` distinguishes execution, finalizing a known outcome, and
@@ -372,7 +373,8 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   checks and migrations; configuration changes grant no reset authority.
 - **Slot ownership precedes recovery and state preparation.** Recovery settles
   predecessors regardless of manifest hash. State preparation refuses unresolved
-  process and endpoint evidence and never signals processes. Endpoint locks
+  process evidence, which covers the endpoint evidence it owns, and never
+  signals processes. Endpoint locks
   cover preflight, service prepare, spawn, and readiness after slot preparation.
 - **Listener loss requires explicit teardown.** `ps` remains process liveness
   and never signals solely because an endpoint is missing. Endpoint acquisition

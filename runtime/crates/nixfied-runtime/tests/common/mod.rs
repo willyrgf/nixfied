@@ -629,10 +629,10 @@ pub fn assert_empty_unversioned_database(path: &Path) {
 pub fn seed_run(connection: &rusqlite::Connection, run_id: &str, outcome: Option<&str>) {
     connection
         .execute(
-            "INSERT INTO runs (run_id, environment, slot, execution_outcome, manifest_path,
+            "INSERT INTO runs (run_id, execution_outcome, manifest_path,
                computed_manifest_hash, runtime_abi, toolchain_id, generator_json, target_json,
                source_json, owner_identity, diagnostic_path)
-             SELECT ?1, environment, slot, ?2, '/nix/store/test-manifest/manifest.json', 'hash',
+             SELECT ?1, ?2, '/nix/store/test-manifest/manifest.json', 'hash',
                runtime_abi, toolchain_id, '{}', '{}', '[]', '{}', 'diagnostics.log'
              FROM registry_meta",
             rusqlite::params![run_id, outcome],
@@ -649,8 +649,8 @@ pub struct SeedProcess<'a> {
     pub start_identity: &'a str,
     pub status: &'a str,
     pub ownership: &'a str,
-    /// A service's `(instance, name)`; a task has neither.
-    pub service: Option<(&'a str, &'a str)>,
+    /// A service's declared name; a task has none.
+    pub service: Option<&'a str>,
     pub presentation: &'a str,
 }
 
@@ -670,24 +670,20 @@ impl Default for SeedProcess<'_> {
 }
 
 pub fn seed_process(connection: &rusqlite::Connection, process: SeedProcess<'_>) {
-    let (instance, name) = process.service.unzip();
     connection
         .execute(
-            "INSERT INTO processes (process_key, environment, slot, pid, pgid, start_identity,
-               command_json, run_id, service_instance_id, service_name, role, status, ownership,
-               source_label, presentation, stdout_path, stderr_path, stop_signal,
-               stop_timeout_ms, containment)
-             SELECT ?1, environment, slot, ?2, ?2, ?3, '{}', ?4, ?5, ?6,
-               CASE WHEN ?5 IS NULL THEN 'task' ELSE 'service' END, ?7, ?8, 'fixture', ?9,
-               'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err', 15, 1000, 'process-group'
-             FROM registry_meta",
+            "INSERT INTO processes (process_key, pid, pgid, start_identity, command_json,
+               run_id, service_name, role, status, ownership, source_label, presentation,
+               stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment)
+             VALUES (?1, ?2, ?2, ?3, '{}', ?4, ?5,
+               CASE WHEN ?5 IS NULL THEN 'task' ELSE 'service' END, ?6, ?7, 'fixture', ?8,
+               'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err', 15, 1000, 'process-group')",
             rusqlite::params![
                 process.key,
                 process.pid,
                 process.start_identity,
                 process.run_id,
-                instance,
-                name,
+                process.service,
                 process.status,
                 process.ownership,
                 process.presentation,
@@ -696,21 +692,13 @@ pub fn seed_process(connection: &rusqlite::Connection, process: SeedProcess<'_>)
         .expect("fixture process should be seeded");
 }
 
-/// Seed an endpoint row owned by `owner`.
-pub fn seed_port(
-    connection: &rusqlite::Connection,
-    endpoint_key: &str,
-    service_instance_id: &str,
-    port: u16,
-    status: &str,
-    owner: &str,
-) {
+/// Seed immutable endpoint evidence owned by the process `owner`.
+pub fn seed_port(connection: &rusqlite::Connection, owner: &str, endpoint_id: &str, port: u16) {
     connection
         .execute(
-            "INSERT INTO ports (endpoint_key, environment, slot, service_instance_id, address,
-               port, status, owner_process_key)
-             SELECT ?1, environment, slot, ?2, '127.0.0.1', ?3, ?4, ?5 FROM registry_meta",
-            rusqlite::params![endpoint_key, service_instance_id, port, status, owner],
+            "INSERT INTO ports (owner_process_key, endpoint_id, address, port)
+             VALUES (?1, ?2, '127.0.0.1', ?3)",
+            rusqlite::params![owner, endpoint_id, port],
         )
         .expect("fixture port should be seeded");
 }

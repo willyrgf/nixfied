@@ -12,12 +12,10 @@ use nixfied_manifest::Manifest;
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::SourcePresentation;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
-use nixfied_runtime::registry::session::record_run_created;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    PrepareRunner, ReadinessFailure, ReadyService, RunContext, ServiceSelection, SlotEndpoints,
-    StartingService, TaskExecution, TaskExecutionError, run_dependent_task_cancellable,
-    run_slot_clean, start_service_for_slot,
+    PrepareRunner, ReadinessFailure, ReadyService, RunContext, StartingService, TaskExecution,
+    TaskExecutionError, run_dependent_task_cancellable, run_slot_clean,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker};
@@ -131,8 +129,8 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         [&service.info().process_key],
     );
     let service_name: String = fixture.query(
-        "SELECT service_name FROM processes WHERE service_instance_id = ?1",
-        [&service.info().service_instance_id],
+        "SELECT service_name FROM processes WHERE process_key = ?1 AND role = 'service'",
+        [&service.info().process_key],
     );
     let probe_ready_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
@@ -229,24 +227,33 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
     );
-    let port_status: String = fixture.query(
-        "SELECT status FROM ports WHERE owner_process_key = ?1",
+    let ports: i64 = fixture.query(
+        "SELECT count(*) FROM ports WHERE owner_process_key = ?1",
         [&service.info().process_key],
     );
     let verified_events: i64 = fixture.query(
-        "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified'",
-        [],
+        "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified' AND process_key = ?1",
+        [&service.info().process_key],
     );
 
     assert_eq!(process_status, "ready");
-    assert_eq!(port_status, "active");
+    assert_eq!(ports, 1);
     assert_eq!(verified_events, 1);
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
-    let released_ports: i64 =
-        fixture.query("SELECT count(*) FROM ports WHERE status = 'released'", []);
-    assert_eq!(released_ports, 1);
+    // Endpoint evidence is immutable and settles with its owner.
+    let settled: (i64, String) = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*), p.ownership FROM ports ep JOIN processes p
+             ON p.process_key = ep.owner_process_key",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(settled, (1, "settled".into()));
 }
 
 #[test]
@@ -256,24 +263,19 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
     let service = fixture
         .start("run-ready-unexpected-open-row", port)
         .expect("service should start before ready activation");
-    let unexpected_key = format!("{}:unexpected", service.info().service_instance_id);
     fixture
         .registry
         .connection()
         .execute(
             "
-            INSERT INTO ports (
-              endpoint_key, environment, slot, service_instance_id,
-              address, port, status, owner_process_key
-            )
-            SELECT ?1, environment, slot, service_instance_id,
-                   address, port + 1, 'active', owner_process_key
+            INSERT INTO ports (owner_process_key, endpoint_id, address, port)
+            SELECT owner_process_key, 'unexpected', address, port + 1
             FROM ports
-            WHERE service_instance_id = ?2
+            WHERE owner_process_key = ?1
             ",
-            rusqlite::params![unexpected_key, service.info().service_instance_id],
+            [&service.info().process_key],
         )
-        .expect("test should inject an unexpected open endpoint row");
+        .expect("test should inject an unexpected endpoint row");
 
     let (service, error) = fixture
         .ready(service)
@@ -287,17 +289,14 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
         .query_row(
             "
             SELECT
-              (SELECT status FROM processes WHERE process_key = ?2),
-              (SELECT count(*) FROM ports WHERE service_instance_id = ?1 AND status = 'active')
+              (SELECT status FROM processes WHERE process_key = ?1),
+              (SELECT count(*) FROM events WHERE event_type = 'port.owner-verified')
             ",
-            rusqlite::params![
-                service.info().service_instance_id,
-                service.info().process_key
-            ],
+            [&service.info().process_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("failed ready transaction should remain inspectable");
-    assert_eq!(state, ("running".into(), 1));
+    assert_eq!(state, ("running".into(), 0));
     let mut contender = test_child_listener_fixture(port);
     let conflict = contender.start_refused(
         "run-contender-before-settlement",
@@ -318,53 +317,32 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
 }
 
 #[test]
-fn ready_activation_rejects_raced_port_owner_atomically() {
+fn ready_activation_rejects_missing_endpoint_evidence_atomically() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let service = fixture
-        .start("run-ready-raced-owner", port)
+        .start("run-ready-missing-evidence", port)
         .expect("service should start before ready activation");
     fixture
         .registry
         .connection()
         .execute(
-            "UPDATE ports SET owner_process_key = 'process-racer' WHERE service_instance_id = ?1",
-            [&service.info().service_instance_id],
+            "DELETE FROM ports WHERE owner_process_key = ?1",
+            [&service.info().process_key],
         )
-        .expect("test should race the reserved owner evidence");
+        .expect("test should remove the recorded endpoint evidence");
 
     let (service, error) = fixture
         .ready(service)
-        .expect_err("ready activation must not accept a mismatched owner")
+        .expect_err("ready activation must not accept unrecorded endpoint evidence")
         .into_parts();
 
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let raced: (String, String) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, o.owner_process_key
-            FROM processes p
-            JOIN ports o ON o.service_instance_id = p.service_instance_id
-            WHERE p.process_key = ?1
-            ",
-            [&service.info().process_key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("raced ready evidence should query");
-    assert_eq!(raced, ("running".into(), "process-racer".into()));
-    fixture
-        .registry
-        .connection()
-        .execute(
-            "UPDATE ports SET owner_process_key = ?2 WHERE service_instance_id = ?1",
-            rusqlite::params![
-                service.info().service_instance_id,
-                service.info().process_key
-            ],
-        )
-        .expect("test should restore ownership for failure settlement");
+    let status: String = fixture.query(
+        "SELECT status FROM processes WHERE process_key = ?1",
+        [&service.info().process_key],
+    );
+    assert_eq!(status, "running");
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
 }
@@ -514,93 +492,13 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
          WHERE event_type IN ('service.lifecycle.started', 'service.lifecycle.terminal')
            AND json_extract(payload_json, '$.class') = 'clean'
            AND json_extract(payload_json, '$.serviceId') = 'synthetic'
-           AND run_id IS NULL AND service_instance_id IS NULL AND process_key IS NULL",
+           AND run_id IS NULL AND process_key IS NULL",
         [],
     );
     assert_eq!(
         declaration_only, 2,
         "slot cleanup must not invent a service instance"
     );
-}
-
-#[test]
-fn same_registry_proven_listener_reports_complete_nixfied_owner() {
-    let port = available_port_window(1);
-    let mut fixture = test_child_listener_fixture(port);
-    let owner = fixture.start_ready("run-owner-attribution", port);
-
-    // A second address with the same exact service contract creates a distinct
-    // service instance while preserving the identity/containment facts needed
-    // to attribute the first instance truthfully.
-    let mut other_manifest: Manifest = (**fixture.admission.common().manifest()).clone();
-    let other = other_manifest.services.remove("synthetic").unwrap();
-    other_manifest.services.insert("other".into(), other);
-    let task = other_manifest.tasks.get_mut("smoke").unwrap();
-    task.requires = serde_json::from_value(json!(["other"])).unwrap();
-    let other_admission = fixture_admission(&other_manifest, &fixture._tmp.path);
-    let selected =
-        select_slot(other_admission.common().manifest(), None).expect("default slot should select");
-    record_run_created(
-        &mut fixture.registry,
-        "run-owner-collision",
-        &other_admission,
-        &fixture.placement,
-    )
-    .expect("the colliding run should be recorded");
-    let result = start_service_for_slot(
-        &other_admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-owner-collision",
-        &selected,
-        ServiceSelection {
-            launcher: &runtime_binary(),
-            session_checkpoint: &|| Ok(()),
-            service_name: "other",
-            endpoint_ports: &synthetic_endpoint(port),
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: None,
-        },
-    );
-    let error = expect_service_start_failure(
-        result,
-        &mut fixture.registry,
-        "the second service address must not take the occupied listener",
-    );
-
-    assert_eq!(error.code, ErrorCode::PortConflict);
-    assert_eq!(
-        error.details["portConflict"],
-        json!({
-            "reason": "listener-occupied",
-            "projectId": "runtime-test",
-            "endpoint": {
-                "transport": "tcp",
-                "family": "ipv4",
-                "address": "127.0.0.1",
-                "port": port,
-                "endpointId": "synthetic-tcp"
-            },
-            "nixfiedOwner": {
-                "projectId": "runtime-test",
-                "environment": "dev",
-                "slot": 0,
-                "runId": "run-owner-attribution",
-                "serviceId": "synthetic",
-                "serviceInstanceId": owner.info().service_instance_id.clone(),
-                "processKey": owner.info().process_key.clone()
-            }
-        })
-    );
-    assert!(
-        process_group_has_non_zombie_member(owner.info().pgid),
-        "collision handling must not terminate an unrelated service instance"
-    );
-    owner
-        .stop(&mut fixture.registry, 1000)
-        .expect("owner should stop");
 }
 
 #[test]
@@ -664,7 +562,16 @@ fn slot_one_service_uses_slot_placement_port_window() {
     service
         .stop(&mut registry, 1000)
         .expect("service should stop");
-    assert_registry_tables_scoped_to_slot(&registry, 1, &["runs", "processes", "ports", "events"]);
+    // The registry itself binds the slot; its rows do not repeat it.
+    let bound: (String, i64) = registry
+        .connection()
+        .query_row(
+            "SELECT environment, slot FROM registry_meta WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(bound, ("dev".into(), 1));
 }
 
 #[test]
@@ -958,7 +865,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         .expect_err("a failing exec probe should time out and clean up")
         .into_parts();
 
-    assert_eq!(fixture.query::<i64>("SELECT count(*) FROM processes WHERE role='probe' AND service_name='synthetic' AND service_instance_id IS NULL AND execution_outcome='failed' AND exit_code=7 AND status='failed'", []), 3);
+    assert_eq!(fixture.query::<i64>("SELECT count(*) FROM processes WHERE role='probe' AND service_name='synthetic' AND execution_outcome='failed' AND exit_code=7 AND status='failed'", []), 3);
     assert_eq!(
         fixture.query::<i64>(
             "SELECT count(*) FROM events WHERE event_type='probe.execution-observed'",
@@ -1223,10 +1130,8 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String = fixture.query(
-        "SELECT status FROM processes WHERE service_instance_id IS NULL",
-        [],
-    );
+    let task_status: String =
+        fixture.query("SELECT status FROM processes WHERE role != 'service'", []);
     let task_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
         [],
@@ -1293,10 +1198,8 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String = fixture.query(
-        "SELECT status FROM processes WHERE service_instance_id IS NULL",
-        [],
-    );
+    let task_status: String =
+        fixture.query("SELECT status FROM processes WHERE role != 'service'", []);
     let task_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.timed-out')",
         [],
@@ -1549,7 +1452,7 @@ fn daemonizing_service_is_terminated_and_recorded_failed() {
     let failed_processes: i64 =
         fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
     let open_ports: i64 = fixture.query(
-        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        "SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'unresolved'",
         [],
     );
 
@@ -1945,7 +1848,7 @@ fn second_start_against_a_live_owner_is_refused_without_mutation() {
                     "SELECT (SELECT count(*) FROM processes),
                        (SELECT count(*) FROM events WHERE run_id = 'run-owner'),
                        (SELECT status FROM processes WHERE process_key = ?1),
-                       (SELECT group_concat(status) FROM ports)",
+                       (SELECT group_concat(endpoint_id) FROM ports)",
                     [&process_key],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
@@ -1999,13 +1902,11 @@ fn ps_observes_dead_process_without_mutating_evidence() {
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
     );
-    let stale_ports: i64 = fixture.query("SELECT count(*) FROM ports WHERE status = 'stale'", []);
     let stale_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type = 'process.stale'",
         [],
     );
     assert_eq!(process_status, "running");
-    assert_eq!(stale_ports, 0);
     assert_eq!(stale_events, 0);
     stop_recorded_processes(&mut fixture.registry, 1000).unwrap();
     let status: String = fixture.query(
@@ -2053,12 +1954,10 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
     );
-    let stale_ports: i64 = fixture.query("SELECT count(*) FROM ports WHERE status = 'stale'", []);
 
     assert!(!observed.live);
     assert_eq!(observed.observed_status, "stale");
     assert_eq!(process_status, "running");
-    assert_eq!(stale_ports, 0);
     assert!(
         process_group_has_non_zombie_member(service.info().pgid),
         "OS process group should still be live; stale status must come from identity mismatch"
@@ -2132,7 +2031,7 @@ fn down_stops_verified_owned_process_group_only() {
         [&service.info().process_key],
     );
     let released_ports: i64 =
-        fixture.query("SELECT count(*) FROM ports WHERE status = 'released'", []);
+        fixture.query("SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'settled'", []);
     assert_eq!(process_status, "stopped");
     assert_eq!(released_ports, 1);
 }
@@ -2155,7 +2054,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     );
 
     let open_ports: i64 = fixture.query(
-        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        "SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'unresolved'",
         [],
     );
     assert_eq!(open_ports, 1);
@@ -2185,7 +2084,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
         .connection()
         .query_row(
             "
-            SELECT p.status, o.status
+            SELECT p.status, p.ownership
             FROM processes p
             JOIN ports o ON o.owner_process_key = p.process_key
             WHERE p.process_key = ?1
@@ -2194,7 +2093,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("terminal escaped evidence should remain");
-    assert_eq!(terminal, ("escaped".into(), "stale".into()));
+    assert_eq!(terminal, ("escaped".into(), "settled".into()));
     drop(service);
 }
 
@@ -2246,7 +2145,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
         .expect("escaped process evidence should remain visible");
     assert!(escaped.live);
     let open_ports: i64 = fixture.query(
-        "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+        "SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'unresolved'",
         [],
     );
     assert_eq!(open_ports, 1);
@@ -2317,11 +2216,12 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         .find(|process| process.process_key == service.info().process_key)
         .expect("escaped tree evidence should remain visible");
     assert!(escaped.live);
-    let port_status: String = fixture.query(
-        "SELECT status FROM ports WHERE owner_process_key = ?1",
+    let owner: String = fixture.query(
+        "SELECT p.ownership FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key
+         WHERE ep.owner_process_key = ?1",
         [&service.info().process_key],
     );
-    assert!(matches!(port_status.as_str(), "reserved" | "active"));
+    assert_eq!(owner, "unresolved");
 
     let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("down should terminate the identity-tracked reparented child");
@@ -2360,7 +2260,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         .connection()
         .query_row(
             "
-            SELECT p.status, o.status
+            SELECT p.status, p.ownership
             FROM processes p
             JOIN ports o ON o.owner_process_key = p.process_key
             WHERE p.process_key = ?1
@@ -2369,7 +2269,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("escaped evidence should remain durable");
-    assert_eq!(state, ("escaped".into(), "active".into()));
+    assert_eq!(state, ("escaped".into(), "unresolved".into()));
     let down = stop_recorded_processes(&mut fixture.registry, 1000)
         .expect("explicit down should terminate the preserved escape");
     assert_eq!(down.stopped, vec![escaped_process_key.clone()]);
@@ -2438,62 +2338,9 @@ fn owned_process_cleanup_does_not_settle_the_session() {
 }
 
 #[test]
-fn control_rejects_malformed_open_endpoints_before_signaling() {
-    for mutation in [
-        "UPDATE ports SET endpoint_key = 'other:endpoint'",
-        "UPDATE ports SET endpoint_key = service_instance_id || ':'",
-        "UPDATE ports SET address = 'not-an-address'",
-        "UPDATE ports SET address = '0.0.0.0'",
-        "UPDATE ports SET port = -1",
-        "UPDATE ports SET port = 65536",
-    ] {
-        let port = available_port_window(1);
-        let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
-        let service = fixture.start("run-corrupt-endpoint", port).unwrap();
-        let original: (String, String, i64) = fixture
-            .registry
-            .connection()
-            .query_row("SELECT endpoint_key, address, port FROM ports", [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .unwrap();
-        fixture
-            .registry
-            .connection()
-            .execute_batch(mutation)
-            .unwrap();
-        let before: i64 = fixture
-            .registry
-            .connection()
-            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
-            .unwrap();
-        let error = stop_recorded_processes(&mut fixture.registry, 1000).unwrap_err();
-        assert_eq!(error.code, ErrorCode::RegistryCorrupt, "{mutation}");
-        assert!(process_is_non_zombie(service.info().pid), "{mutation}");
-        let after: i64 = fixture
-            .registry
-            .connection()
-            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(after, before, "{mutation}");
-        fixture
-            .registry
-            .connection()
-            .execute(
-                "UPDATE ports SET endpoint_key = ?1, address = ?2, port = ?3",
-                rusqlite::params![original.0, original.1, original.2],
-            )
-            .unwrap();
-        service.stop(&mut fixture.registry, 1000).unwrap();
-    }
-}
-
-#[test]
 fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
-    for (status, run_id) in [
-        ("unknown", "run-corrupt-control"),
-        ("running", "missing-run"),
-    ] {
+    // A process of a missing run is unrepresentable: it references its run.
+    for (status, run_id) in [("unknown", "run-corrupt-control")] {
         let port = available_port_window(1);
         let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
         let service = fixture.start("run-corrupt-control", port).unwrap();
@@ -2506,11 +2353,11 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                 .connection()
                 .execute(
                     "INSERT INTO processes (
-                   process_key, environment, slot, pid, pgid, start_identity,
-                   command_json, run_id, service_instance_id, status, role,
+                   process_key, pid, pgid, start_identity,
+                   command_json, run_id, status, role,
                    source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
-                 ) SELECT ?1, environment, slot, 2147483647, 2147483647, start_identity,
-                          command_json, ?2, NULL, ?3, 'task',
+                 ) SELECT ?1, 2147483647, 2147483647, start_identity,
+                          command_json, ?2, ?3, 'task',
                           'fixture', 'hidden', 'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err', 15, 1000, 'process-group'
                    FROM processes WHERE process_key = ?4",
                     rusqlite::params![key, run_id, status, service.info().process_key],
@@ -2854,8 +2701,9 @@ fn endpoint_less_successor_requires_settlement_and_retains_distinct_history() {
         .registry
         .connection()
         .query_row(
-            "SELECT run_id, service_name, status FROM processes WHERE service_instance_id = ?1",
-            [&first_key],
+            "SELECT run_id, service_name, status FROM processes
+             WHERE run_id = 'first-session' AND role = 'service'",
+            [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
@@ -3119,73 +2967,6 @@ impl<'a> StartedSlot<'a> {
 }
 
 #[test]
-fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
-    let port = available_port_window(1);
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
-    let service = fixture
-        .start("run-corrupt-fixture", port)
-        .expect("fixture service should start");
-    let service_instance_id = service.info().service_instance_id.clone();
-    let process_key = service.info().process_key.clone();
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("fixture service should stop cleanly");
-    fixture
-        .registry
-        .connection()
-        .execute(
-            "UPDATE ports SET status = 'active', owner_process_key = 'missing-process-owner' WHERE service_instance_id = ?1",
-            [&service_instance_id],
-        )
-        .expect("test should create impossible open endpoint evidence");
-
-    let error = fixture.start_refused(
-        "run-after-corrupt-row",
-        port,
-        "an impossible active row must fail closed",
-    );
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    assert!(
-        error
-            .message
-            .contains("has no matching process owner in its slot"),
-        "unexpected corruption diagnostic: {}",
-        error.message
-    );
-    let started: i64 = fixture.query(
-        "SELECT count(*) FROM processes WHERE run_id = 'run-after-corrupt-row'",
-        [],
-    );
-    assert_eq!(
-        started, 0,
-        "invalid ownership must reject before child startup"
-    );
-    let unchanged: (String, String, String) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, o.status, o.owner_process_key
-            FROM processes p
-            JOIN ports o ON o.service_instance_id = p.service_instance_id
-            WHERE p.process_key = ?1
-            ",
-            [&process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("corrupt evidence should remain available for diagnosis");
-    assert_eq!(
-        unchanged,
-        (
-            "stopped".into(),
-            "active".into(),
-            "missing-process-owner".into()
-        )
-    );
-}
-
-#[test]
 fn cancellation_after_prepare_settles_startup_and_releases_startup_guard() {
     let port = available_port_window(1);
     let mut fixture = service_fixture_with_prepare(&test_sleep(), &["30"], port);
@@ -3283,7 +3064,7 @@ fn spawn_failure_after_prepare_settles_startup_and_allows_restored_retry() {
         .unwrap();
     assert_eq!((count, status.as_str()), (1, "failed"));
     assert_eq!(
-        fixture.query::<i64>("SELECT count(*) FROM ports WHERE status != 'released'", []),
+        fixture.query::<i64>("SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'unresolved'", []),
         0
     );
     assert_eq!(
@@ -3301,40 +3082,6 @@ fn spawn_failure_after_prepare_settles_startup_and_allows_restored_retry() {
 fn manifest(executable: &str, start_args: &[&str], port: u16) -> Manifest {
     serde_json::from_value(synthetic_manifest(executable, start_args, port, port))
         .expect("fixture manifest should parse")
-}
-
-fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables: &[&str]) {
-    for table in tables {
-        let (min_environment, max_environment, min_slot, max_slot, count): (
-            String,
-            String,
-            i64,
-            i64,
-            i64,
-        ) = registry
-            .connection()
-            .query_row(
-                &format!(
-                    "SELECT min(environment), max(environment), min(slot), max(slot), count(*) FROM {table}"
-                ),
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                    ))
-                },
-            )
-            .unwrap_or_else(|error| panic!("{table} scope query should succeed: {error}"));
-        assert!(count > 0, "{table} should have at least one row");
-        assert_eq!(min_environment, "dev", "{table} min environment");
-        assert_eq!(max_environment, "dev", "{table} max environment");
-        assert_eq!(min_slot, slot, "{table} min slot");
-        assert_eq!(max_slot, slot, "{table} max slot");
-    }
 }
 
 /// SEAM-1: the runtime never invokes `nix`. Poison `PATH` with failing
@@ -3619,7 +3366,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     let conn = fixture.registry();
     let (task_status, pgid): (String, i32) = conn
         .query_row(
-            "SELECT status, pgid FROM processes WHERE service_instance_id IS NULL",
+            "SELECT status, pgid FROM processes WHERE role != 'service'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -3888,7 +3635,7 @@ fn wait_for_task_process_row(state_base: &Path, timeout: Duration) {
     poll_until(timeout, "a task process row", || {
         try_registry_ro(state_base)?
             .query_row(
-                "SELECT count(*) FROM processes WHERE service_instance_id IS NULL",
+                "SELECT count(*) FROM processes WHERE role != 'service'",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -4287,16 +4034,16 @@ fn mark_started_service_escape(
         .execute(
             "
             UPDATE processes
-            SET status = 'escaped', start_identity = ?7
+            SET status = 'escaped', start_identity = ?6
             WHERE process_key = ?1
               AND pid = ?2
               AND pgid = ?3
               AND run_id = ?4
-              AND service_instance_id = ?5
+              AND role = 'service'
               AND status IN ('running', 'ready')
               AND EXISTS (
                 SELECT 1 FROM runs
-                WHERE run_id = ?4 AND computed_manifest_hash = ?6
+                WHERE run_id = ?4 AND computed_manifest_hash = ?5
               )
             ",
             rusqlite::params![
@@ -4304,7 +4051,6 @@ fn mark_started_service_escape(
                 pid,
                 service.pgid,
                 service.run_id,
-                service.service_instance_id,
                 service.computed_manifest_hash,
                 start_identity,
             ],
@@ -4592,7 +4338,7 @@ fn owner_killed_during_readiness_leaves_an_obligation_the_successor_settles() {
     );
     let open: i64 = connection
         .query_row(
-            "SELECT count(*) FROM ports WHERE status IN ('reserved', 'active')",
+            "SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key WHERE p.ownership = 'unresolved'",
             [],
             |row| row.get(0),
         )

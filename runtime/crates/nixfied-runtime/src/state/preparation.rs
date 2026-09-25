@@ -70,8 +70,6 @@ fn record_provenance_refresh(
         "toManifestPath": identity.manifest_path,
     })
     .to_string();
-    let mut event = EventInsert::new("state.provenance-refreshed", &payload);
-    event.computed_manifest_hash = Some(&identity.computed_manifest_hash);
-    registry.append_event(event)?;
+    registry.append_event(EventInsert::new("state.provenance-refreshed", &payload))?;
     Ok(())
 }

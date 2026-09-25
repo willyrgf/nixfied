@@ -1,5 +1,5 @@
 mod endpoint;
-mod identity;
+pub(crate) mod identity;
 mod process;
 mod readiness;
 mod registry;

@@ -66,7 +66,7 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
         );
         try_registry_ro(&state_base)?
             .query_row(
-                "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL
+                "SELECT pid FROM processes WHERE role = 'service'
                  AND status IN ('running', 'ready') LIMIT 1",
                 [],
                 |row| row.get::<_, i32>(0),
@@ -115,12 +115,15 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
     assert_success(&recovery);
 
     let connection = registry_ro(&state_base);
-    let (processes, runs, starts): (i64, i64, i64) = connection.query_row(
-        "SELECT (SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL),
-                (SELECT count(DISTINCT run_id) FROM processes WHERE service_instance_id IS NOT NULL),
+    let (processes, runs, starts): (i64, i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM processes WHERE role = 'service'),
+                (SELECT count(DISTINCT run_id) FROM processes WHERE role = 'service'),
                 (SELECT count(*) FROM events WHERE event_type = 'service.starting')",
-        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ).unwrap();
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
     assert_eq!(
         (processes, runs, starts),
         (2, 2, 2),

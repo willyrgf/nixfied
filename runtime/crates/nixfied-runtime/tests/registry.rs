@@ -205,7 +205,7 @@ fn event_history_survives_successive_owners_and_rejects_another_slot() {
             let seq = registry
                 .append_event(EventInsert::new(&event_type, &payload))
                 .unwrap();
-            acknowledged.push((seq, event_type, payload, "staging".to_string(), 3_i64));
+            acknowledged.push((seq, event_type, payload));
         }
         registry.close().unwrap();
     }
@@ -220,15 +220,13 @@ fn event_history_survives_successive_owners_and_rejects_another_slot() {
     let registry = Registry::open_or_create(registry_guard(&placement), &identity).unwrap();
     let persisted = registry
         .connection()
-        .prepare("SELECT seq, event_type, payload_json, environment, slot FROM events ORDER BY seq")
+        .prepare("SELECT seq, event_type, payload_json FROM events ORDER BY seq")
         .unwrap()
         .query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
             ))
         })
         .unwrap()
@@ -349,9 +347,7 @@ fn rejects_current_registry_missing_required_shape() {
               at TEXT NOT NULL,
               event_type TEXT NOT NULL,
               run_id TEXT,
-              service_instance_id TEXT,
               process_key TEXT,
-              computed_manifest_hash TEXT,
               payload_json TEXT NOT NULL
             );
             ",
@@ -394,7 +390,7 @@ fn exact_schema_and_identity_reject_before_journal_conversion() {
         "CREATE TABLE unexpected (value TEXT)",
         "CREATE TRIGGER suppress_event BEFORE INSERT ON events BEGIN SELECT RAISE(IGNORE); END",
         "CREATE INDEX unexpected_index ON events(event_type)",
-        "PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = replace(sql, 'CHECK (slot >= 0)', '') WHERE name = 'events'; PRAGMA writable_schema = OFF",
+        "PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = replace(sql, 'REFERENCES runs (run_id)', '') WHERE name = 'events'; PRAGMA writable_schema = OFF",
         "PRAGMA user_version = 99",
         "UPDATE registry_meta SET toolchain_id = 'other-toolchain'",
     ] {
@@ -681,8 +677,6 @@ fn successor_interrupts_only_unknown_execution_and_preserves_known_outcomes() {
 fn recovery_validates_all_session_records_before_mutating_any() {
     use nixfied_runtime::registry::session::record_interrupted_sessions;
     for mutation in [
-        "environment = 'other'",
-        "slot = 1",
         "execution_outcome = 'unknown'",
         "finalization = 'unknown'",
         "finalization = 'complete'",

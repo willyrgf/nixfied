@@ -2,10 +2,10 @@
 use super::sql_error;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
+use super::Registry;
 use super::events::{EventInsert, insert_event};
 use super::sqlite::RegistryContext;
 use super::status::{DbStatus, FinalizationStatus};
-use super::{Registry, RegistryIdentity};
 use crate::admission::RunAdmission;
 use crate::state::HostPlacement;
 use crate::{ErrorCode, RuntimeError, RuntimeResult};
@@ -34,15 +34,14 @@ fn decode(outcome: Option<&str>, finalization: &str) -> RuntimeResult<SessionPro
 /// The owner's exact run row. Every run transition checks it first.
 pub(crate) fn require_run(
     connection: &Connection,
-    identity: &RegistryIdentity,
     run_id: &str,
     manifest_hash: &str,
 ) -> RuntimeResult<SessionProgress> {
     let row: Option<(Option<String>, String)> = connection
         .query_row(
             "SELECT execution_outcome, finalization FROM runs
-         WHERE run_id = ?1 AND environment = ?2 AND slot = ?3 AND computed_manifest_hash = ?4",
-            params![run_id, identity.environment, identity.slot, manifest_hash],
+         WHERE run_id = ?1 AND computed_manifest_hash = ?2",
+            params![run_id, manifest_hash],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
@@ -91,7 +90,6 @@ pub fn record_run_created(
     .to_string();
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
@@ -99,15 +97,13 @@ pub fn record_run_created(
         .execute(
             "
             INSERT INTO runs (
-              run_id, environment, slot, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              run_id, manifest_path, computed_manifest_hash, runtime_abi,
+              toolchain_id, generator_json, target_json, source_json,
               summary_path, owner_identity, diagnostic_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 run_id,
-                identity.environment.as_str(),
-                identity.slot,
                 admission.common().manifest_path().display().to_string(),
                 admission.common().computed_manifest_hash(),
                 admission.common().runtime_abi(),
@@ -123,14 +119,11 @@ pub fn record_run_created(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "run.created",
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(admission.common().computed_manifest_hash()),
             payload_json: "{}",
         },
     )?;
@@ -153,13 +146,12 @@ pub fn record_execution_outcome(
     }
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    match require_run(&transaction, identity, run_id, manifest_hash)? {
+    match require_run(&transaction, run_id, manifest_hash)? {
         SessionProgress::Executing => {}
         SessionProgress::Finalizing(stored) | SessionProgress::Finalized(stored) => {
             return if stored == outcome {
@@ -173,14 +165,11 @@ pub fn record_execution_outcome(
     let payload = serde_json::json!({"outcome": outcome.as_str()}).to_string();
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "run.execution-settled",
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(manifest_hash),
             payload_json: &payload,
         },
     )?;
@@ -192,26 +181,21 @@ pub fn record_execution_outcome(
 pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let rows = {
-        let mut statement = transaction.prepare(
-            "SELECT run_id, computed_manifest_hash, environment, slot, execution_outcome, finalization
-             FROM runs ORDER BY run_id",
-        ).map_err(sql_error)?;
+        let mut statement = transaction
+            .prepare("SELECT run_id, execution_outcome, finalization FROM runs ORDER BY run_id")
+            .map_err(sql_error)?;
         statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
                 ))
             })
             .map_err(sql_error)?
@@ -219,26 +203,20 @@ pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()>
             .map_err(sql_error)?
     };
     let mut interrupted = Vec::new();
-    for (run_id, hash, environment, slot, outcome, finalization) in rows {
-        if environment != identity.environment || slot != identity.slot {
-            return Err(invalid("session belongs to another slot"));
-        }
+    for (run_id, outcome, finalization) in rows {
         if decode(outcome.as_deref(), &finalization)? == SessionProgress::Executing {
-            interrupted.push((run_id, hash));
+            interrupted.push(run_id);
         }
     }
-    for (run_id, hash) in interrupted {
+    for run_id in interrupted {
         write_unknown_outcome(&transaction, &run_id, ExecutionOutcome::Interrupted)?;
         insert_event(
             &transaction,
-            identity,
             redactor,
             EventInsert {
                 event_type: "run.interrupted",
                 run_id: Some(&run_id),
-                service_instance_id: None,
                 process_key: None,
-                computed_manifest_hash: Some(&hash),
                 payload_json: "{}",
             },
         )?;
@@ -256,13 +234,12 @@ pub fn record_finalization_complete(
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    match require_run(&transaction, identity, run_id, manifest_hash)? {
+    match require_run(&transaction, run_id, manifest_hash)? {
         SessionProgress::Executing => {
             return Err(invalid(
                 "finalization cannot complete before the execution outcome is known",
@@ -274,14 +251,11 @@ pub fn record_finalization_complete(
     write_complete(&transaction, run_id)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "run.finalized",
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(manifest_hash),
             payload_json: "{}",
         },
     )?;
@@ -293,13 +267,11 @@ pub fn record_finalization_complete(
 pub fn record_finalization_unfinished(
     registry: &mut Registry,
     run_id: &str,
-    manifest_hash: &str,
     reason: &RuntimeError,
 ) -> RuntimeResult<()> {
     let payload = serde_json::json!({"code": reason.code, "message": reason.message}).to_string();
     let mut event = EventInsert::new("run.finalization-unfinished", &payload);
     event.run_id = Some(run_id);
-    event.computed_manifest_hash = Some(manifest_hash);
     registry.append_event(event).map(|_| ())
 }
 
@@ -309,7 +281,6 @@ pub fn record_finalization_unfinished(
 pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -318,7 +289,7 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
     let rows = {
         let mut statement = transaction
             .prepare(
-                "SELECT run_id, computed_manifest_hash, execution_outcome, finalization
+                "SELECT run_id, execution_outcome, finalization
                  FROM runs WHERE finalization = 'unfinished' ORDER BY run_id",
             )
             .map_err(sql_error)?;
@@ -326,16 +297,15 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
                 ))
             })
             .map_err(sql_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql_error)?
     };
-    for (run_id, hash, outcome, finalization) in rows {
+    for (run_id, outcome, finalization) in rows {
         if decode(outcome.as_deref(), &finalization)? == SessionProgress::Executing {
             return Err(invalid(
                 "recovery cannot settle a session whose interruption was not recorded",
@@ -344,14 +314,11 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
         write_complete(&transaction, &run_id)?;
         insert_event(
             &transaction,
-            identity,
             redactor,
             EventInsert {
                 event_type: "run.recovered",
                 run_id: Some(&run_id),
-                service_instance_id: None,
                 process_key: None,
-                computed_manifest_hash: Some(&hash),
                 payload_json: "{}",
             },
         )?;
@@ -376,13 +343,12 @@ pub fn close_source_registration(
 ) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, identity, run_id, manifest_hash)?;
+    require_run(&transaction, run_id, manifest_hash)?;
     let changed = transaction
         .execute(
             "UPDATE runs SET sources = 'closed' WHERE run_id = ?1 AND sources = 'open'",
@@ -392,14 +358,11 @@ pub fn close_source_registration(
     if changed == 1 {
         insert_event(
             &transaction,
-            identity,
             redactor,
             EventInsert {
                 event_type: "run.sources-closed",
                 run_id: Some(run_id),
-                service_instance_id: None,
                 process_key: None,
-                computed_manifest_hash: Some(manifest_hash),
                 payload_json: "{}",
             },
         )?;
@@ -417,13 +380,12 @@ pub fn seal_output(
 ) -> RuntimeResult<OutputPublication> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    require_run(&transaction, identity, run_id, manifest_hash)?;
+    require_run(&transaction, run_id, manifest_hash)?;
     let (sources, pending): (String, i64) = transaction
         .query_row(
             "SELECT sources, (SELECT count(*) FROM processes WHERE run_id = ?1 AND capture = 'pending')
@@ -454,14 +416,11 @@ pub fn seal_output(
     }
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "run.output-sealed",
             run_id: Some(run_id),
-            service_instance_id: None,
             process_key: None,
-            computed_manifest_hash: Some(manifest_hash),
             payload_json: "{}",
         },
     )?;
