@@ -38,6 +38,9 @@ passes on Linux (aarch64). The implementing commits, in order:
 | Session observation before every workload release | `a92ebe9` |
 | D: command-owned presenter, source records, capture outcomes, output seal | `12f2fbc`, `c4a46e2` |
 | E: background launch (`run --daemon`) | `eb49bdb` |
+| Review fixes: stop policy, source closure, exclusive run evidence, presenter fairness, launch interruption, FIFO paths, deleted-generation adoption | `b7e08a1`, `1df399c`, `bea1018` |
+| Removal of reuse-era names and paths; settlement of refused releases | `d58b6fe` |
+| Proofs: presenter backpressure, FIFO delivery, background owner death, diamond start, step finalization, readiness kill; teardown observation | `82c5c3d`, `0bd07ef` |
 
 Not done or not proven:
 
