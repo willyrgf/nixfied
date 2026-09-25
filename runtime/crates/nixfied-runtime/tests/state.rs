@@ -282,23 +282,13 @@ fn persistence_alone_authorizes_deletion_and_purge_overrides_only_retention() {
         let marker = StateMarker::slot(&identity).unwrap();
         write_marker(&fixture, &marker);
 
-        let standard = clean_marked_state(
-            &fixture.layout.state_base,
-            &identity,
-            &mut registry,
-            CleanupMode::Standard,
-        );
+        let standard = clean_marked_state(&identity, &mut registry, CleanupMode::Standard);
         if persistence == PersistencePolicy::Persistent {
             assert_eq!(standard.unwrap_err().code, ErrorCode::CleanupRefused);
             assert!(fixture.layout.state_root.exists());
             assert_eq!(cleanup_rows(&registry), 0);
-            let outcome = clean_marked_state(
-                &fixture.layout.state_base,
-                &identity,
-                &mut registry,
-                CleanupMode::Purge,
-            )
-            .expect("persistent state should purge");
+            let outcome = clean_marked_state(&identity, &mut registry, CleanupMode::Purge)
+                .expect("persistent state should purge");
             let id = deleted_id(&outcome);
             let row: (String, i64, String) = registry
                 .connection()
@@ -340,13 +330,8 @@ fn purge_still_refuses_active_registry_refs() {
         )
         .expect("active process should be inserted");
 
-    let error = clean_marked_state(
-        &fixture.layout.state_base,
-        &persistent,
-        &mut registry,
-        CleanupMode::Purge,
-    )
-    .expect_err("purge must still refuse active refs");
+    let error = clean_marked_state(&persistent, &mut registry, CleanupMode::Purge)
+        .expect_err("purge must still refuse active refs");
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.exists());
@@ -492,13 +477,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         )
         .expect("stale refs should be inserted");
 
-    let outcome = recover_then_clean(
-        &mut registry,
-        &fixture.layout.state_base,
-        &fixture.identity,
-        CleanupMode::Standard,
-    )
-    .expect("stale refs should reconcile before cleanup");
+    let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
+        .expect("stale refs should reconcile before cleanup");
 
     deleted_id(&outcome);
     assert!(!fixture.layout.state_root.exists());
@@ -649,13 +629,7 @@ fn incoherent_pending_authorization_rejects_before_deletion() {
     write_marker(&fixture, &marker);
     // A standard (non-purge) intent cannot authorize persistent data.
     insert_pending(&registry, &fixture, "cleanup-incoherent", &marker, false);
-    let error = clean_marked_state(
-        &fixture.layout.state_base,
-        &persistent,
-        &mut registry,
-        CleanupMode::Purge,
-    )
-    .unwrap_err();
+    let error = clean_marked_state(&persistent, &mut registry, CleanupMode::Purge).unwrap_err();
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
 }
@@ -737,13 +711,8 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         )
         .expect("stale port refs should be inserted");
 
-    let outcome = recover_then_clean(
-        &mut registry,
-        &fixture.layout.state_base,
-        &fixture.identity,
-        CleanupMode::Standard,
-    )
-    .expect("stale port should reconcile before cleanup");
+    let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
+        .expect("stale port should reconcile before cleanup");
     let port_status: String = registry
         .connection()
         .query_row(
@@ -929,7 +898,7 @@ impl StateFixture {
     }
 
     fn clean(&self, registry: &mut Registry, mode: CleanupMode) -> RuntimeResult<CleanupOutcome> {
-        clean_marked_state(&self.layout.state_base, &self.identity, registry, mode)
+        clean_marked_state(&self.identity, registry, mode)
     }
 
     fn registry(&self) -> Registry {
@@ -1076,13 +1045,8 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
     assert_eq!(refused.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
 
-    let outcome = recover_then_clean(
-        &mut registry,
-        &fixture.layout.state_base,
-        &fixture.identity,
-        CleanupMode::Standard,
-    )
-    .expect("recovery settles an obligation once death is proven");
+    let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
+        .expect("recovery settles an obligation once death is proven");
     deleted_id(&outcome);
     let ownership: String = registry
         .connection()
@@ -1178,10 +1142,9 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
 /// marker-gated deletion.
 fn recover_then_clean(
     registry: &mut Registry,
-    state_base: &std::path::Path,
     identity: &StateIdentity,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     nixfied_runtime::control::down_owned_process_groups(registry, 1000)?;
-    clean_marked_state(state_base, identity, registry, mode)
+    clean_marked_state(identity, registry, mode)
 }

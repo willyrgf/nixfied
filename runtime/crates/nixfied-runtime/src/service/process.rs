@@ -1783,7 +1783,6 @@ pub(super) fn start_service_with_lock_root(
 /// a marker-gated runtime cleanup primitive (no exec).
 pub fn run_slot_clean(
     admission: &ControlAdmission,
-    placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
@@ -1791,7 +1790,7 @@ pub fn run_slot_clean(
     for service in admission.execution_manifest().services().values() {
         record_service_clean(admission, registry, service)?;
     }
-    clean_marked_slot_state(admission, placement, registry, selected_slot, mode)
+    clean_marked_slot_state(admission, registry, selected_slot, mode)
 }
 
 /// Record the marker-gated clean lifecycle operation for one service.
@@ -1815,14 +1814,13 @@ fn record_service_clean(
 /// Clean the marker-owned state root for the selected slot.
 fn clean_marked_slot_state(
     admission: &ControlAdmission,
-    placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let identity = StateIdentity::from_selected_slot(admission, selected_slot);
     // The caller already performed exclusive predecessor recovery.
-    clean_marked_state(&placement.state_base, &identity, registry, mode)
+    clean_marked_state(&identity, registry, mode)
 }
 
 fn startup_outcome(error: &RuntimeError) -> ServiceStartOutcome {

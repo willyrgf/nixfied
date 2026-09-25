@@ -40,7 +40,7 @@ pub fn prepare_slot_state(
 ) -> RuntimeResult<PreparationReport> {
     require_settled_slot(registry)?;
     // An unfinished deletion blocks any new generation or provenance rewrite.
-    resume_pending_cleanup(&placement.state_base, identity, registry)?;
+    resume_pending_cleanup(identity, registry)?;
     let decision = evaluate_slot_marker(placement, identity)?;
     let report = match decision {
         MarkerDecision::Fresh => {
