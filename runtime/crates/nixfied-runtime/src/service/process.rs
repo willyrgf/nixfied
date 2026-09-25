@@ -44,7 +44,7 @@ use crate::template::{EndpointSelector, Piece, Template};
 
 use super::TrackedProcessIdentity;
 
-const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
+const STARTUP_GRACE: Duration = Duration::from_millis(100);
 
 fn stop_signal_number(signal: StopSignal) -> i32 {
     match signal {
@@ -238,7 +238,7 @@ impl ReadyService {
     pub fn check_liveness(&self) -> RuntimeResult<()> {
         self.owned.check_liveness()
     }
-    /// Non-blocking: the foreground child exited on its own, or its state is
+    /// Non-blocking: the service leader exited on its own, or its state is
     /// unobservable. Its own stop then settles it as a failure.
     pub fn exited(&self) -> bool {
         !matches!(self.owned.child.observe(), Ok(None))
@@ -290,6 +290,16 @@ impl std::fmt::Debug for ReadyService {
     }
 }
 
+/// One observation of an owned service; callers map it to their phase's error.
+enum Observation {
+    Live,
+    Escaped(RuntimeError),
+    Exited(std::process::ExitStatus),
+    Unobservable(std::io::Error),
+    /// The leader no longer matches its recorded group or start identity.
+    Moved,
+}
+
 /// Only this payload owns child resources. Optional fields exist solely for
 /// move-out during consuming teardown.
 struct OwnedService {
@@ -310,36 +320,74 @@ struct OwnedService {
 }
 
 impl OwnedService {
+    /// One observation of the owned service: escape evidence refreshed at
+    /// this checkpoint first, then the leader itself.
+    fn observe(&self) -> RuntimeResult<Observation> {
+        if let Some(error) = self.escape_error() {
+            return Ok(Observation::Escaped(error));
+        }
+        let info = &self.info;
+        Ok(match self.child.observe() {
+            Err(error) => Observation::Unobservable(error),
+            Ok(Some(status)) => Observation::Exited(status),
+            Ok(None)
+                if !process_is_live_with_identity(
+                    info.pid,
+                    info.pgid,
+                    info.platform_start_identity.as_deref(),
+                )? =>
+            {
+                Observation::Moved
+            }
+            Ok(None) => Observation::Live,
+        })
+    }
+
+    /// A session checkpoint: any departure of a started service is a
+    /// dependency failure, except escape or unobservability.
     fn check_liveness(&self) -> RuntimeResult<()> {
         if let Some(capture) = &self.log_relays {
             capture.check()?;
         }
-        if let Some(error) = self.escape_error() {
-            return Err(error);
-        }
-        let info = &self.info;
-        let observed = self.child.observe().map_err(|error| {
-            RuntimeError::new(
+        match self.observe()? {
+            Observation::Live => Ok(()),
+            Observation::Escaped(error) => Err(error),
+            Observation::Unobservable(error) => Err(RuntimeError::new(
                 ErrorCode::ProcEscape,
                 format!("failed to observe service child: {error}"),
-            )
-        })?;
-        if observed.is_some()
-            || !process_is_live_with_identity(
-                info.pid,
-                info.pgid,
-                info.platform_start_identity.as_deref(),
-            )?
-        {
-            return Err(RuntimeError::new(
+            )),
+            Observation::Exited(_) | Observation::Moved => Err(RuntimeError::new(
                 ErrorCode::DependencyUnavailable,
                 format!(
                     "service {} exited while session work was running",
-                    info.service_name()
+                    self.info.service_name()
                 ),
-            ));
+            )),
         }
-        Ok(())
+    }
+
+    /// Startup and teardown: every departure from a live, contained leader
+    /// before `phase` is a containment failure.
+    fn require_contained(&self, phase: &str) -> RuntimeResult<()> {
+        match self.observe()? {
+            Observation::Live => Ok(()),
+            Observation::Escaped(error) => Err(error),
+            Observation::Unobservable(error) => Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to inspect service child: {error}"),
+            )),
+            Observation::Exited(status) => Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("service exited before {phase}: {status}"),
+            )),
+            Observation::Moved => Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!(
+                    "service process {} no longer matches its recorded containment identity",
+                    self.info.pid
+                ),
+            )),
+        }
     }
 
     pub fn wait_for_probe_ready_cancellable(
@@ -482,7 +530,7 @@ impl OwnedService {
     }
 
     fn check_owned_probe_liveness(&mut self, registry: &Registry) -> RuntimeResult<()> {
-        self.ensure_start_process_live().map_err(|error| {
+        self.require_contained("readiness").map_err(|error| {
             self.override_after_primary_exit_with_endpoint_evidence(registry, error)
         })
     }
@@ -543,37 +591,6 @@ impl OwnedService {
                 )
             }
         }
-    }
-
-    fn ensure_start_process_live(&mut self) -> RuntimeResult<()> {
-        if let Some(error) = self.escape_error() {
-            return Err(error);
-        }
-        if let Some(status) = self.child.observe().map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to inspect foreground service child: {error}"),
-            )
-        })? {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("foreground service exited before readiness: {status}"),
-            ));
-        }
-        if !process_is_live_with_identity(
-            self.info.pid,
-            self.info.pgid,
-            self.info.platform_start_identity.as_deref(),
-        )? {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
-                    "service process {} no longer matches its recorded containment identity",
-                    self.info.pid
-                ),
-            ));
-        }
-        Ok(())
     }
 
     fn observe_endpoint_ownership(&self) -> OwnershipObservation<'_> {
@@ -835,10 +852,6 @@ impl OwnedService {
     ) -> RuntimeResult<()> {
         let context = self.lifecycle_event_context();
         let stop_record = LifecycleRecord::from_meta(&self.service.stop.meta, "stop");
-        if let Some(error) = self.escape_error() {
-            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
         {
@@ -846,22 +859,7 @@ impl OwnedService {
             return Err(canceled_error());
         }
         // Observe pending exits first: an exit seen here remains unexpected.
-        let observed = match self.child.observe() {
-            Ok(observed) => observed,
-            Err(error) => {
-                return Err(self.settle_failed_service(
-                    registry,
-                    timeout_ms,
-                    RuntimeError::new(
-                        ErrorCode::ProcEscape,
-                        format!("failed to inspect foreground service child: {error}"),
-                    ),
-                ));
-            }
-        };
-        if let Some(status) = observed {
-            let message = format!("foreground service exited before stop: {status}");
-            let error = RuntimeError::new(ErrorCode::ProcEscape, message);
+        if let Err(error) = self.require_contained("stop") {
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
@@ -1345,7 +1343,7 @@ pub struct ServiceSelection<'a> {
 /// The prepare-task executor a run driver supplies.
 pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> + 'a>;
 
-/// Start a declared foreground service from the lowered manifest: run prepare,
+/// Start a declared service from the lowered manifest: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
 /// the admission's `ExecutionManifest`, never the raw `Manifest`. The caller must have
 /// recorded this exact `run_id` with [`super::record_run_created`] first.
@@ -1714,9 +1712,7 @@ pub(super) fn start_service_with_lock_root(
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
-    if let Err(error) =
-        ensure_foreground_child_alive(&mut started.owned, cancellation, session_checkpoint)
-    {
+    if let Err(error) = hold_startup_grace(&mut started.owned, cancellation, session_checkpoint) {
         let error = if error.code == ErrorCode::Canceled {
             error
         } else {
@@ -2472,16 +2468,7 @@ pub(crate) fn process_is_live_with_start_identity(
     pid: u32,
     platform_start: Option<&str>,
 ) -> RuntimeResult<bool> {
-    if process_group(pid)?.is_none() {
-        return Ok(false);
-    }
-    let Some(expected) = platform_start else {
-        return Ok(false);
-    };
-    if platform_start_identity(pid).as_deref() != Some(expected) {
-        return Ok(false);
-    }
-    Ok(!process_is_zombie(pid))
+    Ok(process_group(pid)?.is_some() && identity_alive(pid, platform_start))
 }
 
 pub(crate) fn process_is_in_containment(
@@ -2506,12 +2493,14 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
     process_group_has_live_member_impl(pgid)
 }
 
-fn ensure_foreground_child_alive(
+/// The startup grace period: poll cancellation, every started service, and
+/// escape evidence, then require a live, contained leader.
+fn hold_startup_grace(
     service: &mut OwnedService,
     cancellation: &CancellationToken,
     session_checkpoint: &dyn Fn() -> RuntimeResult<()>,
 ) -> RuntimeResult<()> {
-    let deadline = Instant::now() + FOREGROUND_GRACE;
+    let deadline = Instant::now() + STARTUP_GRACE;
     while Instant::now() < deadline {
         cancellation.check()?;
         session_checkpoint()?;
@@ -2522,47 +2511,7 @@ fn ensure_foreground_child_alive(
             super::OBSERVATION_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
         );
     }
-    match service.child.observe().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to inspect service child: {error}"),
-        )
-    })? {
-        None => Ok(()),
-        Some(status) => Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("foreground service exited before handoff: {status}"),
-        )),
-    }?;
-    let current_pgid = get_process_group(service.info.pid)?;
-    if current_pgid != service.info.pgid {
-        return Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!(
-                "foreground service process {} moved from pgid {} to pgid {current_pgid}",
-                service.info.pid, service.info.pgid
-            ),
-        ));
-    }
-    // Under process-tree containment the supervisor's children legitimately form
-    // their own process groups, so only strict process-group services are held to
-    // the single-group invariant here.
-    if matches!(
-        service.service.containment,
-        ContainmentRequirement::ProcessGroup
-    ) {
-        let escaped = escaped_descendants(service.info.pid, service.info.pgid)?;
-        if !escaped.is_empty() {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
-                    "service process {} has descendants outside pgid {}: {:?}",
-                    service.info.pid, service.info.pgid, escaped
-                ),
-            ));
-        }
-    }
-    Ok(())
+    service.require_contained("readiness")
 }
 
 /// The leader of an owned process tree, identified so that a reused PID is
@@ -2594,7 +2543,7 @@ impl Leader<'_> {
             Self::Recorded {
                 pid,
                 platform_start: Some(start),
-            } => identity_alive(*pid, start),
+            } => identity_alive(*pid, Some(start)),
             Self::Recorded {
                 pid,
                 platform_start: None,
@@ -2653,20 +2602,7 @@ pub(crate) fn contain(
     tracked: &[TrackedProcessIdentity],
 ) -> RuntimeResult<bool> {
     let pid = leader.pid();
-    let mut snapshot_by_pid = if leader.alive() {
-        descendant_pids(pid).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
-    .into_iter()
-    .map(|child| (child, platform_start_identity(child)))
-    .collect::<BTreeMap<_, _>>();
-    for process in tracked {
-        snapshot_by_pid
-            .entry(process.pid)
-            .or_insert_with(|| process.platform_start.clone());
-    }
-    let snapshot = snapshot_by_pid.into_iter().collect::<Vec<_>>();
+    let snapshot = tracked_snapshot(leader.alive().then_some(pid), tracked);
     let owns_group = leader.owns_group();
     if owns_group {
         signal_process_group(pgid, signal)?;
@@ -2701,7 +2637,7 @@ fn tree_gone(
     leader: &Leader<'_>,
     pgid: i32,
     owns_group: bool,
-    snapshot: &[(u32, Option<String>)],
+    snapshot: &[TrackedProcessIdentity],
 ) -> RuntimeResult<bool> {
     if leader.alive() {
         return Ok(false);
@@ -2710,31 +2646,31 @@ fn tree_gone(
     // descendant of the leader nor in its group; only the snapshot sees it.
     if snapshot
         .iter()
-        .any(|(child, identity)| snapshot_member_alive(*child, identity))
+        .any(|process| identity_alive(process.pid, process.platform_start.as_deref()))
     {
         return Ok(false);
     }
     Ok(!(owns_group && process_group_has_live_member(pgid)?))
 }
 
-/// `true` if the snapshotted pid is still the *same* live process — including one
-/// that escaped to its own process group. A dead, zombie, or pid-reused entry
-/// (start identity no longer matches) is treated as gone.
-fn snapshot_member_alive(pid: u32, expected: &Option<String>) -> bool {
-    expected
-        .as_deref()
-        .is_some_and(|identity| identity_alive(pid, identity))
-}
-
-fn identity_alive(pid: u32, identity: &str) -> bool {
-    !process_is_zombie(pid) && platform_start_identity(pid).as_deref() == Some(identity)
+/// `true` if `pid` is still the *same* live process — including one that
+/// escaped to its own process group. A dead, zombie, pid-reused (start
+/// identity no longer matches), or identity-unconfirmed entry is not.
+fn identity_alive(pid: u32, identity: Option<&str>) -> bool {
+    identity.is_some_and(|identity| {
+        !process_is_zombie(pid) && platform_start_identity(pid).as_deref() == Some(identity)
+    })
 }
 
 /// SIGKILL every snapshotted descendant still running as its original process,
 /// and the group it escaped into, so an owned child cannot outlive `stop`/`down`.
-fn kill_snapshot_survivors(snapshot: &[(u32, Option<String>)]) {
-    for (pid, identity) in snapshot {
-        if !snapshot_member_alive(*pid, identity) {
+fn kill_snapshot_survivors(snapshot: &[TrackedProcessIdentity]) {
+    for TrackedProcessIdentity {
+        pid,
+        platform_start,
+    } in snapshot
+    {
+        if !identity_alive(*pid, platform_start.as_deref()) {
             continue;
         }
         if let Ok(Some(group)) = process_group(*pid) {
@@ -2833,27 +2769,28 @@ fn monitored_process(pid: u32) -> TrackedProcessIdentity {
     }
 }
 
-fn tracked_process_snapshot(
-    root_pid: u32,
-    existing: &[TrackedProcessIdentity],
+/// Every tracked identity plus the live descendants of `root`, if any. A live
+/// descendant's current identity replaces a stored one for the same PID.
+fn tracked_snapshot(
+    root: Option<u32>,
+    tracked: &[TrackedProcessIdentity],
 ) -> Vec<TrackedProcessIdentity> {
-    let mut tracked = existing
+    let mut snapshot = tracked
         .iter()
         .cloned()
         .map(|process| (process.pid, process))
         .collect::<BTreeMap<_, _>>();
-    for pid in descendant_pids(root_pid).unwrap_or_default() {
+    let live = match root {
+        Some(root) => descendant_pids(root).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    for pid in live {
         let observed = monitored_process(pid);
-        tracked
-            .entry(pid)
-            .and_modify(|stored| {
-                if stored.platform_start.is_none() {
-                    stored.platform_start.clone_from(&observed.platform_start);
-                }
-            })
-            .or_insert(observed);
+        if observed.platform_start.is_some() || !snapshot.contains_key(&pid) {
+            snapshot.insert(pid, observed);
+        }
     }
-    tracked.into_values().collect()
+    snapshot.into_values().collect()
 }
 
 pub(crate) fn process_escape_start_identity(
@@ -2862,20 +2799,8 @@ pub(crate) fn process_escape_start_identity(
     platform_start: Option<&str>,
     existing: &[TrackedProcessIdentity],
 ) -> String {
-    let tracked = tracked_process_snapshot(pid, existing);
+    let tracked = tracked_snapshot(Some(pid), existing);
     super::StoredProcessIdentity::encode(pid, pgid, platform_start, Some(&tracked))
-}
-
-fn escaped_descendants(pid: u32, expected_pgid: i32) -> RuntimeResult<Vec<u32>> {
-    let mut escaped = Vec::new();
-    for descendant in descendant_pids(pid)? {
-        if let Some(pgid) = process_group(descendant)?
-            && pgid != expected_pgid
-        {
-            escaped.push(descendant);
-        }
-    }
-    Ok(escaped)
 }
 
 fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
