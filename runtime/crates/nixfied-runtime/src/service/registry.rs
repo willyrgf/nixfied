@@ -770,28 +770,6 @@ pub(crate) fn settle_unresolved_process(
     Ok(())
 }
 
-pub(crate) fn ensure_service_instance_probe_ready(
-    registry: &Registry,
-    service_name: &str,
-    service_instance_id: &str,
-) -> RuntimeResult<()> {
-    let snapshot = read_service_snapshot(registry, service_instance_id)?;
-    match snapshot.process.as_ref().map(|process| process.status) {
-        Some(ProcessStatus::Ready) => Ok(()),
-        Some(status) => Err(RuntimeError::new(
-            ErrorCode::DependencyUnavailable,
-            format!(
-                "service {service_name} process is {}, not ready",
-                status.as_str()
-            ),
-        )),
-        None => Err(RuntimeError::new(
-            ErrorCode::DependencyUnavailable,
-            format!("service {service_name} has not been started"),
-        )),
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum InvocationOwner<'a> {
     Task,
