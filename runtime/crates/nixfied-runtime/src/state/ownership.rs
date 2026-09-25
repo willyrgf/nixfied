@@ -160,6 +160,18 @@ impl SlotGuard {
         &self.registry_path
     }
 
+    /// The state base as placement names it, for diagnostics only.
+    pub(crate) fn state_base(&self) -> &std::path::Path {
+        &self.state_base
+    }
+
+    /// The held state-base anchor, revalidated. Mutating owners open the
+    /// application tree from this descriptor, never by resolving a path again.
+    pub(crate) fn state_base_directory(&self) -> RuntimeResult<Directory> {
+        self.validate()?;
+        self.ancestors[0].0.try_clone().map_err(acquisition_error)
+    }
+
     /// Recheck the rendezvous entry before mutation. Held identity does not
     /// protect against future interference by another writer with the same UID.
     pub fn validate(&self) -> RuntimeResult<()> {

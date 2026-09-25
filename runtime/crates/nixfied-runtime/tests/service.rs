@@ -427,14 +427,9 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
-    let cleanup = run_synthetic_service_clean_for_slot(
-        fixture.admission.common().manifest(),
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        &selected,
-    )
-    .expect("clean lifecycle should succeed");
+    let cleanup =
+        run_synthetic_service_clean_for_slot(&fixture.admission, &mut fixture.registry, &selected)
+            .expect("clean lifecycle should succeed");
 
     assert!(matches!(
         &cleanup,
@@ -751,37 +746,22 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     );
 
     let slot0_identity = StateIdentity::from_selected_slot(admission.common(), &slot0.selected);
-    clean_marked_state(
-        &slot0.placement.state_base,
-        &slot0_identity,
-        &mut slot0.registry,
-        CleanupMode::Standard,
-    )
-    .expect("slot 0 cleanup should succeed after down");
+    clean_marked_state(&slot0_identity, &mut slot0.registry, CleanupMode::Standard)
+        .expect("slot 0 cleanup should succeed after down");
     assert!(!slot0.placement.state_root.exists());
     assert!(slot1.placement.state_root.exists());
 
     let slot1_identity = StateIdentity::from_selected_slot(admission.common(), &slot1.selected);
-    clean_marked_state(
-        &slot1.placement.state_base,
-        &slot0_identity,
-        &mut slot1.registry,
-        CleanupMode::Standard,
-    )
-    .expect_err("slot 0 identity must not clean slot 1 state");
+    clean_marked_state(&slot0_identity, &mut slot1.registry, CleanupMode::Standard)
+        .expect_err("slot 0 identity must not clean slot 1 state");
     assert!(slot1.placement.state_root.exists());
 
     slot1
         .service
         .stop(&mut slot1.registry, 1000)
         .expect("slot 1 service should stop");
-    clean_marked_state(
-        &slot1.placement.state_base,
-        &slot1_identity,
-        &mut slot1.registry,
-        CleanupMode::Standard,
-    )
-    .expect("slot 1 cleanup should succeed after stop");
+    clean_marked_state(&slot1_identity, &mut slot1.registry, CleanupMode::Standard)
+        .expect("slot 1 cleanup should succeed after stop");
 }
 
 #[test]
@@ -2448,13 +2428,8 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
         .expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
-    let cleanup_error = clean_marked_state(
-        &fixture.placement.state_base,
-        &identity,
-        &mut fixture.registry,
-        CleanupMode::Standard,
-    )
-    .expect_err("open unresolved escape must block cleanup");
+    let cleanup_error = clean_marked_state(&identity, &mut fixture.registry, CleanupMode::Standard)
+        .expect_err("open unresolved escape must block cleanup");
     assert_eq!(cleanup_error.code, ErrorCode::CleanupRefused);
 
     let down = down_owned_process_groups(&mut fixture.registry, 1000)
@@ -2704,7 +2679,6 @@ fn owned_process_cleanup_does_not_settle_the_session() {
         [],
     );
     let cleanup = clean_marked_state(
-        &fixture.placement.state_base,
         &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
@@ -2934,7 +2908,6 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         [],
     );
     let cleanup = clean_marked_state(
-        &fixture.placement.state_base,
         &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,

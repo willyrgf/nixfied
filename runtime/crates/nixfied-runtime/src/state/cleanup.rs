@@ -19,6 +19,7 @@ use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker};
+use crate::state::ownership::SlotGuard;
 use crate::state::placement::normal_component;
 
 const MARKER: &CStr = c".nixfied-state.json";
@@ -56,12 +57,11 @@ impl CleanupMode {
 /// mode. A pending predecessor operation is resumed first under its own
 /// committed authorization; the requested mode never extends it.
 pub fn clean_marked_state(
-    state_base: impl AsRef<Path>,
     expected: &StateIdentity,
     registry: &mut Registry,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    let target = CleanupTarget::new(registry.authority(), expected)?;
     refuse_active_refs(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(outcome);
@@ -91,11 +91,10 @@ pub enum RetentionOutcome {
 /// manifest, authorizes deletion, so a changed manifest cannot make retained
 /// persistent data disposable. Pending deletions are resumed first.
 pub fn apply_retention(
-    state_base: impl AsRef<Path>,
     expected: &StateIdentity,
     registry: &mut Registry,
 ) -> RuntimeResult<RetentionOutcome> {
-    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    let target = CleanupTarget::new(registry.authority(), expected)?;
     refuse_active_refs(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(RetentionOutcome::Deleted(outcome));
@@ -189,11 +188,10 @@ fn delete_generation(
 /// marker admission, or provenance refresh. Returns `None` when nothing is
 /// pending.
 pub fn resume_pending_cleanup(
-    state_base: impl AsRef<Path>,
     expected: &StateIdentity,
     registry: &mut Registry,
 ) -> RuntimeResult<Option<CleanupOutcome>> {
-    let target = CleanupTarget::new(state_base.as_ref(), expected)?;
+    let target = CleanupTarget::new(registry.authority(), expected)?;
     if pending_cleanup(registry)?.is_none() {
         return Ok(None);
     }
@@ -380,9 +378,10 @@ fn authorize(marker: &StateMarker, mode: CleanupMode) -> RuntimeResult<()> {
     }
 }
 
-/// The application root derived from placement, never a caller-supplied path.
+/// The application root derived from placement, never a caller-supplied path,
+/// and opened from the slot guard's held state-base descriptor.
 struct CleanupTarget {
-    base: PathBuf,
+    base: Directory,
     ancestry: [CString; 3],
     name: CString,
     relative: String,
@@ -399,7 +398,7 @@ enum Observed {
 }
 
 impl CleanupTarget {
-    fn new(state_base: &Path, identity: &StateIdentity) -> RuntimeResult<Self> {
+    fn new(guard: &SlotGuard, identity: &StateIdentity) -> RuntimeResult<Self> {
         let project = normal_component("projectId", &identity.project_id)?;
         let environment = normal_component("environment", &identity.environment)?;
         let slot = identity.slot.to_string();
@@ -411,18 +410,9 @@ impl CleanupTarget {
             CString::new(std::os::unix::ffi::OsStrExt::as_bytes(value))
                 .map_err(|_| invalid_target("placement component contains NUL"))
         };
-        let base = state_base.canonicalize().map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::StateUnowned,
-                format!(
-                    "failed to resolve state base {}: {error}",
-                    state_base.display()
-                ),
-            )
-        })?;
         Ok(Self {
-            path: base.join(&relative),
-            base,
+            path: guard.state_base().join(&relative),
+            base: guard.state_base_directory()?,
             ancestry: [
                 c"data".to_owned(),
                 component(project.as_os_str())?,
@@ -434,8 +424,10 @@ impl CleanupTarget {
     }
 
     fn open_parent(&self) -> RuntimeResult<Option<Directory>> {
-        let mut directory =
-            Directory::open_existing(&self.base).map_err(|error| io_error(self, error))?;
+        let mut directory = self
+            .base
+            .try_clone()
+            .map_err(|error| io_error(self, error))?;
         for name in &self.ancestry {
             match directory
                 .entry(name)

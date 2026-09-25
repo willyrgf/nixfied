@@ -262,10 +262,9 @@ impl<'a> RunSession<'a> {
         // Retention requires recorded quiescence: any unresolved process
         // obligation refuses deletion and retains data. Completion is claimed
         // only after every obligation settled.
-        let settlement =
-            apply_retention(&self.placement.state_base, self.state, &mut self.registry)
-                .map(|_| ())
-                .inspect_err(|error| failures.push(error.clone()));
+        let settlement = apply_retention(self.state, &mut self.registry)
+            .map(|_| ())
+            .inspect_err(|error| failures.push(error.clone()));
         let manifest_hash = self.admission.common().computed_manifest_hash();
         let recorded = match settlement {
             Ok(()) => record_finalization_complete(&mut self.registry, self.run_id, manifest_hash),
@@ -933,12 +932,7 @@ fn run_m0_placed(
         ),
     )?;
     registry.set_redactor(redactor.clone());
-    nixfied_runtime::control::recover_slot(
-        &mut registry,
-        &placement.state_base,
-        &identity,
-        options.timeout_ms,
-    )?;
+    nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
     // Recovery effects already settled are kept; abandonment observed now
     // still prevents any new generation or session.
     if let Some(establishment) = establishment.as_deref_mut() {
@@ -1825,15 +1819,10 @@ fn run_control_admitted(
         )?;
         let mut registry = Registry::open_or_create(guard, &identity)?;
         let operation = (|| {
-            let recovery = nixfied_runtime::control::recover_slot(
-                &mut registry,
-                &placement.state_base,
-                &state,
-                options.timeout_ms,
-            )?;
+            let recovery =
+                nixfied_runtime::control::recover_slot(&mut registry, &state, options.timeout_ms)?;
             let cleaned = run_slot_clean(
                 admission,
-                &placement,
                 &mut registry,
                 &selected_slot,
                 options.cleanup_mode,

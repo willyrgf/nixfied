@@ -1,6 +1,5 @@
 use crate::registry::records::{StoredEndpoint as PortRow, read_open_endpoints};
 use crate::registry::sqlite::RegistryContext;
-use std::path::Path;
 
 use rusqlite::{OptionalExtension, params};
 
@@ -99,7 +98,7 @@ pub fn down(
         }
         if let Some(guard) = SlotGuard::try_acquire(placement, &CancellationToken::new())? {
             let mut registry = Registry::open_or_create(guard, registry_identity)?;
-            let recovered = recover_slot(&mut registry, &placement.state_base, state, timeout_ms);
+            let recovered = recover_slot(&mut registry, state, timeout_ms);
             let closed = registry.close();
             let mut report = match (recovered, closed) {
                 (Ok(report), Ok(())) => report.down,
@@ -341,13 +340,12 @@ pub struct RecoveryReport {
 /// tasks or adopts services; any unsafe step refuses and blocks new work.
 pub fn recover_slot(
     registry: &mut Registry,
-    state_base: &Path,
     identity: &StateIdentity,
     timeout_ms: u64,
 ) -> RuntimeResult<RecoveryReport> {
     record_interrupted_sessions(registry)?;
     let down = down_owned_process_groups(registry, timeout_ms)?;
-    let retention = apply_retention(state_base, identity, registry)?;
+    let retention = apply_retention(identity, registry)?;
     record_recovered_sessions(registry)?;
     Ok(RecoveryReport { down, retention })
 }

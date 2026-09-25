@@ -244,15 +244,12 @@ pub fn start_fixture_service(
 /// `[synthetic]`, so the generic slot clean equals cleaning the single service
 /// plus the slot state.
 pub fn run_synthetic_service_clean_for_slot(
-    _manifest: &Manifest,
     admission: &RunAdmission,
-    placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
     run_slot_clean(
         admission.common(),
-        placement,
         registry,
         selected_slot,
         CleanupMode::Standard,

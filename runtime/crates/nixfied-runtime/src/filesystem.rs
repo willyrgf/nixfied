@@ -242,6 +242,11 @@ impl Directory {
         self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Any)
     }
 
+    /// Another close-on-exec descriptor for the same opened directory.
+    pub(crate) fn try_clone(&self) -> io::Result<Self> {
+        self.0.try_clone().map(Self)
+    }
+
     pub(crate) fn identity(&self) -> io::Result<FileIdentity> {
         stat_fd(self.0.as_raw_fd()).map(|stat| FileIdentity::from(&stat))
     }
