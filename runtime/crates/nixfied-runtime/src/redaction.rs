@@ -167,12 +167,7 @@ impl RedactedLogRelays {
     /// Join only workers already known to have finished. Retain results for
     /// checked shutdown; polling never grants completed capture evidence.
     pub(crate) fn check(&self) -> RuntimeResult<()> {
-        let stdout = self.stdout.check();
-        let stderr = self.stderr.check();
-        match (stdout, stderr) {
-            (Ok(()), result) | (result, Ok(())) => result,
-            (Err(stdout), Err(stderr)) => Err(stdout.with_cause(stderr)),
-        }
+        crate::error::both(self.stdout.check(), self.stderr.check())
     }
 
     /// Settle both writers under one deadline and report the checked outcome:
@@ -185,12 +180,10 @@ impl RedactedLogRelays {
         self.stderr.shutdown_at(deadline);
         let (stdout_outcome, stdout) = self.stdout.join_outcome();
         let (stderr_outcome, stderr) = self.stderr.join_outcome();
-        let result = match (stdout, stderr) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(stdout), Err(stderr)) => Err(stdout.with_cause(stderr)),
-        };
-        (stdout_outcome.max(stderr_outcome), result)
+        (
+            stdout_outcome.max(stderr_outcome),
+            crate::error::both(stdout, stderr),
+        )
     }
 }
 

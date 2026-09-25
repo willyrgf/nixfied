@@ -66,12 +66,7 @@ impl Registry {
                 &path,
             )
         });
-        let release = guard.release();
-        match (database, release) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(release)) => Err(error.with_cause(release)),
-        }
+        crate::error::both(database, guard.release())
     }
 
     pub(crate) fn context(&mut self) -> RuntimeResult<RegistryContext<'_>> {

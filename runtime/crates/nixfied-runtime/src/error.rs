@@ -131,6 +131,16 @@ fn cause_details(details: Value) -> Value {
     Value::Object(safe)
 }
 
+/// Both steps ran: the first failure stays primary and a second failure
+/// becomes its cause.
+pub fn both<T>(first: RuntimeResult<T>, second: RuntimeResult<()>) -> RuntimeResult<T> {
+    match (first, second) {
+        (first, Ok(())) => first,
+        (Ok(_), Err(second)) => Err(second),
+        (Err(first), Err(second)) => Err(first.with_cause(second)),
+    }
+}
+
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}: {}", self.code, self.message)
@@ -165,6 +175,13 @@ impl RuntimeError {
     pub fn with_cause(mut self, cause: RuntimeError) -> Self {
         self.causes.push(RuntimeCause::from_error(cause));
         self
+    }
+
+    /// Attach a subordinate failure together with its own causes, which
+    /// precede it.
+    pub fn absorb(mut self, mut subordinate: RuntimeError) -> Self {
+        self.causes.extend(subordinate.causes.drain(..));
+        self.with_cause(subordinate)
     }
 
     pub fn with_detail(mut self, key: impl Into<String>, value: impl Serialize) -> Self {

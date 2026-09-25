@@ -99,12 +99,7 @@ pub fn down(
         if let Some(guard) = SlotGuard::try_acquire(placement, &CancellationToken::new())? {
             let mut registry = Registry::open_or_create(guard, registry_identity)?;
             let recovered = recover_slot(&mut registry, state, timeout_ms);
-            let closed = registry.close();
-            let mut report = match (recovered, closed) {
-                (Ok(report), Ok(())) => report.down,
-                (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
-                (Err(error), Err(close)) => return Err(error.with_cause(close)),
-            };
+            let mut report = crate::error::both(recovered, registry.close())?.down;
             report.canceled_run_id = selected.filter(|_| requested);
             return Ok(report);
         }

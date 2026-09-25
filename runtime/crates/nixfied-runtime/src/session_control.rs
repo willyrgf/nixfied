@@ -102,10 +102,7 @@ impl SessionControl {
                     ),
                 ))
             };
-        match (joined, removed) {
-            (Ok(()), result) | (result, Ok(())) => result,
-            (Err(error), Err(removal)) => Err(error.with_cause(removal)),
-        }
+        crate::error::both(joined, removed)
     }
 }
 

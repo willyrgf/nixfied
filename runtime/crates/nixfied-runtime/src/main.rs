@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use nixfied_manifest::TaskDefaultOutput;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
-use nixfied_runtime::error::{RuntimeCause, error_code_wire};
+use nixfied_runtime::error::error_code_wire;
 use nixfied_runtime::execution::{PlanNode, plan};
 use nixfied_runtime::output::{
     OutputStream, ProjectionOperation, SourcePresentation, output_projection_io_error,
@@ -139,20 +139,17 @@ impl FailureAccumulator {
     }
 
     fn push(&mut self, error: RuntimeError) {
-        let Some(mut primary) = self.primary.take() else {
+        let Some(primary) = self.primary.take() else {
             self.primary = Some(error);
             return;
         };
-        let mut error = error;
-        if failure_priority(error.code) > failure_priority(primary.code) {
-            error.causes.extend(primary.causes.drain(..));
-            error.causes.push(RuntimeCause::from_error(primary));
-            self.primary = Some(error);
-        } else {
-            primary.causes.extend(error.causes.drain(..));
-            primary.causes.push(RuntimeCause::from_error(error));
-            self.primary = Some(primary);
-        }
+        self.primary = Some(
+            if failure_priority(error.code) > failure_priority(primary.code) {
+                error.absorb(primary)
+            } else {
+                primary.absorb(error)
+            },
+        );
     }
 
     fn finish(self, output: RunOutput) -> Result<RunOutput, RuntimeError> {
@@ -1837,12 +1834,7 @@ fn run_control_admitted(
                 (_, cleaned) => print_json(&cleaned),
             }
         })();
-        let release = registry.close();
-        match (operation, release) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(release)) => Err(error.with_cause(release)),
-        }
+        nixfied_runtime::error::both(operation, registry.close())
     })();
     result.map_err(|error| enrich_placed_error(error, &placement, &selected_slot))
 }
