@@ -478,10 +478,9 @@ fn owner_rejects_invalid_or_oversized_requests_before_constructing_a_launch() {
 
 #[test]
 fn native_task_registration_failure_cannot_execute_the_workload() {
+    use nixfied_runtime::registry::session::record_run_created;
     use nixfied_runtime::registry::{Registry, RegistryIdentity};
-    use nixfied_runtime::service::{
-        RunContext, record_run_created, run_dependent_task_cancellable,
-    };
+    use nixfied_runtime::service::{RunContext, run_dependent_task_cancellable};
     let root = TempDir::new();
     let counter = root.path.join("must-not-execute");
     let mut value = test_child_manifest(23180, 23180);

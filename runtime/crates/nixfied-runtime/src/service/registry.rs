@@ -1,5 +1,6 @@
 pub(crate) use crate::registry::records::StoredEndpoint as StoredServiceEndpoint;
 use crate::registry::records::read_open_endpoints;
+use crate::registry::session::{require_open_sources, require_run};
 use crate::registry::sql_error;
 use crate::registry::sqlite::RegistryContext;
 use nixfied_manifest::ContainmentRequirement;
@@ -7,14 +8,12 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-use crate::admission::RunAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::output::EvidenceSource;
 use crate::redaction::CaptureOutcome;
+use crate::registry::Registry;
 use crate::registry::events::{EventInsert, append_event, insert_event};
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
-use crate::registry::{Registry, RegistryIdentity};
-use crate::state::HostPlacement;
 
 use super::{StoredProcessIdentity, TrackedProcessIdentity};
 
@@ -173,73 +172,6 @@ pub(crate) fn record_service_start_intent(
             service_instance_id: Some(service_instance_id),
             process_key: None,
             computed_manifest_hash: Some(computed_manifest_hash),
-            payload_json: "{}",
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
-/// Record the run row up front, before any service starts, so every admitted run
-/// leaves durable evidence — including a service-less selection (a task or
-/// environment of only service-less tasks) whose service loop never runs and so
-/// never reaches `record_service_start_intent`. This is the only run-row creator.
-pub fn record_run_created(
-    registry: &mut Registry,
-    run_id: &str,
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-) -> RuntimeResult<()> {
-    let source_json = serde_json::to_string(&admission.source()).map_err(json_error)?;
-    // The owner's own process identity is recovery evidence for its session.
-    let owner = std::process::id();
-    let owner_identity = serde_json::json!({
-        "pid": owner,
-        "platformStart": crate::service::platform_start_identity(owner),
-    })
-    .to_string();
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path, owner_identity, diagnostic_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            ",
-            params![
-                run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                admission.common().manifest_path().display().to_string(),
-                admission.common().computed_manifest_hash(),
-                admission.common().runtime_abi(),
-                admission.common().toolchain_id(),
-                admission.common().generator_json(),
-                admission.common().target_json(),
-                source_json,
-                placement.summary_path().display().to_string(),
-                owner_identity,
-                crate::output::DIAGNOSTIC_SOURCE,
-            ],
-        )
-        .map_err(sql_error)?;
-    insert_event(
-        &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type: "run.created",
-            run_id: Some(run_id),
-            service_instance_id: None,
-            process_key: None,
-            computed_manifest_hash: Some(admission.common().computed_manifest_hash()),
             payload_json: "{}",
         },
     )?;
@@ -1222,58 +1154,6 @@ fn stored_endpoint_map(
         .collect()
 }
 
-/// Closed source registration forbids every new process source for the run.
-fn require_open_sources(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
-    let sources: String = transaction
-        .query_row(
-            "SELECT sources FROM runs WHERE run_id = ?1",
-            [run_id],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    if sources != "open" {
-        return Err(RuntimeError::new(
-            ErrorCode::LifecycleFailed,
-            "the session closed source registration; no new workload may register",
-        ));
-    }
-    Ok(())
-}
-
-fn require_run(
-    transaction: &Transaction<'_>,
-    identity: &RegistryIdentity,
-    run_id: &str,
-    computed_manifest_hash: &str,
-) -> RuntimeResult<()> {
-    let matches: i64 = transaction
-        .query_row(
-            "
-            SELECT count(*)
-            FROM runs
-            WHERE run_id = ?1
-              AND environment = ?2
-              AND slot = ?3
-              AND computed_manifest_hash = ?4
-            ",
-            params![
-                run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                computed_manifest_hash,
-            ],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    if matches != 1 {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("run transition found {matches} exact rows for {run_id}, expected 1"),
-        ));
-    }
-    Ok(())
-}
-
 fn ensure_predecessor_settled(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
     let mut statement = transaction
         .prepare(&format!(
@@ -1377,12 +1257,9 @@ fn release_service_ports(
     Ok(())
 }
 
-fn json_error(error: serde_json::Error) -> RuntimeError {
-    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::registry::RegistryIdentity;
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::thread;

@@ -12,11 +12,12 @@ use nixfied_manifest::Manifest;
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::output::SourcePresentation;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
+use nixfied_runtime::registry::session::record_run_created;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
     PrepareRunner, ReadinessFailure, ReadyService, RunContext, ServiceSelection, SlotEndpoints,
-    StartingService, TaskExecution, TaskExecutionError, record_run_created,
-    run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
+    StartingService, TaskExecution, TaskExecutionError, run_dependent_task_cancellable,
+    run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker};

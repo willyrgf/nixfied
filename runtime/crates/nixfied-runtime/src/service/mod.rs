@@ -53,7 +53,6 @@ pub use process::{
     PrepareRunner, ReadinessFailure, ReadyService, SelectedEndpoint, ServiceInfo, ServiceSelection,
     SlotEndpoints, StartingService, check_services_live, run_slot_clean, start_service_for_slot,
 };
-pub use registry::record_run_created;
 pub use task::{
     RunContext, TaskExecution, TaskExecutionError, TaskRun, run_dependent_task_cancellable,
 };
