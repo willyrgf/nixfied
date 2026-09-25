@@ -1148,9 +1148,8 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         .into_parts();
     let process_key = service.info().process_key.clone();
     handle.join().expect("canceler should join");
-    service
-        .cancel(&mut fixture.registry, 200, "test readiness cancellation")
-        .expect("canceled service should be terminated");
+    let settled = service.finalize_failed_start(&mut fixture.registry, 200, error.clone());
+    assert_eq!(settled.code, ErrorCode::Canceled);
     thread::sleep(Duration::from_millis(2300));
     let report = observe_registry(&fixture.registry).expect("ps should observe canceled service");
     let observed = report
@@ -1166,7 +1165,10 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     assert_eq!(error.code, ErrorCode::Canceled);
     assert!(!observed.live);
     assert_eq!(observed.registry_status, "canceled");
-    assert_eq!(cancel_events, 2);
+    assert_eq!(
+        cancel_events, 1,
+        "a settled readiness cancellation records its terminal"
+    );
     assert!(
         !process_group_has_non_zombie_member(pgid),
         "canceled service process group should be empty"

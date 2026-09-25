@@ -1,6 +1,7 @@
 //! Independent raw-wire proofs for the sterile runtime workload gate.
 mod common;
 use common::*;
+use nixfied_runtime::launch::Refusal;
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
@@ -334,7 +335,9 @@ fn owner_registration_precedes_permission_and_failed_commit_keeps_child_owned() 
             || Ok(()),
         );
         if reject {
-            let failure = result.expect_err("failed registration must retain the child");
+            let Err(Refusal::Unregistered(failure)) = result else {
+                panic!("failed registration must retain the child");
+            };
             assert_eq!(failure.error.code, ErrorCode::RegistryCorrupt);
             let output = wait_for_child_output(failure.child, Duration::from_secs(3));
             assert_eq!(output.status.code(), Some(125));
@@ -384,7 +387,9 @@ fn cancellation_after_registration_sends_no_permission_and_returns_child() {
             }
         },
     );
-    let failure = result.expect_err("cancellation must stop delivery");
+    let Err(Refusal::Registered(failure)) = result else {
+        panic!("cancellation must stop delivery");
+    };
     assert_eq!(failure.error.code, nixfied_runtime::ErrorCode::Canceled);
     let output = wait_for_child_output(failure.child, Duration::from_secs(3));
     assert_eq!(output.status.code(), Some(125));
@@ -412,9 +417,10 @@ fn owner_reports_exec_failure_without_losing_the_child_or_request_values() {
             Stdio::piped(),
         )
         .unwrap();
-    let failure = pending
-        .register_and_release(|_| Ok(()), || Ok(()))
-        .expect_err("exec must fail");
+    let Err(Refusal::Registered(failure)) = pending.register_and_release(|_| Ok(()), || Ok(()))
+    else {
+        panic!("exec must fail");
+    };
     assert_eq!(failure.error.message, "workload exec failed");
     let output = wait_for_child_output(failure.child, Duration::from_secs(3));
     assert_eq!(output.status.code(), Some(125));

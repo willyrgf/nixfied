@@ -17,6 +17,7 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
     ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
 };
+use crate::launch::Refusal;
 use crate::redaction::{
     CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, LogFileMode, RedactedLogRelays, Redactor,
     child_output,
@@ -169,6 +170,7 @@ impl StartingService {
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
+    /// Stop a started service before readiness with its declared stop policy.
     pub fn stop(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
         let Self {
             mut owned,
@@ -177,19 +179,6 @@ impl StartingService {
         let result = owned.teardown(registry, timeout_ms, Teardown::Stop(None));
         drop(owned);
         startup_guards.release();
-        result
-    }
-    pub fn cancel(
-        mut self,
-        registry: &mut Registry,
-        timeout_ms: u64,
-        reason: &str,
-    ) -> RuntimeResult<()> {
-        let result = self
-            .owned
-            .teardown(registry, timeout_ms, Teardown::Cancel(reason));
-        drop(self.owned);
-        self.startup_guards.release();
         result
     }
     pub fn ready(
@@ -1657,10 +1646,8 @@ pub(super) fn start_service_with_lock_root(
         },
     ) {
         Ok(child) => (child, None),
-        Err(failure) if failure.registration == crate::launch::Registration::Committed => {
-            (failure.child, Some(*failure.error))
-        }
-        Err(failure) => {
+        Err(Refusal::Registered(failure)) => (failure.child, Some(*failure.error)),
+        Err(Refusal::Unregistered(failure)) => {
             let mut child = OwnedChild::from(failure.child);
             return Err(fail_unrecorded(
                 registry,
@@ -2013,23 +2000,6 @@ pub(crate) struct CapturedExecFailure {
     pub capture: crate::redaction::CaptureOutcome,
 }
 
-/// A refused release. Only a committed registration leaves a process row that
-/// the caller must settle from the contained child's facts.
-pub(crate) enum CapturedReleaseFailure {
-    Unregistered(Box<RuntimeError>),
-    Registered(CapturedExecFailure),
-}
-
-#[cfg(test)]
-impl CapturedReleaseFailure {
-    pub fn into_error(self) -> RuntimeError {
-        match self {
-            Self::Unregistered(error) => *error,
-            Self::Registered(failure) => *failure.error,
-        }
-    }
-}
-
 /// Inert captured bootstrap. Capture and the child stay owned through failed
 /// registration/delivery; normal completion only accepts an authorized child.
 pub(crate) struct PendingCapturedChild {
@@ -2048,31 +2018,28 @@ impl PendingCapturedChild {
         mut self,
         register: impl FnOnce(&Child) -> RuntimeResult<()>,
         checkpoint: impl FnMut() -> RuntimeResult<()>,
-    ) -> Result<OwnedCapturedChild, CapturedReleaseFailure> {
+    ) -> Result<OwnedCapturedChild, Refusal<Box<RuntimeError>, CapturedExecFailure>> {
         let result = self
             .pending
             .take()
             .expect("pending child is owned")
             .register_and_release(register, checkpoint);
+        let mut finish = |failure: crate::launch::LaunchFailure| {
+            let (error, settled, capture) = self.owned(failure.child).finish(Some(*failure.error));
+            let error = Box::new(error.expect("release failure retains its error"));
+            (error, settled, capture)
+        };
         match result {
             Ok(child) => Ok(self.owned(child)),
-            Err(failure) => {
-                let (error, settled, capture) =
-                    self.owned(failure.child).finish(Some(*failure.error));
-                let error = Box::new(error.expect("release failure retains its error"));
-                Err(match failure.registration {
-                    crate::launch::Registration::Unconfirmed => {
-                        CapturedReleaseFailure::Unregistered(error)
-                    }
-                    crate::launch::Registration::Committed => {
-                        CapturedReleaseFailure::Registered(CapturedExecFailure {
-                            error,
-                            outcome: None,
-                            settled,
-                            capture,
-                        })
-                    }
-                })
+            Err(Refusal::Unregistered(failure)) => Err(Refusal::Unregistered(finish(failure).0)),
+            Err(Refusal::Registered(failure)) => {
+                let (error, settled, capture) = finish(failure);
+                Err(Refusal::Registered(CapturedExecFailure {
+                    error,
+                    outcome: None,
+                    settled,
+                    capture,
+                }))
             }
         }
     }
@@ -3108,8 +3075,7 @@ mod tests {
             )
             .unwrap()
             .register_and_release(|_| Ok(()), || Ok(()))
-            .map_err(CapturedReleaseFailure::into_error)
-            .unwrap();
+            .unwrap_or_else(|_| panic!("the captured child should be released"));
             let pid = child.pid();
             if exited {
                 let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
@@ -3185,8 +3151,7 @@ mod tests {
         )
         .unwrap()
         .register_and_release(|_| Ok(()), || Ok(()))
-        .map_err(CapturedReleaseFailure::into_error)
-        .unwrap()
+        .unwrap_or_else(|_| panic!("the captured child should be released"))
         .complete(&CancellationToken::new(), || Ok(()), |_| Ok(()))
         .map_err(|failure| *failure.error)
         .unwrap();
@@ -3225,13 +3190,15 @@ mod tests {
             log_file_mode: LogFileMode::Replace,
             label: "task process",
         };
-        let error = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher())
-            .unwrap()
-            .register_and_release(|_| Ok(()), || Ok(()))
-            .err()
-            .unwrap()
-            .into_error();
-        assert_eq!(error.code, ErrorCode::ProcEscape);
+        let Some(Refusal::Registered(failure)) =
+            spawn_gated_captured_exec(&spec, &crate::launch::test_launcher())
+                .unwrap()
+                .register_and_release(|_| Ok(()), || Ok(()))
+                .err()
+        else {
+            panic!("an exec failure follows committed registration");
+        };
+        assert_eq!(failure.error.code, ErrorCode::ProcEscape);
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
         spec.executable = &executable;
@@ -3249,7 +3216,7 @@ mod tests {
             )
             .err()
             .unwrap();
-        let CapturedReleaseFailure::Unregistered(error) = error else {
+        let Refusal::Unregistered(error) = error else {
             panic!("a refused registration leaves no process row to settle");
         };
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
@@ -3277,7 +3244,7 @@ mod tests {
             )
             .err()
             .unwrap();
-        let CapturedReleaseFailure::Registered(failure) = failure else {
+        let Refusal::Registered(failure) = failure else {
             panic!("a refusal after committed registration must return settlement facts");
         };
         assert_eq!(failure.error.code, ErrorCode::Canceled);

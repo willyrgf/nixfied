@@ -166,16 +166,16 @@ pub struct PendingLaunch {
     deadline: Instant,
 }
 
-/// Even after an ambiguous permission send the caller retains the process
-/// handle and must contain/reap it. Never turn delivery failure into detachment.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Registration {
-    Unconfirmed,
-    Committed,
+/// A refused release. Only a committed registration leaves a process record
+/// that the caller must settle from the contained child's facts.
+pub enum Refusal<U, R = U> {
+    Unregistered(U),
+    Registered(R),
 }
 
+/// Even after an ambiguous permission send the caller retains the process
+/// handle and must contain/reap it. Never turn delivery failure into detachment.
 pub struct LaunchFailure {
-    pub registration: Registration,
     pub child: std::process::Child,
     pub error: Box<crate::RuntimeError>,
 }
@@ -269,19 +269,19 @@ impl PendingLaunch {
         self,
         register: impl FnOnce(&std::process::Child) -> crate::RuntimeResult<()>,
         mut checkpoint: impl FnMut() -> crate::RuntimeResult<()>,
-    ) -> Result<std::process::Child, LaunchFailure> {
+    ) -> Result<std::process::Child, Refusal<LaunchFailure>> {
         let Self {
             child,
             mut channel,
             frame,
             deadline,
         } = self;
-        let mut registration = Registration::Unconfirmed;
+        let mut registered = false;
         let result = (|| {
             checkpoint()?;
             check_deadline(deadline)?;
             register(&child)?;
-            registration = Registration::Committed;
+            registered = true;
             checkpoint()?;
             let mut remaining = frame.as_slice();
             while !remaining.is_empty() {
@@ -332,11 +332,17 @@ impl PendingLaunch {
         drop(channel);
         match result {
             Ok(()) => Ok(child),
-            Err(error) => Err(LaunchFailure {
-                registration,
-                child,
-                error: Box::new(error),
-            }),
+            Err(error) => {
+                let failure = LaunchFailure {
+                    child,
+                    error: Box::new(error),
+                };
+                Err(if registered {
+                    Refusal::Registered(failure)
+                } else {
+                    Refusal::Unregistered(failure)
+                })
+            }
         }
     }
 }

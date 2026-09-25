@@ -1415,7 +1415,7 @@ mod tests {
             LockRoot::Opened(&injected),
         ) {
             Ok(service) => {
-                let _ = service.stop(&mut registry, 1000);
+                drop(service);
                 panic!("unsafe lock target must fail before prepare");
             }
             Err(error) => error,
