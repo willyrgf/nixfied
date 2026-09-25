@@ -302,6 +302,17 @@ impl Directory {
         Ok(false)
     }
 
+    /// The name of a known network filesystem that holds this directory. Its
+    /// lock and deletion semantics are outside the supported placement.
+    pub(crate) fn network_filesystem(&self) -> io::Result<Option<&'static str>> {
+        let mut observed = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+        if unsafe { libc::fstatfs(self.0.as_raw_fd(), observed.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fstatfs initialized the complete buffer on success.
+        Ok(network_filesystem(&unsafe { observed.assume_init() }))
+    }
+
     /// All entry names except `.` and `..`, read through a duplicate descriptor.
     pub(crate) fn entry_names(&self) -> io::Result<Vec<CString>> {
         let duplicate =
@@ -475,6 +486,39 @@ impl AsRawFd for PrivateFile {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn network_filesystem(observed: &libc::statfs) -> Option<&'static str> {
+    // The magic number's C type differs across Linux targets.
+    #[allow(clippy::unnecessary_cast)]
+    network_magic(observed.f_type as u32)
+}
+
+#[cfg(target_os = "linux")]
+fn network_magic(magic: u32) -> Option<&'static str> {
+    match magic {
+        0x6969 => Some("nfs"),
+        0x517b => Some("smb"),
+        0xff53_4d42 => Some("cifs"),
+        0xfe53_4d42 => Some("smb2"),
+        0x5346_414f => Some("afs"),
+        0x00c3_6400 => Some("ceph"),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn network_filesystem(observed: &libc::statfs) -> Option<&'static str> {
+    // SAFETY: the kernel NUL-terminates the fixed-size type name.
+    let name = unsafe { CStr::from_ptr(observed.f_fstypename.as_ptr()) };
+    match name.to_bytes() {
+        b"nfs" => Some("nfs"),
+        b"smbfs" => Some("smbfs"),
+        b"afpfs" => Some("afpfs"),
+        b"webdav" => Some("webdav"),
+        _ => None,
+    }
+}
+
 /// The temporary entry [`Directory::publish_file`] writes before its rename.
 /// Only a process killed between creation and rename leaves one behind.
 pub(crate) fn temporary_name(name: &CStr, token: &str) -> io::Result<CString> {
@@ -565,6 +609,27 @@ fn check_directory(fd: RawFd, uid: libc::uid_t, mode: DirectoryMode) -> io::Resu
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_network_filesystems_are_named_and_local_ones_are_not() {
+        for (magic, name) in [
+            (0x6969, "nfs"),
+            (0x517b, "smb"),
+            (0xff53_4d42, "cifs"),
+            (0xfe53_4d42, "smb2"),
+            (0x5346_414f, "afs"),
+            (0x00c3_6400, "ceph"),
+        ] {
+            assert_eq!(network_magic(magic), Some(name));
+        }
+        // ext4, tmpfs, btrfs, xfs, overlayfs
+        for magic in [0xef53, 0x0102_1994, 0x9123_683e, 0x5846_5342, 0x794c_7630] {
+            assert_eq!(network_magic(magic), None);
+        }
+        let temporary = std::env::temp_dir();
+        let directory = Directory::open_external(&temporary.canonicalize().unwrap()).unwrap();
+        assert_eq!(directory.network_filesystem().unwrap(), None);
+    }
 
     #[test]
     fn mount_roots_are_reported_through_statx() {

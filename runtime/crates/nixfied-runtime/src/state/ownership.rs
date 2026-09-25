@@ -88,6 +88,7 @@ impl SlotGuard {
         }
         let mut directory =
             Directory::private_anchor(&placement.state_base).map_err(acquisition_error)?;
+        refuse_network_filesystem(&directory)?;
         let mut ancestors = Vec::new();
         for component in [namespace, project, environment, slot] {
             cancellation.check()?;
@@ -100,6 +101,7 @@ impl SlotGuard {
             directory = child;
         }
         cancellation.check()?;
+        refuse_network_filesystem(&directory)?;
         let file = directory
             .open_private_file(c"slot.lock")
             .map_err(acquisition_error)?;
@@ -219,6 +221,20 @@ impl SlotGuard {
                 format!("failed to close slot authority: {error}"),
             )
         })
+    }
+}
+
+/// Slot locks and descriptor-held deletion assume a local filesystem; a known
+/// network filesystem refuses before any lock or mutation.
+pub(crate) fn refuse_network_filesystem(directory: &Directory) -> RuntimeResult<()> {
+    match directory.network_filesystem().map_err(acquisition_error)? {
+        None => Ok(()),
+        Some(kind) => Err(RuntimeError::new(
+            ErrorCode::StateUnwritable,
+            format!(
+                "state placement is on a {kind} network filesystem; slot ownership and deletion require a local filesystem"
+            ),
+        )),
     }
 }
 

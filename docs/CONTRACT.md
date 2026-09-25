@@ -85,6 +85,11 @@ when the manifest/runtime contract changes.
   before application-state mutation or child spawn. `ps` reads a coherent
   registry snapshot and observes process liveness without acquiring ownership
   or changing stored records. An absent registry yields an empty process list.
+- The state base, the slot's registry directory, and the application root must
+  be on a local filesystem. A known network filesystem (Linux: NFS, SMB/CIFS,
+  AFS, Ceph; macOS: NFS, SMB, AFP, WebDAV) refuses with `STATE_UNWRITABLE`
+  before any lock or mutation. Other filesystems are assumed to provide local
+  `flock`, `rename`, and `fsync` semantics; they are not detected.
 
 - Task invocation `timeoutMs` is optional. Absence (or explicit null) has no
   finite default; a supplied value must be a positive `u64`. Nix emits absent
