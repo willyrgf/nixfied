@@ -323,32 +323,24 @@ pub struct RedactedChildOutput {
     pub relays: RedactedLogRelays,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum LogFileMode {
-    New,
-    Replace,
-}
-
 pub(crate) fn child_output(
     stdout_path: &Path,
     stderr_path: &Path,
     redactor: &Redactor,
-    mode: LogFileMode,
 ) -> RuntimeResult<RedactedChildOutput> {
-    let (stdout, stdout_relay) =
-        redacted_stdio(stdout_path, redactor, CapturedStream::Stdout, mode)?;
-    let (stderr, stderr_relay) =
-        match redacted_stdio(stderr_path, redactor, CapturedStream::Stderr, mode) {
-            Ok(output) => output,
-            Err(error) => {
-                drop(stdout);
-                stdout_relay.shutdown_at(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
-                return Err(match stdout_relay.join() {
-                    Ok(()) => error,
-                    Err(capture) => capture.with_cause(error),
-                });
-            }
-        };
+    let (stdout, stdout_relay) = redacted_stdio(stdout_path, redactor, CapturedStream::Stdout)?;
+    let (stderr, stderr_relay) = match redacted_stdio(stderr_path, redactor, CapturedStream::Stderr)
+    {
+        Ok(output) => output,
+        Err(error) => {
+            drop(stdout);
+            stdout_relay.shutdown_at(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+            return Err(match stdout_relay.join() {
+                Ok(()) => error,
+                Err(capture) => capture.with_cause(error),
+            });
+        }
+    };
     Ok(RedactedChildOutput {
         stdout,
         stderr,
@@ -363,7 +355,6 @@ fn redacted_stdio(
     path: &Path,
     redactor: &Redactor,
     stream: CapturedStream,
-    mode: LogFileMode,
 ) -> RuntimeResult<(Stdio, CaptureWorker)> {
     let mut fds = [0; 2];
     #[cfg(target_os = "linux")]
@@ -396,7 +387,7 @@ fn redacted_stdio(
     {
         return Err(leak_blocked("failed to set capture pipe nonblocking"));
     }
-    let writer = create_log_file(path, !redactor.is_empty(), mode)?;
+    let writer = create_log_file(path, !redactor.is_empty())?;
     let redactor = redactor.clone();
     let (control, receiver) = mpsc::channel();
     let handle = thread::Builder::new()
@@ -512,12 +503,18 @@ fn redact_stream_with_poll(
     Ok(completion)
 }
 
-fn create_log_file(path: &Path, redacted: bool, mode: LogFileMode) -> RuntimeResult<File> {
-    match mode {
-        LogFileMode::New => File::create_new(path),
-        LogFileMode::Replace => File::create(path),
-    }
-    .map_err(|error| {
+/// Every capture file is new evidence; an existing file is never replaced.
+fn create_log_file(path: &Path, redacted: bool) -> RuntimeResult<File> {
+    // Unit tests inject a capture write failure through the full device.
+    #[cfg(test)]
+    let created = if path == Path::new("/dev/full") {
+        File::options().write(true).open(path)
+    } else {
+        File::create_new(path)
+    };
+    #[cfg(not(test))]
+    let created = File::create_new(path);
+    created.map_err(|error| {
         let message = format!("failed to create log file {}: {error}", path.display());
         if redacted {
             leak_blocked(message)
@@ -644,9 +641,7 @@ mod tests {
             } else {
                 Redactor::empty()
             };
-            let error = child_output(&stdout, &fixture.0, &redactor, LogFileMode::Replace)
-                .err()
-                .unwrap();
+            let error = child_output(&stdout, &fixture.0, &redactor).err().unwrap();
             assert_eq!(
                 error.code,
                 if secret {

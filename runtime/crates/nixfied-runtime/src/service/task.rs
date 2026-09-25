@@ -10,7 +10,7 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::ExecTask;
 use crate::output::{EvidenceSource, SourcePresentation};
 use crate::redaction::CaptureOutcome;
-use crate::redaction::{LogFileMode, Redactor};
+use crate::redaction::Redactor;
 use crate::registry::Registry;
 use crate::service::process::{
     CapturedExec, CapturedExecOutcome, ExecSubstitution, Invocation, InvocationFailure,
@@ -229,7 +229,6 @@ pub fn run_dependent_task_cancellable(
             stdout_path: &stdout_path,
             stderr_path: &stderr_path,
             redactor: run_context.redactor,
-            log_file_mode: LogFileMode::New,
             label: "task process",
         },
         run_context.launcher,
@@ -475,7 +474,6 @@ mod tests {
                 stdout_path: &root.join("stdout"),
                 stderr_path: &root.join("stderr"),
                 redactor: &Redactor::empty(),
-                log_file_mode: LogFileMode::New,
                 label: "task process",
             },
             &crate::launch::test_launcher(),

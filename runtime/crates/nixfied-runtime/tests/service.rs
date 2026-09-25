@@ -2377,6 +2377,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         !process_group_has_non_zombie_member(escaped_pgid),
         "explicit down must prove the escaped containment dead"
     );
+    fixture.begin_run("run-after-escaped-exact-listener");
     let replacement = fixture
         .start("run-after-escaped-exact-listener", port)
         .expect("a new owner should start only after explicit down");
@@ -2846,6 +2847,7 @@ fn endpoint_less_successor_requires_settlement_and_retains_distinct_history() {
     assert_eq!(starts, 1, "rejection precedes prepare/start intent");
     first.stop(&mut fixture.registry, 1000).unwrap();
 
+    fixture.begin_run("second-session");
     let second = fixture.start_endpoint_less("second-session").unwrap();
     assert_ne!(first_key, second.info().service_instance_id);
     let predecessor: (String, String, String) = fixture
@@ -2925,6 +2927,20 @@ struct ServiceFixture {
 }
 
 impl ServiceFixture {
+    /// A later session in the same slot owns its own run directory.
+    fn begin_run(&mut self, run_id: &str) {
+        self.placement = default_placement(
+            self.admission.common().manifest(),
+            run_id,
+            self.placement.state_base(),
+        )
+        .expect("layout should derive");
+        self.registry
+            .authority()
+            .claim_run_dir(&self.placement)
+            .unwrap();
+    }
+
     // Read durable evidence directly; callers own the SQL and expected result.
     #[track_caller]
     fn query<T: rusqlite::types::FromSql>(&self, sql: &str, params: impl rusqlite::Params) -> T {
@@ -4159,6 +4175,7 @@ fn expect_service_start_failure(
 }
 
 fn assert_prepared_retry(fixture: &mut ServiceFixture, run_id: &str, port: u16) {
+    fixture.begin_run(run_id);
     let retry = fixture
         .start_with(
             run_id,
