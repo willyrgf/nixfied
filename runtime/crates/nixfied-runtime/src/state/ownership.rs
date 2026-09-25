@@ -272,7 +272,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     // A concurrent harness fork can briefly inherit any live fixture lock until
     // exec. Each authority proof runs alone so only its intended child can hold
@@ -291,24 +290,17 @@ mod tests {
         assert!(status.success(), "isolated authority proof failed: {name}");
         true
     }
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Fixture {
-        root: PathBuf,
+        root: crate::test_support::TestDir,
         placement: HostPlacement,
     }
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "nixfied-slot-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&root).unwrap();
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let root = crate::test_support::TestDir::new("slot");
             let registry_dir = root.join("registry/project/dev/0");
             let run_dir = registry_dir.join("runs/session");
             let placement = HostPlacement {
-                state_base: root.clone(),
+                state_base: root.to_path_buf(),
                 state_root: root.join("data/project/dev/0"),
                 registry_dir,
                 logs_dir: run_dir.join("logs"),
@@ -320,11 +312,6 @@ mod tests {
         }
         fn acquire(&self) -> RuntimeResult<SlotGuard> {
             SlotGuard::acquire(&self.placement, &CancellationToken::new())
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
@@ -455,9 +442,9 @@ mod tests {
         fs::remove_dir(&fixture.root).unwrap();
         let guard = fixture.acquire().unwrap();
         for path in [
-            &fixture.root,
-            &fixture.root.join("registry"),
-            &fixture.placement.registry_dir,
+            fixture.root.to_path_buf(),
+            fixture.root.join("registry"),
+            fixture.placement.registry_dir.clone(),
         ] {
             assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o700);
         }

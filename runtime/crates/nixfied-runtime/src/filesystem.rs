@@ -635,17 +635,11 @@ mod tests {
     fn mount_roots_are_reported_through_statx() {
         let root = Directory::root().unwrap();
         assert!(root.is_mount_root(c"proc").unwrap());
-        let base = std::env::temp_dir().join(format!(
-            "nixfied-mount-root-{}-{}",
-            std::process::id(),
-            crate::token::random_hex().unwrap()
-        ));
+        let base = crate::test_support::TestDir::new("mount-root");
         std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
-            .recursive(true)
             .create(base.join("child"))
             .unwrap();
         let parent = Directory::private_anchor(&base).unwrap();
         assert!(!parent.is_mount_root(c"child").unwrap());
-        std::fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -3194,9 +3194,7 @@ mod tests {
     #[test]
     fn capture_failure_preserves_observed_exit_or_interrupts_live_child() {
         for exited in [false, true] {
-            let root = std::env::temp_dir()
-                .join(format!("nixfied-capture-failure-{}", std::process::id()));
-            std::fs::create_dir(&root).unwrap();
+            let root = crate::test_support::TestDir::new("capture-failure");
             let authority = crate::state::ownership::fixture_guard(
                 &root,
                 &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
@@ -3265,21 +3263,12 @@ mod tests {
                 Some(libc::ECHILD)
             );
             drop(authority);
-            std::fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[test]
     fn bounded_exec_contains_pipe_holding_descendants_before_relay_join() {
-        let root = std::env::temp_dir().join(format!(
-            "nixfied-bounded-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&root).unwrap();
+        let root = crate::test_support::TestDir::new("bounded");
         let authority = crate::state::ownership::fixture_guard(
             &root,
             &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
@@ -3321,7 +3310,6 @@ mod tests {
         .unwrap();
         let survived = marker.exists();
         let captured = std::fs::read_to_string(&stdout).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
         assert!(matches!(outcome, CapturedExecOutcome::Exited(status) if status.success()));
         assert!(
             !survived,
@@ -3332,15 +3320,7 @@ mod tests {
 
     #[test]
     fn bounded_spawn_failure_and_refused_release_close_capture_and_reap() {
-        let root = std::env::temp_dir().join(format!(
-            "nixfied-bounded-abort-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&root).unwrap();
+        let root = crate::test_support::TestDir::new("bounded-abort");
         let authority = crate::state::ownership::fixture_guard(
             &root,
             &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
@@ -3430,7 +3410,6 @@ mod tests {
             -1,
             "registered but unreleased child must be reaped"
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -542,19 +542,10 @@ fn leak_blocked(message: impl Into<String>) -> RuntimeError {
 mod tests {
     use super::*;
 
-    struct CaptureFixture(std::path::PathBuf);
+    struct CaptureFixture(crate::test_support::TestDir);
     impl CaptureFixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "nixfied-capture-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            std::fs::create_dir(&root).unwrap();
-            Self(root)
+            Self(crate::test_support::TestDir::new("capture"))
         }
         fn worker(
             &self,
@@ -592,11 +583,6 @@ mod tests {
                 sender,
                 path,
             )
-        }
-    }
-    impl Drop for CaptureFixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
