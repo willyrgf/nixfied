@@ -8,6 +8,7 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, EntryKind, is_temporary_of};
 use crate::registry::Registry;
 use crate::slot::SelectedSlot;
+use crate::state::cleanup::refuse_deleted_generation;
 use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
 /// The marker's entry name, derived from the one name the tree publishes.
@@ -120,38 +121,46 @@ impl StateMarker {
     /// Ownership, framework ABI, and existing retention authorization gate
     /// access. Other differences update provenance without declaring application
     /// data compatibility or authorizing deletion.
-    pub fn compare(&self, identity: &StateIdentity) -> MarkerComparison {
+    pub fn compare(&self, identity: &StateIdentity) -> RuntimeResult<MarkerDecision> {
         if !self.matches_ownership(identity) {
-            return MarkerComparison::RefuseOwnership;
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnowned,
+                "existing state marker is owned by a different project/environment/slot identity",
+            ));
         }
-        if self.runtime_abi != identity.runtime_abi {
-            return MarkerComparison::RefuseAbi;
-        }
+        self.check_abi(identity)?;
         if self.persistence == PersistencePolicy::Persistent
             && identity.persistence != PersistencePolicy::Persistent
         {
-            return MarkerComparison::RefuseRetention;
+            return Err(RuntimeError::new(
+                ErrorCode::CleanupRefused,
+                "state preparation cannot weaken existing retention authorization",
+            ));
         }
         let provenance_matches = self.manifest_path == identity.manifest_path
             && self.computed_manifest_hash == identity.computed_manifest_hash
             && self.toolchain_id == identity.toolchain_id
             && self.target == identity.target
             && self.persistence == identity.persistence;
-        if provenance_matches {
-            MarkerComparison::Match
+        Ok(if provenance_matches {
+            MarkerDecision::Adopt(self.clone())
         } else {
-            MarkerComparison::RefreshProvenance
-        }
+            MarkerDecision::Refresh {
+                existing: self.clone(),
+            }
+        })
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MarkerComparison {
-    Match,
-    RefreshProvenance,
-    RefuseRetention,
-    RefuseOwnership,
-    RefuseAbi,
+    /// A marker written under another runtime ABI is never used or deleted.
+    pub(crate) fn check_abi(&self, identity: &StateIdentity) -> RuntimeResult<()> {
+        if self.runtime_abi != identity.runtime_abi {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnowned,
+                "existing state marker was written under a different runtime ABI",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// What a run must do with the slot's state root before using it.
@@ -183,22 +192,9 @@ pub fn evaluate_slot_marker(
         refuse_unmarked_state_root(&tree, &root)?;
         return Ok(MarkerDecision::Fresh);
     };
-    match existing.compare(identity) {
-        MarkerComparison::Match => Ok(MarkerDecision::Adopt(existing)),
-        MarkerComparison::RefreshProvenance => Ok(MarkerDecision::Refresh { existing }),
-        MarkerComparison::RefuseRetention => Err(RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            "state preparation cannot weaken existing retention authorization",
-        )),
-        MarkerComparison::RefuseOwnership => Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            "existing state marker is owned by a different project/environment/slot identity",
-        )),
-        MarkerComparison::RefuseAbi => Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            "existing state marker was written under a different runtime ABI",
-        )),
-    }
+    let decision = existing.compare(identity)?;
+    refuse_deleted_generation(registry, &existing)?;
+    Ok(decision)
 }
 
 /// A missing marker only means a fresh slot when the state root is empty, or
@@ -225,14 +221,23 @@ fn interrupted_publication(root: &Directory, name: &std::ffi::CStr) -> std::io::
     Ok(is_temporary_of(name, MARKER) && matches!(root.entry(name)?, Some(EntryKind::File(_))))
 }
 
-/// Publish the marker for a fresh application tree, creating the tree through
-/// the slot guard's held descriptor. Temporaries of an interrupted earlier
-/// publication are removed first. The caller must have processed an
-/// [`evaluate_slot_marker`] decision first — this is the post-decision commit,
-/// not a guard.
+/// Publish the slot marker through the slot guard's held descriptor, creating
+/// the tree when it is fresh. A fresh tree receives a new generation; an
+/// existing marker keeps its generation and only refreshes provenance.
+/// Temporaries of an interrupted earlier publication are removed first. The
+/// caller must have processed an [`evaluate_slot_marker`] decision first —
+/// this is the post-decision commit, not a guard.
 pub fn commit_slot_marker(
     registry: &Registry,
     identity: &StateIdentity,
+) -> RuntimeResult<StateMarker> {
+    publish_slot_marker(registry, identity, None)
+}
+
+pub(crate) fn publish_slot_marker(
+    registry: &Registry,
+    identity: &StateIdentity,
+    existing: Option<&StateMarker>,
 ) -> RuntimeResult<StateMarker> {
     let tree = ApplicationTree::new(registry.authority(), identity)?;
     let root = tree.materialize()?;
@@ -242,20 +247,10 @@ pub fn commit_slot_marker(
                 .map_err(|error| tree.io_error(error))?;
         }
     }
-    let marker = StateMarker::slot(identity)?;
-    tree.publish_marker(&root, &marker)?;
-    Ok(marker)
-}
-
-/// Refresh provenance of an existing tree without changing its generation.
-pub fn refresh_slot_marker(
-    registry: &Registry,
-    identity: &StateIdentity,
-    existing: &StateMarker,
-) -> RuntimeResult<StateMarker> {
-    let tree = ApplicationTree::new(registry.authority(), identity)?;
-    let root = tree.materialize()?;
-    let marker = StateMarker::refreshed(identity, existing);
+    let marker = match existing {
+        None => StateMarker::slot(identity)?,
+        Some(existing) => StateMarker::refreshed(identity, existing),
+    };
     tree.publish_marker(&root, &marker)?;
     Ok(marker)
 }
