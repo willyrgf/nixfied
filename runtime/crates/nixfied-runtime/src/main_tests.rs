@@ -366,7 +366,7 @@ fn failure_merge_preserves_priority_and_flattened_cause_order() {
 
 #[test]
 fn occurrence_collisions_preserve_files_and_terminal_evidence() {
-    use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
+    use nixfied_runtime::state::derive_host_placement;
     use serde_json::json;
     for (collision, secret) in [
         ("stdout", false),
@@ -390,7 +390,6 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let manifest: nixfied_manifest::Manifest = serde_json::from_value(value).unwrap();
         let admission = common::fixture_admission(&manifest, &tmp.path);
         let placement = derive_host_placement(&manifest, "evidence-test", &tmp.path).unwrap();
-        materialize_run_roots(&placement).unwrap();
         let mut registry = Registry::open_or_create(
             common::registry_guard(&placement),
             &RegistryIdentity::default_slot(
@@ -400,6 +399,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             ),
         )
         .unwrap();
+        registry.authority().claim_run_dir(&placement).unwrap();
         record_run_created(&mut registry, "evidence-test", &admission, &placement).unwrap();
         let redactor = Redactor::from_secrets(admission.secrets());
         let cancellation = CancellationToken::new();

@@ -11,7 +11,7 @@ use nixfied_manifest::{Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
-    derive_host_placement, materialize_registry_root, materialize_run_roots, prepare_slot_state,
+    derive_host_placement, prepare_slot_state,
 };
 use nixfied_runtime::{ErrorCode, RunAdmission};
 use serde_json::Value;
@@ -222,9 +222,9 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         let admission_a = admission(&manifest, &tmp.path, false);
         let placement =
             derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
-        materialize_run_roots(&placement).expect("roots should materialize");
         let identity_a = StateIdentity::from_admission(admission_a.common());
         let mut registry = open_registry(&placement, &manifest);
+        registry.authority().claim_run_dir(&placement).unwrap();
         commit_slot_marker(&registry, &identity_a).expect("marker should be written");
         let service = start_fixture_service(
             &admission_a,
@@ -364,7 +364,6 @@ impl PreparationFixture {
         identity: &StateIdentity,
     ) -> Result<nixfied_runtime::state::PreparationReport, nixfied_runtime::RuntimeError> {
         let placement = self.placement(run_id);
-        materialize_registry_root(&placement)?;
         let mut registry = open_registry(&placement, &self.manifest);
         nixfied_runtime::control::stop_recorded_processes(&mut registry, 1000)?;
         prepare_slot_state(identity, &mut registry)
@@ -372,7 +371,6 @@ impl PreparationFixture {
 
     fn registry(&self) -> Registry {
         let placement = self.placement("control");
-        materialize_registry_root(&placement).expect("registry root should materialize");
         open_registry(&placement, &self.manifest)
     }
 
