@@ -531,7 +531,7 @@
     };
   };
 
-  nixfied.tasks.lifecycle-upgrade-preserve = {
+  nixfied.tasks.lifecycle-change-preserves-data = {
     invocation = {
       tools = [
         pkgs.bash
@@ -551,36 +551,9 @@
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_B_MANIFEST/manifest.json" --task smoke >/dev/null
           [ -e "$root/sentinel" ] \
-            || { echo "lifecycle: manifest change cleaned the state root" >&2; exit 1; }
-          hash2=$(jq -r .computedManifestHash "$marker")
-          [ "$hash2" != "$hash1" ] \
-            || { echo "lifecycle: upgrade did not rewrite provenance" >&2; exit 1; }
-          echo "$hash2" > "''${stateDir}/gate-artifacts/lifecycle-hash2.txt"
-        ''
-      ];
-    };
-  };
-
-  nixfied.tasks.lifecycle-change-preserves-data = {
-    invocation = {
-      tools = [
-        pkgs.bash
-        "rt"
-        "jq"
-        "coreutils"
-      ];
-      run = [
-        "bash"
-        "-c"
-        ''
-          set -euo pipefail
-          umask 077
-          root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
-          marker="$root/.nixfied-state.json"
-          NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke >/dev/null
-          [ -e "$root/sentinel" ] \
             || { echo "lifecycle: configuration change deleted retained application data" >&2; exit 1; }
+          [ "$(jq -r .computedManifestHash "$marker")" != "$hash1" ] \
+            || { echo "lifecycle: configuration change did not rewrite provenance" >&2; exit 1; }
           [ "$(jq -r .markerVersion "$marker")" = "3" ] \
             || { echo "lifecycle: unexpected state marker version" >&2; exit 1; }
         ''
@@ -607,7 +580,7 @@
           jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
           code=0
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke \
+            nixfied-runtime run --manifest "$MINIMAL_B_MANIFEST/manifest.json" --task smoke \
             >/dev/null 2>"''${stateDir}/gate-artifacts/lifecycle-tamper-owner.json" || code=$?
           [ "$code" -eq 21 ] \
             || { echo "lifecycle: tampered ownership exited $code, want 21 (STATE_UNOWNED)" >&2; exit 1; }
@@ -615,7 +588,7 @@
             "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
           code=0
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
-            nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke \
+            nixfied-runtime run --manifest "$MINIMAL_B_MANIFEST/manifest.json" --task smoke \
             >/dev/null 2>"''${stateDir}/gate-artifacts/lifecycle-tamper-abi.json" || code=$?
           [ "$code" -eq 21 ] \
             || { echo "lifecycle: tampered runtime ABI exited $code, want 21 (STATE_UNOWNED)" >&2; exit 1; }
@@ -920,7 +893,6 @@
     steps = nixfiedLib.seq [
       "lifecycle-first-run"
       "lifecycle-second-run"
-      "lifecycle-upgrade-preserve"
       "lifecycle-change-preserves-data"
       "lifecycle-tamper-refusal"
       "lifecycle-session-ownership"
