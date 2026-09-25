@@ -69,6 +69,12 @@ pub(crate) fn require_open_sources(connection: &Connection, run_id: &str) -> Run
     Ok(())
 }
 
+/// A fresh unpredictable run identity; the exclusive run-directory claim
+/// refuses a collision.
+pub fn new_run_id() -> RuntimeResult<String> {
+    Ok(format!("run-{}", crate::token::random_hex()?))
+}
+
 /// Record the run row up front, before any service starts, so every admitted run
 /// leaves durable evidence — including a service-less selection (a task or
 /// environment of only service-less tasks) whose service loop never runs and so

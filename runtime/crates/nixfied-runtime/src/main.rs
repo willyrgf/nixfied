@@ -16,7 +16,7 @@ use nixfied_runtime::output::{
 };
 use nixfied_runtime::presenter::{CommandPresenter, PresentationMode, PresenterInit};
 use nixfied_runtime::redaction::Redactor;
-use nixfied_runtime::registry::session::record_run_created;
+use nixfied_runtime::registry::session::{new_run_id, record_run_created};
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
     PrepareRunner, ReadyService, RunContext, SelectedEndpoint, ServiceSelection, TaskExecution,
@@ -666,7 +666,7 @@ fn run_command(args: &[String]) -> Result<(), RuntimeError> {
     if parsed_options.daemon {
         return launch_background(args, parsed_options.timeout_ms);
     }
-    run_session(parsed_options, new_run_id(), None)
+    run_session(parsed_options, new_run_id()?, None)
 }
 
 /// The launcher validated syntax and option combinations; the owner performs
@@ -679,7 +679,7 @@ fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeErro
             "cannot locate the runtime executable for background launch",
         )
     })?;
-    let run_id = new_run_id();
+    let run_id = new_run_id()?;
     let request = nixfied_runtime::background::Request {
         run_id: run_id.clone(),
         args: args
@@ -2051,14 +2051,6 @@ where
             format!("invalid {flag} value {value}: {error}"),
         )
     })
-}
-
-fn new_run_id() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("run-{}-{now}", std::process::id())
 }
 
 fn admission_context(allow_non_store: bool) -> AdmissionContext {

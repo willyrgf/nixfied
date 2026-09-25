@@ -372,8 +372,9 @@ mod tests {
 
     #[test]
     fn run_identities_are_single_safe_components() {
-        for valid in ["run-12-34", "run-abc"] {
-            assert!(valid_run_id(valid));
+        let generated = crate::registry::session::new_run_id().unwrap();
+        for valid in ["run-abc", generated.as_str()] {
+            assert!(valid_run_id(valid), "{valid:?}");
         }
         for invalid in ["", "../x", "a/b", "run 1", "run\0"] {
             assert!(!valid_run_id(invalid), "{invalid:?}");
