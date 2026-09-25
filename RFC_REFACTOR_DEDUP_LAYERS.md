@@ -48,11 +48,12 @@ Not done or not proven:
   supervision") remains a proposal. The accepted requirement is met by
   checkpoints: every wait, release, and startup grace observes every started
   service. There is no one owner object for all children.
-- A service that fails while another service is being stopped is classified
-  when its own stop observes the exit. No separate observation loop runs during
-  ordered teardown.
-- Owner-kill proofs cover preparation, registration, and interrupted deletion
-  (simulated pending intents). Not every boundary listed in §13 has a
+- Ordered teardown observes every remaining service before each stop signal.
+  A service that exits while another service stops is classified as failed from
+  its own exit when that sweep or its own stop observes it; no concurrent
+  observation runs inside one service's stop wait.
+- Owner-kill proofs cover preparation, registration, readiness, and interrupted
+  deletion (simulated pending intents). Not every boundary listed in §13 has a
   deterministic barrier.
 
 ## 1. Accepted product direction
