@@ -174,7 +174,7 @@ impl StartingService {
             mut owned,
             startup_guards,
         } = self;
-        let result = owned.stop_with_cancellation(registry, timeout_ms, None);
+        let result = owned.teardown(registry, timeout_ms, Teardown::Stop(None));
         drop(owned);
         startup_guards.release();
         result
@@ -185,7 +185,9 @@ impl StartingService {
         timeout_ms: u64,
         reason: &str,
     ) -> RuntimeResult<()> {
-        let result = self.owned.cancel(registry, timeout_ms, reason);
+        let result = self
+            .owned
+            .teardown(registry, timeout_ms, Teardown::Cancel(reason));
         drop(self.owned);
         self.startup_guards.release();
         result
@@ -266,20 +268,23 @@ impl ReadyService {
         timeout_ms: u64,
         reason: &str,
     ) -> RuntimeResult<()> {
-        self.owned.cancel(registry, timeout_ms, reason)
+        self.owned
+            .teardown(registry, timeout_ms, Teardown::Cancel(reason))
     }
     pub fn stop(mut self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
         self.owned
-            .stop_with_cancellation(registry, timeout_ms, None)
+            .teardown(registry, timeout_ms, Teardown::Stop(None))
     }
-    pub fn stop_cancellable(
+    /// Stop gracefully; a cancellation that arrives while it stops records
+    /// the service as canceled.
+    pub fn stop_observing(
         mut self,
         registry: &mut Registry,
         timeout_ms: u64,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
         self.owned
-            .stop_with_cancellation(registry, timeout_ms, Some(cancellation))
+            .teardown(registry, timeout_ms, Teardown::Stop(Some(cancellation)))
     }
 }
 impl std::fmt::Debug for ReadyService {
@@ -288,6 +293,24 @@ impl std::fmt::Debug for ReadyService {
             .field("info", self.info())
             .finish_non_exhaustive()
     }
+}
+
+/// How an owned service's teardown is chosen, recorded, and settled.
+enum Teardown<'a> {
+    /// The declared stop signal after durable stop intent; a clean stop
+    /// records `stopped`, or `canceled` when the given cancellation arrived
+    /// while it stopped.
+    Stop(Option<&'a CancellationToken>),
+    /// Cancellation with its reason, recorded as `canceling` before any signal.
+    Cancel(&'a str),
+    /// A failure already decided the outcome: `canceled` for `CANCELED`,
+    /// otherwise `failed`.
+    Fail(RuntimeError),
+}
+
+enum Terminal {
+    Canceled,
+    Failed,
 }
 
 /// One observation of an owned service; callers map it to their phase's error.
@@ -725,222 +748,197 @@ impl OwnedService {
         timeout_ms: u64,
         error: RuntimeError,
     ) -> RuntimeError {
-        let containment = self.contain(libc::SIGTERM, timeout_ms).map(|_| ());
-        let (containment, capture) = self.finish_terminal_capture(containment);
-        self.settle_failure_after_cleanup(registry, containment, capture, error)
+        self.teardown(registry, timeout_ms, Teardown::Fail(error))
+            .expect_err("failure settlement retains its failure")
     }
 
-    fn settle_failure_after_cleanup(
-        &mut self,
-        registry: &mut Registry,
-        containment: RuntimeResult<()>,
-        capture: RuntimeResult<()>,
-        error: RuntimeError,
-    ) -> RuntimeError {
-        if let Err(termination_error) = containment {
-            let escape = self.settle_escape(registry, Some(&error), termination_error);
-            return completion_error(Err(escape), capture, Some(error))
-                .expect("escape remains a failure");
-        }
-        let canceled = error.code == ErrorCode::Canceled;
-        // Contained processes with unsettled capture writers remain obligations.
-        let ownership = if capture.is_ok() {
-            Ownership::Settled
-        } else {
-            Ownership::Unresolved
-        };
-        let error =
-            completion_error(Ok(()), capture, Some(error)).expect("lifecycle failure is retained");
-        let payload = serde_json::json!({
-            "pid": self.info.pid,
-            "pgid": self.info.pgid,
-            "errorCode": error.code,
-            "message": error.message.as_str(),
-        })
-        .to_string();
-        let settlement = if canceled {
-            mark_service_canceled(
-                registry,
-                &self.info.run_id,
-                &self.info.service_instance_id,
-                &self.info.process_key,
-                &self.info.computed_manifest_hash,
-                &payload,
-                ServiceSettlement {
-                    ownership,
-                    capture: self.capture_outcome(),
-                },
-            )
-        } else {
-            mark_service_failed(
-                registry,
-                &self.info.run_id,
-                &self.info.service_instance_id,
-                &self.info.process_key,
-                &self.info.computed_manifest_hash,
-                &payload,
-                ServiceSettlement {
-                    ownership,
-                    capture: self.capture_outcome(),
-                },
-            )
-        };
-        match settlement {
-            Ok(()) => error,
-            Err(settlement_error) => {
-                completion_error(Err(settlement_error), Ok(()), Some(error)).unwrap()
-            }
-        }
-    }
-
-    pub fn cancel(
+    /// The one teardown of an owned service; the caller chooses its policy
+    /// once. Durable intent precedes every signal, containment, reaping, and
+    /// capture shutdown always run, and the terminal record follows the
+    /// contained facts: an uncontained tree records an escape, and unsettled
+    /// capture keeps ownership unresolved.
+    fn teardown(
         &mut self,
         registry: &mut Registry,
         timeout_ms: u64,
-        reason: &str,
+        policy: Teardown<'_>,
     ) -> RuntimeResult<()> {
-        let payload =
-            serde_json::json!({ "pid": self.info.pid, "pgid": self.info.pgid, "reason": reason })
-                .to_string();
-        let intent = record_service_canceling(
-            registry,
-            &self.info.run_id,
-            &self.info.service_instance_id,
-            &self.info.process_key,
-            &self.info.computed_manifest_hash,
-            &payload,
-        );
-        let containment = self.contain(libc::SIGTERM, timeout_ms).map(|_| ());
-        let (containment, capture) = self.finish_terminal_capture(containment);
-        if let Err(termination) = containment {
-            let canceled = RuntimeError::new(ErrorCode::Canceled, reason);
-            let operation = intent.as_ref().err().unwrap_or(&canceled);
-            let escape = self.settle_escape(registry, Some(operation), termination);
-            let error = completion_error(Err(escape), capture, intent.err()).unwrap();
-            return Err(error.with_cause(canceled));
-        }
-        let ownership = if capture.is_ok() {
-            Ownership::Settled
-        } else {
-            Ownership::Unresolved
+        let context = self.lifecycle_event_context();
+        let stop_record = LifecycleRecord::from_meta(&self.service.stop.meta, "stop");
+        let stop_failed = |registry: &mut Registry, error: &RuntimeError| {
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, error);
         };
-        let error = completion_error(Ok(()), capture, intent.err())
-            .map(|error| error.with_cause(RuntimeError::new(ErrorCode::Canceled, reason)));
-        let settlement = mark_service_canceled(
+        let (policy, intent) = match policy {
+            // Pending exits and escapes are observed before the stop
+            // lifecycle start event, the durable stop intent.
+            Teardown::Stop(late) => match self.require_contained("stop") {
+                Err(error) => {
+                    stop_failed(registry, &error);
+                    (Teardown::Fail(error), Ok(()))
+                }
+                Ok(()) => match record_lifecycle_started(registry, &context, &stop_record) {
+                    Ok(()) => (Teardown::Stop(late), Ok(())),
+                    Err(error) => (Teardown::Fail(error), Ok(())),
+                },
+            },
+            Teardown::Cancel(reason) => {
+                let intent = record_service_canceling(
+                    registry,
+                    &self.info.run_id,
+                    &self.info.service_instance_id,
+                    &self.info.process_key,
+                    &self.info.computed_manifest_hash,
+                    &self.event_payload(serde_json::json!({ "reason": reason })),
+                );
+                (Teardown::Cancel(reason), intent)
+            }
+            Teardown::Fail(error) => (Teardown::Fail(error), Ok(())),
+        };
+        // Graceful stop uses the declared signal and budget, capped by the
+        // command timeout; every other teardown terminates with SIGTERM.
+        let (signal, budget) = match policy {
+            Teardown::Stop(_) => (
+                stop_signal_number(self.service.stop.signal),
+                (self.service.stop.timeout.as_millis() as u64).min(timeout_ms),
+            ),
+            Teardown::Cancel(_) | Teardown::Fail(_) => (libc::SIGTERM, timeout_ms),
+        };
+        let containment = match (self.contain(signal, budget), &policy) {
+            (Ok(escalated), Teardown::Stop(_)) => {
+                self.record_stop_signaled(registry, escalated, budget);
+                Ok(())
+            }
+            (Ok(_), _) => Ok(()),
+            (Err(error), Teardown::Stop(_)) => {
+                stop_failed(registry, &error);
+                Err(error)
+            }
+            (Err(error), _) => Err(error),
+        };
+        let (containment, capture) = self.finish_terminal_capture(containment);
+        let (terminal, operation, cause, payload) = match policy {
+            Teardown::Stop(Some(cancellation))
+                if containment.is_ok() && capture.is_ok() && cancellation.is_canceled() =>
+            {
+                // The stop signal already ran; the cancellation that arrived
+                // meanwhile decides the terminal record.
+                let payload = self
+                    .event_payload(serde_json::json!({ "reason": "run canceled during shutdown" }));
+                record_service_canceling(
+                    registry,
+                    &self.info.run_id,
+                    &self.info.service_instance_id,
+                    &self.info.process_key,
+                    &self.info.computed_manifest_hash,
+                    &payload,
+                )?;
+                mark_service_canceled(
+                    registry,
+                    &self.info.run_id,
+                    &self.info.service_instance_id,
+                    &self.info.process_key,
+                    &self.info.computed_manifest_hash,
+                    &payload,
+                    ServiceSettlement {
+                        ownership: Ownership::Settled,
+                        capture: CaptureOutcome::Complete,
+                    },
+                )?;
+                let error = canceled_error();
+                stop_failed(registry, &error);
+                return Err(error);
+            }
+            Teardown::Stop(_) if containment.is_ok() && capture.is_ok() => {
+                match self.escape_error() {
+                    None => {
+                        mark_service_stopped(
+                            registry,
+                            &self.info.run_id,
+                            &self.info.service_instance_id,
+                            &self.info.process_key,
+                            &self.info.computed_manifest_hash,
+                            Some(CaptureOutcome::Complete),
+                        )?;
+                        return record_lifecycle_success(registry, &context, &stop_record);
+                    }
+                    Some(error) => {
+                        stop_failed(registry, &error);
+                        (Terminal::Failed, Some(error), None, None)
+                    }
+                }
+            }
+            Teardown::Stop(_) => (Terminal::Failed, None, None, None),
+            Teardown::Cancel(reason) => (
+                Terminal::Canceled,
+                intent.err(),
+                Some(RuntimeError::new(ErrorCode::Canceled, reason)),
+                Some(self.event_payload(serde_json::json!({ "reason": reason }))),
+            ),
+            Teardown::Fail(error) if error.code == ErrorCode::Canceled => {
+                (Terminal::Canceled, Some(error), None, None)
+            }
+            Teardown::Fail(error) => (Terminal::Failed, Some(error), None, None),
+        };
+        if let Err(termination) = containment {
+            let escape =
+                self.settle_escape(registry, operation.as_ref().or(cause.as_ref()), termination);
+            let error = completion_error(Err(escape), capture, operation)
+                .expect("escape remains a failure");
+            return Err(match cause {
+                Some(cause) => error.with_cause(cause),
+                None => error,
+            });
+        }
+        // Contained processes with unsettled capture writers remain obligations.
+        let settlement = ServiceSettlement {
+            ownership: if capture.is_ok() {
+                Ownership::Settled
+            } else {
+                Ownership::Unresolved
+            },
+            capture: self.capture_outcome(),
+        };
+        let error = completion_error(Ok(()), capture, operation).map(|error| match cause {
+            Some(cause) => error.with_cause(cause),
+            None => error,
+        });
+        let payload = payload.unwrap_or_else(|| {
+            let error = error
+                .as_ref()
+                .expect("a failed terminal retains its failure");
+            self.event_payload(serde_json::json!({
+                "errorCode": error.code,
+                "message": error.message.as_str(),
+            }))
+        });
+        let mark = match terminal {
+            Terminal::Canceled => mark_service_canceled,
+            Terminal::Failed => mark_service_failed,
+        };
+        let settled = mark(
             registry,
             &self.info.run_id,
             &self.info.service_instance_id,
             &self.info.process_key,
             &self.info.computed_manifest_hash,
             &payload,
-            ServiceSettlement {
-                ownership,
-                capture: self.capture_outcome(),
-            },
+            settlement,
         );
-        match completion_error(settlement, Ok(()), error) {
+        match completion_error(settled, Ok(()), error) {
             Some(error) => Err(error),
             None => Ok(()),
         }
     }
 
-    fn stop_with_cancellation(
-        &mut self,
-        registry: &mut Registry,
-        timeout_ms: u64,
-        cancellation: Option<&CancellationToken>,
-    ) -> RuntimeResult<()> {
-        let context = self.lifecycle_event_context();
-        let stop_record = LifecycleRecord::from_meta(&self.service.stop.meta, "stop");
-        if let Some(cancellation) = cancellation
-            && cancellation.is_canceled()
+    /// Lifecycle payload fields beside the recorded leader identity.
+    fn event_payload(&self, fields: serde_json::Value) -> String {
+        let mut payload = serde_json::json!({ "pid": self.info.pid, "pgid": self.info.pgid });
+        if let (Some(payload), serde_json::Value::Object(fields)) =
+            (payload.as_object_mut(), fields)
         {
-            self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
-            return Err(canceled_error());
+            payload.extend(fields);
         }
-        // Observe pending exits first: an exit seen here remains unexpected.
-        if let Err(error) = self.require_contained("stop") {
-            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
-        // Expected stopping begins here: record durable stop intent before any
-        // signal. A recording failure remains a failure but still contains.
-        if let Err(error) = record_lifecycle_started(registry, &context, &stop_record) {
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
-        // Graceful shutdown is the manifest's declared stop signal escalated to
-        // SIGKILL. The graceful budget is the manifest's stopPolicy.timeoutMs, capped
-        // by the CLI timeout as an upper bound.
-        if let Some(error) = self.escape_error() {
-            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
-        let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
-        let stopped = self.contain(stop_signal_number(self.service.stop.signal), stop_timeout);
-        let containment = match stopped {
-            Ok(escalated) => {
-                self.record_stop_signaled(registry, escalated, stop_timeout);
-                Ok(())
-            }
-            Err(error) => {
-                let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-                Err(error)
-            }
-        };
-        let (containment, capture) = self.finish_terminal_capture(containment);
-        if let Err(error) = containment {
-            let escape = self.settle_escape(registry, None, error);
-            return Err(completion_error(Err(escape), capture, None).unwrap());
-        }
-        if let Err(error) = capture {
-            return Err(self.settle_failure_after_cleanup(registry, Ok(()), Ok(()), error));
-        }
-        if let Some(cancellation) = cancellation
-            && cancellation.is_canceled()
-        {
-            let payload = serde_json::json!({
-                "pid": self.info.pid,
-                "pgid": self.info.pgid,
-                "reason": "run canceled during shutdown",
-            })
-            .to_string();
-            record_service_canceling(
-                registry,
-                &self.info.run_id,
-                &self.info.service_instance_id,
-                &self.info.process_key,
-                &self.info.computed_manifest_hash,
-                &payload,
-            )?;
-            mark_service_canceled(
-                registry,
-                &self.info.run_id,
-                &self.info.service_instance_id,
-                &self.info.process_key,
-                &self.info.computed_manifest_hash,
-                &payload,
-                ServiceSettlement {
-                    ownership: Ownership::Settled,
-                    capture: CaptureOutcome::Complete,
-                },
-            )?;
-            let error = canceled_error();
-            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-            return Err(error);
-        }
-        if let Some(error) = self.escape_error() {
-            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
-        mark_service_stopped(
-            registry,
-            &self.info.run_id,
-            &self.info.service_instance_id,
-            &self.info.process_key,
-            &self.info.computed_manifest_hash,
-            Some(CaptureOutcome::Complete),
-        )?;
-        record_lifecycle_success(registry, &context, &stop_record)
+        payload.to_string()
     }
 
     fn escape_error(&self) -> Option<RuntimeError> {
@@ -972,14 +970,11 @@ impl OwnedService {
     ) -> RuntimeError {
         let operation_error = operation_error.unwrap_or(&termination_error);
         let start_identity = self.escape_start_identity();
-        let payload = serde_json::json!({
-            "pid": self.info.pid,
-            "pgid": self.info.pgid,
+        let payload = self.event_payload(serde_json::json!({
             "errorCode": operation_error.code,
             "message": operation_error.message.as_str(),
             "terminationError": termination_error.message.as_str(),
-        })
-        .to_string();
+        }));
         let process = ProcessRecord {
             process_key: &self.info.process_key,
             pid: self.info.pid,
@@ -1019,15 +1014,12 @@ impl OwnedService {
     /// signal sent and whether it escalated to SIGKILL — rather than a fabricated
     /// exec terminal. Best-effort; failure to record does not fail the stop.
     fn record_stop_signaled(&self, registry: &mut Registry, escalated: bool, timeout_ms: u64) {
-        let payload = serde_json::json!({
-            "pid": self.info.pid,
-            "pgid": self.info.pgid,
+        let payload = self.event_payload(serde_json::json!({
             "signal": self.service.stop.signal,
             "signalNumber": stop_signal_number(self.service.stop.signal),
             "escalatedToKill": escalated,
             "timeoutMs": timeout_ms,
-        })
-        .to_string();
+        }));
         let _ = record_service_lifecycle_event(
             registry,
             "service.stop.signaled",
