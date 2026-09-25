@@ -126,7 +126,6 @@ else
       { lib, ... }:
       {
         imports = [ composite ];
-        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
         nixfied.tasks."has.dot" = {
           invocation = {
             tools = [ "synthetic-helper" ];
@@ -433,7 +432,6 @@ else
       { lib, ... }:
       {
         imports = [ composite ];
-        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
         nixfied.tasks.selfinit = {
           invocation = {
             tools = [ "synthetic-helper" ];
@@ -510,7 +508,6 @@ else
       { lib, ... }:
       {
         imports = [ composite ];
-        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
         nixfied.tasks.help = {
           invocation = {
             tools = [ "synthetic-helper" ];
@@ -531,7 +528,6 @@ else
     (reject "a task verb shadowing the docs app" (
       { lib, ... }: {
         imports = [ composite ];
-        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
         nixfied.tasks.docs.invocation = {
           tools = [ "synthetic-helper" ];
           run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ];
