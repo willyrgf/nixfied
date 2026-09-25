@@ -210,11 +210,12 @@ fn changed_manifest_cannot_weaken_existing_retention() {
 fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
     for changed in [false, true] {
         let tmp = TempDir::new();
+        let port = common::available_port_window(1);
         let manifest: Manifest = serde_json::from_value(synthetic_manifest(
             &common::test_sleep(),
             &["30"],
-            23980,
-            23990,
+            port,
+            port,
         ))
         .expect("manifest should parse");
         let admission_a = admission(&manifest, &tmp.path, false);
@@ -229,7 +230,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
             &placement,
             &mut registry,
             "run-a",
-            &synthetic_endpoint(23980),
+            &synthetic_endpoint(port),
             &nixfied_runtime::cancellation::CancellationToken::new(),
             None,
         )

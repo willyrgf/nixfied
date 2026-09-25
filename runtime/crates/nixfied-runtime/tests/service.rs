@@ -201,7 +201,8 @@ fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
     let tmp = TempDir::new();
     let work = tmp.path.join("work");
     fs::create_dir(&work).unwrap();
-    let mut value = synthetic_manifest(&test_sleep(), &["30"], 23180, 23180);
+    let port = available_port_window(1);
+    let mut value = synthetic_manifest(&test_sleep(), &["30"], port, port);
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["cwd"] = json!("work");
     let mut fixture = ServiceFixture::from_manifest_in_store(
         serde_json::from_value(value).unwrap(),
@@ -214,7 +215,7 @@ fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
 
     let error = fixture.start_refused(
         "run-cwd-escape",
-        23180,
+        port,
         "escaped exec cwd should fail before process start",
     );
 
@@ -1420,13 +1421,14 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
 fn daemonizing_service_is_terminated_and_recorded_failed() {
     let child_ready = temp_marker("nixfied-daemon-child-ready");
     let child_ready_arg = child_ready.to_string_lossy().to_string();
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_service(
         &["detached-sleeper", "parent-exit", &child_ready_arg],
-        23182,
-        23182,
+        port,
+        port,
     ));
 
-    let error = fixture.start_refused("run-escape", 23182, "daemonizing service should be refused");
+    let error = fixture.start_refused("run-escape", port, "daemonizing service should be refused");
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
     let failed_processes: i64 =
@@ -1446,15 +1448,16 @@ fn daemonizing_service_is_terminated_and_recorded_failed() {
 fn setsid_descendant_is_identity_killed_before_failed_settlement() {
     let detached = temp_marker("nixfied-start-escape-detached");
     let detached_arg = detached.to_string_lossy().to_string();
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_service(
         &["detached-sleeper", "immediate", &detached_arg],
-        23183,
-        23183,
+        port,
+        port,
     ));
 
     let error = fixture.start_refused(
         "run-setsid-escape",
-        23183,
+        port,
         "setsid descendant should be refused",
     );
 
