@@ -393,10 +393,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 - **State: one retention policy and marker-last deletion.** Every owned state
   root carries a `.nixfied-state.json` marker holding its ownership, its
   `persistence`, and a runtime-generated data generation. `persistence` is the
-  only retention policy: `run-scoped` data may be deleted by ordinary `clean`,
-  while `persistent` data requires `clean --purge`. Purge overrides retention
-  only. Cleanup derives the target from placement, opens the managed ancestry
-  and target through directory descriptors without following symlinks, commits
+  only retention policy: `run-scoped` data is deleted automatically after safe
+  session teardown and may be deleted by ordinary `clean`, while `persistent`
+  data survives sessions and requires `clean --purge`. Purge overrides retention
+  only. Cleanup derives the target from the held slot's identity, opens the
+  managed ancestry and target from the slot guard's held state-base descriptor
+  through directory descriptors without following symlinks, commits
   one pending intent with the marker snapshot before any deletion, deletes
   payload entries relative to held directories without crossing mounts, keeps
   the marker until every payload entry is gone, removes the root through its

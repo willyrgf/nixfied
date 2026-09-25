@@ -149,4 +149,4 @@ the consequences the validators enforce:
 - `requires`/`connectsTo` **toward** it stay legal: ready ordering, failure
   semantics, and the derived service union — minus addressability.
 
-See the worker in `examples/toolchain/nixfied.nix` for the standing shape.
+See the worker in `examples/toolchain/nixfied.nix` for the reference shape.

@@ -2,6 +2,13 @@
 
 Status: proposed implementation plan, following an architecture review against commit `7f9d383df8419a7fa5770092a35de9ebbe7fd539`.
 
+> **Partly superseded.** The session-ownership refactor
+> ([RFC](../RFC_REFACTOR_DEDUP_LAYERS.md)) removed `serviceLifetime`, service
+> reuse, and reuse identity, and made a task's `timeoutMs` optional with no
+> finite default. [CONTRACT.md](CONTRACT.md) is normative for those facts. The
+> rows below that still named them are corrected; rebase any remaining item on
+> the current contract before implementation.
+
 This plan implements the cleanup identified in [the API behavior audit](API_BEHAVIOR_AUDIT.md). It does not add one-off predicates for each historically ignored option. The architectural change is to express alternatives through native Nix module types and complete configured-value evaluation before compiler projection. No production changes are made by this document.
 
 ## Architectural decision
@@ -70,7 +77,7 @@ Adopt these final authoring shapes. Commit 2 changes the alternatives together; 
 
 | Family | New authoring shape | Removed representational problem |
 | --- | --- | --- |
-| Tasks | `tasks.<id>.leaf = { invocation; timeoutMs; exitPolicy; requires; operationId; defaultOutput; serviceLifetime; };` or `.composite = { steps; serviceLifetime; };` | No leaf-only option exists in the composite branch; no top-level `kind` plus unrelated nullable payload. Common lifetime declarations are reused through one fragment. Composite wire output remains summary. |
+| Tasks | `tasks.<id>.leaf = { invocation; timeoutMs; exitPolicy; requires; operationId; defaultOutput; };` or `.composite = { steps; };` | No leaf-only option exists in the composite branch; no top-level `kind` plus unrelated nullable payload. Common lifetime declarations are reused through one fragment. Composite wire output remains summary. |
 | Probes | `lifecycle.<ready-or-health>.probe.tcp = { timeoutMs; retryIntervalMs; maxAttempts; };` or `.exec = { invocation; timeoutMs; retryIntervalMs; maxAttempts; };` | TCP has no invocation member. Shared probe timing comes from one ordinary option fragment. |
 | Service endpoint topology | `services.<id>.topology.none = { };` or `.listening = { endpoints; primaryEndpoint; };` | No singular endpoint sugar and no primary selection on the no-endpoint alternative. Listening requires primary selection. |
 | Secret resolvers | `secrets.<id>.source."env-var" = { envVar; };` or `.file = { path; };` | No coexistence of `kind`, unused `path` and unused `envVar`. Applies the same representation rule to an already-validated family rather than making the solution audit-specific. |
@@ -107,7 +114,7 @@ A generic compiler cannot prove that arbitrary well-typed data has an observable
 | Old task/probe/secret discriminator-plus-payload option forms | Replace with native selected branches | Same primitive semantics, with incompatible authored combinations unavailable. |
 | Singular `endpoint` shortcut and top-level service `endpoints`/`primaryEndpoint` pair | Replace with selected topology using the canonical endpoint map | Same runtime endpoint layout, primary selection and ownership checks. |
 
-For the duration move, add the leaf-owned `timeoutMs` to the existing task wire record rather than introducing a second invocation record. Rust's task coherence must require a positive duration for a leaf and forbid it on a composite. Change native execution lowering and literal raw-wire proofs together. The shared invocation fragment then contains only facts valid at task, service-start and exec-probe sites.
+For the duration move, add the leaf-owned `timeoutMs` to the existing task wire record rather than introducing a second invocation record. Rust's task coherence must accept an absent duration or a positive one for a leaf and forbid it on a composite. Change native execution lowering and literal raw-wire proofs together. The shared invocation fragment then contains only facts valid at task, service-start and exec-probe sites.
 
 Removing unused start/probe timeouts also removes their contribution to service compatibility hashing because they no longer exist in the hashed lifecycle invocation. Keep identity computation tied to the surviving contract; do not add exceptions that strip a growing list of ignored fields before hashing.
 
@@ -158,7 +165,7 @@ Every commit must leave one current, coherent implementation. Suggested subjects
 - Remove the five refs, closure kind, and common invocation timeout; move leaf deadline to the task wire record.
 - Update capability inventory, authored wire declarations, constants/digest snapshot, generated Rust, structural/native lowering, fixtures, independent vectors, views and docs in this same commit.
 - Recompute the descriptor-derived ABI and acknowledge its snapshot; change numeric manifest/ABI-base/toolchain versions only if their defined semantics require it.
-- Remove obsolete source assignments and tests whose only purpose was proving discarded metadata round-trips. Replace their useful guarantees with behavioral state/log/summary/reuse tests.
+- Remove obsolete source assignments and tests whose only purpose was proving discarded metadata round-trips. Replace their useful guarantees with behavioral state/log/summary tests.
 - Delete old readers and fields. Unknown-option/native unknown-wire rejection is the retirement behavior; no migration or alias path.
 - Preserve historical upgrade archives/goldens as historical artifacts and append-only registry evidence. Update only current-source consumers and intentional current-contract snapshots.
 
@@ -181,8 +188,8 @@ Run focused proofs for each commit and the cross-layer gate for the final state.
 | Package and reference laziness | A valid package with poisoned unused `passthru` compiles; real store-path dependencies and source string context survive. Metadata queries tolerate poisoned configured values/providers and expose all branch option paths. |
 | Genuine relations | Primary membership, graph/reference/cycle failures, source/target constraints, endpoint-less probe requirements, listener attestation and port capacity still reject at their existing owning boundary. |
 | Wire retirement | Independent literal removed-field/enum cases reject in Rust, including nested service/task/invocation records; new task timeout missing/null/zero/wrong-kind cases reject. Old ABI rejects rather than translating. |
-| Runtime continuity | State directory/policy, logs, redaction, summaries, task success codes, service reuse and command outputs retain behavior without refs or closure kind. |
-| Timing | Leaf timeout still cancels a bounded command; probe outer timeout controls attempts; stopping and cancellation preserve containment/evidence. No unused inner deadline can churn reuse identity because it no longer exists. |
+| Runtime continuity | State directory/policy, logs, redaction, summaries, task success codes and command outputs retain behavior without refs or closure kind. |
+| Timing | Leaf timeout still cancels a bounded command; probe outer timeout controls attempts; stopping and cancellation preserve containment/evidence. No unused inner deadline remains. |
 | Cleanup evidence | Successful deletion precedes success events; protected/unowned/live-owner refusals emit no success; deletion errors preserve failure evidence; failures writing either `cleanup.deleted` or a later service terminal event do not falsify the filesystem outcome; interrupted cleanup remains recoverable. |
 
 Use existing owners: `nix/checks/option-metadata.nix`, structure/coverage/reference/maintenance checks, Nix/Rust derivation vectors, raw manifest wire tests, runtime service/output/state tests and downstream gates. Add a cohesive compiler-boundary check where needed; do not distribute an audit-specific denylist across fixtures and implementation.

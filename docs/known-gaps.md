@@ -26,9 +26,9 @@ Parity does not require identical Nix and Rust representations.
 - The authored [capability inventory](../runtime/crates/nixfied-manifest/capability.txt)
   derives the exact runtime ABI. It records contract changes; it cannot detect
   every semantic change that was not recorded in its bytes.
-- [Capability coverage](../runtime/crates/nixfied-runtime/tests/capability_coverage.rs)
-  checks fixture field names against inventory tokens. This does not establish
-  that runtime behavior honors those fields' documented meaning.
+- The [whole-inventory coverage audit](../nix/checks/coverage.nix) maps every
+  inventory record to its wire declaration. This does not establish that runtime behavior honors those
+  fields' documented meaning.
 - Typed decoding, manifest validation, and
   [execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
   reject invalid input. Exhaustive destructuring requires a field-handling
@@ -104,6 +104,6 @@ One integration run timed out after 90 seconds waiting for PostgreSQL startup.
 The focused test and full CI then passed on the unchanged tree. The cause remains
 unestablished; the retries do not prove an environmental cause or a runtime fix.
 If it recurs, retain startup diagnostics when investigating
-`interrupt_and_recover_adopts_orphaned_postgres` in
+`interrupt_and_recover_stops_orphan_and_starts_fresh_postgres` in
 [lifecycle.rs](../runtime/crates/nixfied-runtime/tests/lifecycle.rs). This isolated
 observation is separate from the completed reference feature.

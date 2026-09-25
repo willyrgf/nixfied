@@ -4,6 +4,14 @@ Research against commit `7f9d383df8419a7fa5770092a35de9ebbe7fd539`, 2026-09-24.
 The pre-existing working-tree change to `PROBLEM_DUPLICATION_LAYERS.md` was preserved.
 This report records current behavior and proposed follow-up; it changes no product contract or implementation.
 
+> **Historical baseline.** This audit describes behavior at `7f9d383`. The
+> session-ownership refactor ([RFC](../RFC_REFACTOR_DEDUP_LAYERS.md)) later
+> removed service reuse and its identity, `serviceLifetime`, `stateEpoch`,
+> standing services, and borrowers. Statements below about those concepts are
+> no longer current; [CONTRACT.md](CONTRACT.md) is normative. The test named
+> `descriptive_refs_change_manifest_bytes_but_not_service_reuse_identity` is now
+> `descriptive_refs_change_manifest_bytes_but_not_lowered_service`.
+
 The subsequent [compiler architecture and cleanup plan](API_COMPILER_CLEANUP_PLAN.md) turns the covered findings into an ordered implementation proposal. It replaces case-by-case shape rejection with native authoring alternatives and one complete configured-value evaluation boundary. It also selects a concrete cleanup correction: retain the shared terminal-label shape and make clean failure/success evidence follow the real outcome. The findings and original proof receipts below remain the audit baseline, not a claim that the proposal is implemented.
 
 The audit found more than descriptive references. Some supplied configuration disappears before manifest emission; some policy names have no implementing behavior; some unused execution settings still change service reuse identity.
