@@ -213,7 +213,21 @@ pub(crate) fn exec_probe_attempt(
             }
             CapturedExecTransition::Terminating(_) => record_probe_canceling(registry, identity),
         })
-        .map_err(|failure| *failure.error)?;
+        .map_err(|failure| {
+            let error = *failure.error;
+            if !failure.settled {
+                return error;
+            }
+            // A settled probe interrupted by its session keeps no obligation.
+            let status = failure
+                .outcome
+                .as_ref()
+                .map_or(TaskTerminalStatus::Canceled, |outcome| terminal(outcome).2);
+            match mark_invocation_finished(registry, identity, status, "{}") {
+                Ok(()) => error,
+                Err(settlement) => error.with_cause(settlement),
+            }
+        })?;
     mark_invocation_finished(registry, identity, terminal(&outcome).2, "{}")?;
 
     Ok(match outcome {

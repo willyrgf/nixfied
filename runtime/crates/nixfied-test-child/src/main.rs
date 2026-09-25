@@ -76,6 +76,7 @@ fn listen(args: &[String]) -> Result<(), String> {
         ("close-on-marker", [request, closed]) => {
             close_on_marker(listener, Path::new(request), Path::new(closed))
         }
+        ("exit-zero-on-marker", [request]) => exit_zero_on_marker(listener, Path::new(request)),
         ("ready-on-marker", [bound, acknowledgement, ready]) => ready_on_marker(
             listener,
             Path::new(bound),
@@ -468,6 +469,27 @@ fn close_on_marker(listener: TcpListener, request: &Path, closed: &Path) -> Resu
                     .read(&mut byte)
                     .map_err(|error| format!("read connection: {error}"))?;
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(format!("accept connection: {error}")),
+        }
+    }
+}
+
+/// Serve until the request marker appears, then exit successfully: an
+/// unexpected service exit that nevertheless reports status zero.
+fn exit_zero_on_marker(listener: TcpListener, request: &Path) -> Result<(), String> {
+    remove_if_present(request)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("set listener nonblocking: {error}"))?;
+    loop {
+        if request.exists() {
+            std::process::exit(0);
+        }
+        match listener.accept() {
+            Ok((stream, _)) => drop(stream),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
             }

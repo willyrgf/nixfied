@@ -1715,3 +1715,63 @@ fn an_old_session_request_never_reaches_its_successor() {
     let successor = wait_for_child_output(successor, Duration::from_secs(5));
     assert_eq!(successor.status.code(), Some(27));
 }
+
+#[test]
+fn unexpected_service_exit_zero_fails_the_session_and_still_settles() {
+    let task_marker = tempfile_marker("exit-zero-task");
+    let service_marker = tempfile_marker("exit-zero-service");
+    let mut manifest = task_manifest(&[
+        "output".into(),
+        "hex-block".into(),
+        "".into(),
+        "".into(),
+        task_marker.to_string_lossy().into_owned(),
+    ]);
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    let program =
+        manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0].clone();
+    manifest["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = json!([
+        program,
+        "listen",
+        "127.0.0.1",
+        "${port}",
+        "exit-zero-on-marker",
+        service_marker.to_string_lossy()
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let child = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&task_marker, Duration::from_secs(5)));
+    fs::write(&service_marker, b"exit").unwrap();
+    let output = wait_for_child_output(child, Duration::from_secs(6));
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("DEPENDENCY_UNAVAILABLE"), "{error}");
+    let connection = registry_connection(&fixture);
+    let (outcome, finalization, service, ownership): (String, String, String, i64) = connection
+        .query_row(
+            "SELECT r.execution_outcome, r.finalization,
+               (SELECT status FROM processes WHERE role = 'service'),
+               (SELECT count(*) FROM processes WHERE ownership = 'unresolved')
+             FROM runs r",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome, "failed",
+        "exit zero is not a successful task result"
+    );
+    assert_eq!(service, "failed");
+    assert_eq!(ownership, 0);
+    assert_eq!(finalization, "complete");
+    assert!(
+        !fixture.state_base.join("data/runtime-test/dev/0").exists(),
+        "a settled failure still applies run-scoped retention"
+    );
+}

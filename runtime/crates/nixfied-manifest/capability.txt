@@ -85,7 +85,7 @@ output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoi
 output-schema selected-endpoint: endpointId host port
 output-schema ps-json: processes
 # ps reads a coherent snapshot without reconciliation or absent-registry creation.
-output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus reconciledStatus live
+output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus reconciledStatus ownership live
 output-schema runtime-error-port-conflict: portConflict
 output-schema port-conflict: reason projectId endpoint nixfiedOwner?
 output-schema port-conflict-endpoint: transport family address port endpointId
@@ -105,12 +105,12 @@ endpoint-ownership: exact-listener process-identity containment complete-active-
 session-service-reference: length-framed-run-and-declared-name no-configuration-hashes predecessor-settlement-before-start cleanup-declaration-without-instance
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: gated-process-registration process-role-probe declared-service-attribution immutable-attempt-logs observation-before-capture probe-intent-before-signal independent-terminal-evidence post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence
-service-ownership: execution-thread-descendant-observation ready-checkpoint-containment cancellation-aware-startup-grace gated-process-registration supervision-before-permission session-owned guarded-ready-rollback initial-health-failed-start-settlement settlement-error-retains-lifecycle-cause process-owned-service-label no-service-registry
+service-ownership: observe-exit-before-stop-intent stop-intent-before-signal execution-thread-descendant-observation ready-checkpoint-containment cancellation-aware-startup-grace gated-process-registration supervision-before-permission session-owned guarded-ready-rollback initial-health-failed-start-settlement settlement-error-retains-lifecycle-cause process-owned-service-label no-service-registry
 task-evidence: gated-process-registration verified-launcher-identity-before-permission session-owned-terminal-records monotonic-attempt-occurrence-from-zero gaps-before-terminal exclusive-task-occurrence-logs exclusive-summary-occurrence-json preserve-task-step-path-order prepare-capture-only direct-leaf-replay summary-failure-retains-completed-evidence
 bounded-capture: checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
 state-preparation: marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation single-settlement-writer retention-after-quiescence run-scoped-deleted persistent-retained complete-after-settlement unfinished-retains-data recovery-applies-predecessor-retention recovered-sessions-complete
-escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
+escaped-port-reconciliation: explicit-process-ownership unresolved-until-proven endpoint-independent ps-visible down-actionable cleanup-blocked settle-after-death-proof capture-failure-unresolved
 
 # The closed stop signals the runtime can send.
 signal: TERM INT QUIT HUP

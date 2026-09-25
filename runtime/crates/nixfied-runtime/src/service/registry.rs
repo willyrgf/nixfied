@@ -485,8 +485,25 @@ pub(crate) fn mark_service_stopped(
 
 enum ServiceTerminal<'a> {
     Stopped,
-    Canceled(&'a str),
-    Failed(&'a str),
+    Canceled(&'a str, Ownership),
+    Failed(&'a str, Ownership),
+}
+
+/// Whether the owner proved that a process and its captured writers are gone.
+/// Leader exit alone never settles ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ownership {
+    Settled,
+    Unresolved,
+}
+
+impl Ownership {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::Unresolved => "unresolved",
+        }
+    }
 }
 
 fn settle_service_terminal(
@@ -505,20 +522,32 @@ fn settle_service_terminal(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let (process_status, event_type, payload_json) = match terminal {
-        ServiceTerminal::Stopped => (ProcessStatus::Stopped, "service.stopped", "{}"),
-        ServiceTerminal::Canceled(payload) => {
-            (ProcessStatus::Canceled, "service.canceled", payload)
+    let (process_status, event_type, payload_json, ownership) = match terminal {
+        ServiceTerminal::Stopped => (
+            ProcessStatus::Stopped,
+            "service.stopped",
+            "{}",
+            Ownership::Settled,
+        ),
+        ServiceTerminal::Canceled(payload, ownership) => (
+            ProcessStatus::Canceled,
+            "service.canceled",
+            payload,
+            ownership,
+        ),
+        ServiceTerminal::Failed(payload, ownership) => {
+            (ProcessStatus::Failed, "service.failed", payload, ownership)
         }
-        ServiceTerminal::Failed(payload) => (ProcessStatus::Failed, "service.failed", payload),
     };
     transaction
         .execute(
-            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, process_status.as_str()],
+            "UPDATE processes SET status = ?2, ownership = ?3 WHERE process_key = ?1",
+            params![process_key, process_status.as_str(), ownership.as_str()],
         )
         .map_err(sql_error)?;
-    release_service_ports(&transaction, service_instance_id)?;
+    if ownership == Ownership::Settled {
+        release_service_ports(&transaction, service_instance_id)?;
+    }
     insert_event(
         &transaction,
         identity,
@@ -594,6 +623,7 @@ pub(crate) fn mark_service_canceled(
     process_key: &str,
     computed_manifest_hash: &str,
     payload_json: &str,
+    ownership: Ownership,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
@@ -601,7 +631,7 @@ pub(crate) fn mark_service_canceled(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Canceled(payload_json),
+        ServiceTerminal::Canceled(payload_json, ownership),
     )
 }
 
@@ -660,6 +690,7 @@ pub(crate) fn mark_service_failed(
     process_key: &str,
     computed_manifest_hash: &str,
     payload_json: &str,
+    ownership: Ownership,
 ) -> RuntimeResult<()> {
     settle_service_terminal(
         registry,
@@ -667,7 +698,7 @@ pub(crate) fn mark_service_failed(
         service_instance_id,
         process_key,
         computed_manifest_hash,
-        ServiceTerminal::Failed(payload_json),
+        ServiceTerminal::Failed(payload_json, ownership),
     )
 }
 
@@ -748,14 +779,14 @@ pub(crate) fn mark_process_escape(
     Ok(())
 }
 
-/// Release the durable ownership evidence of an unresolved escape after OS
-/// liveness proves the recorded process containment is gone. The terminal
-/// escaped process evidence is intentionally retained.
-pub(crate) fn release_unresolved_escape_ports(
+/// Settle an unresolved terminal process after OS observation proves its
+/// recorded process, group, and tracked descendants are gone (or were
+/// terminated by the exclusive recovery owner). Endpoint evidence it still owns
+/// is released with it; the terminal status is retained as history.
+pub(crate) fn settle_unresolved_process(
     registry: &mut Registry,
     process_key: &str,
     run_id: &str,
-    service_instance_id: &str,
     computed_manifest_hash: &str,
 ) -> RuntimeResult<()> {
     let RegistryContext {
@@ -766,56 +797,34 @@ pub(crate) fn release_unresolved_escape_ports(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let unresolved: i64 = transaction
-        .query_row(
+    let changed = transaction
+        .execute(
             &format!(
-                "
-                SELECT count(*)
-                FROM processes p
-                JOIN runs r ON r.run_id = p.run_id
-                WHERE p.process_key = ?1
-                  AND p.run_id = ?2
-                  AND p.service_instance_id = ?3
-                  AND p.status = ?4
-                  AND r.computed_manifest_hash = ?5
-                  AND EXISTS (
-                    SELECT 1 FROM ports ep
-                    WHERE ep.service_instance_id = p.service_instance_id
-                      AND ep.owner_process_key = p.process_key
-                      AND ep.status IN ({})
-                  )
-                ",
-                status::sql_in_list(status::PORT_OPEN)
+                "UPDATE processes SET ownership = 'settled'
+                 WHERE process_key = ?1 AND run_id = ?2 AND ownership = 'unresolved'
+                   AND status NOT IN ({})
+                   AND EXISTS (
+                     SELECT 1 FROM runs r
+                     WHERE r.run_id = processes.run_id AND r.computed_manifest_hash = ?3
+                   )",
+                status::sql_in_list(status::PROCESS_ACTIVE)
             ),
-            params![
-                process_key,
-                run_id,
-                service_instance_id,
-                ProcessStatus::Escaped.as_str(),
-                computed_manifest_hash,
-            ],
-            |row| row.get(0),
+            params![process_key, run_id, computed_manifest_hash],
         )
         .map_err(sql_error)?;
-    if unresolved != 1 {
+    if changed != 1 {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            format!("unresolved escape {process_key} no longer has exact open-port evidence"),
+            format!("unresolved process {process_key} no longer matches its recorded obligation"),
         ));
     }
     transaction
         .execute(
             &format!(
-                "
-                UPDATE ports
-                SET status = ?3
-                WHERE service_instance_id = ?1
-                  AND owner_process_key = ?2
-                  AND status IN ({})
-                ",
+                "UPDATE ports SET status = ?2 WHERE owner_process_key = ?1 AND status IN ({})",
                 status::sql_in_list(status::PORT_OPEN)
             ),
-            params![service_instance_id, process_key, PortStatus::Stale.as_str()],
+            params![process_key, PortStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -823,9 +832,9 @@ pub(crate) fn release_unresolved_escape_ports(
         identity,
         redactor,
         EventInsert {
-            event_type: "service.escape-reconciled",
+            event_type: "process.ownership-settled",
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
+            service_instance_id: None,
             process_key: Some(process_key),
             computed_manifest_hash: Some(computed_manifest_hash),
             payload_json: "{}",
@@ -1107,7 +1116,7 @@ pub(crate) fn mark_invocation_finished(
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
     let changed = transaction.execute(
-        "UPDATE processes SET status = ?2 WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
+        "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1 AND run_id = ?3 AND role = ?4 AND environment = ?5 AND slot = ?6",
         params![process_key, process_status.as_str(), run_id, owner.role().as_str(), identity.environment, identity.slot],
     ).map_err(sql_error)?;
     if changed != 1 {

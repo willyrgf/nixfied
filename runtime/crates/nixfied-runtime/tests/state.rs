@@ -749,18 +749,21 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
             |row| row.get(0),
         )
         .expect("port status should query");
-    let port_events: i64 = registry
+    // A terminal row without proven containment is an explicit obligation;
+    // recovery settles it (and its endpoint evidence) only after death proof.
+    let (ownership, settled_events): (String, i64) = registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'port.stale'",
+            "SELECT ownership, (SELECT count(*) FROM events WHERE event_type = 'process.ownership-settled')
+             FROM processes WHERE process_key = 'process-stale-port'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .expect("port events should query");
+        .expect("ownership should query");
 
     deleted_id(&outcome);
     assert_eq!(port_status, "stale");
-    assert_eq!(port_events, 1);
+    assert_eq!((ownership.as_str(), settled_events), ("settled", 1));
 }
 
 fn assert_cleanup_refused_with_active_ref(sql: &str) {
@@ -1035,4 +1038,56 @@ fn cleanup_rejects_application_ancestry_redirected_into_evidence() {
     );
     assert!(fixture.layout.registry_path().is_file());
     assert_eq!(cleanup_rows(&registry), 0);
+}
+
+#[test]
+fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
+            INSERT INTO runs (
+              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json, summary_path
+            ) VALUES (
+              'run-escaped', 'dev', 0, 'failed', '/nix/store/test-manifest/manifest.json',
+              'computed-hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1', '{}', '{}', '[]', NULL
+            );
+            INSERT INTO processes (
+              process_key, environment, slot, pid, pgid, start_identity, command_json,
+              run_id, service_instance_id, status, ownership, service_name, role
+            ) VALUES (
+              'process-escaped', 'dev', 0, 999997, 999997,
+              '{\"platformStart\":\"missing\"}', '{}',
+              'run-escaped', 'service-escaped', 'escaped', 'unresolved', 'synthetic', 'service'
+            );
+            ",
+        )
+        .unwrap();
+
+    let refused = fixture
+        .clean(&mut registry, CleanupMode::Purge)
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::CleanupRefused);
+    assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
+
+    let outcome = clean_reconciled_state(
+        &mut registry,
+        &fixture.layout.state_base,
+        &fixture.identity,
+        CleanupMode::Standard,
+    )
+    .expect("recovery settles an obligation once death is proven");
+    deleted_id(&outcome);
+    let ownership: String = registry
+        .connection()
+        .query_row(
+            "SELECT ownership FROM processes WHERE process_key = 'process-escaped'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ownership, "settled");
 }

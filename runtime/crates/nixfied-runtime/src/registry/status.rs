@@ -36,26 +36,18 @@ pub fn sql_in_list<S: DbStatus>(statuses: &[S]) -> String {
         .join(", ")
 }
 
-/// Registry queries use `p` for the process row whose current ownership is checked.
-pub(crate) fn unresolved_escape_sql() -> String {
+/// Registry queries use `p` for the process row whose ownership is checked. A
+/// terminal status whose containment was never proven remains an obligation,
+/// with or without endpoint evidence.
+pub(crate) fn unsettled_terminal_sql() -> String {
     format!(
-        "p.status = '{}' AND EXISTS (
-            SELECT 1 FROM ports ep
-            WHERE ep.service_instance_id = p.service_instance_id
-              AND ep.owner_process_key = p.process_key
-              AND ep.status IN ({})
-        )",
-        ProcessStatus::Escaped.as_str(),
-        sql_in_list(PORT_OPEN),
+        "p.ownership = 'unresolved' AND p.status NOT IN ({})",
+        sql_in_list(PROCESS_ACTIVE)
     )
 }
 
-pub(crate) fn actionable_process_sql() -> String {
-    format!(
-        "p.status IN ({}) OR ({})",
-        sql_in_list(PROCESS_ACTIVE),
-        unresolved_escape_sql()
-    )
+pub(crate) fn actionable_process_sql() -> &'static str {
+    "p.ownership = 'unresolved'"
 }
 
 macro_rules! db_status {

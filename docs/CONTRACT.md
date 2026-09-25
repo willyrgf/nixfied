@@ -264,6 +264,23 @@ when the manifest/runtime contract changes.
   unfinished predecessor's finalization with a `run.recovered` event. Recovery
   never resumes tasks or adopts services; any unsafe step refuses and blocks new
   work. `clean` reports a deletion performed by that recovery.
+- Every process record carries explicit `ownership`: `unresolved` from
+  registration until the owner (or an exclusive recovery successor) proves the
+  process, its group, its tracked descendants, and its captured writers are
+  gone; then `settled`. Active statuses are always unresolved. A contained and
+  capture-settled terminal records `settled`; an escape or unsettled capture
+  keeps `unresolved` even after the leader exits, with or without endpoint
+  evidence. Recovery settles an unresolved terminal row only after proving its
+  death or terminating its recorded tree. Deletion, state preparation, and new
+  service startup refuse while any obligation is unresolved. `ps` reports
+  `ownership`. A task or probe interrupted by a session failure after
+  containment, reaping, and capture settlement records a terminal status and
+  settles.
+- Service teardown observes pending exits before recording stop intent; an exit
+  observed then remains an unexpected failure. The stop lifecycle start event is
+  the durable stop intent and precedes every stop signal; its recording failure
+  still contains and reaps the service. An unexpected service exit, including
+  status zero, fails the session with `DEPENDENCY_UNAVAILABLE`.
 - Each session creates a private FIFO named `control` in its never-reused
   `runs/<runId>` evidence directory before publishing its run record, opens a
   reader and a separate keeper writer (both close-on-exec), and removes the

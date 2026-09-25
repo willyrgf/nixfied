@@ -32,9 +32,9 @@ use crate::service::endpoint::{
 use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
-    EndpointRecord, ProcessRecord, ServiceRecord, ServiceStartOutcome, VerifiedEndpointActivation,
-    activate_service_ready, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_stopped, read_service_snapshot, record_service_canceling,
+    EndpointRecord, Ownership, ProcessRecord, ServiceRecord, ServiceStartOutcome,
+    VerifiedEndpointActivation, activate_service_ready, mark_process_escape, mark_service_canceled,
+    mark_service_failed, mark_service_stopped, read_service_snapshot, record_service_canceling,
     record_service_lifecycle_event, record_service_start, record_service_start_intent,
     settle_service_start,
 };
@@ -720,6 +720,12 @@ impl OwnedService {
                 .expect("escape remains a failure");
         }
         let canceled = error.code == ErrorCode::Canceled;
+        // Contained processes with unsettled capture writers remain obligations.
+        let ownership = if capture.is_ok() {
+            Ownership::Settled
+        } else {
+            Ownership::Unresolved
+        };
         let error =
             completion_error(Ok(()), capture, Some(error)).expect("lifecycle failure is retained");
         let payload = serde_json::json!({
@@ -737,6 +743,7 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
+                ownership,
             )
         } else {
             mark_service_failed(
@@ -746,6 +753,7 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
+                ownership,
             )
         };
         match settlement {
@@ -782,6 +790,11 @@ impl OwnedService {
             let error = completion_error(Err(escape), capture, intent.err()).unwrap();
             return Err(error.with_cause(canceled));
         }
+        let ownership = if capture.is_ok() {
+            Ownership::Settled
+        } else {
+            Ownership::Unresolved
+        };
         let error = completion_error(Ok(()), capture, intent.err())
             .map(|error| error.with_cause(RuntimeError::new(ErrorCode::Canceled, reason)));
         let settlement = mark_service_canceled(
@@ -791,6 +804,7 @@ impl OwnedService {
             &self.info.process_key,
             &self.info.computed_manifest_hash,
             &payload,
+            ownership,
         );
         match completion_error(settlement, Ok(()), error) {
             Some(error) => Err(error),
@@ -816,9 +830,7 @@ impl OwnedService {
             self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
             return Err(canceled_error());
         }
-        if let Err(error) = record_lifecycle_started(registry, &context, &stop_record) {
-            return Err(self.settle_failed_service(registry, timeout_ms, error));
-        }
+        // Observe pending exits first: an exit seen here remains unexpected.
         let observed = match self.child.observe() {
             Ok(observed) => observed,
             Err(error) => {
@@ -836,6 +848,11 @@ impl OwnedService {
             let message = format!("foreground service exited before stop: {status}");
             let error = RuntimeError::new(ErrorCode::ProcEscape, message);
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
+            return Err(self.settle_failed_service(registry, timeout_ms, error));
+        }
+        // Expected stopping begins here: record durable stop intent before any
+        // signal. A recording failure remains a failure but still contains.
+        if let Err(error) = record_lifecycle_started(registry, &context, &stop_record) {
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
         // Graceful shutdown is the manifest's declared stop signal escalated to
@@ -889,6 +906,7 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
+                Ownership::Settled,
             )?;
             let error = canceled_error();
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
@@ -1996,6 +2014,8 @@ pub(crate) enum CapturedExecTransition<'a> {
 pub(crate) struct CapturedExecFailure {
     pub error: Box<RuntimeError>,
     pub outcome: Option<CapturedExecOutcome>,
+    /// Containment, reaping, and capture all settled; only the operation failed.
+    pub settled: bool,
 }
 
 /// Inert captured bootstrap. Capture and the child stay owned through failed
@@ -2158,20 +2178,22 @@ impl OwnedCapturedChild {
             ),
         };
         match self.finish(operation) {
-            Some(error) => Err(CapturedExecFailure {
+            (Some(error), settled) => Err(CapturedExecFailure {
                 error: Box::new(error),
                 outcome,
+                settled,
             }),
-            None => Ok(outcome.expect("successful observation supplies an outcome")),
+            (None, _) => Ok(outcome.expect("successful observation supplies an outcome")),
         }
     }
 
     pub fn abort(mut self, error: RuntimeError) -> RuntimeError {
         self.finish(Some(error))
+            .0
             .expect("abort retains its original failure")
     }
 
-    fn finish(&mut self, operation: Option<RuntimeError>) -> Option<RuntimeError> {
+    fn finish(&mut self, operation: Option<RuntimeError>) -> (Option<RuntimeError>, bool) {
         let pgid = self.pid() as i32;
         let containment = terminate_and_reap(&mut self.child, pgid);
         let capture = self
@@ -2179,7 +2201,8 @@ impl OwnedCapturedChild {
             .take()
             .expect("completion consumes capture once")
             .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
-        completion_error(containment, capture, operation)
+        let settled = containment.is_ok() && capture.is_ok();
+        (completion_error(containment, capture, operation), settled)
     }
 }
 

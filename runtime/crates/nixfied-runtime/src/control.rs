@@ -14,7 +14,7 @@ use crate::service::{
     ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
     mark_service_stopped, mark_task_finished, process_escape_start_identity,
     process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, release_unresolved_escape_ports, terminate_process_group,
+    process_is_live_with_start_identity, settle_unresolved_process, terminate_process_group,
     terminate_process_tree_with_snapshot,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
@@ -41,6 +41,9 @@ pub struct ProcessObservation {
     pub pgid: i32,
     pub registry_status: String,
     pub reconciled_status: String,
+    /// `unresolved` until the owner or a recovery successor proved the
+    /// process, its group, and its tracked descendants are gone.
+    pub ownership: String,
     pub live: bool,
 }
 
@@ -154,7 +157,7 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
         .into_iter()
         .map(|row| {
             let active = status::PROCESS_ACTIVE.contains(&row.status);
-            let live = if active || row.unresolved_escape {
+            let live = if active || row.unsettled {
                 row.reconciled_liveness()?
             } else {
                 false
@@ -176,6 +179,12 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
                 pgid: row.pgid,
                 registry_status: row.status.as_str().to_string(),
                 reconciled_status: observed_status.as_str().to_string(),
+                ownership: if active || row.unsettled {
+                    "unresolved"
+                } else {
+                    "settled"
+                }
+                .to_string(),
                 live,
             })
         })
@@ -189,15 +198,15 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<Vec<Reconcil
     let rows = process_rows(registry.connection())?;
     for row in rows {
         let active = status::PROCESS_ACTIVE.contains(&row.status);
-        let live = if active || row.unresolved_escape {
+        let live = if active || row.unsettled {
             row.reconciled_liveness()?
         } else {
             false
         };
         if active && !live {
             mark_process_stale(registry, &row)?;
-        } else if row.unresolved_escape && !live {
-            reconcile_unresolved_escape(registry, &row)?;
+        } else if row.unsettled && !live {
+            reconcile_unsettled(registry, &row)?;
         }
     }
     let rows = process_rows(registry.connection())?;
@@ -217,7 +226,7 @@ pub(crate) fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     let endpoints = read_open_endpoints(registry.connection(), None)?;
     if processes
         .iter()
-        .any(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
+        .any(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unsettled)
         || !endpoints.is_empty()
     {
         return Err(RuntimeError::new(
@@ -242,18 +251,18 @@ pub fn down_owned_process_groups(
     let mut stopped = Vec::new();
     for row in rows
         .into_iter()
-        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unresolved_escape)
+        .filter(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unsettled)
     {
         if !row.reconciled_liveness()? {
-            if row.unresolved_escape {
-                reconcile_unresolved_escape(registry, &row)?;
+            if row.unsettled {
+                reconcile_unsettled(registry, &row)?;
             } else {
                 mark_process_stale(registry, &row)?;
             }
             stale.push(row.process_key);
             continue;
         }
-        if row.unresolved_escape {
+        if row.unsettled {
             terminate_process_tree_with_snapshot(
                 row.pid,
                 row.pgid,
@@ -339,7 +348,7 @@ struct ProcessRow {
     service_instance_id: Option<String>,
     status: ProcessStatus,
     computed_manifest_hash: String,
-    unresolved_escape: bool,
+    unsettled: bool,
 }
 
 impl ProcessRow {
@@ -352,7 +361,7 @@ impl ProcessRow {
     }
 
     fn reconciled_liveness(&self) -> RuntimeResult<bool> {
-        if !self.unresolved_escape {
+        if !self.unsettled {
             return self.is_live();
         }
         if process_is_live_with_start_identity(
@@ -440,7 +449,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
             LEFT JOIN runs r ON r.run_id = p.run_id
             ORDER BY p.process_key
             ",
-            escaped_process = status::unresolved_escape_sql(),
+            escaped_process = status::unsettled_terminal_sql(),
         ))
         .map_err(sql_error)?;
     let rows = statement
@@ -476,7 +485,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 service_instance_id,
                 status,
                 computed_manifest_hash,
-                unresolved_escape,
+                unsettled,
                 role,
                 service_name,
             )| {
@@ -519,7 +528,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     service_instance_id,
                     status: ProcessStatus::parse_db(&status)?,
                     computed_manifest_hash,
-                    unresolved_escape,
+                    unsettled,
                 })
             },
         )
@@ -535,7 +544,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1",
             params![row.process_key, ProcessStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
@@ -711,28 +720,18 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
 }
 
 fn settle_down_process(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    if row.unresolved_escape {
-        reconcile_unresolved_escape(registry, row)
+    if row.unsettled {
+        reconcile_unsettled(registry, row)
     } else {
         mark_stopped(registry, row)
     }
 }
 
-fn reconcile_unresolved_escape(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    let service_instance_id = row.service_instance_id.as_deref().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!(
-                "escaped process {} has open ports but no service instance",
-                row.process_key
-            ),
-        )
-    })?;
-    release_unresolved_escape_ports(
+fn reconcile_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
+    settle_unresolved_process(
         registry,
         &row.process_key,
         &row.run_id,
-        service_instance_id,
         &row.computed_manifest_hash,
     )
 }

@@ -191,6 +191,7 @@ in
         (required "pgid" i32 "Observed signed process-group id.")
         (required "registryStatus" text "Native registry status string.")
         (required "reconciledStatus" text "Native reconciled status string.")
+        (required "ownership" text "`unresolved` until process, group, and tracked descendants are proven gone; otherwise `settled`.")
         (required "live" boolean "Native host liveness observation.")
       ]
     )
