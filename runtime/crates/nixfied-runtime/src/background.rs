@@ -11,8 +11,7 @@
 //! means readiness or task success.
 
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -25,11 +24,12 @@ use serde_json::Value;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 pub const COMMAND: &str = "__session-owner";
-const MAGIC: &[u8; 4] = b"NXD1";
-const MAX_FRAME: usize = 1024 * 1024;
+const PROTOCOL: crate::channel::Protocol = crate::channel::Protocol {
+    magic: *b"NXD1",
+    max: 1024 * 1024,
+};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(1);
-const FAILURE_EXIT: i32 = 125;
 
 /// The launcher's validated request: forwarded run arguments and the
 /// immutable run identity it allocated before spawning.
@@ -118,28 +118,23 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
     use std::os::unix::process::CommandExt;
     let failure = |message: &str| RuntimeError::new(ErrorCode::LifecycleFailed, message);
     let body = serde_json::to_vec(request).map_err(|_| failure("cannot encode launch request"))?;
-    if body.len() > MAX_FRAME {
-        return Err(failure("background launch request exceeds its limit"));
-    }
-    let (mut channel, child_channel) = crate::launch::startup_pair()
-        .map_err(|_| failure("cannot create background launch channel"))?;
-    let inherited = child_channel.as_raw_fd();
-    let launcher_end = channel.as_raw_fd();
+    let frame = PROTOCOL
+        .encode(&body)
+        .map_err(|_| failure("background launch request exceeds its limit"))?;
+    let (mut channel, child_channel) =
+        crate::channel::pair().map_err(|_| failure("cannot create background launch channel"))?;
     let mut command = Command::new(runtime);
+    command.arg(COMMAND);
+    crate::channel::inherit(&mut command, &child_channel, &channel);
     command
-        .arg(COMMAND)
-        .arg(inherited.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // SAFETY: only async-signal-safe syscalls run after fork. The owner leads
-    // a new session so it holds no controlling terminal.
+    // SAFETY: setsid is async-signal-safe. The owner leads a new session so
+    // it holds no controlling terminal.
     unsafe {
-        command.pre_exec(move || {
-            if libc::setsid() < 0
-                || libc::close(launcher_end) != 0
-                || libc::fcntl(inherited, libc::F_SETFD, 0) != 0
-            {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
@@ -148,13 +143,13 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
     let mut owner = crate::spawn::command(&mut command)
         .map_err(|_| failure("cannot spawn background session owner"))?;
     drop(child_channel);
-    if write_frame(&mut channel, &body, Instant::now() + REQUEST_TIMEOUT).is_err() {
+    if crate::channel::write_all(&mut channel, &frame, Instant::now() + REQUEST_TIMEOUT).is_err() {
         let _ = owner.kill();
         let _ = owner.wait();
         return Err(failure("cannot deliver the background launch request"));
     }
     let mut deadline = Instant::now() + wait;
-    let mut received = Vec::new();
+    let mut reader = crate::channel::FrameReader::new(&PROTOCOL);
     let mut interrupted = false;
     let outcome = loop {
         if !interrupted && crate::cancellation::signal_received() {
@@ -164,7 +159,7 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
             let _ = channel.shutdown(std::net::Shutdown::Write);
             deadline = Instant::now() + INTERRUPT_GRACE;
         }
-        match read_frame_step(&mut channel, &mut received) {
+        match reader.step(&mut channel) {
             Ok(Some(body)) => {
                 break match serde_json::from_slice::<Reply>(&body) {
                     Ok(Reply::Established(acknowledgement)) if interrupted => {
@@ -180,7 +175,9 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
                     Err(_) => LaunchOutcome::Uncertain,
                 };
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            Ok(None) if Instant::now() < deadline => {
+                let _ = crate::channel::wait(&channel, libc::POLLIN, deadline);
+            }
             Ok(None) | Err(_) if interrupted => break LaunchOutcome::Interrupted,
             Ok(None) | Err(_) => break LaunchOutcome::Uncertain,
         }
@@ -220,54 +217,19 @@ pub struct Establishment {
 /// Return None for ordinary runtime commands. Otherwise decode the single
 /// bounded request before any ordinary runtime initialization.
 pub fn receive(args: &[OsString]) -> Option<Result<(Request, Establishment), i32>> {
-    if args.first().is_none_or(|arg| arg != COMMAND) {
-        return None;
-    }
-    let [_, descriptor] = args else {
-        return Some(Err(FAILURE_EXIT));
+    let failure = Some(Err(crate::channel::FAILURE_EXIT));
+    let mut channel = match crate::channel::admit(args, COMMAND)? {
+        Ok(channel) => channel,
+        Err(exit) => return Some(Err(exit)),
     };
-    let Some(fd) = descriptor
-        .to_str()
-        .and_then(|value| value.parse::<i32>().ok())
-        .filter(|fd| *fd >= 3)
-    else {
-        return Some(Err(FAILURE_EXIT));
-    };
-    let mut kind: libc::c_int = 0;
-    let mut length = std::mem::size_of_val(&kind) as libc::socklen_t;
-    if unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_TYPE,
-            (&raw mut kind).cast(),
-            &mut length,
-        )
-    } != 0
-        || kind != libc::SOCK_STREAM
-    {
-        return Some(Err(FAILURE_EXIT));
-    }
-    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-    // SAFETY: this internal process takes sole ownership of its inherited socket.
-    let mut channel = unsafe { UnixStream::from_raw_fd(fd) };
-    if channel.set_nonblocking(true).is_err() {
-        return Some(Err(FAILURE_EXIT));
-    }
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
-    let mut received = Vec::new();
-    let body = loop {
-        match read_frame_step(&mut channel, &mut received) {
-            Ok(Some(body)) => break body,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            _ => return Some(Err(FAILURE_EXIT)),
-        }
+    let Ok(body) = PROTOCOL.read(&mut channel, Instant::now() + REQUEST_TIMEOUT) else {
+        return failure;
     };
     let Ok(request) = serde_json::from_slice::<Request>(&body) else {
-        return Some(Err(FAILURE_EXIT));
+        return failure;
     };
     if !valid_run_id(&request.run_id) {
-        return Some(Err(FAILURE_EXIT));
+        return failure;
     }
     Some(Ok((
         request,
@@ -297,7 +259,7 @@ impl Establishment {
     pub fn acknowledge(&mut self, acknowledgement: Acknowledgement) {
         self.acknowledged = true;
         if let Ok(body) = serde_json::to_vec(&Reply::Established(acknowledgement)) {
-            let _ = write_frame(&mut self.channel, &body, Instant::now() + REPLY_TIMEOUT);
+            let _ = PROTOCOL.write(&mut self.channel, &body, Instant::now() + REPLY_TIMEOUT);
         }
     }
 
@@ -313,7 +275,7 @@ impl Establishment {
             details: error.details.clone(),
         });
         if let Ok(body) = serde_json::to_vec(&rejection) {
-            let _ = write_frame(&mut self.channel, &body, Instant::now() + REPLY_TIMEOUT);
+            let _ = PROTOCOL.write(&mut self.channel, &body, Instant::now() + REPLY_TIMEOUT);
         }
     }
 }
@@ -325,78 +287,6 @@ fn valid_run_id(run_id: &str) -> bool {
         && run_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-}
-
-fn write_frame(channel: &mut UnixStream, body: &[u8], deadline: Instant) -> io::Result<()> {
-    let mut frame = Vec::with_capacity(8 + body.len());
-    frame.extend(MAGIC);
-    frame.extend((body.len() as u32).to_be_bytes());
-    frame.extend(body);
-    let mut bytes = frame.as_slice();
-    while !bytes.is_empty() {
-        match channel.write(bytes) {
-            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-            Ok(written) => bytes = &bytes[written..],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err(io::ErrorKind::TimedOut.into());
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-/// Accumulate one frame without blocking. `Ok(None)` means incomplete so far;
-/// EOF before a complete frame, a bad header, or trailing bytes are errors.
-fn read_frame_step(
-    channel: &mut UnixStream,
-    received: &mut Vec<u8>,
-) -> io::Result<Option<Vec<u8>>> {
-    let mut chunk = [0_u8; 8192];
-    let mut closed = false;
-    loop {
-        match channel.read(&mut chunk) {
-            Ok(0) => {
-                closed = true;
-                break;
-            }
-            Ok(read) => {
-                received.extend_from_slice(&chunk[..read]);
-                if received.len() > MAX_FRAME + 8 {
-                    return Err(io::ErrorKind::InvalidData.into());
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) => return Err(error),
-        }
-    }
-    let incomplete = || -> io::Result<Option<Vec<u8>>> {
-        if closed {
-            Err(io::ErrorKind::UnexpectedEof.into())
-        } else {
-            Ok(None)
-        }
-    };
-    if received.len() < 8 {
-        return incomplete();
-    }
-    if &received[..4] != MAGIC {
-        return Err(io::ErrorKind::InvalidData.into());
-    }
-    let size = u32::from_be_bytes(received[4..8].try_into().expect("four bytes")) as usize;
-    if size == 0 || size > MAX_FRAME {
-        return Err(io::ErrorKind::InvalidData.into());
-    }
-    match received.len().cmp(&(8 + size)) {
-        std::cmp::Ordering::Less => incomplete(),
-        std::cmp::Ordering::Equal => Ok(Some(received[8..].to_vec())),
-        std::cmp::Ordering::Greater => Err(io::ErrorKind::InvalidData.into()),
-    }
 }
 
 #[cfg(test)]
@@ -439,41 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn frames_reject_truncation_trailing_bytes_and_oversize() {
-        let (mut left, mut right) = UnixStream::pair().unwrap();
-        right.set_nonblocking(true).unwrap();
-        write_frame(&mut left, b"{}", Instant::now() + REPLY_TIMEOUT).unwrap();
-        let mut received = Vec::new();
-        assert_eq!(
-            read_frame_step(&mut right, &mut received).unwrap(),
-            Some(b"{}".to_vec())
-        );
-
-        let mut received = Vec::new();
-        left.write_all(b"NXD1\0\0\0\x02{").unwrap();
-        assert_eq!(read_frame_step(&mut right, &mut received).unwrap(), None);
-        // Shut down explicitly: a concurrently forked test child may briefly
-        // hold another copy of this descriptor.
-        left.shutdown(std::net::Shutdown::Write).unwrap();
-        assert!(read_frame_step(&mut right, &mut received).is_err());
-
-        let (mut left, mut right) = UnixStream::pair().unwrap();
-        right.set_nonblocking(true).unwrap();
-        left.write_all(b"NXD1\0\0\0\x02{}extra").unwrap();
-        assert!(read_frame_step(&mut right, &mut Vec::new()).is_err());
-        left.write_all(b"").unwrap();
-
-        let (mut left, mut right) = UnixStream::pair().unwrap();
-        right.set_nonblocking(true).unwrap();
-        left.write_all(b"NXD1\xff\xff\xff\xff").unwrap();
-        assert!(read_frame_step(&mut right, &mut Vec::new()).is_err());
-        let (mut left, mut right) = UnixStream::pair().unwrap();
-        right.set_nonblocking(true).unwrap();
-        left.write_all(b"XXXX\0\0\0\x02{}").unwrap();
-        assert!(read_frame_step(&mut right, &mut Vec::new()).is_err());
-    }
-
-    #[test]
     fn closed_launcher_is_observed_abandonment_and_rejection_follows_acknowledgement_rules() {
         let (launcher, owner) = UnixStream::pair().unwrap();
         owner.set_nonblocking(true).unwrap();
@@ -501,9 +356,8 @@ mod tests {
         // After acknowledgement a later failure is the session's own outcome.
         establishment.reject(&RuntimeError::new(ErrorCode::TaskFailed, "later"));
         drop(establishment);
-        let mut received = Vec::new();
-        let body = read_frame_step(&mut launcher, &mut received)
-            .unwrap()
+        let body = PROTOCOL
+            .read(&mut launcher, Instant::now() + REPLY_TIMEOUT)
             .unwrap();
         assert!(matches!(
             serde_json::from_slice::<Reply>(&body).unwrap(),
