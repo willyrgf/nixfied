@@ -272,12 +272,7 @@ impl<'a> RunSession<'a> {
         let manifest_hash = self.admission.common().computed_manifest_hash();
         let recorded = match settlement {
             Ok(()) => record_finalization_complete(&mut self.registry, self.run_id, manifest_hash),
-            Err(error) => record_finalization_unfinished(
-                &mut self.registry,
-                self.run_id,
-                manifest_hash,
-                &error,
-            ),
+            Err(error) => record_finalization_unfinished(&mut self.registry, self.run_id, &error),
         };
         if let Err(error) = recorded {
             failures.push(error);

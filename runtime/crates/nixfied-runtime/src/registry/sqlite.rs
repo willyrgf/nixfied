@@ -20,7 +20,6 @@ pub struct Registry {
 
 pub(crate) struct RegistryContext<'a> {
     pub(crate) connection: &'a mut Connection,
-    pub(crate) identity: &'a RegistryIdentity,
     pub(crate) redactor: &'a Redactor,
 }
 
@@ -73,7 +72,6 @@ impl Registry {
         self.guard.validate()?;
         Ok(RegistryContext {
             connection: &mut self.conn,
-            identity: &self.identity,
             redactor: &self.redactor,
         })
     }
@@ -96,7 +94,7 @@ impl Registry {
 
     pub fn append_event(&mut self, event: EventInsert<'_>) -> RuntimeResult<i64> {
         self.guard.validate()?;
-        append_event(&mut self.conn, &self.identity, &self.redactor, event)
+        append_event(&mut self.conn, &self.redactor, event)
     }
 }
 

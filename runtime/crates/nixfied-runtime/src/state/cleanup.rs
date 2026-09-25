@@ -17,7 +17,7 @@ use crate::filesystem::{Directory, EntryKind, FileIdentity};
 use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::sqlite::RegistryContext;
-use crate::registry::status::{self, CleanupStatus, DbStatus};
+use crate::registry::status::{CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker, refuse_unmarked_state_root};
 use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
@@ -345,12 +345,14 @@ struct CleanupRecord {
     root: FileIdentity,
 }
 
-/// The slot's one settled check: no recorded process obligation and no open
-/// endpoint evidence. Retention and cleanup refuse before any deletion.
+/// The slot's one settled check: no recorded process obligation, and so no
+/// endpoint evidence of an unsettled owner. Retention and cleanup refuse
+/// before any deletion.
 fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     registry.authority().validate()?;
-    // Quiescence is the absence of recorded process obligations, independent of
-    // endpoint evidence: leader exit or a terminal status alone settles nothing.
+    // Quiescence is the absence of recorded process obligations; endpoint
+    // evidence settles with its owning process. Leader exit or a terminal
+    // status alone settles nothing.
     let unresolved_process_count = registry
         .connection()
         .query_row(
@@ -363,24 +365,6 @@ fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
         return Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
             "cleanup refused because unresolved process obligations exist",
-        ));
-    }
-
-    let active_port_count = registry
-        .connection()
-        .query_row(
-            &format!(
-                "SELECT count(*) FROM ports WHERE status IN ({})",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(sql_error)?;
-    if active_port_count > 0 {
-        return Err(RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            "cleanup refused because open endpoint evidence exists",
         ));
     }
     Ok(())
@@ -505,7 +489,6 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
     let payload = payload(record);
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -529,9 +512,8 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        identity,
         redactor,
-        cleanup_event("cleanup.intent", record, &payload),
+        EventInsert::new("cleanup.intent", &payload),
     )?;
     transaction.commit().map_err(sql_error)
 }
@@ -540,7 +522,6 @@ fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()
     let payload = payload(record);
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection
@@ -564,9 +545,8 @@ fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()
     }
     insert_event(
         &transaction,
-        identity,
         redactor,
-        cleanup_event("cleanup.completed", record, &payload),
+        EventInsert::new("cleanup.completed", &payload),
     )?;
     transaction.commit().map_err(sql_error)
 }
@@ -591,19 +571,8 @@ fn attempt_failed(
         "reason": error.to_string(),
     })
     .to_string();
-    match registry.append_event(cleanup_event("cleanup.attempt-failed", record, &payload)) {
+    match registry.append_event(EventInsert::new("cleanup.attempt-failed", &payload)) {
         Ok(_) => failure,
         Err(recording) => failure.with_cause(recording),
     }
-}
-
-/// Cleanup events carry the manifest provenance of the generation's marker.
-fn cleanup_event<'a>(
-    event_type: &'a str,
-    record: &'a CleanupRecord,
-    payload: &'a str,
-) -> EventInsert<'a> {
-    let mut event = EventInsert::new(event_type, payload);
-    event.computed_manifest_hash = Some(&record.marker.computed_manifest_hash);
-    event
 }

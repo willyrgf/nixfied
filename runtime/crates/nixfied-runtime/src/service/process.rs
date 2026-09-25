@@ -1,4 +1,3 @@
-use crate::registry::sql_error;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -7,7 +6,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use nixfied_manifest::{ContainmentRequirement, LoopbackHost, StopSignal};
-use rusqlite::params;
 use serde::Serialize;
 
 use crate::admission::secrets::ResolvedSecrets;
@@ -23,22 +21,20 @@ use crate::redaction::{
     CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, RedactedLogRelays, Redactor, child_output,
 };
 use crate::registry::Registry;
-use crate::registry::status::{self, DbStatus, PortStatus};
 use crate::service::endpoint::{
-    EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
-    OwnershipObservation, acquire_startup_locks, observe_ownership,
-    observe_ownership_after_primary_exit, observe_single_ownership, preflight,
+    EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, OwnershipObservation,
+    acquire_startup_locks, observe_ownership, observe_ownership_after_primary_exit, preflight,
 };
 use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, Ownership,
     ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, ServiceTerminal,
-    StopPolicy, TaskTerminalStatus, VerifiedEndpointActivation, activate_service_ready,
-    mark_invocation_finished, mark_process_escape, read_service_snapshot, record_capture_outcome,
-    record_event, record_invocation_canceling, record_invocation_observed,
-    record_invocation_started, record_service_start, record_service_start_intent,
-    settle_service_start, settle_service_terminal,
+    StopPolicy, TaskTerminalStatus, VerifiedEndpoint, activate_service_ready,
+    mark_invocation_finished, mark_process_escape, record_capture_outcome, record_event,
+    record_invocation_canceling, record_invocation_observed, record_invocation_started,
+    record_service_start, record_service_start_intent, settle_service_start,
+    settle_service_terminal,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -94,20 +90,6 @@ struct PortConflictDetails<'a> {
     reason: PortConflictReason,
     project_id: &'a str,
     endpoint: PortConflictEndpoint<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nixfied_owner: Option<&'a NixfiedOwner>,
-}
-
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NixfiedOwner {
-    project_id: String,
-    environment: String,
-    slot: u32,
-    run_id: String,
-    service_id: String,
-    service_instance_id: String,
-    process_key: String,
 }
 
 include!("../generated/process.rs");
@@ -503,16 +485,11 @@ impl OwnedService {
                         ),
                     };
                 }
-                OwnershipObservation::Outside {
-                    endpoint,
-                    listeners,
-                } => {
+                OwnershipObservation::Outside { endpoint } => {
                     return Err(port_conflict_error(
                         PortConflictReason::ListenerOccupied,
                         &registry.identity().project_id,
                         endpoint,
-                        proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?
-                            .as_ref(),
                     ));
                 }
                 OwnershipObservation::Unverifiable { endpoint, message } => {
@@ -667,18 +644,11 @@ impl OwnedService {
         observation: OwnershipObservation<'_>,
     ) -> RuntimeError {
         match observation {
-            OwnershipObservation::Outside {
+            OwnershipObservation::Outside { endpoint } => port_conflict_error(
+                PortConflictReason::ListenerOccupied,
+                &registry.identity().project_id,
                 endpoint,
-                listeners,
-            } => match proven_nixfied_owner(registry, endpoint, &listeners, &self.service) {
-                Ok(owner) => port_conflict_error(
-                    PortConflictReason::ListenerOccupied,
-                    &registry.identity().project_id,
-                    endpoint,
-                    owner.as_ref(),
-                ),
-                Err(error) => error,
-            },
+            ),
             OwnershipObservation::Unverifiable { endpoint, message } => {
                 port_unverifiable_error(endpoint, message)
             }
@@ -699,38 +669,29 @@ impl OwnedService {
             .iter()
             .map(|ownership| {
                 serde_json::to_string(ownership)
-                    .map(|payload| {
-                        (
-                            endpoint_key(
-                                &self.info.service_instance_id,
-                                &ownership.endpoint.endpoint_id,
-                            ),
-                            ownership.endpoint.host.to_string(),
-                            ownership.endpoint.port,
-                            payload,
-                        )
-                    })
+                    .map(|payload| (ownership.endpoint.host.to_string(), payload))
                     .map_err(|error| {
                         RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string())
                     })
             })
             .collect::<RuntimeResult<Vec<_>>>()?;
-        let activations = payloads
+        let verified = ownership
             .iter()
-            .map(|(key, address, port, payload)| VerifiedEndpointActivation {
-                endpoint_key: key,
-                address,
-                port: *port,
+            .zip(&payloads)
+            .map(|(ownership, (address, payload))| VerifiedEndpoint {
+                endpoint: EndpointRecord {
+                    endpoint_id: &ownership.endpoint.endpoint_id,
+                    address,
+                    port: ownership.endpoint.port,
+                },
                 ownership_json: payload,
             })
             .collect::<Vec<_>>();
         activate_service_ready(
             registry,
             &self.info.run_id,
-            &self.info.service_instance_id,
             &self.info.process_key,
-            &self.info.computed_manifest_hash,
-            &activations,
+            &verified,
             (
                 record.meta.operation_id.as_str(),
                 record.class,
@@ -783,9 +744,7 @@ impl OwnedService {
                     registry,
                     "service.canceling",
                     Some(&self.info.run_id),
-                    Some(&self.info.service_instance_id),
                     Some(&self.info.process_key),
-                    &self.info.computed_manifest_hash,
                     &self.event_payload(serde_json::json!({ "reason": reason })),
                 );
                 (Teardown::Cancel(reason), intent)
@@ -826,17 +785,13 @@ impl OwnedService {
                     registry,
                     "service.canceling",
                     Some(&self.info.run_id),
-                    Some(&self.info.service_instance_id),
                     Some(&self.info.process_key),
-                    &self.info.computed_manifest_hash,
                     &payload,
                 )?;
                 settle_service_terminal(
                     registry,
                     &self.info.run_id,
-                    &self.info.service_instance_id,
                     &self.info.process_key,
-                    &self.info.computed_manifest_hash,
                     ServiceTerminal::Canceled(
                         &payload,
                         ServiceSettlement {
@@ -855,9 +810,7 @@ impl OwnedService {
                         settle_service_terminal(
                             registry,
                             &self.info.run_id,
-                            &self.info.service_instance_id,
                             &self.info.process_key,
-                            &self.info.computed_manifest_hash,
                             ServiceTerminal::Stopped(Some(CaptureOutcome::Complete)),
                         )?;
                         return record_lifecycle_success(registry, &context, &stop_record);
@@ -915,9 +868,7 @@ impl OwnedService {
         let settled = settle_service_terminal(
             registry,
             &self.info.run_id,
-            &self.info.service_instance_id,
             &self.info.process_key,
-            &self.info.computed_manifest_hash,
             match terminal {
                 Terminal::Canceled => ServiceTerminal::Canceled(&payload, settlement),
                 Terminal::Failed => ServiceTerminal::Failed(&payload, settlement),
@@ -984,7 +935,6 @@ impl OwnedService {
         match mark_process_escape(
             registry,
             &self.info.run_id,
-            &self.info.service_instance_id,
             &process,
             &self.info.computed_manifest_hash,
             self.info.platform_start_identity.as_deref(),
@@ -1023,9 +973,7 @@ impl OwnedService {
             registry,
             "service.stop.signaled",
             Some(self.info.run_id.as_str()),
-            Some(&self.info.service_instance_id),
             Some(self.info.process_key.as_str()),
-            &self.info.computed_manifest_hash,
             &payload,
         );
     }
@@ -1092,9 +1040,7 @@ impl OwnedService {
         LifecycleEventContext {
             run_id: Some(self.info.run_id.clone()),
             service_name: self.info.service_name.clone(),
-            service_instance_id: Some(self.info.service_instance_id.clone()),
             process_key: Some(self.info.process_key.clone()),
-            computed_manifest_hash: self.info.computed_manifest_hash.clone(),
         }
     }
 
@@ -1124,7 +1070,6 @@ fn port_conflict_error(
     reason: PortConflictReason,
     project_id: &str,
     endpoint: &SelectedEndpoint,
-    owner: Option<&NixfiedOwner>,
 ) -> RuntimeError {
     let reason_wire = serde_json::to_value(reason).expect("closed conflict reason serializes");
     let reason_text = reason_wire
@@ -1143,7 +1088,6 @@ fn port_conflict_error(
             port: endpoint.port,
             endpoint_id: &endpoint.endpoint_id,
         },
-        nixfied_owner: owner,
     };
     RuntimeError::new(
         ErrorCode::PortConflict,
@@ -1169,117 +1113,18 @@ fn port_unverifiable_error(
     error
 }
 
-fn proven_nixfied_owner(
-    registry: &Registry,
-    endpoint: &SelectedEndpoint,
-    listeners: &[ListenerRecord],
-    requested_service: &ExecService,
-) -> RuntimeResult<Option<NixfiedOwner>> {
-    if listeners.is_empty() {
-        return Ok(None);
-    }
-    let address = endpoint.host.to_string();
-    let candidates = {
-        let mut statement = registry
-            .connection()
-            .prepare(
-                "
-                SELECT DISTINCT service_instance_id
-                FROM ports
-                WHERE address = ?1 AND port = ?2 AND status = ?3
-                ORDER BY service_instance_id
-                ",
-            )
-            .map_err(sql_error)?;
-        statement
-            .query_map(
-                params![address, endpoint.port, PortStatus::Active.as_str()],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?
-    };
-    for service_instance_id in candidates {
-        let snapshot = read_service_snapshot(registry, &service_instance_id)?;
-        let Some(process) = &snapshot.process else {
-            continue;
-        };
-        if !status::PROCESS_ACTIVE.contains(&process.status)
-            || !snapshot.endpoints.iter().any(|stored| {
-                stored.address == address
-                    && stored.port == endpoint.port
-                    && stored.status == PortStatus::Active
-                    && stored.owner_process_key == process.process_key
-            })
-        {
-            continue;
-        }
-        if !process_is_live_with_identity(
-            process.pid,
-            process.pgid,
-            process.platform_start.as_deref(),
-        )? {
-            continue;
-        }
-        if !matches!(
-            observe_single_ownership(
-                endpoint,
-                &ExpectedOwner {
-                    pid: process.pid,
-                    pgid: process.pgid,
-                    platform_start: process.platform_start.as_deref(),
-                    containment: requested_service.containment,
-                    tracked_processes: &[],
-                },
-            ),
-            OwnershipObservation::Complete(_)
-        ) {
-            continue;
-        }
-        let slot = u32::try_from(registry.identity().slot).map_err(|_| {
-            RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!("registry slot {} is outside u32", registry.identity().slot),
-            )
-        })?;
-        return Ok(Some(NixfiedOwner {
-            project_id: registry.identity().project_id.clone(),
-            environment: registry.identity().environment.clone(),
-            slot,
-            run_id: process.run_id.clone(),
-            service_id: process.service_name.clone(),
-            service_instance_id,
-            process_key: process.process_key.clone(),
-        }));
-    }
-    Ok(None)
-}
-
-fn endpoint_failure_error(
-    registry: &Registry,
-    service: &ExecService,
-    failure: EndpointFailure,
-) -> RuntimeError {
+fn endpoint_failure_error(registry: &Registry, failure: EndpointFailure) -> RuntimeError {
     match failure {
         EndpointFailure::LockContended { endpoint } => port_conflict_error(
             PortConflictReason::StartupLockContended,
             &registry.identity().project_id,
             &endpoint,
-            None,
         ),
-        EndpointFailure::ListenerOccupied {
-            endpoint,
-            listeners,
-        } => match proven_nixfied_owner(registry, &endpoint, &listeners, service) {
-            Ok(owner) => port_conflict_error(
-                PortConflictReason::ListenerOccupied,
-                &registry.identity().project_id,
-                &endpoint,
-                owner.as_ref(),
-            ),
-            Err(error) => error,
-        },
+        EndpointFailure::ListenerOccupied { endpoint } => port_conflict_error(
+            PortConflictReason::ListenerOccupied,
+            &registry.identity().project_id,
+            &endpoint,
+        ),
         EndpointFailure::Unverifiable { endpoint, message } => {
             port_unverifiable_error(endpoint.as_ref(), message)
         }
@@ -1421,24 +1266,18 @@ pub fn start_service_for_slot(
     // start exec, so probe attempts later need no endpoint context.
     let ready_probe = prepare_probe(&service.ready.probe, &substitution)?;
     let health_probe = prepare_probe(&service.health.probe, &substitution)?;
-    let service_instance_id = service_instance_id(&run_id, service_name);
     // Stable backing storage for process-bound endpoint evidence.
-    let endpoint_records: Vec<(String, String, u16)> = own_endpoints
+    let addresses: Vec<String> = own_endpoints
         .values()
-        .map(|endpoint| {
-            (
-                endpoint_key(&service_instance_id, &endpoint.endpoint_id),
-                endpoint.host.to_string(),
-                endpoint.port,
-            )
-        })
+        .map(|endpoint| endpoint.host.to_string())
         .collect();
-    let endpoints_to_record: Vec<EndpointRecord<'_>> = endpoint_records
-        .iter()
-        .map(|(key, address, port)| EndpointRecord {
-            endpoint_key: key,
+    let endpoints_to_record: Vec<EndpointRecord<'_>> = own_endpoints
+        .values()
+        .zip(&addresses)
+        .map(|(endpoint, address)| EndpointRecord {
+            endpoint_id: &endpoint.endpoint_id,
             address,
-            port: *port,
+            port: endpoint.port,
         })
         .collect();
     let evidence = crate::output::EvidenceSource::in_logs(
@@ -1448,7 +1287,6 @@ pub fn start_service_for_slot(
         &format!("service.{service_name}"),
     );
     let service_record = ServiceRecord {
-        service_instance_id: &service_instance_id,
         service_name,
         source: &evidence,
         stop: StopPolicy {
@@ -1460,11 +1298,11 @@ pub fn start_service_for_slot(
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(own_endpoints.values()) {
         Ok(guards) => guards,
-        Err(failure) => return Err(endpoint_failure_error(registry, service, failure)),
+        Err(failure) => return Err(endpoint_failure_error(registry, failure)),
     };
     cancellation.check()?;
     if let Err(failure) = preflight(own_endpoints.values()) {
-        return Err(endpoint_failure_error(registry, service, failure));
+        return Err(endpoint_failure_error(registry, failure));
     }
     // Record startup intent after endpoint preflight and before prepare.
     // The slot owner and host startup guards stay held through readiness.
@@ -1472,14 +1310,12 @@ pub fn start_service_for_slot(
         registry,
         &run_id,
         admission.common().computed_manifest_hash(),
-        &service_instance_id,
+        service_name,
     )?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
         service_name: service_name.to_owned(),
-        service_instance_id: Some(service_instance_id.clone()),
         process_key: None,
-        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
     // Until spawn succeeds, every failure can settle startup directly.
@@ -1551,7 +1387,7 @@ pub fn start_service_for_slot(
         };
         Ok((child, command_json, redactor, log_relays))
     })()
-    .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
+    .map_err(|error| settle_reserved_failure(registry, &run_id, service_name, error))?;
     let pid = pending.id();
     // Before the start record commits, cleanup owns the child and capture, but
     // may settle startup only after proving containment.
@@ -1570,7 +1406,7 @@ pub fn start_service_for_slot(
         )
         .unwrap();
         if contained {
-            settle_reserved_failure(registry, &run_id, &service_instance_id, error)
+            settle_reserved_failure(registry, &run_id, service_name, error)
         } else {
             error
         }
@@ -1594,9 +1430,7 @@ pub fn start_service_for_slot(
     let started_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
         service_name: service_name.to_owned(),
-        service_instance_id: Some(service_instance_id.clone()),
         process_key: Some(process_key.clone()),
-        computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
     };
     let descendants = DescendantTracker::default();
     let (child, launch_error) = match pending.register_and_release(
@@ -1638,8 +1472,8 @@ pub fn start_service_for_slot(
         startup_guards,
         owned: Box::new(OwnedService {
             info: ServiceInfo {
+                service_instance_id: service_instance_id(&run_id, service_name),
                 run_id,
-                service_instance_id,
                 process_key,
                 pid,
                 pgid,
@@ -1707,9 +1541,7 @@ pub fn run_slot_clean(
             let context = LifecycleEventContext {
                 run_id: None,
                 service_name: service.name.to_string(),
-                service_instance_id: None,
                 process_key: None,
-                computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
             };
             (
                 context,
@@ -1737,13 +1569,13 @@ pub fn run_slot_clean(
 fn settle_reserved_failure(
     registry: &mut Registry,
     run_id: &str,
-    service_instance_id: &str,
+    service_name: &str,
     error: RuntimeError,
 ) -> RuntimeError {
     match settle_service_start(
         registry,
         run_id,
-        service_instance_id,
+        service_name,
         if error.code == ErrorCode::Canceled {
             ServiceStartOutcome::Canceled
         } else {
@@ -2395,16 +2227,10 @@ fn reap_owned_child(child: &mut OwnedChild) -> RuntimeResult<()> {
     ))
 }
 
-fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
-    format!("{service_instance_id}:{endpoint_id}")
-}
-
 struct LifecycleEventContext {
     run_id: Option<String>,
     service_name: String,
-    service_instance_id: Option<String>,
     process_key: Option<String>,
-    computed_manifest_hash: String,
 }
 
 /// A lifecycle operation's identity and terminal semantics for durable event
@@ -2439,9 +2265,7 @@ fn record_lifecycle_started(
         registry,
         "service.lifecycle.started",
         context.run_id.as_deref(),
-        context.service_instance_id.as_deref(),
         context.process_key.as_deref(),
-        &context.computed_manifest_hash,
         &payload_json,
     )
 }
@@ -2495,9 +2319,7 @@ fn record_lifecycle_terminal(
         registry,
         "service.lifecycle.terminal",
         context.run_id.as_deref(),
-        context.service_instance_id.as_deref(),
         context.process_key.as_deref(),
-        &context.computed_manifest_hash,
         &payload_json,
     )
 }
@@ -3390,18 +3212,13 @@ mod tests {
     }
 
     #[test]
-    fn conflict_view_preserves_wire_host_owner_omission_and_native_message() {
+    fn conflict_view_preserves_wire_host_and_native_message() {
         let selected = SelectedEndpoint {
             endpoint_id: "web".into(),
             host: LoopbackHost::parse("::1").unwrap(),
             port: 23080,
         };
-        let error = port_conflict_error(
-            PortConflictReason::ListenerOccupied,
-            "project",
-            &selected,
-            None,
-        );
+        let error = port_conflict_error(PortConflictReason::ListenerOccupied, "project", &selected);
         assert_eq!(
             error.message,
             "endpoint web is unavailable at ::1:23080 (listener-occupied)"
@@ -3413,31 +3230,14 @@ mod tests {
                 "endpoint":{"transport":"tcp","family":"ipv6","address":"::1","port":23080,"endpointId":"web"}
             }})
         );
-        let owner = NixfiedOwner {
-            project_id: "owner".into(),
-            environment: "dev".into(),
-            slot: 2,
-            run_id: "run".into(),
-            service_id: "service".into(),
-            service_instance_id: "instance".into(),
-            process_key: "process".into(),
-        };
         let error = port_conflict_error(
             PortConflictReason::StartupLockContended,
             "project",
             &selected,
-            Some(&owner),
         );
         assert_eq!(
             error.details["portConflict"]["reason"],
             "startup-lock-contended"
-        );
-        assert_eq!(
-            error.details["portConflict"]["nixfiedOwner"],
-            serde_json::json!({
-                "projectId":"owner","environment":"dev","slot":2,"runId":"run",
-                "serviceId":"service","serviceInstanceId":"instance","processKey":"process"
-            })
         );
     }
 

@@ -244,7 +244,7 @@ in
       ]
     )
     (record (output "runtime-error-port-conflict") "NoDecoder"
-      "The portConflict member of error details identifies the contended endpoint and any verified Nixfied owner."
+      "The portConflict member of error details identifies the contended endpoint."
       [
         (required "portConflict" (ref (
           output "port-conflict"
@@ -267,21 +267,6 @@ in
         (required "reason" (enum "enum PortConflictReason") "Native choice of the proven conflict fact.")
         (required "projectId" text "Requesting project identity.")
         (required "endpoint" (ref (output "port-conflict-endpoint")) "The contended endpoint.")
-        (omitted "nixfiedOwner" (ref (
-          output "nixfied-owner"
-        )) "Present only when native ownership proof identifies a Nixfied owner.")
-      ]
-    )
-    (record (output "nixfied-owner") "NoDecoder"
-      "Owner identity assembled only from native verified registry/host evidence."
-      [
-        (required "projectId" text "Owning project id.")
-        (required "environment" text "Owning dev namespace.")
-        (required "slot" u32 "Owning slot.")
-        (required "runId" text "Owning run.")
-        (required "serviceId" text "Owning declared service.")
-        (required "serviceInstanceId" text "Owning service instance.")
-        (required "processKey" text "Owning registry process key.")
       ]
     )
     (record (local "RegistryIdentityDiagnostic") "NoDecoder"
@@ -352,9 +337,6 @@ in
     )
     (vocabulary "status ProcessStatus" "ProcessStatus" status
       "Native processes.status vocabulary; ownership settlement is the separate ownership column."
-    )
-    (vocabulary "status PortStatus" "PortStatus" status
-      "Native ports.status vocabulary: endpoint evidence (reserved until verified, then active), never a socket reservation."
     )
     (vocabulary "status CleanupStatus" "CleanupStatus" status
       "Native cleanups.status vocabulary; marker-gated deletion stays native."

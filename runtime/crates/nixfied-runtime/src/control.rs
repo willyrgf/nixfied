@@ -1,4 +1,3 @@
-use crate::registry::records::{StoredEndpoint as PortRow, read_open_endpoints};
 use crate::registry::sql_error;
 use crate::registry::sqlite::RegistryContext;
 
@@ -8,8 +7,9 @@ use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::session::{record_interrupted_sessions, record_recovered_sessions};
-use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
+use crate::registry::status::{self, DbStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity, RegistryReader};
+use crate::service::identity::service_instance_id;
 use crate::service::{
     InvocationIdentity, InvocationOwner, Leader, ProcessRecord, ServiceTerminal, StopPolicy,
     StoredProcessIdentity, TaskTerminalStatus, contain, mark_invocation_finished,
@@ -162,9 +162,9 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
                 row.status
             };
             Ok(ProcessObservation {
+                service_instance_id: row.service_instance_id(),
                 process_key: row.process_key,
                 run_id: row.run_id,
-                service_instance_id: row.service_instance_id,
                 pid: row.pid,
                 pgid: row.pgid,
                 registry_status: row.status.as_str().to_string(),
@@ -178,14 +178,13 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
 }
 
 /// Recovery's process pass under slot authority: settle every recorded
-/// obligation proven gone, release endpoint evidence no live owner holds, then
-/// stop every live obligation with its recorded policy.
+/// obligation proven gone, then stop every live obligation with its recorded
+/// policy. Endpoint evidence settles with its owning process.
 pub fn stop_recorded_processes(
     registry: &mut Registry,
     timeout_ms: u64,
 ) -> RuntimeResult<DownReport> {
     registry.authority().validate()?;
-    read_open_endpoints(registry.connection(), None)?;
     let mut stale = Vec::new();
     let mut live = Vec::new();
     for row in process_rows(registry.connection())? {
@@ -203,16 +202,11 @@ pub fn stop_recorded_processes(
         }
         stale.push(row.process_key);
     }
-    let rows = process_rows(registry.connection())?;
-    release_orphaned_endpoints(registry, &rows)?;
     let mut stopped = Vec::new();
     for row in live {
         // Escape evidence snapshots live descendants before any signal.
-        let escape_start_identity = row
-            .service_instance_id
-            .as_ref()
-            .filter(|_| !row.unsettled)
-            .map(|_| {
+        let escape_start_identity =
+            (row.role == ProcessRole::Service && !row.unsettled).then(|| {
                 process_escape_start_identity(
                     row.pid,
                     row.pgid,
@@ -283,8 +277,8 @@ pub struct RecoveryReport {
 }
 
 /// Proof that exclusive predecessor recovery completed under one registry's
-/// slot authority: every recorded process obligation settled, no endpoint
-/// evidence remained open, any pending deletion was resumed, and the
+/// slot authority: every recorded process obligation, with the endpoint
+/// evidence it owns, settled, any pending deletion was resumed, and the
 /// predecessor tree's own retention was applied. Only [`recover_slot`]
 /// produces it; state preparation consumes it.
 #[derive(Debug)]
@@ -340,7 +334,6 @@ struct ProcessRow {
     start_identity: StoredProcessIdentity,
     command_json: String,
     run_id: String,
-    service_instance_id: Option<String>,
     status: ProcessStatus,
     computed_manifest_hash: String,
     unsettled: bool,
@@ -348,6 +341,14 @@ struct ProcessRow {
 }
 
 impl ProcessRow {
+    /// The public run-scoped reference of a service process.
+    fn service_instance_id(&self) -> Option<String> {
+        match (self.role, &self.service_name) {
+            (ProcessRole::Service, Some(name)) => Some(service_instance_id(&self.run_id, name)),
+            _ => None,
+        }
+    }
+
     /// Active rows and unresolved terminal rows are recorded obligations.
     fn is_obligation(&self) -> bool {
         status::PROCESS_ACTIVE.contains(&self.status) || self.unsettled
@@ -417,9 +418,7 @@ fn settle_control_escape(
     start_identity: Option<&str>,
     termination_error: RuntimeError,
 ) -> RuntimeError {
-    let (Some(service_instance_id), Some(start_identity)) =
-        (row.service_instance_id.as_deref(), start_identity)
-    else {
+    let (ProcessRole::Service, Some(start_identity)) = (row.role, start_identity) else {
         return termination_error;
     };
     let payload = serde_json::json!({
@@ -440,7 +439,6 @@ fn settle_control_escape(
     match mark_process_escape(
         registry,
         &row.run_id,
-        service_instance_id,
         &process,
         &row.computed_manifest_hash,
         row.start_identity.platform_start.as_deref(),
@@ -463,12 +461,12 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
             "
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
-              p.run_id, p.service_instance_id, p.status, r.computed_manifest_hash,
+              p.run_id, p.status, r.computed_manifest_hash,
               CASE WHEN {escaped_process}
                    THEN 1 ELSE 0 END, p.role, p.service_name,
               p.stop_signal, p.stop_timeout_ms, p.containment
             FROM processes p
-            LEFT JOIN runs r ON r.run_id = p.run_id
+            JOIN runs r ON r.run_id = p.run_id
             ORDER BY p.process_key
             ",
             escaped_process = status::unsettled_terminal_sql(),
@@ -484,16 +482,15 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 start_identity,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, i64>(9)? != 0,
-                row.get::<_, String>(10)?,
-                row.get::<_, Option<String>>(11)?,
+                row.get::<_, i64>(8)? != 0,
+                row.get::<_, String>(9)?,
+                row.get::<_, Option<String>>(10)?,
                 (
-                    row.get::<_, i32>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, String>(14)?,
+                    row.get::<_, i32>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, String>(13)?,
                 ),
             ))
         })
@@ -509,7 +506,6 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 start_identity_json,
                 command_json,
                 run_id,
-                service_instance_id,
                 status,
                 computed_manifest_hash,
                 unsettled,
@@ -526,14 +522,9 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     containment: StopPolicy::parse_containment(&containment)?,
                 };
                 let coherent = match role {
-                    ProcessRole::Task => service_instance_id.is_none() && service_name.is_none(),
-                    ProcessRole::Service => {
-                        service_instance_id.is_some()
-                            && service_name.as_ref().is_some_and(|name| !name.is_empty())
-                    }
-                    ProcessRole::Probe => {
-                        service_instance_id.is_none()
-                            && service_name.as_ref().is_some_and(|name| !name.is_empty())
+                    ProcessRole::Task => service_name.is_none(),
+                    ProcessRole::Service | ProcessRole::Probe => {
+                        service_name.as_ref().is_some_and(|name| !name.is_empty())
                     }
                 };
                 if !coherent {
@@ -560,7 +551,6 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     start_identity,
                     command_json,
                     run_id,
-                    service_instance_id,
                     status: ProcessStatus::parse_db(&status)?,
                     computed_manifest_hash,
                     unsettled,
@@ -574,7 +564,6 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     let RegistryContext {
         connection,
-        identity,
         redactor,
     } = registry.context()?;
     let transaction = connection.transaction().map_err(sql_error)?;
@@ -584,22 +573,6 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             params![row.process_key, ProcessStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
-    if let Some(service_instance_id) = row.service_instance_id.as_deref() {
-        transaction
-            .execute(
-                &format!(
-                    "
-                UPDATE ports
-                SET status = ?2
-                WHERE service_instance_id = ?1
-                  AND status IN ({})
-                ",
-                    status::sql_in_list(status::PORT_OPEN)
-                ),
-                params![service_instance_id, PortStatus::Stale.as_str()],
-            )
-            .map_err(sql_error)?;
-    }
     let payload_json = serde_json::json!({
         "pid": row.pid,
         "pgid": row.pgid,
@@ -609,101 +582,11 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     .to_string();
     insert_event(
         &transaction,
-        identity,
         redactor,
         EventInsert {
             event_type: "process.stale",
             run_id: Some(&row.run_id),
-            service_instance_id: row.service_instance_id.as_deref(),
             process_key: Some(&row.process_key),
-            computed_manifest_hash: Some(&row.computed_manifest_hash),
-            payload_json: &payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
-fn release_orphaned_endpoints(
-    registry: &mut Registry,
-    processes: &[ProcessRow],
-) -> RuntimeResult<()> {
-    let ports = read_open_endpoints(registry.connection(), None)?;
-    for port in ports {
-        let mut proof_process = None;
-        let mut live_owner = false;
-        for process in processes
-            .iter()
-            .filter(|process| port.is_owned_by_process(process))
-        {
-            if process.observed_liveness()? {
-                live_owner = true;
-                break;
-            }
-            if proof_process.is_none() {
-                proof_process = Some(process);
-            }
-        }
-        if live_owner {
-            continue;
-        }
-        if let Some(process) = proof_process {
-            mark_port_stale(registry, &port, process)?;
-        }
-    }
-    Ok(())
-}
-
-impl PortRow {
-    fn is_owned_by_process(&self, process: &ProcessRow) -> bool {
-        self.owner_process_key == process.process_key
-            && process.service_instance_id.as_deref() == Some(self.service_instance_id.as_str())
-    }
-}
-
-fn mark_port_stale(
-    registry: &mut Registry,
-    port: &PortRow,
-    process: &ProcessRow,
-) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            &format!(
-                "
-            UPDATE ports
-            SET status = ?2
-            WHERE endpoint_key = ?1
-              AND status IN ({})
-            ",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            params![port.endpoint_key.as_str(), PortStatus::Stale.as_str()],
-        )
-        .map_err(sql_error)?;
-    let payload_json = serde_json::json!({
-        "endpointKey": port.endpoint_key.as_str(),
-        "address": port.address.as_str(),
-        "port": port.port,
-        "previousStatus": port.status.as_str(),
-        "ownerProcessKey": port.owner_process_key.as_str(),
-    })
-    .to_string();
-    insert_event(
-        &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type: "port.stale",
-            run_id: Some(&process.run_id),
-            service_instance_id: Some(&port.service_instance_id),
-            process_key: Some(&process.process_key),
-            computed_manifest_hash: Some(&process.computed_manifest_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -712,14 +595,12 @@ fn mark_port_stale(
 }
 
 fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    if let Some(service_instance_id) = row.service_instance_id.as_deref() {
+    if row.role == ProcessRole::Service {
         // Recovery proves process death, never a predecessor's capture outcome.
         return settle_service_terminal(
             registry,
             &row.run_id,
-            service_instance_id,
             &row.process_key,
-            &row.computed_manifest_hash,
             ServiceTerminal::Stopped(None),
         );
     }
@@ -761,10 +642,5 @@ fn settle_down_process(registry: &mut Registry, row: &ProcessRow) -> RuntimeResu
 }
 
 fn settle_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    settle_unresolved_process(
-        registry,
-        &row.process_key,
-        &row.run_id,
-        &row.computed_manifest_hash,
-    )
+    settle_unresolved_process(registry, &row.process_key, &row.run_id)
 }

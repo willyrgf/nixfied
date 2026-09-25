@@ -239,11 +239,17 @@ when the manifest/runtime contract changes.
   reported; registry evidence alone is not a liveness oracle. There are no
   service leases, heartbeat or expiry transitions, owner tokens, or borrower
   counts. Startup intent is recorded before prepare; endpoint rows are recorded
-  atomically with their owning process, never as ownerless reservations. The
+  atomically with their owning process, never as ownerless reservations. An
+  endpoint row is immutable evidence keyed by its owning process and endpoint
+  id; it has no status of its own and settles exactly when that process does.
+  Verified listener ownership is recorded as `port.owner-verified` events. The
   declared service name belongs to its process record; there is no reusable
   service table or mutable service identity registry. A service-instance
   reference identifies one run and declared service name; it does not hash
-  endpoint, state, runtime, or target configuration. Startup rejects unresolved
+  endpoint, state, runtime, or target configuration. It is derived for output
+  and is not stored. The registry binds its project, environment, and slot once;
+  runs, processes, endpoint rows, and events do not repeat them, and each row
+  references the run or process it belongs to. Startup rejects unresolved
   predecessor process evidence before prepare. Slot cleanup lifecycle events
   identify the declared service without inventing a process instance.
 - Session execution outcome has one live writer: the session finalizer records
@@ -255,7 +261,8 @@ when the manifest/runtime contract changes.
   session records before writing any interruption evidence.
 - Session finalization has one writer. After stopping services, the live owner
   applies the application tree's own retention only when every service stop
-  settled and no process or endpoint evidence remains active: `run-scoped` data
+  settled and no process obligation, with the endpoint evidence it owns,
+  remains unresolved: `run-scoped` data
   is deleted through the marker-last protocol and `persistent` data is retained.
   Only then does it commit `finalization = complete` with a `run.finalized`
   event. Unsettled processes, refused retention, or a failed deletion retain
@@ -498,7 +505,7 @@ when the manifest/runtime contract changes.
   no locks, secrets, database writers, or cancellation FIFO. The session owner
   never writes caller streams while it has duties: runtime progress lines are
   retained in the run's `diagnostics.log` source. Each process registers its
-  source label, presentation (`selected`, `shown`, or `hidden` for replace-on-retry
+  source label, presentation (`selected`, `shown`, or `hidden` for per-attempt
   probe logs), and run-relative stdout/stderr paths before release. The helper
   discovers sources in short read-only transactions, tails them by run identity
   and offset with bounded per-stream queues, and treats temporary EOF as
@@ -598,7 +605,7 @@ Runtime output structs, borrowed views and private storage are authored in Rust;
 shared declarations describe wire fields and vocabularies. Independent literal
 serialization tests preserve those bytes and native failure behavior.
 Native producers place task evidence under `taskRun`, projection issues under
-`projections`, and verified endpoint/owner evidence under `portConflict`.
+`projections`, and the contended endpoint under `portConflict`.
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.
@@ -620,8 +627,7 @@ registry:
 
 Native cause projection retains its existing safe-key allowlist and excludes raw
 infrastructure text. Non-object details become an empty object in a cause. The
-allowlisted `endpoint` and `nixfiedOwner` keys have no direct current production
-insertion. Native `with_detail` retains its serialization-failure fallback. Run,
+allowlisted `endpoint` key has no direct current production insertion. Native `with_detail` retains its serialization-failure fallback. Run,
 control and summary output keep their existing conversion, redaction, formatting
 and write boundaries; the structural declarations perform none of those effects.
 

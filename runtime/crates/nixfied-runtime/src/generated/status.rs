@@ -26,23 +26,13 @@ Probe => "probe",
 
 db_status! {
     ProcessStatus {
-    Starting => "starting",
-Running => "running",
+    Running => "running",
 Ready => "ready",
 Stopped => "stopped",
 Succeeded => "succeeded",
 Failed => "failed",
 Canceled => "canceled",
 Escaped => "escaped",
-Stale => "stale",
-    }
-}
-
-db_status! {
-    PortStatus {
-    Reserved => "reserved",
-Active => "active",
-Released => "released",
 Stale => "stale",
     }
 }

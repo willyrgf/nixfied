@@ -38,7 +38,7 @@ pub fn sql_in_list<S: DbStatus>(statuses: &[S]) -> String {
 
 /// Registry queries use `p` for the process row whose ownership is checked. A
 /// terminal status whose containment was never proven remains an obligation,
-/// with or without endpoint evidence.
+/// together with any endpoint evidence it owns.
 pub(crate) fn unsettled_terminal_sql() -> String {
     format!(
         "p.ownership = 'unresolved' AND p.status NOT IN ({})",
@@ -77,14 +77,5 @@ macro_rules! db_status {
 
 include!("../generated/status.rs");
 
-/// Endpoint evidence still attributed to a process: registered before
-/// ownership verification (`reserved`) or verified (`active`). Never a socket
-/// reservation against the host.
-pub const PORT_OPEN: &[PortStatus] = &[PortStatus::Reserved, PortStatus::Active];
-
 /// Recorded statuses of a process that has not reached a terminal outcome.
-pub const PROCESS_ACTIVE: &[ProcessStatus] = &[
-    ProcessStatus::Starting,
-    ProcessStatus::Running,
-    ProcessStatus::Ready,
-];
+pub const PROCESS_ACTIVE: &[ProcessStatus] = &[ProcessStatus::Running, ProcessStatus::Ready];

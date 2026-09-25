@@ -93,9 +93,8 @@ output-schema ps-json: processes
 # ps reads a coherent snapshot without reconciliation or absent-registry creation.
 output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus observedStatus ownership live
 output-schema runtime-error-port-conflict: portConflict
-output-schema port-conflict: reason projectId endpoint nixfiedOwner?
+output-schema port-conflict: reason projectId endpoint
 output-schema port-conflict-endpoint: transport family address port endpointId
-output-schema nixfied-owner: projectId environment slot runId serviceId serviceInstanceId processKey
 output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
 output-schema run-error-summary-text: error
 output-schema runtime-error: code exitClass message details causes? manifestPath? computedManifestHash?
@@ -107,14 +106,14 @@ output-schema runtime-error-projection: stream operation kind path bytesWritten
 # Ownership requires exact listener/process/containment/endpoint proof.
 # Linux observes SOCK_DIAG; macOS observes pcblist_n.
 endpoint-acquisition: fixed-euid-startup-lock reuseaddr-exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
-endpoint-ownership: exact-listener process-identity containment complete-active-endpoint-set guarded-activation
+endpoint-ownership: exact-listener process-identity containment complete-active-endpoint-set guarded-activation immutable-process-owned-evidence settles-with-owner
 session-service-reference: length-framed-run-and-declared-name no-configuration-hashes predecessor-settlement-before-start cleanup-declaration-without-instance
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: gated-process-registration process-role-probe declared-service-attribution immutable-attempt-logs observation-before-capture probe-intent-before-signal independent-terminal-evidence post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence
 service-ownership: release-observes-session startup-grace-observes-session observe-exit-before-stop-intent stop-intent-before-signal execution-thread-descendant-observation ready-checkpoint-containment cancellation-aware-startup-grace gated-process-registration supervision-before-permission session-owned guarded-ready-rollback initial-health-failed-start-settlement settlement-error-retains-lifecycle-cause process-owned-service-label no-service-registry
 task-evidence: gated-process-registration verified-launcher-identity-before-permission session-owned-terminal-records monotonic-attempt-occurrence-from-zero gaps-before-terminal exclusive-task-occurrence-logs exclusive-summary-occurrence-json preserve-task-step-path-order prepare-shown-live direct-leaf-selected-live summary-failure-retains-completed-evidence
 bounded-capture: service-always-captured minimal-secret-prefix-holdback typed-capture-outcome checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
-state-preparation: refuse-deleted-generation marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
+state-preparation: refuse-deleted-generation marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation single-settlement-writer retention-after-quiescence run-scoped-deleted persistent-retained complete-after-settlement unfinished-retains-data recovery-applies-predecessor-retention recovered-sessions-complete
 process-obligation-recovery: persisted-stop-policy leader-group-and-tracked-liveness absent-leader-group-is-owned present-mismatched-leader-is-reuse post-termination-settle-wait-1000ms recovery-never-invents-capture explicit-process-ownership unresolved-until-proven endpoint-independent ps-visible down-actionable cleanup-blocked settle-after-death-proof capture-failure-unresolved
 
@@ -140,8 +139,7 @@ enum PersistencePolicy: run-scoped persistent
 status ExecutionOutcome: succeeded failed canceled interrupted
 status FinalizationStatus: unfinished complete
 status ProcessRole: task service probe
-status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
-status PortStatus: reserved active released stale
+status ProcessStatus: running ready stopped succeeded failed canceled escaped stale
 status CleanupStatus: pending completed
 
 # PORT_CONFLICT is constructed only from one of these two proven host facts.

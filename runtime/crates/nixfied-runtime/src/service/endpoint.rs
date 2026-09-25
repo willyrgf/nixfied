@@ -136,7 +136,6 @@ pub(crate) enum EndpointFailure {
     },
     ListenerOccupied {
         endpoint: SelectedEndpoint,
-        listeners: Vec<ListenerRecord>,
     },
     Unverifiable {
         endpoint: Option<SelectedEndpoint>,
@@ -410,7 +409,6 @@ pub(crate) enum OwnershipObservation<'a> {
     Missing(&'a SelectedEndpoint),
     Outside {
         endpoint: &'a SelectedEndpoint,
-        listeners: Vec<ListenerRecord>,
     },
     Unverifiable {
         endpoint: Option<&'a SelectedEndpoint>,
@@ -449,13 +447,6 @@ pub(crate) fn observe_ownership_after_primary_exit<'a>(
 ) -> OwnershipObservation<'a> {
     let endpoints = endpoints.values().collect::<Vec<_>>();
     observe_ownership_inner(&endpoints, expected, false)
-}
-
-pub(crate) fn observe_single_ownership<'a>(
-    endpoint: &'a SelectedEndpoint,
-    expected: &ExpectedOwner<'_>,
-) -> OwnershipObservation<'a> {
-    observe_ownership_inner(&[endpoint], expected, true)
 }
 
 fn observe_ownership_inner<'a>(
@@ -511,10 +502,7 @@ fn observe_ownership_inner<'a>(
             .collect::<Vec<_>>();
         for listener in &matches {
             if listener.identity.uid != euid {
-                return OwnershipObservation::Outside {
-                    endpoint,
-                    listeners: matches,
-                };
+                return OwnershipObservation::Outside { endpoint };
             }
             if listener.holders.is_empty() {
                 return OwnershipObservation::Unverifiable {
@@ -540,10 +528,7 @@ fn observe_ownership_inner<'a>(
                         if holder.platform_start.as_deref() == Some(expected_start) {
                             continue;
                         }
-                        return OwnershipObservation::Outside {
-                            endpoint,
-                            listeners: matches,
-                        };
+                        return OwnershipObservation::Outside { endpoint };
                     }
                     if let Some(monitored) = expected
                         .tracked_processes
@@ -561,10 +546,7 @@ fn observe_ownership_inner<'a>(
                         if holder.platform_start.as_deref() == Some(monitored_start) {
                             continue;
                         }
-                        return OwnershipObservation::Outside {
-                            endpoint,
-                            listeners: matches,
-                        };
+                        return OwnershipObservation::Outside { endpoint };
                     }
                 }
                 match process_is_in_containment(
@@ -576,10 +558,7 @@ fn observe_ownership_inner<'a>(
                 ) {
                     Ok(true) => {}
                     Ok(false) => {
-                        return OwnershipObservation::Outside {
-                            endpoint,
-                            listeners: matches,
-                        };
+                        return OwnershipObservation::Outside { endpoint };
                     }
                     Err(error) => {
                         return OwnershipObservation::ContainmentUnconfirmed {
@@ -620,7 +599,6 @@ pub(crate) fn preflight<'a>(
         if !listeners.is_empty() {
             return Err(EndpointFailure::ListenerOccupied {
                 endpoint: endpoint.clone(),
-                listeners,
             });
         }
         if matches!(bind, BindResult::AddressInUse) {

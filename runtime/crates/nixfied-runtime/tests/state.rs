@@ -476,17 +476,21 @@ fn cleanup_refuses_a_symlinked_root_and_unlinks_tree_symlinks_without_following(
 #[test]
 fn cleanup_and_purge_refuse_active_registry_refs() {
     let process: fn(&rusqlite::Connection) = |connection| {
+        seed_run(connection, "run-1", None);
         seed_process(connection, SeedProcess::default());
     };
+    // Endpoint evidence of a terminal, unresolved owner is still active.
     let port: fn(&rusqlite::Connection) = |connection| {
-        seed_port(
+        seed_run(connection, "run-1", None);
+        seed_process(
             connection,
-            "endpoint-1",
-            "service-1",
-            23080,
-            "reserved",
-            "process-1",
+            SeedProcess {
+                status: "stopped",
+                service: Some("synthetic"),
+                ..SeedProcess::default()
+            },
         );
+        seed_port(connection, "process-1", "endpoint-1", 23080);
     };
     for seed in [process, port] {
         for purge in [false, true] {
@@ -562,17 +566,15 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         SeedProcess {
             key: "process-stale",
             run_id: "run-stale",
-            service: Some(("service-stale", "synthetic")),
+            service: Some("synthetic"),
             ..SeedProcess::default()
         },
     );
     seed_port(
         registry.connection(),
-        "service-stale:endpoint-stale",
-        "service-stale",
-        23190,
-        "active",
         "process-stale",
+        "endpoint-stale",
+        23190,
     );
 
     let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
@@ -580,16 +582,18 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
 
     deleted_id(&outcome);
     assert!(!fixture.layout.state_root().exists());
-    let statuses: (String, String) = registry
+    // Endpoint evidence is retained unchanged; it settled with its owner.
+    let settled: (String, String, i64) = registry
         .connection()
         .query_row(
-            "SELECT p.status, e.status FROM processes p, ports e
-             WHERE p.process_key = 'process-stale' AND e.endpoint_key = 'service-stale:endpoint-stale'",
+            "SELECT p.status, p.ownership, e.port FROM processes p
+             JOIN ports e ON e.owner_process_key = p.process_key
+             WHERE p.process_key = 'process-stale' AND e.endpoint_id = 'endpoint-stale'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(statuses, ("stale".to_string(), "stale".to_string()));
+    assert_eq!(settled, ("stale".into(), "settled".into(), 23190));
 }
 
 #[test]
@@ -872,7 +876,7 @@ fn a_failed_completion_commit_after_root_removal_resumes_the_same_operation() {
 }
 
 #[test]
-fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
+fn clean_settles_endpoint_evidence_with_its_owner_after_death_proof() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
     seed_run(registry.connection(), "run-stale-port", None);
@@ -883,29 +887,19 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
             run_id: "run-stale-port",
             pid: 999_998,
             status: "stopped",
-            service: Some(("service-stale-port", "synthetic")),
+            service: Some("synthetic"),
             ..SeedProcess::default()
         },
     );
     seed_port(
         registry.connection(),
-        "service-stale-port:endpoint",
-        "service-stale-port",
-        23191,
-        "active",
         "process-stale-port",
+        "endpoint",
+        23191,
     );
 
     let outcome = recover_then_clean(&mut registry, &fixture.identity, CleanupMode::Standard)
         .expect("stale port should reconcile before cleanup");
-    let port_status: String = registry
-        .connection()
-        .query_row(
-            "SELECT status FROM ports WHERE endpoint_key = 'service-stale-port:endpoint'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("port status should query");
     // A terminal row without proven containment is an explicit obligation;
     // recovery settles it (and its endpoint evidence) only after death proof.
     let (ownership, settled_events): (String, i64) = registry
@@ -919,7 +913,6 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         .expect("ownership should query");
 
     deleted_id(&outcome);
-    assert_eq!(port_status, "stale");
     assert_eq!((ownership.as_str(), settled_events), ("settled", 1));
 }
 
@@ -1240,7 +1233,7 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
             run_id: "run-escaped",
             pid: 999_997,
             status: "escaped",
-            service: Some(("service-escaped", "synthetic")),
+            service: Some("synthetic"),
             ..SeedProcess::default()
         },
     );

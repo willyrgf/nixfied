@@ -30,12 +30,7 @@ fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
     let first = HeldSession::start(&fixture, &root_a);
     assert!(find_named(&root_a, "endpoint-prepare-sentinel").is_some());
     let blocked = run_command(&fixture, &root_b).output().unwrap();
-    let error = assert_port_conflict(&blocked, "listener-occupied", port);
-    assert!(
-        error["details"]["portConflict"]
-            .get("nixfiedOwner")
-            .is_none()
-    );
+    assert_port_conflict(&blocked, "listener-occupied", port);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
     first.finish();
     let second = HeldSession::start(&fixture, &root_b);
@@ -123,11 +118,6 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
     assert!(error["details"]["runId"].is_string());
     assert_eq!(error["details"]["environment"], json!("dev"));
     assert_eq!(error["details"]["slot"], json!(0));
-    assert!(
-        error["details"]["portConflict"]
-            .get("nixfiedOwner")
-            .is_none()
-    );
     drop(external);
 }
 
@@ -142,13 +132,8 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
         let root = fixture.tmp.path.join("root");
 
         let output = run_command(&fixture, &root).output().unwrap();
-        let error = assert_port_conflict(&output, "listener-occupied", port);
+        assert_port_conflict(&output, "listener-occupied", port);
         assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
-        assert!(
-            error["details"]["portConflict"]
-                .get("nixfiedOwner")
-                .is_none()
-        );
     }
 }
 
@@ -219,7 +204,7 @@ fn interrupted_starting_service_is_cleaned_before_fresh_start_not_adopted() {
     rusqlite::Connection::open(find_named(&root, "registry.sqlite3").unwrap())
         .unwrap()
         .execute(
-            "UPDATE processes SET status = 'starting' WHERE process_key = ?1",
+            "UPDATE processes SET status = 'running' WHERE process_key = ?1",
             [&old_key],
         )
         .unwrap();
@@ -227,7 +212,7 @@ fn interrupted_starting_service_is_cleaned_before_fresh_start_not_adopted() {
     assert_ne!(service_process(&root).1, old_key);
     assert_eq!(
         service_evidence(&root, &old_key),
-        ("stopped".into(), "released".into())
+        ("stopped".into(), "settled".into())
     );
     successor.finish();
 }
@@ -243,15 +228,10 @@ fn outside_listener_survives_predecessor_recovery_and_reports_conflict() {
     let external = TcpListener::bind(("127.0.0.1", port)).unwrap();
     predecessor.crash();
     let blocked = run_command(&fixture, &root).output().unwrap();
-    let error = assert_port_conflict(&blocked, "listener-occupied", port);
-    assert!(
-        error["details"]["portConflict"]
-            .get("nixfiedOwner")
-            .is_none()
-    );
+    assert_port_conflict(&blocked, "listener-occupied", port);
     assert_eq!(
         service_evidence(&root, &old_key),
-        ("stopped".into(), "released".into())
+        ("stopped".into(), "settled".into())
     );
     assert_eq!(external.local_addr().unwrap().port(), port);
     drop(external);
@@ -289,15 +269,16 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
         .query_row(
             "
             SELECT
-              (SELECT count(*) FROM ports WHERE status = 'active'),
-              (SELECT count(*) FROM ports WHERE status = 'released'),
+              (SELECT count(*) FROM ports),
+              (SELECT count(*) FROM ports ep JOIN processes p ON p.process_key = ep.owner_process_key
+                 WHERE p.ownership = 'unresolved'),
               (SELECT count(*) FROM events WHERE event_type = 'service.probe-ready')
             ",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(state, (0, 2, 0));
+    assert_eq!(state, (2, 0, 0));
     drop(connection);
 
     // A second full attempt reaches the same truthful readiness result rather
@@ -541,9 +522,11 @@ impl HeldSession {
         poll_until(Duration::from_secs(5), "held task registration", || {
             let registered: i64 = registry_ro(root)
                 .query_row(
-                    "SELECT count(*) FROM processes WHERE service_instance_id IS NULL AND status = 'running'",
-                    [], |row| row.get(0),
-                ).unwrap();
+                    "SELECT count(*) FROM processes WHERE role != 'service' AND status = 'running'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
             (registered == 1).then_some(())
         });
         session
@@ -588,15 +571,19 @@ impl Drop for HeldSession {
 }
 
 fn service_process(root: &Path) -> (libc::pid_t, String) {
-    registry_ro(root).query_row(
-        "SELECT pid, process_key FROM processes WHERE service_instance_id IS NOT NULL AND status = 'ready'",
-        [], |row| Ok((row.get(0)?, row.get(1)?)),
-    ).unwrap()
+    registry_ro(root)
+        .query_row(
+            "SELECT pid, process_key FROM processes WHERE role = 'service' AND status = 'ready'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
 }
 
+/// A service process's status and ownership, with its endpoint evidence present.
 fn service_evidence(root: &Path, process: &str) -> (String, String) {
     registry_ro(root).query_row(
-        "SELECT p.status, ep.status FROM processes p JOIN ports ep ON ep.owner_process_key = p.process_key
+        "SELECT p.status, p.ownership FROM processes p JOIN ports ep ON ep.owner_process_key = p.process_key
          WHERE p.process_key = ?1", [process], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap()
 }
