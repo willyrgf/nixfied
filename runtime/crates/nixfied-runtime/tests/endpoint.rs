@@ -36,8 +36,11 @@ fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
     );
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
     first.finish();
-    HeldSession::start(&manifest, &root_b).finish();
+    let second = HeldSession::start(&manifest, &root_b);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_some());
+    second.finish();
+    // Run-scoped data ends with its session; the application tree is gone.
+    assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
 }
 
 #[test]

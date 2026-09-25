@@ -1332,3 +1332,174 @@ fn stored_execution_outcome(fixture: &RuntimeFixture) -> String {
         .query_row("SELECT execution_outcome FROM runs", [], |row| row.get(0))
         .unwrap()
 }
+
+fn registry_connection(fixture: &RuntimeFixture) -> rusqlite::Connection {
+    rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+}
+
+#[test]
+fn session_settlement_applies_the_trees_own_retention_after_every_outcome() {
+    for persistent in [false, true] {
+        for (scenario, expected_exit, expected_outcome) in [
+            ("success", 0, "succeeded"),
+            ("failure", 30, "failed"),
+            ("cancel", 27, "canceled"),
+        ] {
+            let marker = tempfile_marker("retention");
+            let args: Vec<String> = match scenario {
+                "success" => vec!["exit".into(), "0".into()],
+                "failure" => vec!["exit".into(), "3".into()],
+                _ => vec![
+                    "output".into(),
+                    "hex-block".into(),
+                    "".into(),
+                    "".into(),
+                    marker.to_string_lossy().into_owned(),
+                ],
+            };
+            let mut manifest = leaf_task_manifest(&args);
+            if persistent {
+                manifest["state"]["persistence"] = json!("persistent");
+            }
+            let fixture = RuntimeFixture::new(manifest);
+            let child = fixture
+                .command("run", &["--task", "smoke", "--output", "json"])
+                .spawn()
+                .unwrap();
+            if scenario == "cancel" {
+                assert!(wait_for_path(&marker, Duration::from_secs(5)));
+                assert_eq!(
+                    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+                    0
+                );
+            }
+            let output = wait_for_child_output(child, Duration::from_secs(10));
+            assert_eq!(
+                output.status.code(),
+                Some(expected_exit),
+                "{scenario}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let data = fixture.state_base.join("data/runtime-test/dev/0");
+            assert_eq!(
+                data.join(".nixfied-state.json").is_file(),
+                persistent,
+                "{scenario}: persistence alone decides whether data survives"
+            );
+            let connection = registry_connection(&fixture);
+            let (outcome, finalization, cleanups, logs): (String, String, i64, i64) = connection
+                .query_row(
+                    "SELECT execution_outcome, finalization,
+                       (SELECT count(*) FROM cleanups WHERE status = 'completed'),
+                       (SELECT count(*) FROM events WHERE event_type = 'run.finalized')
+                     FROM runs",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(outcome, expected_outcome, "{scenario}");
+            assert_eq!(finalization, "complete", "{scenario}");
+            assert_eq!(cleanups, i64::from(!persistent), "{scenario}");
+            assert_eq!(logs, 1, "{scenario}");
+            let runs = fixture.state_base.join("registry/runtime-test/dev/0/runs");
+            let run = fs::read_dir(runs).unwrap().next().unwrap().unwrap().path();
+            assert!(
+                run.join("logs/task.0.stdout.log").is_file(),
+                "{scenario}: retained evidence survives data deletion"
+            );
+        }
+    }
+}
+
+#[test]
+fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
+    for persistent in [false, true] {
+        let marker = tempfile_marker("killed-owner");
+        let block = vec![
+            "output".into(),
+            "hex-block".into(),
+            "".into(),
+            "".into(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        let mut manifest = leaf_task_manifest(&block);
+        if persistent {
+            manifest["state"]["persistence"] = json!("persistent");
+        }
+        let fixture = RuntimeFixture::new(&manifest);
+        let owner = fixture
+            .command("run", &["--task", "smoke", "--output", "json"])
+            .spawn()
+            .unwrap();
+        assert!(wait_for_path(&marker, Duration::from_secs(5)));
+        let data = fixture.state_base.join("data/runtime-test/dev/0");
+        let sentinel = data.join("application-data");
+        fs::write(&sentinel, b"written by the killed session").unwrap();
+        let generation = |path: &PathBuf| -> String {
+            let marker: Value =
+                serde_json::from_slice(&fs::read(path.join(".nixfied-state.json")).unwrap())
+                    .unwrap();
+            marker["dataGeneration"].as_str().unwrap().to_owned()
+        };
+        let before = generation(&data);
+        assert_eq!(
+            unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
+            0
+        );
+        let killed = wait_for_child_output(owner, Duration::from_secs(5));
+        assert!(!killed.status.success());
+
+        let program = manifest["tasks"]["smoke"]["invocation"]["run"][0].clone();
+        manifest["tasks"]["smoke"]["invocation"]["run"] = json!([program, "exit", "0"]);
+        fs::write(
+            &fixture.manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let successor = run(&fixture, &["--task", "smoke", "--output", "json"]);
+        assert!(
+            successor.status.success(),
+            "{}",
+            String::from_utf8_lossy(&successor.stderr)
+        );
+        assert_eq!(
+            sentinel.exists(),
+            persistent,
+            "the predecessor's own retention decides its data"
+        );
+        if persistent {
+            assert_eq!(generation(&data), before);
+        } else {
+            assert!(!data.exists(), "the successor's run-scoped data also ends");
+        }
+        let connection = registry_connection(&fixture);
+        let sessions: Vec<(String, String)> = connection
+            .prepare("SELECT execution_outcome, finalization FROM runs ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            sessions,
+            [
+                ("interrupted".to_string(), "complete".to_string()),
+                ("succeeded".to_string(), "complete".to_string()),
+            ]
+        );
+        let recovered: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_type = 'run.recovered'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recovered, 1);
+    }
+}

@@ -77,8 +77,14 @@
           [[ "$docs" == *'### `synthetic`'* ]]
           [[ "$docs" == *'- primary endpoint: `synthetic-tcp`'* ]]
           [[ "$docs" != *'## Surfaces'* ]]
-          NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
-            nixfied-runtime clean --manifest "$MINIMAL_MANIFEST/manifest.json"
+          # Run-scoped application data is deleted by session finalization;
+          # retained evidence and cleanup history survive it.
+          [ ! -e "''${stateDir}/example-minimal-inner/data/minimal/dev/0" ] \
+            || { echo "example-minimal: run-scoped state survived its session" >&2; exit 1; }
+          test -f "$(jq -r .task.stdoutPath "$result")"
+          clean=$(NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
+            nixfied-runtime clean --manifest "$MINIMAL_MANIFEST/manifest.json")
+          jq -e '.result == "absent"' <<<"$clean" >/dev/null
         ''
       ];
     };
@@ -113,8 +119,14 @@
             > "''${stateDir}/gate-artifacts/example-postgres-repeat.stdout"
           [ "$(cat "''${stateDir}/gate-artifacts/example-postgres-repeat.stdout")" = 1 ]
           test -f "$root/pgdata/adoption-sentinel"
+          if NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
+            nixfied-runtime clean --manifest "$POSTGRES_MANIFEST/manifest.json" 2>/dev/null; then
+            echo "example-postgres: ordinary clean deleted persistent data" >&2
+            exit 1
+          fi
+          test -f "$root/pgdata/adoption-sentinel"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
-            nixfied-runtime clean --manifest "$POSTGRES_MANIFEST/manifest.json"
+            nixfied-runtime clean --manifest "$POSTGRES_MANIFEST/manifest.json" --purge
           test ! -e "$root"
         ''
       ];
@@ -569,7 +581,7 @@
             nixfied-runtime run --manifest "$MINIMAL_CHANGED_STATE_MANIFEST/manifest.json" --task smoke >/dev/null
           [ -e "$root/sentinel" ] \
             || { echo "lifecycle: configuration change deleted retained application data" >&2; exit 1; }
-          [ "$(jq -r .markerVersion "$marker")" = "2" ] \
+          [ "$(jq -r .markerVersion "$marker")" = "3" ] \
             || { echo "lifecycle: unexpected state marker version" >&2; exit 1; }
         ''
       ];
@@ -864,16 +876,14 @@
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime clean --manifest "$DOWNSTREAM_MANIFEST/manifest.json" --slot 1 \
             > "''${stateDir}/gate-artifacts/slots-clean-1.json"
-          clean0=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/slots-clean-0.json")
-          clean1=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/slots-clean-1.json")
-          jq -e '.cleanupId and .deletedPath' \
-            "''${stateDir}/gate-artifacts/slots-clean-0.json" >/dev/null
-          jq -e '.cleanupId and .deletedPath' \
-            "''${stateDir}/gate-artifacts/slots-clean-1.json" >/dev/null
-          [ -n "$clean0" ] && [ "$clean0" != "null" ] \
-            || { echo "slots: clean slot 0 did not report a deletedPath" >&2; exit 1; }
-          [ -n "$clean1" ] && [ "$clean1" != "null" ] \
-            || { echo "slots: clean slot 1 did not report a deletedPath" >&2; exit 1; }
+          # Each run-scoped session already deleted its own slot data; clean
+          # observes per-slot absence without inventing a deletion.
+          clean0=$(jq -r 'select(.result == "absent") | .targetPath' "''${stateDir}/gate-artifacts/slots-clean-0.json")
+          clean1=$(jq -r 'select(.result == "absent") | .targetPath' "''${stateDir}/gate-artifacts/slots-clean-1.json")
+          [ -n "$clean0" ] && [ ! -e "$clean0" ] \
+            || { echo "slots: slot 0 run-scoped data survived its session" >&2; exit 1; }
+          [ -n "$clean1" ] && [ ! -e "$clean1" ] \
+            || { echo "slots: slot 1 run-scoped data survived its session" >&2; exit 1; }
           [ "$clean0" != "$clean1" ] \
             || { echo "slots: clean reported the same state path for both slots" >&2; exit 1; }
         ''
