@@ -638,6 +638,21 @@ fn decode_record(
     })
 }
 
+/// A generation that cleanup history already deleted can never be adopted as
+/// application data again; its reappearance is contradictory history.
+pub(crate) fn refuse_deleted_generation(
+    registry: &Registry,
+    marker: &StateMarker,
+) -> RuntimeResult<()> {
+    if generation_completed(registry, &marker.data_generation)? {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "a previously deleted data generation reappeared; refusing contradictory history",
+        ));
+    }
+    Ok(())
+}
+
 fn generation_completed(registry: &Registry, generation: &str) -> RuntimeResult<bool> {
     registry
         .connection()

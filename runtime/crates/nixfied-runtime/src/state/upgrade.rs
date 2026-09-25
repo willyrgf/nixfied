@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::control::require_settled_slot;
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry};
-use crate::state::cleanup::resume_pending_cleanup;
+use crate::state::cleanup::{refuse_deleted_generation, resume_pending_cleanup};
 use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
 };
@@ -48,11 +48,13 @@ pub fn prepare_slot_state(
             commit_slot_marker(placement, identity)?;
             UpgradeReport::unchanged()
         }
-        MarkerDecision::Adopt(_) => {
+        MarkerDecision::Adopt(existing) => {
+            refuse_deleted_generation(registry, &existing)?;
             materialize_state_root(placement)?;
             UpgradeReport::unchanged()
         }
         MarkerDecision::Upgrade { existing } => {
+            refuse_deleted_generation(registry, &existing)?;
             record_upgrade_event(registry, identity, &existing)?;
             materialize_state_root(placement)?;
             refresh_slot_marker(placement, identity, &existing)?;
