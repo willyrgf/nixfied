@@ -11,6 +11,7 @@ mod filesystem;
 pub mod launch;
 pub mod manifest_loader;
 pub mod output;
+pub mod presenter;
 pub mod redaction;
 pub mod registry;
 pub mod service;

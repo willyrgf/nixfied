@@ -671,8 +671,8 @@ fn insert_pending_session(registry: &Registry, run_id: &str) {
         .connection()
         .execute(
             "INSERT INTO runs (run_id, environment, slot, manifest_path, computed_manifest_hash,
-             runtime_abi, toolchain_id, generator_json, target_json, source_json)
-         VALUES (?1, ?2, ?3, '/manifest', 'hash', ?4, ?5, '{}', '{}', '{}')",
+             runtime_abi, toolchain_id, generator_json, target_json, source_json, owner_identity, diagnostic_path)
+         VALUES (?1, ?2, ?3, '/manifest', 'hash', ?4, ?5, '{}', '{}', '{}', '{}', 'diagnostics.log')",
             rusqlite::params![
                 run_id,
                 identity.environment,

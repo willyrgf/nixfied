@@ -269,6 +269,111 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
     transaction.commit().map_err(sql_error)
 }
 
+/// Whether the owner could publish a checked output seal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputPublication {
+    Sealed,
+    /// Some source lacks a checked capture outcome; completeness stays unknown.
+    Unsealed,
+}
+
+/// Disable new source admission: after this commit no process may register
+/// a source for the run. Repeating it is harmless.
+pub fn close_source_registration(
+    registry: &mut Registry,
+    run_id: &str,
+    manifest_hash: &str,
+) -> RuntimeResult<()> {
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    progress(&transaction, identity, run_id, manifest_hash)?;
+    let changed = transaction
+        .execute(
+            "UPDATE runs SET sources = 'closed' WHERE run_id = ?1 AND sources = 'open'",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    if changed == 1 {
+        insert_event(
+            &transaction,
+            identity,
+            redactor,
+            EventInsert {
+                event_type: "run.sources-closed",
+                run_id: Some(run_id),
+                service_instance_id: None,
+                process_key: None,
+                computed_manifest_hash: Some(manifest_hash),
+                payload_json: "{}",
+            },
+        )?;
+    }
+    transaction.commit().map_err(sql_error)
+}
+
+/// Publish the run's output seal only when registration is closed and every
+/// source recorded a checked capture outcome. The caller has already closed
+/// its diagnostic writer. Sealed files are immutable afterwards.
+pub fn seal_output(
+    registry: &mut Registry,
+    run_id: &str,
+    manifest_hash: &str,
+) -> RuntimeResult<OutputPublication> {
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    progress(&transaction, identity, run_id, manifest_hash)?;
+    let (sources, pending): (String, i64) = transaction
+        .query_row(
+            "SELECT sources, (SELECT count(*) FROM processes WHERE run_id = ?1 AND capture = 'pending')
+             FROM runs WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    if sources != "closed" {
+        return Err(invalid(
+            "output cannot be sealed while source registration is open",
+        ));
+    }
+    if pending > 0 {
+        transaction.commit().map_err(sql_error)?;
+        return Ok(OutputPublication::Unsealed);
+    }
+    transaction
+        .execute(
+            "UPDATE runs SET output = 'sealed' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        identity,
+        redactor,
+        EventInsert {
+            event_type: "run.output-sealed",
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: None,
+            computed_manifest_hash: Some(manifest_hash),
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(OutputPublication::Sealed)
+}
+
 fn write_complete(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
     let changed = transaction
         .execute(

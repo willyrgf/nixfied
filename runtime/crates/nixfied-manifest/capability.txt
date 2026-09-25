@@ -60,6 +60,9 @@ surface: check run ps down clean
 session-cancellation: runs-session-control-fifo any-byte-cancels separate-keeper-writer scoped-receiver-token-only nonblocking-sender select-once never-successor observe-selected-settlement dead-owner-recovery-under-slot timeout-reports-incomplete no-pid-signaling endpoint-removed-before-release
 # Private bootstrap mode, not an adopter app or manifest command. It dispatches
 # before ordinary admission and receives exactly one bounded execution request.
+# Private command-owned presenter: read-only evidence tailing, never a workload.
+internal-presenter: __presenter connected-unix-stream-fd NXP1 u32be-length json-init max-65536 finish-F cancel-C report-frame null-stdin env-clear failure-exit-125
+output-publication: diagnostic-source source-registration-before-release selected-shown-hidden run-relative-paths capture-outcome-per-source sources-closed-after-teardown seal-after-writer-closure no-active-session-caller-writes post-release-drain labeled-human-lines fragment-8192 command-local-delivery
 internal-workload-gate: __workload-gate connected-unix-stream-fd NXG1 u32be-length json-unix-bytes max-1048576 write-half-eof deadline-10000ms failure-exit-125
 workload-gate-request: executable args env cwd
 workload-gate-failure: frame-1 request-2 setup-3 exec-4
@@ -69,7 +72,7 @@ surface-help: -h --help
 
 # The run command output projections. Summary is human-facing; json is the
 # structured automation surface; both is the explicit combined diagnostic mode;
-# task-output replays one directly selected leaf's redacted evidence bytes.
+# task-output presents one directly selected leaf's redacted evidence bytes live.
 run-output-mode: summary json both task-output
 
 # The runtime-owned run output schemas. These JSON/text projections are public
@@ -106,8 +109,8 @@ session-service-reference: length-framed-run-and-declared-name no-configuration-
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: gated-process-registration process-role-probe declared-service-attribution immutable-attempt-logs observation-before-capture probe-intent-before-signal independent-terminal-evidence post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence
 service-ownership: release-observes-session startup-grace-observes-session observe-exit-before-stop-intent stop-intent-before-signal execution-thread-descendant-observation ready-checkpoint-containment cancellation-aware-startup-grace gated-process-registration supervision-before-permission session-owned guarded-ready-rollback initial-health-failed-start-settlement settlement-error-retains-lifecycle-cause process-owned-service-label no-service-registry
-task-evidence: gated-process-registration verified-launcher-identity-before-permission session-owned-terminal-records monotonic-attempt-occurrence-from-zero gaps-before-terminal exclusive-task-occurrence-logs exclusive-summary-occurrence-json preserve-task-step-path-order prepare-capture-only direct-leaf-replay summary-failure-retains-completed-evidence
-bounded-capture: checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
+task-evidence: gated-process-registration verified-launcher-identity-before-permission session-owned-terminal-records monotonic-attempt-occurrence-from-zero gaps-before-terminal exclusive-task-occurrence-logs exclusive-summary-occurrence-json preserve-task-step-path-order prepare-shown-live direct-leaf-selected-live summary-failure-retains-completed-evidence
+bounded-capture: service-always-captured minimal-secret-prefix-holdback typed-capture-outcome checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
 state-preparation: marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation single-settlement-writer retention-after-quiescence run-scoped-deleted persistent-retained complete-after-settlement unfinished-retains-data recovery-applies-predecessor-retention recovered-sessions-complete
 escaped-port-reconciliation: explicit-process-ownership unresolved-until-proven endpoint-independent ps-visible down-actionable cleanup-blocked settle-after-death-proof capture-failure-unresolved
@@ -129,7 +132,7 @@ enum SourceMode: snapshot flake-input live-workspace
 enum DirtyPolicy: allow warn reject
 enum PersistencePolicy: run-scoped persistent
 
-# Task execution observations persist before containment/capture settlement; incomplete capture grants no replay.
+# Task execution observations persist before containment/capture settlement; incomplete capture is never upgraded.
 # The typed registry status domains and their wire values.
 status ExecutionOutcome: succeeded failed canceled interrupted
 status FinalizationStatus: unfinished complete

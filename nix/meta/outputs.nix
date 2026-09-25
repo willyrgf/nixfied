@@ -239,7 +239,7 @@ in
           "Native open/read/write/flush/join enum serialization."
         ) "Failed native projection operation.")
         (required "kind" text "Redaction-safe native error-kind classification.")
-        (required "path" text "Already formatted path; replay deliberately uses to_string_lossy.")
+        (required "path" text "Already formatted path; delivery deliberately uses to_string_lossy.")
         (required "bytesWritten" u64 "Committed byte count before the failure.")
       ]
     )
@@ -329,7 +329,7 @@ in
           OUTPUT_MODE_INVALID = annotation "The requested output mode is outside the supported domain." "outputs";
           OUTPUT_MODE_CONFLICT = annotation "Output selections conflict under the native parser's rules." "outputs";
           TASK_SELECTION_INVALID = annotation "Native task/output selection validation rejected the request." "tasks";
-          OUTPUT_PROJECTION_FAILED = annotation "Native output or evidence replay failed; cleanup still runs." "outputs";
+          OUTPUT_PROJECTION_FAILED = annotation "Command-owned output delivery failed, was interrupted, or could not be confirmed; the session is already settled." "outputs";
         };
       }
     )

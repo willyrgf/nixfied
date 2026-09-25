@@ -9,5 +9,5 @@ Options:
   --slot <number>         Select a declared project slot
   --timeout-ms <number>   Set the runtime operation timeout in milliseconds
   --output <mode>         Select summary, json, both, or task-output (default: task default or summary)
-                           task-output requires one directly selected leaf and replays redacted output
+                           task-output requires one directly selected leaf and presents its redacted output live
   -h, --help              Show this help

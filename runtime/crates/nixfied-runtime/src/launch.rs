@@ -450,7 +450,7 @@ impl PendingLaunch {
     }
 }
 
-fn startup_pair() -> io::Result<(UnixStream, UnixStream)> {
+pub(crate) fn startup_pair() -> io::Result<(UnixStream, UnixStream)> {
     fn create(kind: libc::c_int) -> io::Result<(UnixStream, UnixStream)> {
         let mut descriptors = [-1; 2];
         if unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, descriptors.as_mut_ptr()) } != 0 {

@@ -19,8 +19,8 @@ use crate::execution::{
     ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
 };
 use crate::redaction::{
-    CAPTURE_SHUTDOWN_TIMEOUT, LogFileMode, RedactedLogRelays, Redactor, child_output,
-    direct_service_output,
+    CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, LogFileMode, RedactedLogRelays, Redactor,
+    child_output,
 };
 use crate::registry::Registry;
 use crate::registry::status::{self, DbStatus, PortStatus};
@@ -32,11 +32,11 @@ use crate::service::endpoint::{
 use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
-    EndpointRecord, Ownership, ProcessRecord, ServiceRecord, ServiceStartOutcome,
-    VerifiedEndpointActivation, activate_service_ready, mark_process_escape, mark_service_canceled,
-    mark_service_failed, mark_service_stopped, read_service_snapshot, record_service_canceling,
-    record_service_lifecycle_event, record_service_start, record_service_start_intent,
-    settle_service_start,
+    EndpointRecord, Ownership, ProcessRecord, ServiceRecord, ServiceSettlement,
+    ServiceStartOutcome, VerifiedEndpointActivation, activate_service_ready, mark_process_escape,
+    mark_service_canceled, mark_service_failed, mark_service_stopped, read_service_snapshot,
+    record_service_canceling, record_service_lifecycle_event, record_service_start,
+    record_service_start_intent, settle_service_start,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -301,6 +301,8 @@ struct OwnedService {
     next_probe_occurrence: u64,
     redactor: Redactor,
     log_relays: Option<RedactedLogRelays>,
+    // Set once when capture settles; read by terminal settlement.
+    capture_outcome: Option<CaptureOutcome>,
 }
 
 impl OwnedService {
@@ -743,7 +745,10 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
-                ownership,
+                ServiceSettlement {
+                    ownership,
+                    capture: self.capture_outcome(),
+                },
             )
         } else {
             mark_service_failed(
@@ -753,7 +758,10 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
-                ownership,
+                ServiceSettlement {
+                    ownership,
+                    capture: self.capture_outcome(),
+                },
             )
         };
         match settlement {
@@ -804,7 +812,10 @@ impl OwnedService {
             &self.info.process_key,
             &self.info.computed_manifest_hash,
             &payload,
-            ownership,
+            ServiceSettlement {
+                ownership,
+                capture: self.capture_outcome(),
+            },
         );
         match completion_error(settlement, Ok(()), error) {
             Some(error) => Err(error),
@@ -906,7 +917,10 @@ impl OwnedService {
                 &self.info.process_key,
                 &self.info.computed_manifest_hash,
                 &payload,
-                Ownership::Settled,
+                ServiceSettlement {
+                    ownership: Ownership::Settled,
+                    capture: CaptureOutcome::Complete,
+                },
             )?;
             let error = canceled_error();
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
@@ -992,7 +1006,15 @@ impl OwnedService {
                     "failed to prove termination of service process tree rooted at {}: {}",
                     self.info.pid, termination_error.message,
                 );
-                termination_error
+                match super::registry::record_capture_outcome(
+                    registry,
+                    &self.info.run_id,
+                    &self.info.process_key,
+                    self.capture_outcome(),
+                ) {
+                    Ok(()) => termination_error,
+                    Err(recording) => termination_error.with_cause(recording),
+                }
             }
             Err(mut settlement_error) => {
                 settlement_error
@@ -1097,7 +1119,16 @@ impl OwnedService {
     }
 
     fn shutdown_capture(&mut self) -> RuntimeResult<()> {
-        shutdown_service_capture(self.log_relays.take())
+        let (outcome, result) = shutdown_service_capture(self.log_relays.take());
+        if let Some(outcome) = outcome {
+            self.capture_outcome = Some(outcome);
+        }
+        result
+    }
+
+    /// The checked outcome once capture settled; unknown before settlement.
+    fn capture_outcome(&self) -> CaptureOutcome {
+        self.capture_outcome.unwrap_or(CaptureOutcome::Unknown)
     }
 
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
@@ -1312,10 +1343,15 @@ impl Drop for OwnedService {
     }
 }
 
-fn shutdown_service_capture(capture: Option<RedactedLogRelays>) -> RuntimeResult<()> {
+fn shutdown_service_capture(
+    capture: Option<RedactedLogRelays>,
+) -> (Option<CaptureOutcome>, RuntimeResult<()>) {
     match capture {
-        Some(capture) => capture.shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT),
-        None => Ok(()),
+        Some(capture) => {
+            let (outcome, result) = capture.shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
+            (Some(outcome), result)
+        }
+        None => (None, Ok(())),
     }
 }
 
@@ -1469,9 +1505,16 @@ pub(super) fn start_service_with_lock_root(
             port: *port,
         })
         .collect();
+    let evidence = crate::output::EvidenceSource::in_logs(
+        &placement.logs_dir,
+        service_name,
+        crate::output::SourcePresentation::Shown,
+        &format!("service.{service_name}"),
+    );
     let service_record = ServiceRecord {
         service_instance_id: &service_instance_id,
         service_name,
+        source: &evidence,
     };
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(own_endpoints.values(), lock_root) {
@@ -1538,12 +1581,8 @@ pub(super) fn start_service_with_lock_root(
         let args = substitution.args(&exec.args)?;
         let declared_env = substitution.env(&exec.env)?;
         let env = exec.env_with_path(declared_env);
-        let stdout_path = placement
-            .logs_dir
-            .join(format!("service.{service_name}.stdout.log"));
-        let stderr_path = placement
-            .logs_dir
-            .join(format!("service.{service_name}.stderr.log"));
+        let stdout_path = &evidence.stdout;
+        let stderr_path = &evidence.stderr;
         let command_json = serde_json::to_string(&CommandRecord {
             executable: exec.executable.as_str(),
             args: &args,
@@ -1554,20 +1593,17 @@ pub(super) fn start_service_with_lock_root(
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
         let request = crate::launch::PreparedLaunch::new(&exec.executable, &args, &env, &command_cwd)?;
         let redactor = Redactor::from_secrets(admission.secrets());
-        let (stdout, stderr, log_relays) = if redactor.is_empty() {
-            let (stdout, stderr) = direct_service_output(&stdout_path, &stderr_path)?;
-            (stdout, stderr, None)
-        } else {
-            let output = child_output(&stdout_path, &stderr_path, &redactor, LogFileMode::Replace)?;
-            (output.stdout, output.stderr, Some(output.relays))
-        };
+        // Service output always passes through owned capture workers, so writer
+        // closure is checked rather than inferred from the leader's exit.
+        let output = child_output(stdout_path, stderr_path, &redactor, LogFileMode::Replace)?;
+        let (stdout, stderr, log_relays) = (output.stdout, output.stderr, Some(output.relays));
         let spawned = cancellation.check().and_then(|()| request.spawn(
             selection.launcher, registry.authority(), stdin_for(exec.stdin), stdout, stderr,
         ));
         let child = match spawned {
             Ok(child) => child,
             Err(error) => {
-                let error = completion_error(Ok(()), shutdown_service_capture(log_relays), Some(error)).unwrap();
+                let error = completion_error(Ok(()), shutdown_service_capture(log_relays).1, Some(error)).unwrap();
                 let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
                 return Err(error);
             }
@@ -1588,7 +1624,7 @@ pub(super) fn start_service_with_lock_root(
         let contained = containment.is_ok();
         let error = completion_error(
             containment,
-            shutdown_service_capture(log_relays.take()),
+            shutdown_service_capture(log_relays.take()).1,
             Some(error),
         )
         .unwrap();
@@ -1701,6 +1737,7 @@ pub(super) fn start_service_with_lock_root(
             next_probe_occurrence: 0,
             redactor,
             log_relays,
+            capture_outcome: None,
         }),
     };
     if let Some(error) = launch_error {
@@ -2026,6 +2063,8 @@ pub(crate) struct CapturedExecFailure {
     pub outcome: Option<CapturedExecOutcome>,
     /// Containment, reaping, and capture all settled; only the operation failed.
     pub settled: bool,
+    /// The checked capture outcome after writer settlement.
+    pub capture: crate::redaction::CaptureOutcome,
 }
 
 /// Inert captured bootstrap. Capture and the child stay owned through failed
@@ -2103,7 +2142,7 @@ pub(crate) fn spawn_gated_captured_exec(
             label: spec.label.into(),
         }),
         Err(error) => {
-            let capture = output
+            let (_, capture) = output
                 .relays
                 .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
             Err(completion_error(Ok(()), capture, Some(error)).expect("spawn failure is retained"))
@@ -2188,12 +2227,13 @@ impl OwnedCapturedChild {
             ),
         };
         match self.finish(operation) {
-            (Some(error), settled) => Err(CapturedExecFailure {
+            (Some(error), settled, capture) => Err(CapturedExecFailure {
                 error: Box::new(error),
                 outcome,
                 settled,
+                capture,
             }),
-            (None, _) => Ok(outcome.expect("successful observation supplies an outcome")),
+            (None, _, _) => Ok(outcome.expect("successful observation supplies an outcome")),
         }
     }
 
@@ -2203,16 +2243,23 @@ impl OwnedCapturedChild {
             .expect("abort retains its original failure")
     }
 
-    fn finish(&mut self, operation: Option<RuntimeError>) -> (Option<RuntimeError>, bool) {
+    fn finish(
+        &mut self,
+        operation: Option<RuntimeError>,
+    ) -> (Option<RuntimeError>, bool, crate::redaction::CaptureOutcome) {
         let pgid = self.pid() as i32;
         let containment = terminate_and_reap(&mut self.child, pgid);
-        let capture = self
+        let (outcome, capture) = self
             .capture
             .take()
             .expect("completion consumes capture once")
             .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT);
         let settled = containment.is_ok() && capture.is_ok();
-        (completion_error(containment, capture, operation), settled)
+        (
+            completion_error(containment, capture, operation),
+            settled,
+            outcome,
+        )
     }
 }
 

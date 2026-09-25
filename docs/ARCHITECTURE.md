@@ -299,7 +299,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   stored process evidence rejects before new startup.
 - **Session completion has one owner.** Workload transitions update local process
   and endpoint evidence, never aggregate execution outcome. The live session
-  records its outcome before replay and teardown. Recovery under the slot guard
+  records its outcome before teardown. Recovery under the slot guard
   marks only unknown executions interrupted and preserves known outcomes.
   `SessionProgress` distinguishes execution, finalizing a known outcome, and
   finalized execution; checked decoding and SQL constraints reject completion
@@ -451,29 +451,31 @@ Exec probes commit their own role, service attribution and process identity thro
 the same gate, retaining separate evidence for every attempt. Task and probe
 observation records the execution outcome and exit code
 before containment and capture settlement. `ObservedWithoutEvidence` preserves
-that result when settlement cannot produce completed evidence; it grants no
-replay ticket. Cancellation/timeout intent precedes signaling. Every exit
+that result when settlement cannot produce completed evidence. Cancellation/timeout intent precedes signaling. Every exit
 path attempts containment and reap, then shuts down both capture workers under
 one absolute deadline. Workers own evidence files, and captured children receive only pipe
 writers, including when no secrets are configured. Actual EOF alone completes
-capture; an incomplete stream cannot issue completed evidence or a replay ticket.
-Service terminal cleanup reuses bounded relay shutdown; services without secrets
-retain their direct-file output policy across runtime interruption. Capture
+capture; an incomplete stream records an `incomplete` (or `unknown`) capture
+outcome and cannot issue completed evidence. Service capture always uses the same
+owned workers, so service writer closure is checked, not inferred. Capture
 workers remain owned through session teardown.
 
-`--output task-output` is a separate direct-leaf boundary. The runtime validates
-one explicit leaf after admission but before slot selection, placement, state,
-registry, services, prepare tasks, or child spawn. It captures and redacts the
-selected task through the ordinary evidence path, opens both redacted evidence
-files before terminal transitions, then gives a move-only `ReplayTicket` to the
-run finalizer. The ticket owns independent stdout/stderr sources and is consumed
-exactly once by bounded concurrent workers. A failed stream does not stop the
-other stream; both workers are joined and their typed projection issues are
-retained.
+Presentation is separate from the session. Evidence is the data path: capture
+writes redacted per-source files and the owner writes runtime progress into its
+diagnostic source. A command-owned auxiliary process (`__presenter`) tails those
+files by run identity and offset, discovers sources through committed process
+records in short read-only transactions, and writes the caller's streams through
+one bounded queue per stream. `task-output` routes the directly selected leaf's
+exact bytes; `summary`/`both` route labeled lines of every shown source. A
+stalled reader can block only the presenter. The owner closes source
+registration, closes its writers, publishes the output seal, and releases the
+slot without waiting; the command then lets the presenter drain the sealed files
+with no default deadline, and reports delivery failure without rewriting the
+settled session.
 
-The run session is the single finalization owner. It replays before service
-teardown, slot release, aggregate summary, footer, and final error projection,
-then runs every remaining cleanup stage even when an earlier stage fails.
+The run session is the single finalization owner. It never waits for output
+delivery before service teardown, retention, finalization, or slot release, and
+it runs every remaining cleanup stage even when an earlier stage fails.
 One node runner executes prepare and root occurrences, appending completed task
 records directly to the session's canonical evidence vector. Root and selected
 projections retain private indices; finalization derives owned output records

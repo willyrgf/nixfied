@@ -337,7 +337,7 @@ fn purge_still_refuses_active_registry_refs() {
             "INSERT INTO processes (
                process_key, environment, slot, pid, pgid, start_identity, command_json,
                run_id, status, role
-             ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task')",
+             , source_label, presentation, stdout_path, stderr_path) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))",
         )
         .expect("active process should be inserted");
 
@@ -390,7 +390,7 @@ fn cleanup_refuses_active_registry_refs() {
         "INSERT INTO processes (
            process_key, environment, slot, pid, pgid, start_identity, command_json,
            run_id, status, role
-         ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task')",
+         , source_label, presentation, stdout_path, stderr_path) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO ports (
@@ -469,19 +469,19 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
-            ) VALUES (
+            , owner_identity, diagnostic_path) VALUES (
               'run-stale', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            );
+            , '{}', 'diagnostics.log');
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, service_name, role
-            ) VALUES (
+            , source_label, presentation, stdout_path, stderr_path) VALUES (
               'process-stale', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-stale', 'service-stale', 'running', 'synthetic', 'service'
-            );
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
@@ -710,19 +710,19 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
-            ) VALUES (
+            , owner_identity, diagnostic_path) VALUES (
               'run-stale-port', 'dev', 0, NULL, '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            );
+            , '{}', 'diagnostics.log');
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, service_name, role
-            ) VALUES (
+            , source_label, presentation, stdout_path, stderr_path) VALUES (
               'process-stale-port', 'dev', 0, 999998, 999998,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-stale-port', 'service-stale-port', 'stopped', 'synthetic', 'service'
-            );
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
@@ -1051,18 +1051,18 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
             INSERT INTO runs (
               run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json, summary_path
-            ) VALUES (
+            , owner_identity, diagnostic_path) VALUES (
               'run-escaped', 'dev', 0, 'failed', '/nix/store/test-manifest/manifest.json',
               'computed-hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            );
+            , '{}', 'diagnostics.log');
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, ownership, service_name, role
-            ) VALUES (
+            , source_label, presentation, stdout_path, stderr_path) VALUES (
               'process-escaped', 'dev', 0, 999997, 999997,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-escaped', 'service-escaped', 'escaped', 'unresolved', 'synthetic', 'service'
-            );
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
             ",
         )
         .unwrap();

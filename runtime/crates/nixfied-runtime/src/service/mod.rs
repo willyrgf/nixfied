@@ -55,13 +55,12 @@ pub use process::{
 };
 pub use registry::record_run_created;
 pub use task::{
-    CompletedEvidence, RunContext, TaskExecution, TaskExecutionError, TaskRun,
-    run_dependent_task_cancellable,
+    RunContext, TaskExecution, TaskExecutionError, TaskRun, run_dependent_task_cancellable,
 };
 
 pub(crate) use process::{
-    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, terminate_process_group,
+    platform_start_identity, process_escape_start_identity, process_group_has_live_member,
+    process_is_live_with_identity, process_is_live_with_start_identity, terminate_process_group,
     terminate_process_tree_with_snapshot,
 };
 pub(crate) use registry::{

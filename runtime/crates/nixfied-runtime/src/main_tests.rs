@@ -413,7 +413,6 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
                 &redactor,
             ),
             cancellation: &cancellation,
-            output_mode: RunOutputMode::TaskOutput,
         };
         let node = PlanNode {
             node_id: nixfied_manifest::NodeId::new("smoke"),
@@ -430,7 +429,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         };
         std::fs::write(&conflicting, b"prior evidence").unwrap();
         let mut evidence = RunEvidence::default();
-        let mut diagnostics = Vec::new();
+        let mut diagnostics = SessionDiagnostics::create(&placement.run_dir, true).unwrap();
         let error = execute_node(
             &context,
             &mut registry,
@@ -456,7 +455,6 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         if collision == "summary" {
             assert_eq!(evidence.tasks.len(), 1);
             assert_eq!(evidence.nodes().len(), 1);
-            assert!(evidence.replay.is_some());
             assert_eq!(std::fs::read_to_string(&counter).unwrap(), "1");
             assert_eq!(
                 error.error.details["taskRun"]["stdoutPath"],
@@ -466,7 +464,6 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             assert!(evidence.tasks.is_empty());
             assert!(evidence.root_nodes.is_empty());
             assert!(evidence.selected_task.is_none());
-            assert!(evidence.replay.is_none());
             assert!(
                 !counter.exists(),
                 "log collision must prevent child execution"

@@ -412,9 +412,13 @@ when the manifest/runtime contract changes.
   flags are not accepted. `task-output` is valid only for exactly one directly
   selected leaf: stdout is the selected task's exact redacted captured stdout,
   while stderr contains runtime diagnostics and the exact redacted captured
-  stderr. It emits no runtime JSON metadata to stdout. Callers must check the
-  process status before consuming replayed bytes; accepted child exit codes
-  still produce a successful run. Composite selections, missing/unknown/
+  stderr, both presented live. It emits no runtime JSON metadata to stdout.
+  `summary` presents runtime diagnostics and the live output of executed tasks,
+  preparation, and services on stderr, one `[label] ` (stdout) or
+  `[label:err] ` (stderr) prefix per line; stdout stays empty. `both` adds the
+  final structured result on stdout. `json` presents no live logs. Displayed
+  bytes establish no result: callers must check the process status; accepted
+  child exit codes still produce a successful run. Composite selections, missing/unknown/
   repeated selections, invalid repeated output options, and invalid manifest
   defaults are rejected before state or child side effects. There is no
   `--json`, `--both`, `--summary`, or `--task-output` alias and no `logs`
@@ -428,26 +432,48 @@ when the manifest/runtime contract changes.
   overwriting or retrying a conflicting name. Log creation failure rejects before
   spawn with the existing redacted/unredacted creation error. Summary creation
   failure reports `STATE_UNWRITABLE` after completion and retains completed task
-  evidence and any selected replay ticket. Repeated prepares and prepare/root
+  evidence. Repeated prepares and prepare/root
   overlap retain separate files even when their task IDs and step paths match.
-- Task-output replay happens only after capture and redaction complete, with
-  both evidence files opened before terminal registry transitions or cleanup.
-  The two streams replay concurrently with bounded buffers, preserving each
-  stream's bytes and order but not cross-stream interleaving. Replay occurs for
-  success, task failure, timeout, and cancellation, before service teardown,
-  slot release, aggregate summary, footer, or final error projection. Cleanup
-  and finalization continue after a replay failure.
+- Live output is presented by one command-owned read-only helper, the hidden
+  `__presenter` mode of the runtime binary, launched with null stdin, a cleared
+  environment, the caller's stdout/stderr, and one private socket; it inherits
+  no locks, secrets, database writers, or cancellation FIFO. The session owner
+  never writes caller streams while it has duties: runtime progress lines are
+  retained in the run's `diagnostics.log` source. Each process registers its
+  source label, presentation (`selected`, `shown`, or `hidden` for replace-on-retry
+  probe logs), and run-relative stdout/stderr paths before release. The helper
+  discovers sources in short read-only transactions, tails them by run identity
+  and offset with bounded per-stream queues, and treats temporary EOF as
+  progress. Human rendering bounds unterminated lines to 8 KiB fragments.
+- Finalization never waits for delivery: after teardown, retention, and
+  finalization, the owner closes source registration, writes the run summary
+  and footer, closes the diagnostic writer, and publishes the output seal only
+  when every source recorded a checked capture outcome (`complete`,
+  `incomplete`, or `unknown`); then it releases the slot. The command then lets
+  the helper drain the sealed sources with no default deadline. A termination
+  signal to the command ends the drain; a remote `down` does not. Delivery is
+  command-local: a failed, interrupted, or unconfirmed (unsealed) delivery of a
+  successful session fails the command with `OUTPUT_PROJECTION_FAILED` without
+  rewriting any session record; a canceled session stays `CANCELED`. A slow
+  healthy reader is never truncated; a stalled reader cannot delay settlement
+  or slot release. Displayed safe prefixes never upgrade incomplete capture.
 - Execution checkpoints poll completed capture workers without waiting for open
   streams. Worker failure stops further execution, including a task with no
   deadline. Checked results remain owned through shutdown; a successful poll
-  alone grants no completed evidence or replay.
-- Bounded task/probe capture always uses pipes, including without secrets. After
+  alone grants no completed capture outcome.
+- Task, probe, and service capture always uses pipes, including without
+  secrets, so service writer closure is checked rather than inferred from the
+  leader's exit. The redactor emits every byte whose interpretation cannot
+  change and holds back only the suffix that is still a proper prefix of some
+  secret; results equal whole-buffer longest-first replacement for every
+  chunking.
+- Bounded capture shutdown: After
   containment and reap attempts, both stream workers receive one absolute
   shutdown deadline 1,000 ms away. Workers check control and expiry before reads,
   poll for at most 10 ms, and read at most 8 KiB per iteration. Only actual EOF
   completes capture. Expiry discards the undecided redactor tail, closes both
-  evidence writers, and retains safe prefix files without completed task evidence
-  or replay. Both workers are joined even when either fails. This bound excludes
+  evidence writers, and retains safe prefix files with an `incomplete` capture
+  outcome and without completed task evidence. Both workers are joined even when either fails. This bound excludes
   blocked regular-file writes/flushes and OS scheduling; it proves neither that
   an escaped process died nor that the runtime discovered every descendant.
 - Incomplete capture reports `SECRET_LEAK_BLOCKED` with the fixed message
@@ -475,7 +501,7 @@ when the manifest/runtime contract changes.
   lower/equal-priority error appends its existing causes, then its safe root cause.
   A higher-priority error becomes primary, retaining its own causes before the
   previous primary's causes and safe root cause. Finalization records its own
-  cancellation observation at most once across replay and teardown checkpoints;
+  cancellation observation at most once across its teardown checkpoints;
   distinct errors may still carry distinct cancellation causes. Late cancellation
   continues service teardown and terminal registry settlement before slot release.
 - JSON fields, text projection tokens, error codes, and exit classes are public
@@ -510,7 +536,7 @@ Native producers place task evidence under `taskRun`, projection issues under
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.
-Replay diagnostic paths deliberately use lossy display strings. Task, manifest and
+Delivery diagnostic paths deliberately use lossy display strings. Task, manifest and
 cleanup paths retain native path
 serialization and its failure behavior.
 

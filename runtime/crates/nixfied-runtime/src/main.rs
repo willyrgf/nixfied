@@ -1,6 +1,6 @@
 use nixfied_runtime::registry::session::{
-    ExecutionOutcome, record_execution_outcome, record_finalization_complete,
-    record_finalization_unfinished,
+    ExecutionOutcome, close_source_registration, record_execution_outcome,
+    record_finalization_complete, record_finalization_unfinished, seal_output,
 };
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -12,9 +12,9 @@ use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::{RuntimeCause, error_code_wire};
 use nixfied_runtime::execution::{PlanNode, plan};
 use nixfied_runtime::output::{
-    EvidenceMode, OutputStream, ProjectionOperation, ReplaySinks, ReplayTicket,
-    output_projection_io_error,
+    OutputStream, ProjectionOperation, SourcePresentation, output_projection_io_error,
 };
+use nixfied_runtime::presenter::{CommandPresenter, PresentationMode, PresenterInit};
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
@@ -121,7 +121,7 @@ struct RunSession<'a> {
     extra_services: Vec<ServiceRunOutput>,
     direct_selected: bool,
     evidence: RunEvidence,
-    diagnostic_failures: Vec<RuntimeError>,
+    diagnostics: SessionDiagnostics,
     control: nixfied_runtime::session_control::SessionControl,
 }
 
@@ -217,15 +217,7 @@ impl<'a> RunSession<'a> {
         ) {
             failures.push(error);
         }
-        for error in self.diagnostic_failures.drain(..) {
-            failures.push(error);
-        }
-
-        if let Some(ticket) = self.evidence.replay.take()
-            && let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error()
-        {
-            failures.push(error);
-        }
+        // Presentation is command-owned: no delivery wait precedes teardown.
         record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
 
         let services = {
@@ -275,6 +267,12 @@ impl<'a> RunSession<'a> {
         if let Err(error) = recorded {
             failures.push(error);
         }
+        // No workload remains, so no new source may register.
+        if let Err(error) =
+            close_source_registration(&mut self.registry, self.run_id, manifest_hash)
+        {
+            failures.push(error);
+        }
         record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
         let duration_ms = elapsed_ms(self.run_started);
         let run_succeeded = failures.is_empty();
@@ -296,15 +294,23 @@ impl<'a> RunSession<'a> {
             }
         };
         let footer_succeeded = failures.is_empty();
-        if let Err(error) = print_run_footer(
-            self.options.output_mode,
+        write_run_footer(
+            &mut self.diagnostics,
             footer_succeeded,
             &node_results,
             duration_ms,
             run_summary_path.as_deref(),
             &self.placement.logs_dir,
-        ) {
-            failures.push(error);
+        );
+        // Close every evidence writer before publishing the seal; a failed
+        // close or write leaves the output unsealed rather than claiming it.
+        match self.diagnostics.close() {
+            Ok(()) => {
+                if let Err(error) = seal_output(&mut self.registry, self.run_id, manifest_hash) {
+                    failures.push(error);
+                }
+            }
+            Err(error) => failures.push(error),
         }
 
         let primary_task = if self.direct_selected {
@@ -352,11 +358,23 @@ impl RunOutputMode {
     fn is_task_output(self) -> bool {
         matches!(self, Self::TaskOutput)
     }
+
+    /// Structured output alone needs no live presentation.
+    fn presentation(self) -> Option<PresentationMode> {
+        match self {
+            Self::Summary | Self::Both => Some(PresentationMode::Human),
+            Self::TaskOutput => Some(PresentationMode::TaskOutput),
+            Self::Json => None,
+        }
+    }
 }
 
 fn main() {
     let native_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(exit) = nixfied_runtime::launch::dispatch(&native_args) {
+        std::process::exit(exit);
+    }
+    if let Some(exit) = nixfied_runtime::presenter::dispatch(&native_args) {
         std::process::exit(exit);
     }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -629,12 +647,42 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let redactor = Redactor::from_secrets(admission.secrets());
     let manifest_path = admission.common().manifest_path().to_path_buf();
     let computed_manifest_hash = admission.common().computed_manifest_hash().to_owned();
-    let output = run_m0_admitted(&admission, &redactor, &options, run_id, &cancellation).map_err(
-        |error| {
-            redactor
-                .redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
-        },
-    )?;
+    let mut presenter = None;
+    let result = run_m0_admitted(
+        &admission,
+        &redactor,
+        &options,
+        run_id,
+        &cancellation,
+        &mut presenter,
+    );
+    // The slot is released. The command may now wait for its presenter to
+    // drain retained evidence, with no default deadline; a termination signal
+    // ends the drain. Delivery never rewrites the session result.
+    let result = match presenter.map(CommandPresenter::finish) {
+        None => result,
+        Some(delivery) => {
+            // Presentation stopped by the same cancellation is not a second
+            // failure; interrupted delivery of a successful session is.
+            let canceled = matches!(
+                &result,
+                Err(error) if error.code == nixfied_runtime::ErrorCode::Canceled
+            );
+            match (result, delivery.into_error(canceled)) {
+                (result, None) => result,
+                (Ok(_), Some(delivery)) => Err(delivery),
+                (Err(error), Some(delivery)) => {
+                    let mut failures = FailureAccumulator::new();
+                    failures.push(error);
+                    failures.push(delivery);
+                    Err(failures.primary.expect("a failure was pushed"))
+                }
+            }
+        }
+    };
+    let output = result.map_err(|error| {
+        redactor.redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
+    })?;
     if options.output_mode.emit_json() {
         print_json_redacted(&output, &redactor)?;
     }
@@ -647,6 +695,7 @@ fn run_m0_admitted(
     options: &RunOptions,
     run_id: String,
     cancellation: &CancellationToken,
+    presenter: &mut Option<CommandPresenter>,
 ) -> Result<RunOutput, RuntimeError> {
     let manifest = admission.common().manifest();
     cancellation.check()?;
@@ -672,6 +721,7 @@ fn run_m0_admitted(
         &selected_slot,
         &placement,
         cancellation,
+        presenter,
     )
     .map_err(|error| enrich_run_error(error, &run_id, &placement, &selected_slot))
 }
@@ -731,6 +781,7 @@ fn run_m0_placed(
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
+    presenter: &mut Option<CommandPresenter>,
 ) -> Result<RunOutput, RuntimeError> {
     let launcher = std::env::current_exe().map_err(|_| {
         RuntimeError::new(
@@ -740,7 +791,6 @@ fn run_m0_placed(
     })?;
     let manifest = admission.common().manifest();
     let run_started = Instant::now();
-    let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
     // Exclusive recovery settles every predecessor before the state marker
     // decision, independently of manifest provenance.
     let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(placement, cancellation)?;
@@ -763,17 +813,15 @@ fn run_m0_placed(
         options.timeout_ms,
     )?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
-    if upgrade.upgraded
-        && options.output_mode.emit_summary()
-        && let Err(error) = write_diagnostic(
-            options.output_mode,
-            format_args!(
-                "  updated slot provenance from manifest {} (data retained)",
-                upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
-            ),
-        )
-    {
-        diagnostic_failures.push(error);
+    // Runtime progress is retained evidence from here on; the presenter, not
+    // the session owner, shows it while session duties remain.
+    let mut diagnostics =
+        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
+    if upgrade.upgraded {
+        diagnostics.write(format_args!(
+            "  updated slot provenance from manifest {} (data retained)",
+            upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
+        ));
     }
 
     let direct_selected = admission
@@ -832,7 +880,7 @@ fn run_m0_placed(
         extra_services: Vec::new(),
         direct_selected,
         evidence: RunEvidence::default(),
-        diagnostic_failures,
+        diagnostics,
         control,
     };
     macro_rules! finish_run {
@@ -842,16 +890,30 @@ fn run_m0_placed(
             return session.finalize(Some(error), None);
         }};
     }
+    // The command-owned presenter exists before any workload is released; its
+    // establishment failure releases no workload.
+    if let Some(mode) = options.output_mode.presentation() {
+        let init = PresenterInit {
+            run_id: run_id.to_owned(),
+            run_dir: placement.run_dir.clone(),
+            registry_path: placement.registry_path(),
+            project_id: manifest.project.project_id.clone(),
+            environment: selected_slot.environment.to_owned(),
+            slot: i64::from(selected_slot.slot),
+            runtime_abi: manifest.runtime_abi.clone(),
+            toolchain_id: manifest.toolchain_id.clone(),
+            mode,
+        };
+        match CommandPresenter::spawn(session.registry.authority(), &launcher, &init) {
+            Ok(spawned) => *presenter = Some(spawned),
+            Err(error) => finish_run!(error, Vec::new()),
+        }
+    }
     for binding in &plan.services {
         let service_name = binding.service.name.as_str();
-        if options.output_mode.emit_summary()
-            && let Err(error) = write_diagnostic(
-                options.output_mode,
-                format_args!("  starting service {service_name}"),
-            )
-        {
-            session.diagnostic_failures.push(error);
-        }
+        session
+            .diagnostics
+            .write(format_args!("  starting service {service_name}"));
 
         let prepare_runner: Option<PrepareRunner<'_>> =
             binding.service.prepare.as_ref().map(|_| {
@@ -865,11 +927,10 @@ fn run_m0_placed(
                         redactor,
                     ),
                     cancellation,
-                    output_mode: options.output_mode,
                 };
                 let evidence = &mut session.evidence;
                 let started = &session.started;
-                let diagnostics = &mut session.diagnostic_failures;
+                let diagnostics = &mut session.diagnostics;
                 Box::new(move |registry: &mut Registry| {
                     for node in &binding.prepare_nodes {
                         execute_node(
@@ -952,7 +1013,7 @@ fn run_m0_placed(
                 vec![failed_service_output]
             );
         }
-        if options.output_mode.emit_summary() {
+        {
             let name = current_service.service_name();
             let message = match current_service.selected_endpoint() {
                 Some(endpoint) => format!(
@@ -961,9 +1022,7 @@ fn run_m0_placed(
                 ),
                 None => format!("  service {name} ready (endpoint-less)"),
             };
-            if let Err(error) = write_diagnostic(options.output_mode, message) {
-                session.diagnostic_failures.push(error);
-            }
+            session.diagnostics.write(message);
         }
         session.started.push(current_service);
     }
@@ -982,7 +1041,6 @@ fn run_m0_placed(
             redactor,
         ),
         cancellation,
-        output_mode: options.output_mode,
     };
     for (index, node) in plan.nodes.iter().enumerate() {
         if let Err(failure) = execute_node(
@@ -990,7 +1048,7 @@ fn run_m0_placed(
             &mut session.registry,
             &mut session.evidence,
             &session.started,
-            &mut session.diagnostic_failures,
+            &mut session.diagnostics,
             node,
             NodeRole::Root { direct_selected },
         ) {
@@ -1024,11 +1082,72 @@ fn service_output(info: &nixfied_runtime::service::ServiceInfo) -> ServiceRunOut
     }
 }
 
-fn write_diagnostic(output_mode: RunOutputMode, line: impl Display) -> Result<(), RuntimeError> {
-    if !output_mode.emit_summary() {
-        return Ok(());
+/// The run-owned diagnostic source. While session duties remain, runtime
+/// progress lines are retained evidence that the presenter shows on stderr;
+/// the owner never writes them to caller streams. The first write failure is
+/// kept for finalization and later lines are dropped.
+struct SessionDiagnostics {
+    file: Option<std::fs::File>,
+    enabled: bool,
+    failure: Option<RuntimeError>,
+}
+
+impl SessionDiagnostics {
+    fn create(run_dir: &Path, enabled: bool) -> Result<Self, RuntimeError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = run_dir.join(nixfied_runtime::output::DIAGNOSTIC_SOURCE);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .map_err(|error| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::StateUnwritable,
+                    format!(
+                        "failed to create diagnostic source {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+        Ok(Self {
+            file: Some(file),
+            enabled,
+            failure: None,
+        })
     }
-    write_stderr_line(line)
+
+    fn write(&mut self, line: impl Display) {
+        if !self.enabled || self.failure.is_some() {
+            return;
+        }
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        if let Err(error) = writeln!(file, "{line}") {
+            self.failure = Some(diagnostic_error(error));
+        }
+    }
+
+    /// Close the writer before the output seal; sealed sources never grow.
+    fn close(&mut self) -> Result<(), RuntimeError> {
+        let closed = match self.file.take() {
+            Some(file) => file.sync_all().map_err(diagnostic_error),
+            None => Ok(()),
+        };
+        match self.failure.take() {
+            Some(error) => Err(error),
+            None => closed,
+        }
+    }
+}
+
+fn diagnostic_error(error: io::Error) -> RuntimeError {
+    RuntimeError::new(
+        nixfied_runtime::ErrorCode::StateUnwritable,
+        format!("failed to write the session diagnostic source: {error}"),
+    )
 }
 
 fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
@@ -1051,7 +1170,6 @@ struct RunEvidence {
     tasks: Vec<TaskRun>,
     root_nodes: Vec<EvidenceIndex>,
     selected_task: Option<EvidenceIndex>,
-    replay: Option<ReplayTicket>,
 }
 
 impl RunEvidence {
@@ -1111,7 +1229,6 @@ struct NodeContext<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
     run: RunContext<'a>,
     cancellation: &'a CancellationToken,
-    output_mode: RunOutputMode,
 }
 
 fn execute_node(
@@ -1119,7 +1236,7 @@ fn execute_node(
     registry: &mut Registry,
     evidence: &mut RunEvidence,
     started: &[ReadyService],
-    diagnostic_failures: &mut Vec<RuntimeError>,
+    diagnostics: &mut SessionDiagnostics,
     node: &PlanNode<'_>,
     role: NodeRole,
 ) -> Result<(), NodeFailure> {
@@ -1149,20 +1266,17 @@ fn execute_node(
                 ))
             })?;
     }
-    if matches!(role, NodeRole::Prepare)
-        && context.output_mode.emit_summary()
-        && let Err(error) = write_diagnostic(
-            context.output_mode,
-            format_args!("  prepare node {} ({})", node.node_id, task.task_id),
-        )
-    {
-        diagnostic_failures.push(error);
+    if matches!(role, NodeRole::Prepare) {
+        diagnostics.write(format_args!(
+            "  prepare node {} ({})",
+            node.node_id, task.task_id
+        ));
     }
-    let mode = match role {
+    let presentation = match role {
         NodeRole::Root {
             direct_selected: true,
-        } if context.output_mode.is_task_output() => EvidenceMode::ReplaySelected,
-        NodeRole::Prepare | NodeRole::Root { .. } => EvidenceMode::CaptureOnly,
+        } => SourcePresentation::Selected,
+        NodeRole::Prepare | NodeRole::Root { .. } => SourcePresentation::Shown,
     };
     let result = run_dependent_task_cancellable(
         context.placement,
@@ -1173,9 +1287,9 @@ fn execute_node(
         occurrence,
         task,
         context.cancellation,
-        mode,
+        presentation,
     );
-    let (completed, error) = match result {
+    let (task_run, error) = match result {
         Ok(TaskExecution::Succeeded(completed)) => (completed, None),
         Ok(TaskExecution::Failed { error, evidence }) => (evidence, Some(error)),
         Err(TaskExecutionError::BeforeTerminal(error)) => return Err(decorate(*error).into()),
@@ -1187,7 +1301,6 @@ fn execute_node(
         }
         Err(TaskExecutionError::AfterTerminal { error, evidence }) => (*evidence, Some(*error)),
     };
-    let (task_run, ticket) = completed.into_task_and_replay();
     let observed = if task_run.canceled {
         ExecutionOutcome::Canceled
     } else if task_run.success {
@@ -1197,47 +1310,31 @@ fn execute_node(
     };
     let index = EvidenceIndex(evidence.tasks.len());
     evidence.tasks.push(task_run);
-    evidence.replay = ticket.or(evidence.replay.take());
     if let NodeRole::Root { direct_selected } = role {
         evidence.root_nodes.push(index);
         if direct_selected {
             evidence.selected_task = Some(index);
         }
         let task_run = &evidence.tasks[index.0];
-        if context.output_mode.emit_summary() {
-            let diagnostic = if error.is_some() {
-                write_diagnostic(
-                    context.output_mode,
-                    format_args!(
-                        "  fail {} ({}) {} exit={}",
-                        node.node_id,
-                        task.task_id,
-                        human_duration(task_run.duration_ms),
-                        human_exit_code(task_run.exit_code)
-                    ),
-                )
-            } else {
-                write_diagnostic(
-                    context.output_mode,
-                    format_args!(
-                        "  ok {} ({}) {}",
-                        node.node_id,
-                        task.task_id,
-                        human_duration(task_run.duration_ms)
-                    ),
-                )
-            };
-            if let Err(error) = diagnostic {
-                diagnostic_failures.push(error);
-            }
-            if error.is_some()
-                && let Err(error) = write_diagnostic(
-                    context.output_mode,
-                    format_args!("    stderr: {}", human_path(&task_run.stderr_path)),
-                )
-            {
-                diagnostic_failures.push(error);
-            }
+        if error.is_some() {
+            diagnostics.write(format_args!(
+                "  fail {} ({}) {} exit={}",
+                node.node_id,
+                task.task_id,
+                human_duration(task_run.duration_ms),
+                human_exit_code(task_run.exit_code)
+            ));
+            diagnostics.write(format_args!(
+                "    stderr: {}",
+                human_path(&task_run.stderr_path)
+            ));
+        } else {
+            diagnostics.write(format_args!(
+                "  ok {} ({}) {}",
+                node.node_id,
+                task.task_id,
+                human_duration(task_run.duration_ms)
+            ));
         }
     }
     match error {
@@ -1293,52 +1390,37 @@ fn human_exit_code(exit_code: Option<i32>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
-fn print_run_footer(
-    output_mode: RunOutputMode,
+fn write_run_footer(
+    diagnostics: &mut SessionDiagnostics,
     run_succeeded: bool,
     nodes: &[NodeResult],
     duration_ms: u64,
     run_summary_path: Option<&Path>,
     logs_dir: &Path,
-) -> Result<(), RuntimeError> {
-    if !output_mode.emit_summary() {
-        return Ok(());
-    }
+) {
     if run_succeeded {
-        write_diagnostic(
-            output_mode,
-            format_args!(
-                "  result: ok {} passed, 0 failed in {}",
-                nodes.iter().filter(|node| node.success).count(),
-                human_duration(duration_ms)
-            ),
-        )?;
+        diagnostics.write(format_args!(
+            "  result: ok {} passed, 0 failed in {}",
+            nodes.iter().filter(|node| node.success).count(),
+            human_duration(duration_ms)
+        ));
     } else if nodes.is_empty() {
-        write_diagnostic(
-            output_mode,
-            format_args!("  result: fail in {}", human_duration(duration_ms)),
-        )?;
+        diagnostics.write(format_args!(
+            "  result: fail in {}",
+            human_duration(duration_ms)
+        ));
     } else {
-        write_diagnostic(
-            output_mode,
-            format_args!(
-                "  result: fail {} passed, {} failed in {}",
-                nodes.iter().filter(|node| node.success).count(),
-                nodes.iter().filter(|node| !node.success).count(),
-                human_duration(duration_ms)
-            ),
-        )?;
+        diagnostics.write(format_args!(
+            "  result: fail {} passed, {} failed in {}",
+            nodes.iter().filter(|node| node.success).count(),
+            nodes.iter().filter(|node| !node.success).count(),
+            human_duration(duration_ms)
+        ));
     }
     if let Some(path) = run_summary_path {
-        write_diagnostic(
-            output_mode,
-            format_args!("  run-summary: {}", human_path(path)),
-        )?;
+        diagnostics.write(format_args!("  run-summary: {}", human_path(path)));
     }
-    write_diagnostic(
-        output_mode,
-        format_args!("  logs: {}", human_path(logs_dir)),
-    )
+    diagnostics.write(format_args!("  logs: {}", human_path(logs_dir)));
 }
 
 struct RunSummary<'a> {

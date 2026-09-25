@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use nixfied_manifest::Manifest;
 use nixfied_runtime::cancellation::CancellationToken;
-use nixfied_runtime::output::EvidenceMode;
+use nixfied_runtime::output::SourcePresentation;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
@@ -821,14 +821,13 @@ fn dependent_task_runs_after_owned_service_is_ready() {
             .leaf("smoke")
             .expect("smoke task"),
         &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
+        SourcePresentation::Shown,
     )
     .expect("ready dependent task should run");
     let TaskExecution::Succeeded(evidence) = task else {
         panic!("ready dependent task should succeed");
     };
-    let (task, replay) = evidence.into_task_and_replay();
-    assert!(replay.is_none());
+    let task = evidence;
 
     assert!(task.success);
     assert_eq!(task.exit_code, Some(0));
@@ -909,7 +908,7 @@ fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
             .leaf("smoke")
             .expect("smoke task"),
         &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
+        SourcePresentation::Shown,
     )
     .expect_err("task should wait for probe-ready service");
 
@@ -1388,14 +1387,13 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
             .leaf("smoke")
             .expect("smoke task"),
         &cancellation,
-        EvidenceMode::CaptureOnly,
+        SourcePresentation::Shown,
     )
     .expect("task should complete with a canceled outcome");
     let TaskExecution::Failed { error, evidence } = result else {
         panic!("task should be canceled");
     };
-    let (task_run, replay) = evidence.into_task_and_replay();
-    assert!(replay.is_none());
+    let task_run = evidence;
     handle.join().expect("canceler should join");
     thread::sleep(Duration::from_millis(2300));
     let report = observe_registry(&fixture.registry).expect("ps should reconcile canceled task");
@@ -1489,14 +1487,13 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
             .leaf("smoke")
             .expect("smoke task"),
         &CancellationToken::new(),
-        EvidenceMode::CaptureOnly,
+        SourcePresentation::Shown,
     )
     .expect("task should complete with a timed-out failure outcome");
     let TaskExecution::Failed { error, evidence } = result else {
         panic!("task should time out as a task failure");
     };
-    let (task_run, replay) = evidence.into_task_and_replay();
-    assert!(replay.is_none());
+    let task_run = evidence;
     thread::sleep(Duration::from_millis(2300));
     let report = observe_registry(&fixture.registry).expect("ps should reconcile timed-out task");
     let task_observations = report
@@ -2802,9 +2799,11 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                 .execute(
                     "INSERT INTO processes (
                    process_key, environment, slot, pid, pgid, start_identity,
-                   command_json, run_id, service_instance_id, status, role
+                   command_json, run_id, service_instance_id, status, role,
+                   source_label, presentation, stdout_path, stderr_path
                  ) SELECT ?1, environment, slot, 2147483647, 2147483647, start_identity,
-                          command_json, ?2, NULL, ?3, 'task'
+                          command_json, ?2, NULL, ?3, 'task',
+                          'fixture', 'hidden', 'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err'
                    FROM processes WHERE process_key = ?4",
                     rusqlite::params![key, run_id, status, service.info().process_key],
                 )
@@ -2894,8 +2893,9 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
-              command_json, run_id, service_instance_id, status, role
-            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running', 'task')
+              command_json, run_id, service_instance_id, status, role,
+              source_label, presentation, stdout_path, stderr_path
+            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))
             ",
             rusqlite::params![
                 task_process_key,

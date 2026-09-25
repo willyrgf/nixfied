@@ -39,6 +39,8 @@ let
     finalization = "runtime";
     escaped-port-reconciliation = "runtime";
     session-cancellation = "runtime";
+    internal-presenter = "runtime";
+    output-publication = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;
 in

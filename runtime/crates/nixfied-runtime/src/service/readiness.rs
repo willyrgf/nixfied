@@ -104,14 +104,18 @@ pub(crate) fn exec_probe_attempt(
         occurrence,
     } = invocation;
     let command_cwd = resolve_exec_cwd(source_root, &command.cwd)?;
-    let stdout_path = logs_dir.join(format!(
-        "lifecycle.{service_name}.{}.probe.{occurrence}.stdout.log",
-        probe.label
-    ));
-    let stderr_path = logs_dir.join(format!(
-        "lifecycle.{service_name}.{}.probe.{occurrence}.stderr.log",
-        probe.label
-    ));
+    // Replace-on-retry probe logs remain outside the default live display.
+    let evidence = crate::output::EvidenceSource::in_logs(
+        logs_dir,
+        service_name,
+        crate::output::SourcePresentation::Hidden,
+        &format!(
+            "lifecycle.{service_name}.{}.probe.{occurrence}",
+            probe.label
+        ),
+    );
+    let stdout_path = evidence.stdout.clone();
+    let stderr_path = evidence.stderr.clone();
     cancellation.check()?;
     checkpoint()?;
     let pending = spawn_gated_captured_exec(
@@ -169,6 +173,7 @@ pub(crate) fn exec_probe_attempt(
             record_invocation_started(
                 registry,
                 &InvocationProcessRecord {
+                    source: &evidence,
                     run_id,
                     process_key: &process_key,
                     pid,
@@ -216,19 +221,34 @@ pub(crate) fn exec_probe_attempt(
         .map_err(|failure| {
             let error = *failure.error;
             if !failure.settled {
-                return error;
+                return match crate::service::registry::record_capture_outcome(
+                    registry,
+                    run_id,
+                    &process_key,
+                    failure.capture,
+                ) {
+                    Ok(()) => error,
+                    Err(recording) => error.with_cause(recording),
+                };
             }
             // A settled probe interrupted by its session keeps no obligation.
             let status = failure
                 .outcome
                 .as_ref()
                 .map_or(TaskTerminalStatus::Canceled, |outcome| terminal(outcome).2);
-            match mark_invocation_finished(registry, identity, status, "{}") {
+            match mark_invocation_finished(registry, identity, status, "{}", Some(failure.capture))
+            {
                 Ok(()) => error,
                 Err(settlement) => error.with_cause(settlement),
             }
         })?;
-    mark_invocation_finished(registry, identity, terminal(&outcome).2, "{}")?;
+    mark_invocation_finished(
+        registry,
+        identity,
+        terminal(&outcome).2,
+        "{}",
+        Some(crate::redaction::CaptureOutcome::Complete),
+    )?;
 
     Ok(match outcome {
         CapturedExecOutcome::Canceled => return Err(canceled_error()),
