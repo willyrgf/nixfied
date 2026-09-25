@@ -427,8 +427,10 @@ impl PreparationFixture {
 fn open_registry(placement: &HostPlacement, manifest: &Manifest) -> Registry {
     Registry::open_or_create(
         registry_guard(placement),
-        &RegistryIdentity::default_slot(
+        &RegistryIdentity::for_slot(
             &manifest.project.project_id,
+            "dev",
+            0,
             &manifest.runtime_abi,
             &manifest.toolchain_id,
         ),

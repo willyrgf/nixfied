@@ -1260,7 +1260,8 @@ mod tests {
     impl TestRegistry {
         fn new() -> Self {
             let root = crate::test_support::TestDir::new("service-registry-test");
-            let identity = RegistryIdentity::default_slot("test-project", "test-abi", "test-tool");
+            let identity =
+                RegistryIdentity::for_slot("test-project", "dev", 0, "test-abi", "test-tool");
             let registry = Registry::open_or_create(
                 crate::state::ownership::fixture_guard(&root, &identity),
                 &identity,

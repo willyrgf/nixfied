@@ -26,14 +26,6 @@ impl RegistryIdentity {
             toolchain_id: toolchain_id.into(),
         }
     }
-
-    pub fn default_slot(
-        project_id: impl Into<String>,
-        runtime_abi: impl Into<String>,
-        toolchain_id: impl Into<String>,
-    ) -> Self {
-        Self::for_slot(project_id, "dev", 0, runtime_abi, toolchain_id)
-    }
 }
 
 /// Stored spelling is retained for exact row comparisons and event payloads;
