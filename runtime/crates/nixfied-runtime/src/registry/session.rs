@@ -351,12 +351,17 @@ pub fn seal_output(
         transaction.commit().map_err(sql_error)?;
         return Ok(OutputPublication::Unsealed);
     }
-    transaction
+    // A repeated seal is harmless and records no second event.
+    let changed = transaction
         .execute(
-            "UPDATE runs SET output = 'sealed' WHERE run_id = ?1",
+            "UPDATE runs SET output = 'sealed' WHERE run_id = ?1 AND output = 'unsealed'",
             params![run_id],
         )
         .map_err(sql_error)?;
+    if changed == 0 {
+        transaction.commit().map_err(sql_error)?;
+        return Ok(OutputPublication::Sealed);
+    }
     insert_event(
         &transaction,
         identity,

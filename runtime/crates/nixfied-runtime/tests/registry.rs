@@ -902,3 +902,78 @@ fn ignored_outcome_updates_cannot_publish_false_settlement_events() {
         assert_eq!(events, 0);
     }
 }
+
+#[test]
+fn output_seals_only_after_closed_registration_and_settled_capture_and_never_on_a_failed_commit() {
+    use nixfied_runtime::registry::session::{
+        OutputPublication, close_source_registration, seal_output,
+    };
+    let tmp = TempDir::new();
+    let placement = registry_placement(&tmp.path, &identity());
+    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    insert_pending_session(&registry, "run");
+    let output = |registry: &Registry| -> (String, i64) {
+        registry
+            .connection()
+            .query_row(
+                "SELECT output, (SELECT count(*) FROM events WHERE event_type = 'run.output-sealed')
+                 FROM runs WHERE run_id = 'run'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    };
+
+    // Open registration never seals.
+    assert_eq!(
+        seal_output(&mut registry, "run", "hash").unwrap_err().code,
+        ErrorCode::RegistryCorrupt
+    );
+    registry
+        .connection()
+        .execute(
+            "INSERT INTO processes (process_key, environment, slot, pid, pgid, start_identity,
+               command_json, run_id, role, status, ownership, source_label, presentation,
+               stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment)
+             VALUES ('task', 'dev', 0, 1, 1, '{}', '{}', 'run', 'task', 'exited', 'settled',
+               'task', 'shown', 'logs/out', 'logs/err', 15, 1000, 'process-group')",
+            [],
+        )
+        .unwrap();
+    close_source_registration(&mut registry, "run", "hash").unwrap();
+
+    // A source without a checked capture outcome leaves completeness unknown.
+    assert!(matches!(
+        seal_output(&mut registry, "run", "hash").unwrap(),
+        OutputPublication::Unsealed
+    ));
+    assert_eq!(output(&registry), ("unsealed".into(), 0));
+    registry
+        .connection()
+        .execute("UPDATE processes SET capture = 'complete'", [])
+        .unwrap();
+
+    // A failed seal commit publishes no seal.
+    registry
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER reject_seal BEFORE INSERT ON events
+             WHEN NEW.event_type = 'run.output-sealed' BEGIN SELECT RAISE(ABORT, 'seal-denied'); END;",
+        )
+        .unwrap();
+    let error = seal_output(&mut registry, "run", "hash").unwrap_err();
+    assert!(error.message.contains("seal-denied"), "{error:?}");
+    assert_eq!(output(&registry), ("unsealed".into(), 0));
+
+    registry
+        .connection()
+        .execute_batch("DROP TRIGGER reject_seal;")
+        .unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            seal_output(&mut registry, "run", "hash").unwrap(),
+            OutputPublication::Sealed
+        ));
+    }
+    assert_eq!(output(&registry), ("sealed".into(), 1));
+}

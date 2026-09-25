@@ -771,6 +771,74 @@ fn a_tree_deeper_than_the_traversal_bound_refuses_and_keeps_the_intent_pending()
 }
 
 #[test]
+fn a_failed_intent_commit_deletes_nothing() {
+    for trigger in [
+        "CREATE TRIGGER deny BEFORE INSERT ON cleanups BEGIN SELECT RAISE(ABORT, 'intent-denied'); END;",
+        "CREATE TRIGGER deny BEFORE INSERT ON events WHEN NEW.event_type = 'cleanup.intent'
+         BEGIN SELECT RAISE(ABORT, 'intent-denied'); END;",
+    ] {
+        let fixture = StateFixture::new();
+        let mut registry = fixture.registry();
+        fs::write(fixture.layout.state_root.join("data"), b"kept").unwrap();
+        registry.connection().execute_batch(trigger).unwrap();
+
+        let error = fixture
+            .clean(&mut registry, CleanupMode::Standard)
+            .expect_err("an uncommitted intent authorizes no deletion");
+
+        assert!(error.message.contains("intent-denied"), "{error:?}");
+        assert_eq!(cleanup_rows(&registry), 0);
+        assert_eq!(
+            fs::read(fixture.layout.state_root.join("data")).unwrap(),
+            b"kept"
+        );
+        assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
+    }
+}
+
+#[test]
+fn a_failed_completion_commit_after_root_removal_resumes_the_same_operation() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    fs::write(fixture.layout.state_root.join("data"), b"gone").unwrap();
+    registry
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER deny BEFORE UPDATE ON cleanups WHEN NEW.status = 'completed'
+             BEGIN SELECT RAISE(ABORT, 'completion-denied'); END;",
+        )
+        .unwrap();
+
+    let error = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect_err("completion is not claimed before its commit");
+    assert!(error.message.contains("completion-denied"), "{error:?}");
+    assert!(!fixture.layout.state_root.exists());
+    let id: String = registry
+        .connection()
+        .query_row(
+            "SELECT cleanup_id FROM cleanups WHERE status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    registry
+        .connection()
+        .execute_batch("DROP TRIGGER deny;")
+        .unwrap();
+    let outcome = fixture.clean(&mut registry, CleanupMode::Standard).unwrap();
+    assert_eq!(deleted_id(&outcome), id);
+    assert_eq!(cleanup_rows(&registry), 1);
+    assert_eq!(
+        cleanup_event_types(&registry, &id)
+            .last()
+            .map(String::as_str),
+        Some("cleanup.completed")
+    );
+}
+
+#[test]
 fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
