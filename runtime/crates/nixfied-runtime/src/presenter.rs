@@ -97,6 +97,9 @@ pub enum DeliveryOutcome {
 pub struct CommandPresenter {
     child: Option<Child>,
     channel: UnixStream,
+    /// Termination signals counted when the session last observed
+    /// cancellation; any later signal did not cancel it and ends the drain.
+    session_signals: usize,
 }
 
 impl CommandPresenter {
@@ -133,6 +136,7 @@ impl CommandPresenter {
             channel: channel
                 .try_clone()
                 .map_err(|_| failure("cannot own presenter channel"))?,
+            session_signals: crate::cancellation::signal_count(),
         };
         if crate::channel::write_all(&mut channel, &frame, Instant::now() + STARTUP_TIMEOUT)
             .is_err()
@@ -143,12 +147,19 @@ impl CommandPresenter {
         Ok(presenter)
     }
 
+    /// Record the session's final cancellation observation. Call it before
+    /// that observation: a signal counted afterwards reached the runtime too
+    /// late to cancel the session, so it must end the drain instead.
+    pub fn observe_session_signals(&mut self) {
+        self.session_signals = crate::cancellation::signal_count();
+    }
+
     /// After slot release: let the helper drain stable evidence with no
-    /// default deadline. A termination signal that arrives during the drain
-    /// ends it; one that already canceled the session does not truncate the
-    /// final output the session retained.
+    /// default deadline. A termination signal that did not cancel the session
+    /// ends the drain, even one received before slot release; one that already
+    /// canceled the session does not truncate the final output it retained.
     pub fn finish(mut self) -> DeliveryOutcome {
-        let signals = crate::cancellation::signal_count();
+        let signals = self.session_signals;
         let _ = crate::channel::write_all(
             &mut self.channel,
             &[FINISH],

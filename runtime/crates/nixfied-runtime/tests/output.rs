@@ -839,42 +839,52 @@ fn service_failure_interrupts_another_services_exec_probe() {
 }
 
 /// Settlement and slot release under stalled readers are proven below; an
-/// interrupted delivery after settlement is an output failure alone.
+/// interrupted delivery after settlement is an output failure alone. A signal
+/// that lands after the session's last cancellation observation is never lost,
+/// whether it arrives before or after slot release.
 #[test]
 fn interrupted_delivery_after_settlement_fails_output_not_the_session() {
-    let count = 4 * 1024 * 1024;
-    let manifest = task_manifest(&["output", "repeat", "78", &count.to_string(), "79", "0"]);
-    let fixture = RuntimeFixture::new(manifest);
-    let mut child = fixture
-        .command("run", &["--task", "smoke", "--output", "task-output"])
-        .spawn()
-        .unwrap();
-    // Hold the caller's stdout open without ever reading it.
-    let stalled = child.stdout.take().unwrap();
-    wait_for_registry(&fixture, SEALED_SETTLEMENT);
-    // The interrupt lands once the slot is released and only presentation remains.
-    assert_success(&output_eventually(&fixture, "clean", &[]));
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "the command keeps presenting after settlement"
-    );
-    assert_eq!(
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
-    let output = wait_for_child_output(child, Duration::from_secs(10));
-    drop(stalled);
-    assert_eq!(output.status.code(), Some(38));
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        diagnostic.contains("OUTPUT_PROJECTION_FAILED"),
-        "{diagnostic}"
-    );
-    assert_eq!(
-        stored_execution_outcome(&fixture),
-        "succeeded",
-        "interrupted delivery never rewrites the settled session"
-    );
+    for before_release in [true, false] {
+        let count = 4 * 1024 * 1024;
+        let manifest = task_manifest(&["output", "repeat", "78", &count.to_string(), "79", "0"]);
+        let fixture = RuntimeFixture::new(manifest);
+        let mut child = fixture
+            .command("run", &["--task", "smoke", "--output", "task-output"])
+            .spawn()
+            .unwrap();
+        // Hold the caller's stdout open without ever reading it.
+        let stalled = child.stdout.take().unwrap();
+        wait_for_registry(&fixture, SEALED_SETTLEMENT);
+        if !before_release {
+            // The interrupt lands once the slot is released and only presentation remains.
+            assert_success(&output_eventually(&fixture, "clean", &[]));
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "the command keeps presenting after settlement"
+            );
+        }
+        assert_eq!(
+            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+            0
+        );
+        let output = wait_for_child_output(child, Duration::from_secs(10));
+        drop(stalled);
+        assert_eq!(
+            output.status.code(),
+            Some(38),
+            "before release: {before_release}"
+        );
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostic.contains("OUTPUT_PROJECTION_FAILED"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            stored_execution_outcome(&fixture),
+            "succeeded",
+            "interrupted delivery never rewrites the settled session"
+        );
+    }
 }
 
 #[test]
