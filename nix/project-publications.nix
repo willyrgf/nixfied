@@ -64,13 +64,13 @@ in
   (control "manifest-check" "check" "Admit the compiled Nixfied manifest without executing tasks"
     "Checks the compiled manifest without executing tasks or materialising runtime state."
   )
-  (control "ps" "ps" "Reconcile and report Nixfied-owned processes for a slot"
-    "Observes processes and reconciles stale registry evidence for the selected slot."
+  (control "ps" "ps" "Report recorded Nixfied processes for a slot"
+    "Reads the selected slot's registry and observes process liveness without writing anything."
   )
-  (control "down" "down" "Stop Nixfied-owned processes for a slot"
-    "Stops owned processes and updates registry evidence for the selected slot."
+  (control "down" "down" "Cancel the slot's live Nixfied session"
+    "Cancels the live session through its control endpoint, or recovers a dead owner's processes."
   )
   (control "clean" "clean" "Safely clean Nixfied-owned state for a slot"
-    "Performs marker-, policy-, lease- and process-gated cleanup of owned slot state."
+    "Recovers the slot, then performs marker-, persistence- and process-gated cleanup of owned state."
   )
 ]

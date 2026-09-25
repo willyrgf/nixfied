@@ -75,7 +75,7 @@ fn assert_stream_contains(haystack: &[u8], needle: &[u8], stream: &str) {
 }
 
 #[test]
-fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_replay() {
+fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence() {
     struct Survivor(libc::pid_t);
     impl Drop for Survivor {
         fn drop(&mut self) {
@@ -360,7 +360,7 @@ fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() 
 }
 
 #[test]
-fn direct_leaf_replays_exact_binary_without_metadata() {
+fn direct_leaf_presents_exact_binary_without_metadata() {
     let stdout = [0_u8, 1, 2, 0, 0xff, b'\n'];
     let stderr = b"stderr-without-final-newline\0";
     let args = vec![
@@ -386,7 +386,7 @@ fn direct_leaf_replays_exact_binary_without_metadata() {
 }
 
 #[test]
-fn leaf_default_replays_when_output_is_omitted() {
+fn leaf_default_presents_when_output_is_omitted() {
     let stdout = b"default stdout";
     let stderr = b"default stderr";
     let mut manifest = leaf_task_manifest(&[
@@ -422,7 +422,7 @@ fn explicit_output_overrides_leaf_default() {
     );
     assert!(
         output.stdout.is_empty(),
-        "summary must not replay task stdout"
+        "summary keeps task output off stdout"
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("result: ok"));
 }
@@ -446,12 +446,12 @@ fn composite_selection_uses_its_metadata_default_not_a_child_default() {
     );
     assert!(
         output.stdout.is_empty(),
-        "composites must not replay child output"
+        "composites keep child output off stdout"
     );
 }
 
 #[test]
-fn accepted_nonzero_code_replays_and_succeeds() {
+fn accepted_nonzero_code_presents_and_succeeds() {
     let stdout = b"accepted nonzero\0";
     let stderr = b"diagnostic";
     let args = vec![
@@ -476,7 +476,7 @@ fn accepted_nonzero_code_replays_and_succeeds() {
 }
 
 #[test]
-fn empty_output_is_a_valid_zero_byte_replay() {
+fn empty_output_is_a_valid_zero_byte_presentation() {
     let args = vec![
         "output".to_string(),
         "hex".to_string(),
@@ -496,7 +496,7 @@ fn empty_output_is_a_valid_zero_byte_replay() {
 }
 
 #[test]
-fn large_simultaneous_streams_replay_exactly() {
+fn large_simultaneous_streams_present_exactly() {
     let stdout = vec![0x61; 256 * 1024];
     let stderr = vec![0x7a; 192 * 1024];
     let args = vec![
@@ -521,7 +521,7 @@ fn large_simultaneous_streams_replay_exactly() {
 }
 
 #[test]
-fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_replay() {
+fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_delivery() {
     let stdout = vec![b'x'; 128 * 1024];
     let stderr = vec![b'z'; 32 * 1024];
     let args = vec![
@@ -553,7 +553,7 @@ fn broken_stdout_pipe_is_typed_and_does_not_stop_stderr_replay() {
 }
 
 #[test]
-fn task_failure_replays_captured_bytes_and_preserves_status() {
+fn task_failure_presents_captured_bytes_and_preserves_status() {
     let stdout = b"failed stdout";
     let stderr = b"failed stderr";
     let args = vec![
@@ -578,7 +578,7 @@ fn task_failure_replays_captured_bytes_and_preserves_status() {
 }
 
 #[test]
-fn redaction_happens_before_task_output_replay() {
+fn redaction_happens_before_task_output_presentation() {
     let mut manifest =
         leaf_task_manifest(&["output".to_string(), "env".to_string(), "TOKEN".to_string()]);
     manifest["secrets"]["api-token"] = json!({
@@ -618,7 +618,7 @@ fn redaction_happens_before_task_output_replay() {
 }
 
 #[test]
-fn timeout_replays_output_before_reporting_task_failure() {
+fn timeout_presents_output_before_reporting_task_failure() {
     let marker = tempfile_marker("timeout");
     let stdout = b"timeout stdout";
     let stderr = b"timeout stderr";
@@ -1967,7 +1967,19 @@ fn service_failure_during_another_services_preparation_releases_no_further_workl
         second_started, 0,
         "no workload is released after an owned service failed"
     );
-    assert_eq!(unresolved, 0, "the interrupted prepare task settled");
+    let rows: Vec<(String, String, String, String)> = connection
+        .prepare("SELECT role, status, ownership, capture FROM processes")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        unresolved, 0,
+        "the interrupted prepare task settled: {rows:?}"
+    );
     assert_eq!(finalization, "complete");
     assert!(!release.exists());
 }

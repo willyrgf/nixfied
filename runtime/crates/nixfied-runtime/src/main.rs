@@ -922,7 +922,7 @@ fn run_m0_placed(
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
-    let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
+    let preparation = prepare_slot_state(placement, &identity, &mut registry)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.
     nixfied_runtime::state::claim_run_evidence(placement)?;
@@ -954,10 +954,13 @@ fn run_m0_placed(
     // the session owner, shows it while session duties remain.
     let mut diagnostics =
         SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
-    if upgrade.upgraded {
+    if preparation.provenance_refreshed {
         diagnostics.write(format_args!(
             "  updated slot provenance from manifest {} (data retained)",
-            upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
+            preparation
+                .from_manifest_hash
+                .as_deref()
+                .unwrap_or("unknown"),
         ));
     }
     if let Some(establishment) = establishment {

@@ -556,7 +556,7 @@ fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     if active_port_count > 0 {
         return Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
-            "cleanup refused because active port reservations exist",
+            "cleanup refused because open endpoint evidence exists",
         ));
     }
     Ok(())

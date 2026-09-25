@@ -318,12 +318,7 @@ pub(crate) fn record_service_start(
                 "INSERT INTO ports (
                 endpoint_key, environment, slot, service_instance_id, address, port,
                 status, owner_process_key
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(endpoint_key) DO UPDATE SET
-                environment = excluded.environment, slot = excluded.slot,
-                service_instance_id = excluded.service_instance_id,
-                address = excluded.address, port = excluded.port,
-                status = excluded.status, owner_process_key = excluded.owner_process_key",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     endpoint.endpoint_key,
                     identity.environment,
@@ -1836,21 +1831,16 @@ mod tests {
     }
 
     #[test]
-    fn startup_intent_has_no_endpoint_or_lease_authority() {
+    fn startup_intent_records_no_endpoint_evidence() {
         let mut fixture = TestRegistry::new();
         insert_run(&fixture.registry, RUN_ID);
         record_intent(&mut fixture.registry, RUN_ID);
-        let (ports, leases): (i64, i64) = fixture
+        let ports: i64 = fixture
             .registry
             .connection()
-            .query_row(
-                "SELECT (SELECT count(*) FROM ports),
-                    (SELECT count(*) FROM sqlite_master WHERE name = 'run_leases')",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row("SELECT count(*) FROM ports", [], |row| row.get(0))
             .unwrap();
-        assert_eq!((ports, leases), (0, 0));
+        assert_eq!(ports, 0);
         let error = fixture
             .registry
             .connection()

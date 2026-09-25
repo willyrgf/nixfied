@@ -13,7 +13,6 @@ use crate::admission::secrets::ResolvedSecrets;
 use crate::admission::{ControlAdmission, RunAdmission};
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::child::OwnedChild;
-use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
     ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
@@ -1817,10 +1816,7 @@ fn clean_marked_slot_state(
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let identity = StateIdentity::from_selected_slot(admission, selected_slot);
-    // Reconcile first so rows left active by a crashed runtime (no live OS
-    // process) are marked stale instead of tripping the active-refs refusal,
-    // sparing the operator a manual ps/down before clean can proceed.
-    reconcile_registry(registry)?;
+    // The caller already performed exclusive predecessor recovery.
     clean_marked_state(&placement.state_base, &identity, registry, mode)
 }
 
@@ -2073,6 +2069,23 @@ pub(crate) struct CapturedExecFailure {
     pub capture: crate::redaction::CaptureOutcome,
 }
 
+/// A refused release. Only a committed registration leaves a process row that
+/// the caller must settle from the contained child's facts.
+pub(crate) enum CapturedReleaseFailure {
+    Unregistered(Box<RuntimeError>),
+    Registered(CapturedExecFailure),
+}
+
+#[cfg(test)]
+impl CapturedReleaseFailure {
+    pub fn into_error(self) -> RuntimeError {
+        match self {
+            Self::Unregistered(error) => *error,
+            Self::Registered(failure) => *failure.error,
+        }
+    }
+}
+
 /// Inert captured bootstrap. Capture and the child stay owned through failed
 /// registration/delivery; normal completion only accepts an authorized child.
 pub(crate) struct PendingCapturedChild {
@@ -2091,7 +2104,7 @@ impl PendingCapturedChild {
         mut self,
         register: impl FnOnce(&Child) -> RuntimeResult<()>,
         checkpoint: impl FnMut() -> RuntimeResult<()>,
-    ) -> RuntimeResult<OwnedCapturedChild> {
+    ) -> Result<OwnedCapturedChild, CapturedReleaseFailure> {
         let result = self
             .pending
             .take()
@@ -2099,7 +2112,24 @@ impl PendingCapturedChild {
             .register_and_release(register, checkpoint);
         match result {
             Ok(child) => Ok(self.owned(child)),
-            Err(failure) => Err(self.owned(failure.child).abort(*failure.error)),
+            Err(failure) => {
+                let (error, settled, capture) =
+                    self.owned(failure.child).finish(Some(*failure.error));
+                let error = Box::new(error.expect("release failure retains its error"));
+                Err(match failure.registration {
+                    crate::launch::Registration::Unconfirmed => {
+                        CapturedReleaseFailure::Unregistered(error)
+                    }
+                    crate::launch::Registration::Committed => {
+                        CapturedReleaseFailure::Registered(CapturedExecFailure {
+                            error,
+                            outcome: None,
+                            settled,
+                            capture,
+                        })
+                    }
+                })
+            }
         }
     }
 
@@ -2241,12 +2271,6 @@ impl OwnedCapturedChild {
             }),
             (None, _, _) => Ok(outcome.expect("successful observation supplies an outcome")),
         }
-    }
-
-    pub fn abort(mut self, error: RuntimeError) -> RuntimeError {
-        self.finish(Some(error))
-            .0
-            .expect("abort retains its original failure")
     }
 
     fn finish(
@@ -3201,6 +3225,7 @@ mod tests {
             )
             .unwrap()
             .register_and_release(|_| Ok(()), || Ok(()))
+            .map_err(CapturedReleaseFailure::into_error)
             .unwrap();
             let pid = child.pid();
             if exited {
@@ -3286,6 +3311,7 @@ mod tests {
         )
         .unwrap()
         .register_and_release(|_| Ok(()), || Ok(()))
+        .map_err(CapturedReleaseFailure::into_error)
         .unwrap()
         .complete(&CancellationToken::new(), || Ok(()), |_| Ok(()))
         .map_err(|failure| *failure.error)
@@ -3302,7 +3328,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_spawn_failure_and_unrecorded_abort_close_capture_and_reap() {
+    fn bounded_spawn_failure_and_refused_release_close_capture_and_reap() {
         let root = std::env::temp_dir().join(format!(
             "nixfied-bounded-abort-{}-{}",
             std::process::id(),
@@ -3338,7 +3364,8 @@ mod tests {
             .unwrap()
             .register_and_release(|_| Ok(()), || Ok(()))
             .err()
-            .unwrap();
+            .unwrap()
+            .into_error();
         assert_eq!(error.code, ErrorCode::ProcEscape);
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
@@ -3357,6 +3384,9 @@ mod tests {
             )
             .err()
             .unwrap();
+        let CapturedReleaseFailure::Unregistered(error) = error else {
+            panic!("a refused registration leaves no process row to settle");
+        };
         assert_eq!(error.code, ErrorCode::RegistryCorrupt);
         assert_eq!(error.message, "process recording denied");
         assert_eq!(
@@ -3366,6 +3396,37 @@ mod tests {
         );
         assert!(std::fs::read(&stdout).unwrap().is_empty());
         assert!(std::fs::read(&stderr).unwrap().is_empty());
+        let pending = spawn_gated_captured_exec(&spec, &crate::launch::test_launcher()).unwrap();
+        let pid = pending.pid() as i32;
+        let mut checkpoints = 0;
+        let failure = pending
+            .register_and_release(
+                |_| Ok(()),
+                || {
+                    checkpoints += 1;
+                    if checkpoints == 1 {
+                        return Ok(());
+                    }
+                    Err(RuntimeError::new(ErrorCode::Canceled, "session canceled"))
+                },
+            )
+            .err()
+            .unwrap();
+        let CapturedReleaseFailure::Registered(failure) = failure else {
+            panic!("a refusal after committed registration must return settlement facts");
+        };
+        assert_eq!(failure.error.code, ErrorCode::Canceled);
+        assert!(failure.outcome.is_none());
+        assert!(
+            failure.settled,
+            "a contained unreleased child settles its row"
+        );
+        assert_eq!(failure.capture, crate::redaction::CaptureOutcome::Complete);
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "registered but unreleased child must be reaped"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

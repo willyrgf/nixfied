@@ -151,7 +151,7 @@ let
       health = mkOption {
         type = probeOpType "health";
         default = { };
-        description = "Probe contract used to verify an existing service remains reusable.";
+        description = "Probe contract run once after readiness, before the session relies on the service.";
       };
       stop = mkOption {
         type = stopOpType;

@@ -727,15 +727,15 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         slot0.service.info().service_instance_id,
         slot1.service.info().service_instance_id
     );
-    let slot0_ps = observe_registry(&slot0.registry).expect("slot 0 ps should reconcile");
-    let slot1_ps = observe_registry(&slot1.registry).expect("slot 1 ps should reconcile");
+    let slot0_ps = observe_registry(&slot0.registry).expect("slot 0 ps should observe");
+    let slot1_ps = observe_registry(&slot1.registry).expect("slot 1 ps should observe");
     assert!(slot0_ps.processes.iter().any(|process| process.live));
     assert!(slot1_ps.processes.iter().any(|process| process.live));
 
     down_owned_process_groups(&mut slot0.registry, 1000).expect("slot 0 down should stop slot 0");
     drop(slot0.service);
     let slot0_after_down =
-        observe_registry(&slot0.registry).expect("slot 0 ps should reconcile after down");
+        observe_registry(&slot0.registry).expect("slot 0 ps should observe after down");
     let slot1_after_down = observe_registry(&slot1.registry).expect("slot 1 ps should remain live");
     assert!(
         slot0_after_down
@@ -1310,7 +1310,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         .cancel(&mut fixture.registry, 200, "test readiness cancellation")
         .expect("canceled service should be terminated");
     thread::sleep(Duration::from_millis(2300));
-    let report = observe_registry(&fixture.registry).expect("ps should reconcile canceled service");
+    let report = observe_registry(&fixture.registry).expect("ps should observe canceled service");
     let observed = report
         .processes
         .iter()
@@ -1396,7 +1396,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     let task_run = evidence;
     handle.join().expect("canceler should join");
     thread::sleep(Duration::from_millis(2300));
-    let report = observe_registry(&fixture.registry).expect("ps should reconcile canceled task");
+    let report = observe_registry(&fixture.registry).expect("ps should observe canceled task");
     let task_observations = report
         .processes
         .iter()
@@ -1495,7 +1495,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     };
     let task_run = evidence;
     thread::sleep(Duration::from_millis(2300));
-    let report = observe_registry(&fixture.registry).expect("ps should reconcile timed-out task");
+    let report = observe_registry(&fixture.registry).expect("ps should observe timed-out task");
     let task_observations = report
         .processes
         .iter()
@@ -2179,7 +2179,7 @@ fn duplicate_active_service_start_is_refused() {
 }
 
 #[test]
-fn ready_service_is_not_borrowed_by_another_run() {
+fn live_session_service_blocks_a_second_start_on_its_endpoint() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let owner = fixture
@@ -2198,7 +2198,7 @@ fn ready_service_is_not_borrowed_by_another_run() {
     let error = match fixture.start("run-other", port) {
         Ok(other) => {
             other.stop(&mut fixture.registry, 1000).unwrap();
-            panic!("ready services must not be borrowed");
+            panic!("a live session's endpoint must refuse a second start");
         }
         Err(error) => error,
     };
@@ -2214,7 +2214,7 @@ fn ready_service_is_not_borrowed_by_another_run() {
 }
 
 #[test]
-fn probe_ready_service_with_different_planned_port_is_not_reused() {
+fn unsettled_predecessor_process_blocks_a_second_start() {
     let port_a = available_port_window(2);
     let port_b = port_a + 1;
     let mut fixture = test_child_listener_fixture(port_a);
@@ -2229,20 +2229,17 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
         )
         .expect("owner should become ready before mismatch attempt");
 
-    let error = match fixture.start("run-borrower-port", port_b) {
-        Ok(borrower) => {
-            let _ = borrower.stop(&mut fixture.registry, 1000);
-            panic!("different planned port must not be borrowed");
+    let error = match fixture.start("run-second", port_b) {
+        Ok(second) => {
+            let _ = second.stop(&mut fixture.registry, 1000);
+            panic!("an unsettled predecessor must refuse a second start");
         }
         Err(error) => error,
     };
 
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let borrowed_events: i64 = fixture.query(
-        "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
-        [],
-    );
-    assert_eq!(borrowed_events, 0);
+    let processes: i64 = fixture.query("SELECT count(*) FROM processes", []);
+    assert_eq!(processes, 1, "the refused start registered nothing");
     owner
         .stop(&mut fixture.registry, 1000)
         .expect("owner service should stop");
@@ -2256,7 +2253,7 @@ fn ps_observes_dead_process_without_mutating_evidence() {
         .expect("foreground service should start");
     thread::sleep(Duration::from_millis(1300));
 
-    let report = observe_registry(&fixture.registry).expect("ps should reconcile");
+    let report = observe_registry(&fixture.registry).expect("ps should observe");
 
     let observed = report
         .processes
@@ -2264,7 +2261,7 @@ fn ps_observes_dead_process_without_mutating_evidence() {
         .find(|process| process.process_key == service.info().process_key)
         .expect("process should be reported");
     assert!(!observed.live);
-    assert_eq!(observed.reconciled_status, "stale");
+    assert_eq!(observed.observed_status, "stale");
     let process_status: String = fixture.query(
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
@@ -2312,7 +2309,7 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
         .expect("test should corrupt start identity");
 
     let report =
-        observe_registry(&fixture.registry).expect("ps should reconcile mismatched identity");
+        observe_registry(&fixture.registry).expect("ps should observe mismatched identity");
 
     let observed = report
         .processes
@@ -2326,7 +2323,7 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
     let stale_ports: i64 = fixture.query("SELECT count(*) FROM ports WHERE status = 'stale'", []);
 
     assert!(!observed.live);
-    assert_eq!(observed.reconciled_status, "stale");
+    assert_eq!(observed.observed_status, "stale");
     assert_eq!(process_status, "running");
     assert_eq!(stale_ports, 0);
     assert!(
@@ -2379,7 +2376,7 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
         .find(|process| process.process_key == service.info().process_key)
         .expect("service process should be reported");
     assert!(process.live);
-    assert_eq!(process.reconciled_status, "running");
+    assert_eq!(process.observed_status, "running");
     let registry_status: String = fixture.query(
         "
             SELECT p.status
@@ -2438,14 +2435,14 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     );
     assert_eq!(open_ports, 1);
     let report =
-        observe_registry(&fixture.registry).expect("ps should reconcile escaped owner liveness");
+        observe_registry(&fixture.registry).expect("ps should observe escaped owner liveness");
     let escaped = report
         .processes
         .iter()
         .find(|process| process.process_key == service.info().process_key)
         .expect("escaped process should remain visible");
     assert!(escaped.live);
-    assert_eq!(escaped.reconciled_status, "escaped");
+    assert_eq!(escaped.observed_status, "escaped");
 
     let selected = select_slot(fixture.admission.common().manifest(), None)
         .expect("default slot should select");
@@ -2641,7 +2638,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     let conflict = match fixture.start("run-blocked-by-escaped-owner", port) {
         Ok(service) => {
             let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("an escaped owner must not be reused or replaced implicitly");
+            panic!("an escaped owner must not be replaced implicitly");
         }
         Err(error) => error,
     };

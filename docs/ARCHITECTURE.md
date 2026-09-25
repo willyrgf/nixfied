@@ -278,16 +278,19 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   Darwin additionally requests and verifies `fullfsync` and
   `checkpoint_fullfsync`. These settings do not by themselves establish filesystem
   publication ordering or a tested host-power-loss guarantee.
-- **Liveness is reconciled against the OS** before being reported — `ps` confirms
-  process identity (surviving PID reuse) before saying `running`/`stale`/etc.
+- **Liveness is observed against the OS** before being reported — `ps` confirms
+  process identity (surviving PID reuse) before saying `running`/`stale`/etc., and
+  writes nothing.
 - **Registry readers own stored representation.** Service and control paths share
   endpoint decoding for status, service prefix, nonempty endpoint identity,
   loopback address, and port representation. Raw address spelling remains available
   for exact row comparisons and event bytes. Process registration and activation
   retain their own complete-set and ownership checks within the relevant transaction.
   Shared actionable-process SQL preserves each caller's multiplicity and conflict
-  rules. Reconciliation returns typed observations; `ps` alone projects public
-  strings, and `down` re-reads rows and refreshes identity before signaling.
+  rules. Observation returns typed facts; `ps` alone projects public strings.
+  A live session is canceled only through its own control FIFO; recovery of a
+  dead owner re-reads rows and refreshes identity under the slot guard before
+  signaling anything.
 - **Transitions borrow registry context.** Connection, immutable identity, and
   redactor are borrowed together after revalidating the held slot guard. Each
   transition visibly selects its transaction
@@ -363,8 +366,8 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   atomically; macOS coordinates socket flag setup with every workload spawn.
   Coordination poisoning refuses effects. This process-local synchronization
   protects descriptor inheritance.
-- **Application data has no framework compatibility epoch.** Marker version 2
-  records ownership, retention, and provenance. State preparation has no deletion
+- **Application data has no framework compatibility epoch.** Marker version 3
+  records ownership, retention, data generation, and provenance. State preparation has no deletion
   branch and refuses retention downgrades. Application startup owns its format
   checks and migrations; configuration changes grant no reset authority.
 - **Slot ownership precedes recovery and state preparation.** Recovery settles
@@ -376,8 +379,8 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   also never signals a pre-existing process: missing or unprovable ownership is
   `PORT_UNVERIFIABLE` and an outside listener is `PORT_CONFLICT`. The recorded
   process and ownership evidence remain
-  actionable to `down` and cleanup; after explicit `down`, a later run may start
-  the replacement.
+  unresolved obligations; the next exclusive owner's recovery settles them before
+  any fresh session starts.
 - **The coordination boundary is deliberately narrow.** Endpoint locks
   coordinate participating runtimes for the same effective user and relevant
   network scope, not arbitrary external binders. An unrelated process can still
@@ -385,9 +388,8 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   observed, while an ambiguous bind failure fails closed. Eliminating that
   window would require socket activation and descriptor handoff, which widens
   the generic invocation and adapter contracts, or a lifetime lock or guardian,
-  which adds a supervision protocol even though persistent services outlive the
-  invoking runtime. Nixfied therefore does not claim atomic reservation against
-  arbitrary host processes.
+  which adds another supervision protocol. Nixfied therefore does not claim
+  atomic reservation against arbitrary host processes.
 - **State: one retention policy and marker-last deletion.** Every owned state
   root carries a `.nixfied-state.json` marker holding its ownership, its
   `persistence`, and a runtime-generated data generation. `persistence` is the

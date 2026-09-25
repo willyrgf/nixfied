@@ -20,10 +20,7 @@ use crate::service::{
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
 use crate::state::ownership::SlotGuard;
-use crate::state::{
-    CleanupMode, CleanupOutcome, RetentionOutcome, StateIdentity, apply_retention,
-    clean_marked_state,
-};
+use crate::state::{RetentionOutcome, StateIdentity, apply_retention};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +37,8 @@ pub struct ProcessObservation {
     pub pid: u32,
     pub pgid: i32,
     pub registry_status: String,
-    pub reconciled_status: String,
+    /// The recorded status as the host currently observes it.
+    pub observed_status: String,
     /// `unresolved` until the owner or a recovery successor proved the
     /// process, its group, and its tracked descendants are gone.
     pub ownership: String,
@@ -147,18 +145,13 @@ fn session_settled(reader: &RegistryReader, run_id: &str) -> RuntimeResult<bool>
         .map_err(sql_error)
 }
 
-/// A reconciled observation is evidence at a moment, not authority to signal.
-pub struct ReconciledProcess {
-    row: ProcessRow,
-}
-
 pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
     let processes = process_rows(registry.connection())?
         .into_iter()
         .map(|row| {
             let active = status::PROCESS_ACTIVE.contains(&row.status);
             let live = if active || row.unsettled {
-                row.reconciled_liveness()?
+                row.observed_liveness()?
             } else {
                 false
             };
@@ -178,7 +171,7 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
                 pid: row.pid,
                 pgid: row.pgid,
                 registry_status: row.status.as_str().to_string(),
-                reconciled_status: observed_status.as_str().to_string(),
+                observed_status: observed_status.as_str().to_string(),
                 ownership: if active || row.unsettled {
                     "unresolved"
                 } else {
@@ -192,30 +185,32 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
     Ok(PsReport { processes })
 }
 
-pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<Vec<ReconciledProcess>> {
+/// Recovery's first pass under slot authority: settle every recorded process
+/// proven gone and release endpoint evidence no live owner holds. Returns the
+/// process keys it settled.
+fn settle_dead_processes(registry: &mut Registry) -> RuntimeResult<Vec<String>> {
     registry.authority().validate()?;
     read_open_endpoints(registry.connection(), None)?;
     let rows = process_rows(registry.connection())?;
+    let mut settled = Vec::new();
     for row in rows {
         let active = status::PROCESS_ACTIVE.contains(&row.status);
         let live = if active || row.unsettled {
-            row.reconciled_liveness()?
+            row.observed_liveness()?
         } else {
             false
         };
         if active && !live {
             mark_process_stale(registry, &row)?;
+            settled.push(row.process_key);
         } else if row.unsettled && !live {
-            reconcile_unsettled(registry, &row)?;
+            settle_unsettled(registry, &row)?;
+            settled.push(row.process_key);
         }
     }
     let rows = process_rows(registry.connection())?;
-    reconcile_stale_port_reservations(registry, &rows)?;
-
-    Ok(process_rows(registry.connection())?
-        .into_iter()
-        .map(|row| ReconciledProcess { row })
-        .collect())
+    release_orphaned_endpoints(registry, &rows)?;
+    Ok(settled)
 }
 
 /// State preparation never performs teardown. The slot owner must first settle
@@ -241,21 +236,16 @@ pub fn down_owned_process_groups(
     registry: &mut Registry,
     timeout_ms: u64,
 ) -> RuntimeResult<DownReport> {
-    let reconciled = reconcile_registry(registry)?;
-    let mut stale = reconciled
-        .into_iter()
-        .filter(|process| process.row.status == ProcessStatus::Stale)
-        .map(|process| process.row.process_key)
-        .collect::<Vec<_>>();
+    let mut stale = settle_dead_processes(registry)?;
     let rows = process_rows(registry.connection())?;
     let mut stopped = Vec::new();
     for row in rows
         .into_iter()
         .filter(|row| status::PROCESS_ACTIVE.contains(&row.status) || row.unsettled)
     {
-        if !row.reconciled_liveness()? {
+        if !row.observed_liveness()? {
             if row.unsettled {
-                reconcile_unsettled(registry, &row)?;
+                settle_unsettled(registry, &row)?;
             } else {
                 mark_process_stale(registry, &row)?;
             }
@@ -307,10 +297,10 @@ pub fn down_owned_process_groups(
         // Group termination cannot reach descendants that left the group. An
         // exiting leader may briefly remain observable, so wait a bounded time.
         let settle_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        let mut live = row.reconciled_liveness()?;
+        let mut live = row.observed_liveness()?;
         while live && std::time::Instant::now() < settle_deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
-            live = row.reconciled_liveness()?;
+            live = row.observed_liveness()?;
         }
         if live {
             return Err(settle_control_escape(
@@ -361,16 +351,6 @@ pub fn recover_slot(
     Ok(RecoveryReport { down, retention })
 }
 
-pub fn clean_reconciled_state(
-    registry: &mut Registry,
-    state_base: &Path,
-    identity: &StateIdentity,
-    mode: CleanupMode,
-) -> RuntimeResult<CleanupOutcome> {
-    reconcile_registry(registry)?;
-    clean_marked_state(state_base, identity, registry, mode)
-}
-
 #[derive(Debug)]
 struct ProcessRow {
     role: ProcessRole,
@@ -400,7 +380,7 @@ impl ProcessRow {
     /// A recorded process is gone only when its leader, every member of its
     /// process group, and every tracked descendant are gone. Leader exit alone
     /// never settles ownership.
-    fn reconciled_liveness(&self) -> RuntimeResult<bool> {
+    fn observed_liveness(&self) -> RuntimeResult<bool> {
         if self.is_live()? {
             return Ok(true);
         }
@@ -660,7 +640,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     Ok(())
 }
 
-fn reconcile_stale_port_reservations(
+fn release_orphaned_endpoints(
     registry: &mut Registry,
     processes: &[ProcessRow],
 ) -> RuntimeResult<()> {
@@ -672,7 +652,7 @@ fn reconcile_stale_port_reservations(
             .iter()
             .filter(|process| port.is_owned_by_process(process))
         {
-            if process.reconciled_liveness()? {
+            if process.observed_liveness()? {
                 live_owner = true;
                 break;
             }
@@ -797,13 +777,13 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
 
 fn settle_down_process(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     if row.unsettled {
-        reconcile_unsettled(registry, row)
+        settle_unsettled(registry, row)
     } else {
         mark_stopped(registry, row)
     }
 }
 
-fn reconcile_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
+fn settle_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     settle_unresolved_process(
         registry,
         &row.process_key,

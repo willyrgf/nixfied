@@ -344,6 +344,9 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
         if sealed || finishing_now {
             // Drain every stable file to its end, however large the backlog;
             // a slow healthy reader is never truncated.
+            for tail in tails.values_mut() {
+                tail.require_open();
+            }
             loop {
                 let moved = tails
                     .values_mut()
@@ -370,7 +373,11 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
         }
         thread::sleep(DISCOVERY_INTERVAL);
     };
-    let mut issues = stdout.finish();
+    let mut issues: Vec<ProjectionIssue> = tails
+        .values_mut()
+        .filter_map(|tail| tail.issue.take())
+        .collect();
+    issues.extend(stdout.finish());
     issues.extend(stderr.finish());
     let Ok(body) = serde_json::to_vec(&PresenterReport { sealed, issues }) else {
         return FAILURE_EXIT;
@@ -521,6 +528,9 @@ struct Tail {
     /// Rendered bytes a full queue refused. While present this source reads
     /// nothing more, so a stalled stream holds back only its own sources.
     blocked: Option<(OutputStream, Vec<u8>)>,
+    /// A failure reading this source's retained evidence; completeness of
+    /// its delivery is then not claimed.
+    issue: Option<ProjectionIssue>,
 }
 
 impl Tail {
@@ -531,6 +541,37 @@ impl Tail {
             route: source.route.clone(),
             partial: Vec::new(),
             blocked: None,
+            issue: None,
+        }
+    }
+
+    fn stream(&self) -> OutputStream {
+        match self.route {
+            Route::Raw(stream) => stream,
+            Route::Labeled(_) => OutputStream::Stderr,
+        }
+    }
+
+    /// At the final drain a registered source that still cannot be opened is
+    /// a delivery failure, not an empty source.
+    fn require_open(&mut self) {
+        if self.file.is_none() && self.issue.is_none() {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&self.path)
+            {
+                Ok(file) => self.file = Some(file),
+                Err(error) => {
+                    self.issue = Some(ProjectionIssue::io(
+                        self.stream(),
+                        ProjectionOperation::Open,
+                        &self.path,
+                        &error,
+                        0,
+                    ));
+                }
+            }
         }
     }
 
@@ -538,7 +579,7 @@ impl Tail {
     /// simply waits for more bytes. Returns the bytes moved in this pass.
     fn pump(&mut self, stdout: &Writer, stderr: &Writer) -> usize {
         let mut moved = self.retry(stdout, stderr);
-        if self.blocked.is_some() {
+        if self.blocked.is_some() || self.issue.is_some() {
             return moved;
         }
         if self.file.is_none() {
@@ -558,7 +599,16 @@ impl Tail {
                 Ok(0) => break,
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                Err(error) => {
+                    self.issue = Some(ProjectionIssue::io(
+                        self.stream(),
+                        ProjectionOperation::Read,
+                        &self.path,
+                        &error,
+                        0,
+                    ));
+                    break;
+                }
             };
             budget -= read;
             moved += read;
@@ -801,6 +851,7 @@ mod tests {
             route: Route::Labeled(b"[api] ".to_vec()),
             partial: Vec::new(),
             blocked: None,
+            issue: None,
         };
         tail.deliver(b"one\ntw", &stdout, &stderr);
         tail.deliver(b"o\n", &stdout, &stderr);

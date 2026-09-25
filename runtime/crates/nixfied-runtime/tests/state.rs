@@ -3,7 +3,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use nixfied_manifest::{Manifest, PersistencePolicy};
-use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -493,7 +492,7 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         )
         .expect("stale refs should be inserted");
 
-    let outcome = clean_reconciled_state(
+    let outcome = recover_then_clean(
         &mut registry,
         &fixture.layout.state_base,
         &fixture.identity,
@@ -738,7 +737,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         )
         .expect("stale port refs should be inserted");
 
-    let outcome = clean_reconciled_state(
+    let outcome = recover_then_clean(
         &mut registry,
         &fixture.layout.state_base,
         &fixture.identity,
@@ -1077,7 +1076,7 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
     assert_eq!(refused.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
 
-    let outcome = clean_reconciled_state(
+    let outcome = recover_then_clean(
         &mut registry,
         &fixture.layout.state_base,
         &fixture.identity,
@@ -1153,13 +1152,9 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
         )
         .unwrap();
 
-    let refused = clean_reconciled_state(
-        &mut registry,
-        &fixture.layout.state_base,
-        &fixture.identity,
-        CleanupMode::Standard,
-    )
-    .unwrap_err();
+    let refused = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .unwrap_err();
     assert_eq!(refused.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
     assert_eq!(unsafe { libc::kill(member, 0) }, 0, "the member still runs");
@@ -1177,4 +1172,16 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
     fixture
         .clean(&mut registry, CleanupMode::Standard)
         .expect("settled obligations permit deletion");
+}
+
+/// The clean command's order: exclusive recovery of recorded processes, then
+/// marker-gated deletion.
+fn recover_then_clean(
+    registry: &mut Registry,
+    state_base: &std::path::Path,
+    identity: &StateIdentity,
+    mode: CleanupMode,
+) -> RuntimeResult<CleanupOutcome> {
+    nixfied_runtime::control::down_owned_process_groups(registry, 1000)?;
+    clean_marked_state(state_base, identity, registry, mode)
 }

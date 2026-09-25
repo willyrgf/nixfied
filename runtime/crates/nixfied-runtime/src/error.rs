@@ -218,7 +218,7 @@ mod tests {
             .with_detail("taskRun", serde_json::json!({ "success": false }));
         let compound = RuntimeError::new(
             ErrorCode::OutputProjectionFailed,
-            "selected task output replay failed",
+            "live output delivery failed",
         )
         .with_detail(
             "projections",
@@ -246,7 +246,7 @@ mod tests {
     fn causes_project_typed_details_without_raw_os_messages() {
         let compound = RuntimeError::new(
             ErrorCode::OutputProjectionFailed,
-            "selected task output replay failed",
+            "live output delivery failed",
         )
         .with_cause(
             RuntimeError::new(
