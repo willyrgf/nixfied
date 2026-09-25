@@ -367,7 +367,6 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
           'flatten(ci) =',
           'ci.check.fmt',
           'servicesRequired(all) = ["api", "postgres", "worker"]',
-          'operationBindings(gitC) = []',
       ],
       'tasks': [
           'Invocations observe the live workspace by default',
@@ -383,8 +382,8 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
       for explanation in explanations:
           assert explanation in prose[name], (name, explanation)
   derivation = index['topics']['derivation']['prose']
-  assert derivation.index('## 6. Golden vectors') < derivation.index('### 6.1 Representative examples')
-  assert set(re.findall(r'^#### V(\d+) ', derivation, re.M)) == {str(n) for n in range(1, 11)}
+  assert derivation.index('## 5. Golden vectors') < derivation.index('### 5.1 Representative examples')
+  assert set(re.findall(r'^#### V(\d+) ', derivation, re.M)) == {'1', '2', '3', '4', '6', '8', '9', '10'}
   assert 'Requesting `task-output` for a composite is rejected' in prose['outputs']
   for name, topic in index['topics'].items():
       output = topic['text']
@@ -439,7 +438,7 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
   assert outputs['prose'].index('### Choose output') < outputs['prose'].index('## Output and failure contract')
   assert '--output json' in outputs['prose']
   assert '--output task-output' in outputs['prose']
-  assert '### 6.1' in index['topics']['derivation']['prose']
+  assert '### 5.1' in index['topics']['derivation']['prose']
   error_record = entries[('record', 'output-schema/runtime-error')]
   error_backlinks = [ref['id'] for ref in error_record['backlinks'] if ref['kind'] == 'error']
   rendered_backlinks = error_record['text'].split('### Referenced by', 1)[1]

@@ -1,4 +1,4 @@
-# The pure derivation algorithms of docs/DERIVATION_SPEC.md (§3–§5), shared by
+# The pure derivation algorithms of docs/DERIVATION_SPEC.md (§2–§4), shared by
 # the compiler (nix/compiler/derive.nix) and unit-tested against the spec's
 # golden vectors (the `derive-facts-vectors` flake check). The runtime lowering
 # derives its execution graph at admission; independent vectors prove conformance
@@ -52,11 +52,11 @@ rec {
     in
     byteSort (close base);
 
-  # Default operation ids — spec §5.1.
+  # Default operation ids — spec §4.1.
   leafOperationId = name: "task.${name}.run";
   serviceOperationId = name: op: "service.${name}.${op}";
 
-  # Default terminal tokens per lifecycle class — spec §5.2.
+  # Default terminal tokens per lifecycle class — spec §4.2.
   terminalDefaults = {
     prepare = {
       success = "initialized";
@@ -142,29 +142,4 @@ rec {
           topo (placed ++ [ next.stepPath ]) rest (ordered ++ [ next ]);
     in
     topo [ ] emitted [ ];
-
-  # operationBindings(closure) — spec §4: the byte-sorted operation ids of
-  # every invocation position whose run[0] resolves to the closure (the FIRST
-  # tool whose executable basename equals run[0]); tool-set members that are
-  # not the resolved executable bind nothing. `positions` is a list of
-  # { operationId, toolIds, program }; `executableBasenames` maps closure id →
-  # basename of its executable.
-  operationBindings =
-    { positions, executableBasenames }:
-    closureId:
-    byteSort (
-      lib.unique (
-        map (position: position.operationId) (
-          builtins.filter (
-            position:
-            let
-              matches = builtins.filter (
-                id: (executableBasenames ? ${id}) && executableBasenames.${id} == position.program
-              ) position.toolIds;
-            in
-            matches != [ ] && builtins.head matches == closureId
-          ) positions
-        )
-      )
-    );
 }

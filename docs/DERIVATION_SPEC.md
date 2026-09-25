@@ -5,9 +5,8 @@
 Status: **normative**. Nix validates authored graphs and restrictions; runtime
 admission derives the graph it executes from manifest inputs. Independent Nix
 and Rust vectors and behavioral tests establish conformance. The manifest does
-not carry `servicesRequired` or `operationBindings`, and no equality check of
-carried graph facts occurs at admission. Closure binding sets exist only to
-check authored Nix restrictions; runtime executable selection remains mandatory.
+not carry `servicesRequired`, and no equality check of
+carried graph facts occurs at admission.
 This removes per-manifest detection of disagreement between Nix and Rust graph
 derivations; independent vectors do not prove agreement for every possible input.
 
@@ -15,8 +14,7 @@ Scope: the exact algorithms for
 
 1. composite **flattening** and stable **step paths** (§2);
 2. **`servicesRequired`** of a task (§3);
-3. **`operationBindings`** of a closure (§4);
-4. default **operation ids** and default **terminal tokens** (§5).
+3. default **operation ids** and default **terminal tokens** (§4).
 
 Vocabulary follows the task–service algebra: a *task* is a leaf
 `{ invocation, requires, exitPolicy, refs }` or a composite
@@ -70,8 +68,7 @@ output plus `/bin/` and `meta.mainProgram` (falling back to `lib.getName`).
 Package names alone never identify a closure. Equal selections share an entry;
 different outputs or executable selections remain distinct. Insertion checks
 full identity equality even when hashes match. Any collision with an explicitly
-named closure rejects before emission. Operation bindings use these same keys
-and the ordinary resolution rule above; no second binding namespace exists.
+named closure rejects before emission.
 The runtime consumes ordinary closure IDs and does not synthesize package IDs.
 
 ## 2. Flattening and step paths
@@ -189,62 +186,13 @@ Pinned consequences:
   capacity before execution. Nix derives it for early diagnostics and disposable
   documentation; the manifest contains only its inputs.
 
-An explicit `operationBindings`-style narrowing does **not** exist for
-`servicesRequired`: the set is a fact, not a choice.
-
-## 4. `operationBindings(closure)`
-
-The Nix authoring restriction check: which operations dispatch against a
-closure. With invocations inline, every executed program position is an
-invocation whose `run[0]` was resolved at eval to an executable provided by
-exactly one declared closure (its *executable closure*).
-
-```
-operationBindings(closure c):
-  return sorted({ opId(P) | P is an invocation position in the manifest,
-                            executableClosure(P) == c })
-```
-
-where the **invocation positions** and their operation ids are:
-
-| Position | opId(P) |
-| --- | --- |
-| leaf task `t`'s invocation | the leaf's operation id (§5) |
-| service `s` start invocation | `s`'s start operation id (§5) |
-| service `s` ready/health invocation probe | `s`'s ready/health operation id (§5) |
-
-Pinned consequences:
-
-- **Tool-set members bind nothing.** Every element of an invocation's
-  `tools` is verified at admission like any closure (existence,
-  executability, target, declaration — SEAM-1/PREPARE-1), but only the
-  closure providing the resolved `run[0]` is *dispatched against* the
-  operation, so only it gains the binding. PATH availability is attested by
-  presence, not by binding.
-- Composites bind nothing (they carry no invocation). A prepare-as-task
-  reference binds nothing at the service: the referenced task's own leaves
-  carry their own bindings.
-- A closure referenced by no invocation has `operationBindings = []` (legal;
-  e.g. a pure tool-set member).
-- **Explicit `operationBindings` survives only as an optional narrowing
-  gate**: if declared, it must be a *superset-equal check* target — the
-  derived set must be a subset of the declared set, and every declared
-  binding must name a declared operation. A derived binding outside the
-  declared list is an eval error ("closure `c` is dispatched
-  against `op` but its declared bindings do not allow it"). Absent a
-  declaration, the derived set determines the authoring check.
-- No binding set crosses the wire. Nix owns this authored restriction; runtime
-  admission resolves each invocation against its declared tools, validates
-  references and effects, and checks operation-ID uniqueness. It creates no
-  otherwise-unused binding registry.
-
-## 5. Default operation ids and terminal tokens
+## 4. Default operation ids and terminal tokens
 
 Derived by default; declared only to override. Overrides are per-position
 strings with the same global-uniqueness obligation as today (duplicate
 operation ids are rejected at eval and admission).
 
-### 5.1 Operation ids
+### 4.1 Operation ids
 
 | Owner | Default operation id |
 | --- | --- |
@@ -262,7 +210,7 @@ A flattened PlanNode's operation id is its **leaf's** operation id (the same
 leaf referenced from two steps runs the same operation twice, distinguished
 by step path — operation id is *what* runs, step path is *where*).
 
-### 5.2 Terminal tokens
+### 4.2 Terminal tokens
 
 Service lifecycle defaults (override per position via `terminal`):
 
@@ -280,9 +228,9 @@ vocabulary for bounded execution; a per-task terminal field would be a
 hand-declared synonym for it (the A4 disease) and does not exist on the
 wire.
 
-## 6. Golden vectors
+## 5. Golden vectors
 
-### 6.1 Representative examples
+### 5.1 Representative examples
 
 Each vector is graph input and the exact expected derivation. Nix binding-set
 vectors prove authoring restrictions; Rust vectors prove selected executables
@@ -336,29 +284,9 @@ servicesRequired(lint)  = []
 servicesRequired(smoke) = ["api", "postgres"]
 ```
 
-#### V5 — operationBindings: run[0] closure binds, tools do not
+### 5.2 Additional examples
 
-```
-closures: cargoC (provides bin/cargo), gitC (provides bin/git),
-          psqlC (provides bin/psql)
-tasks:
-  build = leaf(build, invocation = { tools: [cargoC, gitC], run: ["cargo", ...] })
-  query = leaf(query, invocation = { tools: [psqlC],        run: ["psql", ...] },
-               requires=["postgres"])
-services:
-  postgres.start  invocation resolves run[0] to pg-serverC
-  postgres.ready  invocation probe resolves run[0] to pg-isreadyC
-
-operationBindings(cargoC)      = ["task.build.run"]
-operationBindings(gitC)        = []                      # tool-set member only
-operationBindings(psqlC)       = ["task.query.run"]
-operationBindings(pg-serverC)  = ["service.postgres.start"]
-operationBindings(pg-isreadyC) = ["service.postgres.ready"]
-```
-
-### 6.2 Additional examples
-
-These vectors use the shorthand defined in [§6.1](#61-representative-examples)
+These vectors use the shorthand defined in [§5.1](#51-representative-examples)
 and cover repeated execution, direct selection, defaults and further dependency
 graphs. Vector identifiers remain stable across both implementations.
 
@@ -397,16 +325,6 @@ opId(fmt) = "task.fmt.run"
 opId(odd) = "task.custom.fmt-check"
 opId(postgres.start) = "service.postgres.start";  terminal = spawned/failed
 opId(postgres.ready) = "service.postgres.ready";  terminal = ready/not-ready
-```
-
-#### V7 — one closure dispatched by several leaves
-
-```
-tasks:
-  fmt    = leaf(fmt,    invocation = { tools: [cargoC], run: ["cargo","fmt",...] })
-  clippy = leaf(clippy, invocation = { tools: [cargoC], run: ["cargo","clippy",...] })
-
-operationBindings(cargoC) = ["task.clippy.run", "task.fmt.run"]   # sorted
 ```
 
 #### V8 — servicesRequired: diamond dedup

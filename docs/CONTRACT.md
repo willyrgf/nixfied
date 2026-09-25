@@ -115,10 +115,8 @@ when the manifest/runtime contract changes.
   opaque leaf, not in the runtime contract.
 - **DERIVE-1:** admission derives service requirements and execution ordering
   from graph inputs according to `DERIVATION_SPEC.md` before child effects.
-  The manifest carries neither `servicesRequired` nor `operationBindings`.
-  Nix independently checks graph feasibility and authored binding restrictions;
-  those restrictions reject at authoring, not through a runtime authorization
-  list. Operation IDs remain explicit inputs with native uniqueness checks.
+  The manifest does not carry `servicesRequired`.
+  Nix independently checks graph feasibility at authoring. Operation IDs remain explicit inputs with native uniqueness checks.
   Independent vectors and behavioral tests prove derivation, replacing
   per-manifest equality checks. Effects remain authored attestations.
 - **CACHE-1:** cache is neither a semantic kind nor a runtime resource. Nixfied
@@ -193,7 +191,7 @@ when the manifest/runtime contract changes.
 - **Relational admission order:** after target, source/secret, and closure host
   checks, lowering checks references and operation IDs; local invocation,
   endpoint, and effect coherence; task/sibling cycles; combined service cycles;
-  carried operation bindings; carried service requirements; then slot capacity.
+  then slot capacity.
   All graph relationship errors, including `connectsTo`, are
   `MANIFEST_ADMISSION`, not structural `MANIFEST_INVALID` errors. Every declared
   task/service is checked, including unused graph components.

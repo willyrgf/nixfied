@@ -31,7 +31,7 @@ nix run .#docs -- api module adapter/postgres
 
 | Piece | Contract |
 | --- | --- |
-| Closures | One per executable, with declared `effects` (the one hand-declared attestation). `operationBindings` are derived from the invocation graph; declare a list only as a narrowing gate. |
+| Closures | One per executable, with declared `effects` (the one hand-declared attestation). |
 | Service | A lifecycle of inline invocations: `prepare` (a **task reference** — see `docs topic services`) / `start` / `ready` / `health` / `stop` / `clean`, endpoints where the service listens, state labels, containment. Operation ids and terminal tokens are derived; declare only to override (postgres overrides `stop.signal`). |
 | Tasks | Named smoke/verification tasks (`smoke-query`, `reth-smoke`). **This is how adapter checks enter an adopter's pipeline**: the adopter references them as steps in its own composites — membership does not exist, so importing an adapter contributes *definitions only* and adds zero startup to tasks that require nothing of it. |
 

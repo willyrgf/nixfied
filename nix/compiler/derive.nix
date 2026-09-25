@@ -76,7 +76,7 @@ let
   toolClosureId =
     package: "tool-${builtins.hashString "sha256" (builtins.toJSON (toolIdentity package))}";
   toolMainProgram = package: package.meta.mainProgram or (lib.getName package);
-  # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §5.1),
+  # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §4.1),
   # declared only to override.
   leafOperationId =
     name: task: if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
@@ -180,39 +180,6 @@ let
       stdin = invocation.stdin;
       timeoutMs = invocation.timeoutMs;
     };
-
-  # Derived operation bindings (docs/DERIVATION_SPEC.md §4): the byte-sorted
-  # operation ids of every position whose run[0] resolves to the closure. A
-  # declared list narrows: the derived set must be a subset of it, and every
-  # declared binding must name a declared operation.
-  executableBasenames = mapAttrs (_id: closure: baseNameOf closure.executable) closures;
-  bindingPositions = map (position: {
-    operationId = position.operationId;
-    toolIds = map toolEntryId position.invocation.tools;
-    program = builtins.head position.invocation.run;
-  }) invocationPositions;
-  derivedBindings = deriveFacts.operationBindings {
-    positions = bindingPositions;
-    inherit executableBasenames;
-  };
-  declaredOperationIds = map (position: position.operationId) invocationPositions;
-  gatedBindings =
-    id: declared:
-    let
-      derived = derivedBindings id;
-      outsideGate = builtins.filter (binding: !(builtins.elem binding declared)) derived;
-      unknownDeclared = builtins.filter (binding: !(builtins.elem binding declaredOperationIds)) (
-        if declared == null then [ ] else declared
-      );
-    in
-    if declared == null then
-      derived
-    else
-      assert lib.assertMsg (unknownDeclared == [ ])
-        "closure ${id}: declared operationBindings name undeclared operations: ${builtins.concatStringsSep ", " unknownDeclared}";
-      assert lib.assertMsg (outsideGate == [ ])
-        "closure ${id}: dispatched against operations outside its declared bindings: ${builtins.concatStringsSep ", " outsideGate}";
-      derived;
 
   # Native lowering selects invocations; shared construction owns omission.
   probeOf =
@@ -401,51 +368,46 @@ in
 {
   packages = closurePackages;
 
-  manifest =
-    builtins.deepSeq
-      (mapAttrs (id: closure: gatedBindings id closure.operationBindings) config.nixfied.closures)
-      (
-        construct "Manifest" {
-          manifestVersion = constants.manifestVersion;
-          toolchainId = constants.toolchainId;
-          runtimeAbi = constants.runtimeAbi;
-          generator = construct "Generator" {
-            name = "nixfied";
-            version = constants.toolchainId;
-            emitter = "nix/compiler/emit-manifest.nix";
-          };
-          project = construct "Project" {
-            inherit (config.nixfied.project) projectId name;
-          };
-          inherit target;
-          codebases = [
-            (construct "Codebase" {
-              codebaseId = "main";
-              inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
-              sourcePolicy = construct "SourcePolicy" {
-                inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
-              };
-            })
-          ];
-          secrets = secretDescriptors;
-          # Membership does not exist; `dev` is the single isolation namespace
-          # (state roots, slots, registry keys).
-          environments = [ "dev" ];
-          inherit slotPolicy;
-          placement = construct "Placement" {
-            inherit slotPlacements;
-          };
-          state = construct "StatePolicy" {
-            inherit (config.nixfied.state)
-              markerIdentity
-              persistence
-              ;
-          };
-          inherit
-            closures
-            services
-            tasks
-            ;
-        }
-      );
+  manifest = construct "Manifest" {
+    manifestVersion = constants.manifestVersion;
+    toolchainId = constants.toolchainId;
+    runtimeAbi = constants.runtimeAbi;
+    generator = construct "Generator" {
+      name = "nixfied";
+      version = constants.toolchainId;
+      emitter = "nix/compiler/emit-manifest.nix";
+    };
+    project = construct "Project" {
+      inherit (config.nixfied.project) projectId name;
+    };
+    inherit target;
+    codebases = [
+      (construct "Codebase" {
+        codebaseId = "main";
+        inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
+        sourcePolicy = construct "SourcePolicy" {
+          inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
+        };
+      })
+    ];
+    secrets = secretDescriptors;
+    # Membership does not exist; `dev` is the single isolation namespace
+    # (state roots, slots, registry keys).
+    environments = [ "dev" ];
+    inherit slotPolicy;
+    placement = construct "Placement" {
+      inherit slotPlacements;
+    };
+    state = construct "StatePolicy" {
+      inherit (config.nixfied.state)
+        markerIdentity
+        persistence
+        ;
+    };
+    inherit
+      closures
+      services
+      tasks
+      ;
+  };
 }

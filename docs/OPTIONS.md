@@ -95,30 +95,6 @@ one of “executable”, “helper”
 
 
 
-## nixfied\.closures\.\<name>\.operationBindings
-
-
-
-Optional authoring restriction: the operation ids this closure may be
-dispatched against\. Nix derives bindings from the invocation graph and
-requires them to be a subset of this list\. No binding set is emitted
-into the manifest\.
-
-
-
-*Type:*
-null or (list of string)
-
-
-
-*Default:*
-
-```nix
-null
-```
-
-
-
 ## nixfied\.closures\.\<name>\.requiresExecutable
 
 
@@ -1939,6 +1915,8 @@ signed integer
 
 ## nixfied\.state\.markerIdentity
 
+
+
 Identity written into the slot marker and required before the runtime may adopt or clean its state\.
 
 
@@ -1957,8 +1935,6 @@ non-empty string
 
 
 ## nixfied\.state\.persistence
-
-
 
 The sole application-data retention policy: ` run-scoped ` data is deleted after safe session teardown and by ordinary ` clean `; ` persistent ` data survives sessions and ordinary ` clean `, and only explicit purge deletes it\.
 

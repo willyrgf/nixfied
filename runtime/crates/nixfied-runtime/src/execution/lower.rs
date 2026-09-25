@@ -631,8 +631,7 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
         }
     }
 
-    // Operation ids are globally unique across every lifecycle and task; the
-    // declared set also anchors the closure binding check below.
+    // Operation ids are globally unique across every lifecycle and task.
     for service in manifest.services.values() {
         for operation_id in lifecycle_op_ids(&service.lifecycle) {
             if !declared_operations.insert(operation_id) {
@@ -1100,7 +1099,7 @@ mod tests {
         services
     }
 
-    /// Golden vector V4 (docs/DERIVATION_SPEC.md §6) on the runtime side:
+    /// Golden vector V4 (docs/DERIVATION_SPEC.md §5) on the runtime side:
     /// union of transitive leaf requires, closed over connectsTo, byte-sorted.
     #[test]
     fn services_required_derivation_matches_vector_v4() {
