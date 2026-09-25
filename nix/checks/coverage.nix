@@ -38,6 +38,7 @@ let
     state-preparation = "runtime";
     finalization = "runtime";
     escaped-port-reconciliation = "runtime";
+    session-cancellation = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;
 in

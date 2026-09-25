@@ -407,6 +407,11 @@ nix run .#down -- --slot 2
 nix run .#clean -- --slot 2
 ```
 
+`down` asks the slot's live session to cancel through that session's own
+control endpoint and waits for it to finish its normal teardown; if the owning
+runtime has died, `down` takes the slot and stops the recorded processes. It
+never cancels a newer session that replaced the one it selected.
+
 Each slot has its own state root, registry, process records, and
 deterministic candidate port window. `nixfied.placement.ports` controls the base,
 window size, and stride; the generated manifest view shows the resolved windows.

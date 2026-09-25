@@ -264,6 +264,20 @@ when the manifest/runtime contract changes.
   unfinished predecessor's finalization with a `run.recovered` event. Recovery
   never resumes tasks or adopts services; any unsafe step refuses and blocks new
   work. `clean` reports a deletion performed by that recovery.
+- Each session creates a private FIFO named `control` in its never-reused
+  `runs/<runId>` evidence directory before publishing its run record, opens a
+  reader and a separate keeper writer (both close-on-exec), and removes the
+  endpoint while still holding the slot. Any byte requests cancellation; a
+  scoped receiver only sets the session's cancellation token. `down` selects the
+  newest unfinished session once, opens that endpoint nonblocking without
+  following symlinks, verifies a private FIFO, and writes one byte. It then
+  observes that selected session until its finalization completes (reporting
+  `canceledRunId`) or its owner releases the slot. A missing reader, missing
+  endpoint, or broken pipe means no live owner; `down` then acquires the slot
+  and performs predecessor recovery. `down` never signals the owner or a
+  process group of a live session and never targets a successor; if the owner
+  keeps the slot past `--timeout-ms`, it fails with `LIFECYCLE_FAILED` without
+  further action. Ordinary SIGINT/SIGTERM/SIGHUP remain cancellation inputs.
 - A task's observed execution outcome and exit code commit atomically with its
   observation event before containment and capture settlement. That observation
   does not grant completed output evidence or replay. A later capture failure

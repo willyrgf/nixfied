@@ -1503,3 +1503,215 @@ fn successor_recovery_applies_predecessor_retention_before_a_fresh_session() {
         assert_eq!(recovered, 1);
     }
 }
+
+fn blocking_session(marker: &std::path::Path) -> RuntimeFixture {
+    let mut manifest = leaf_task_manifest(&[
+        "output".into(),
+        "hex-block".into(),
+        "".into(),
+        "".into(),
+        marker.to_string_lossy().into_owned(),
+    ]);
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    RuntimeFixture::new(manifest)
+}
+
+fn published_session(fixture: &RuntimeFixture) -> (String, i32) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = rusqlite::Connection::open_with_flags(
+            fixture
+                .state_base
+                .join("registry/runtime-test/dev/0/registry.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT r.run_id, p.pid FROM runs r JOIN processes p ON p.run_id = r.run_id
+                     WHERE r.finalization = 'unfinished' AND p.status = 'running'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()
+        });
+        if let Some(row) = row {
+            return row;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session never published"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn session_row(fixture: &RuntimeFixture, run_id: &str) -> (Option<String>, String) {
+    registry_connection(fixture)
+        .query_row(
+            "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn down_cancels_the_live_session_through_its_own_endpoint_and_observes_settlement() {
+    let marker = tempfile_marker("down-live");
+    let fixture = blocking_session(&marker);
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (run_id, _) = published_session(&fixture);
+    let down = fixture
+        .command("down", &["--timeout-ms", "10000"])
+        .output()
+        .unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert_eq!(
+        report,
+        json!({"canceledRunId": run_id, "stopped": [], "stale": []}),
+        "the owner, not down, performs teardown"
+    );
+    let owner = wait_for_child_output(owner, Duration::from_secs(5));
+    assert_eq!(owner.status.code(), Some(27));
+    assert!(String::from_utf8_lossy(&owner.stderr).contains("CANCELED"));
+    assert_eq!(
+        session_row(&fixture, &run_id),
+        (Some("canceled".into()), "complete".into())
+    );
+    let endpoint = fixture
+        .state_base
+        .join("registry/runtime-test/dev/0/runs")
+        .join(&run_id)
+        .join(nixfied_runtime::session_control::CONTROL_FIFO_NAME);
+    assert!(
+        !endpoint.exists(),
+        "the owner removes its endpoint before slot release"
+    );
+}
+
+#[test]
+fn down_recovers_a_dead_owner_under_slot_authority() {
+    let marker = tempfile_marker("down-dead");
+    let fixture = blocking_session(&marker);
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (run_id, task_pid) = published_session(&fixture);
+    assert_eq!(
+        unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    let _ = wait_for_child_output(owner, Duration::from_secs(5));
+    let down = fixture
+        .command("down", &["--timeout-ms", "10000"])
+        .output()
+        .unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert!(report.get("canceledRunId").is_none());
+    assert_eq!(report["stopped"].as_array().unwrap().len(), 1);
+    assert_ne!(
+        unsafe { libc::kill(task_pid, 0) },
+        0,
+        "recovery settled the orphaned task"
+    );
+    assert_eq!(
+        session_row(&fixture, &run_id),
+        (Some("interrupted".into()), "complete".into())
+    );
+}
+
+#[test]
+fn down_times_out_on_a_stopped_owner_without_signaling_it() {
+    let marker = tempfile_marker("down-stopped");
+    let fixture = blocking_session(&marker);
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (run_id, task_pid) = published_session(&fixture);
+    let owner_pid = owner.id() as libc::pid_t;
+    assert_eq!(unsafe { libc::kill(owner_pid, libc::SIGSTOP) }, 0);
+    let down = fixture
+        .command("down", &["--timeout-ms", "300"])
+        .output()
+        .unwrap();
+    let alive = unsafe { libc::kill(task_pid, 0) } == 0;
+    assert_eq!(unsafe { libc::kill(owner_pid, libc::SIGCONT) }, 0);
+    assert_eq!(down.status.code(), Some(31));
+    let error = String::from_utf8_lossy(&down.stderr);
+    assert!(error.contains("LIFECYCLE_FAILED"), "{error}");
+    assert!(alive, "a timeout never tears down the owner's children");
+    // The buffered request reaches the resumed owner; it finalizes itself.
+    let owner = wait_for_child_output(owner, Duration::from_secs(5));
+    assert_eq!(owner.status.code(), Some(27));
+    assert_eq!(
+        session_row(&fixture, &run_id),
+        (Some("canceled".into()), "complete".into())
+    );
+}
+
+#[test]
+fn an_old_session_request_never_reaches_its_successor() {
+    let marker = tempfile_marker("down-successor");
+    let fixture = blocking_session(&marker);
+    let first = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (first_run, _) = published_session(&fixture);
+    let old_endpoint = fixture
+        .state_base
+        .join("registry/runtime-test/dev/0/runs")
+        .join(&first_run);
+    assert_eq!(
+        nixfied_runtime::session_control::request_cancellation(&old_endpoint).unwrap(),
+        nixfied_runtime::session_control::CancellationDelivery::Requested
+    );
+    let _ = wait_for_child_output(first, Duration::from_secs(5));
+    fs::remove_file(&marker).unwrap();
+    let successor = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (second_run, _) = published_session(&fixture);
+    assert_ne!(first_run, second_run);
+    // A requester that paused across the old owner's exit reaches no reader.
+    assert_eq!(
+        nixfied_runtime::session_control::request_cancellation(&old_endpoint).unwrap(),
+        nixfied_runtime::session_control::CancellationDelivery::Unavailable
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        session_row(&fixture, &second_run).1,
+        "unfinished",
+        "the successor keeps running"
+    );
+    let down = fixture.command("down", &[]).output().unwrap();
+    assert!(down.status.success());
+    let successor = wait_for_child_output(successor, Duration::from_secs(5));
+    assert_eq!(successor.status.code(), Some(27));
+}

@@ -135,12 +135,12 @@ in
     state
     slot
   ] 19 "output-schema/ps-json")
-  (runtime "down" "Stop Nixfied-owned process groups for a slot." [
+  (runtime "down" "Cancel the slot's live session, or recover a dead owner." [
     manifest
     allow
     state
     slot
-    (timeout "Set the stop timeout in milliseconds")
+    (timeout "Set the wait and recovery stop timeout in milliseconds")
   ] 25 "local/DownReport")
   (runtime "clean" "Safely clean Nixfied-owned state for a slot." [
     manifest
