@@ -432,6 +432,11 @@ rendered by `nix run .#docs -- api record output-schema/run-json`.
 explicitly for diagnostics. When the option is omitted, the runtime uses the
 selected root task's manifest `defaultOutput`, whose normal value is `summary`.
 
+Capture workers retain their checked completion result after nonblocking
+checkpoint observation. Task/probe execution and captured-service liveness
+checkpoints observe worker failures before waiting for process completion;
+shutdown still consumes both results and settles every remaining worker.
+
 Task and probe completion share a concrete captured-child owner. Tasks first own
 an inert captured launcher, verify its process identity, and commit their process
 record before releasing execution permission. Preparation uses the same task path.

@@ -14,7 +14,7 @@ pub struct RuntimeCause {
     pub details: serde_json::Value,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeError {
     pub code: ErrorCode,

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -157,6 +158,17 @@ pub struct RedactedLogRelays {
 }
 
 impl RedactedLogRelays {
+    /// Join only workers already known to have finished. Retain results for
+    /// checked shutdown; polling never grants completed capture evidence.
+    pub(crate) fn check(&self) -> RuntimeResult<()> {
+        let stdout = self.stdout.check();
+        let stderr = self.stderr.check();
+        match (stdout, stderr) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(stdout), Err(stderr)) => Err(stdout.with_cause(stderr)),
+        }
+    }
+
     pub fn shutdown(self, deadline: Instant) -> RuntimeResult<()> {
         // Publish to both before joining either: progress never extends the budget.
         self.stdout.shutdown_at(deadline);
@@ -212,23 +224,26 @@ enum CaptureCompletion {
     Incomplete,
 }
 
+enum WorkerState {
+    Running(JoinHandle<RuntimeResult<CaptureCompletion>>),
+    Finished(RuntimeResult<()>),
+}
+
 struct CaptureWorker {
     stream: CapturedStream,
     control: Sender<Instant>,
-    // Taken only by consuming join; never an authored lifecycle state.
-    handle: Option<JoinHandle<RuntimeResult<CaptureCompletion>>>,
+    // None only during consuming join/drop or an internal state transition.
+    state: RefCell<Option<WorkerState>>,
 }
 impl CaptureWorker {
     fn shutdown_at(&self, deadline: Instant) {
         let _ = self.control.send(deadline);
     }
-    fn join(mut self) -> RuntimeResult<()> {
-        match self
-            .handle
-            .take()
-            .expect("capture handle is consumed once")
-            .join()
-        {
+    fn checked_join(
+        &self,
+        handle: JoinHandle<RuntimeResult<CaptureCompletion>>,
+    ) -> RuntimeResult<()> {
+        match handle.join() {
             Ok(Ok(CaptureCompletion::Eof)) => Ok(()),
             Ok(Ok(CaptureCompletion::Incomplete)) => Err(self.stream.incomplete()),
             Ok(Err(error)) => Err(error),
@@ -237,10 +252,34 @@ impl CaptureWorker {
             )),
         }
     }
+    fn check(&self) -> RuntimeResult<()> {
+        let mut state = self.state.borrow_mut();
+        if matches!(state.as_ref(), Some(WorkerState::Running(handle)) if handle.is_finished()) {
+            let Some(WorkerState::Running(handle)) = state.take() else {
+                unreachable!()
+            };
+            *state = Some(WorkerState::Finished(self.checked_join(handle)));
+        }
+        match state.as_ref().expect("capture state is owned") {
+            WorkerState::Running(_) => Ok(()),
+            WorkerState::Finished(result) => result.clone(),
+        }
+    }
+    fn join(self) -> RuntimeResult<()> {
+        let state = self
+            .state
+            .borrow_mut()
+            .take()
+            .expect("capture state is consumed once");
+        match state {
+            WorkerState::Running(handle) => self.checked_join(handle),
+            WorkerState::Finished(result) => result,
+        }
+    }
 }
 impl Drop for CaptureWorker {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
+        if let Some(WorkerState::Running(handle)) = self.state.get_mut().take() {
             self.shutdown_at(Instant::now());
             let _ = handle.join();
         }
@@ -350,7 +389,7 @@ fn redacted_stdio(
         CaptureWorker {
             stream,
             control,
-            handle: Some(handle),
+            state: RefCell::new(Some(WorkerState::Running(handle))),
         },
     ))
 }
@@ -522,7 +561,7 @@ mod tests {
                 CaptureWorker {
                     stream,
                     control,
-                    handle: Some(handle),
+                    state: RefCell::new(Some(WorkerState::Running(handle))),
                 },
                 sender,
                 path,
@@ -630,6 +669,37 @@ mod tests {
         drop(writer);
         worker.join().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"[REDACTED][REDACTED]-tail");
+    }
+
+    #[test]
+    fn failed_worker_is_polled_without_waiting_for_the_other_stream() {
+        let fixture = CaptureFixture::new();
+        let (stdout, mut out, _) = fixture.worker(CapturedStream::Stdout, Redactor::empty(), false);
+        let (stderr, err, _) = fixture.worker(CapturedStream::Stderr, Redactor::empty(), true);
+        let relays = RedactedLogRelays { stdout, stderr };
+        assert!(relays.check().is_ok());
+        out.write_all(b"failure").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let error = loop {
+            match relays.check() {
+                Err(error) => break error,
+                Ok(()) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "capture failure was not observed"
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+        };
+        assert_eq!(error.code, ErrorCode::SecretLeakBlocked);
+        assert!(error.message.contains("failed to write"));
+        assert_eq!(relays.check().unwrap_err().message, error.message);
+        drop(err);
+        let settled = relays
+            .shutdown(Instant::now() + CAPTURE_SHUTDOWN_TIMEOUT)
+            .unwrap_err();
+        assert_eq!(settled.message, error.message);
     }
 
     #[test]

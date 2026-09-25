@@ -362,6 +362,10 @@ when the manifest/runtime contract changes.
   success, task failure, timeout, and cancellation, before service teardown,
   slot release, aggregate summary, footer, or final error projection. Cleanup
   and finalization continue after a replay failure.
+- Execution checkpoints poll completed capture workers without waiting for open
+  streams. Worker failure stops further execution, including a task with no
+  deadline. Checked results remain owned through shutdown; a successful poll
+  alone grants no completed evidence or replay.
 - Bounded task/probe capture always uses pipes, including without secrets. After
   containment and reap attempts, both stream workers receive one absolute
   shutdown deadline 1,000 ms away. Workers check control and expiry before reads,
