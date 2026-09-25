@@ -5494,3 +5494,107 @@ fn service_exit_during_canceled_teardown_is_a_failure_not_a_cancellation() {
         "the dependency exited on its own before its cancellation signal"
     );
 }
+
+#[test]
+fn down_ends_when_a_successor_recovers_the_chosen_dead_session() {
+    let port = available_port_window(1);
+    let started = temp_marker("nixfied-down-successor-started");
+    let stopping = temp_marker("nixfied-down-successor-stopping");
+    let mut value = test_child_fixture_value(
+        &[
+            "term-block",
+            "127.0.0.1",
+            "${port}",
+            started.to_str().unwrap(),
+            stopping.to_str().unwrap(),
+        ],
+        port,
+    );
+    value["services"]["synthetic"]["lifecycle"]["stop"]["timeoutMs"] = json!(2000);
+    value["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    set_task_run_args(&mut value, &["block"]);
+    let manifest: Manifest = serde_json::from_value(value).unwrap();
+    let fixture = RuntimeFixture::new(manifest);
+    let run = |timeout: &str| {
+        fixture
+            .command("run", &["--task", "smoke", "--output", "json"])
+            .args(["--timeout-ms", timeout])
+            .spawn()
+            .unwrap()
+    };
+    let running_task = |state_base: &Path| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let run_id: Option<String> =
+                find_named(state_base, "registry.sqlite3").and_then(|_| {
+                    read_registry(state_base)
+                    .query_row(
+                        "SELECT run_id FROM processes WHERE role = 'task' AND status = 'running'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                });
+            if let Some(run_id) = run_id {
+                return run_id;
+            }
+            assert!(Instant::now() < deadline, "the task never started");
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    let owner = run("5000");
+    let chosen = running_task(&fixture.state_base);
+    assert_eq!(
+        unsafe { libc::kill(owner.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    let _ = wait_for_child_output(owner, Duration::from_secs(5));
+
+    // The successor holds the slot while its recovery waits on the orphaned
+    // service, which ignores its stop signal.
+    let successor = run("2000");
+    assert!(wait_for_path(&stopping, Duration::from_secs(5)));
+    let down = fixture
+        .command("down", &["--timeout-ms", "10000"])
+        .spawn()
+        .unwrap();
+    let down = wait_for_child_output(down, Duration::from_secs(12));
+    let successor_run = running_task(&fixture.state_base);
+    let _ = unsafe { libc::kill(successor.id() as libc::pid_t, libc::SIGTERM) };
+    let successor = wait_for_child_output(successor, Duration::from_secs(10));
+    let _ = fs::remove_file(&started);
+    let _ = fs::remove_file(&stopping);
+
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert_eq!(
+        report,
+        json!({"stopped": [], "stale": []}),
+        "the successor, not down, recovered the chosen session"
+    );
+    assert_ne!(chosen, successor_run);
+    let (outcome, finalization): (Option<String>, String) = read_registry(&fixture.state_base)
+        .query_row(
+            "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
+            [&chosen],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (outcome.as_deref(), finalization.as_str()),
+        (Some("interrupted"), "complete")
+    );
+    assert_eq!(
+        successor.status.code(),
+        Some(27),
+        "down never reached the successor"
+    );
+}
