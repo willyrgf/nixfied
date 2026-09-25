@@ -16,9 +16,10 @@ use serde_json::{Value, json};
 
 use nixfied_manifest::Manifest;
 use nixfied_manifest::fixtures::{self, SyntheticManifestOptions};
+use nixfied_runtime::registry::session::record_run_created;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    ServiceSelection, SlotEndpoints, StartingService, record_run_created, start_service_for_slot,
+    ServiceSelection, SlotEndpoints, StartingService, start_service_for_slot,
 };
 use nixfied_runtime::slot::SelectedSlot;
 use nixfied_runtime::state::HostPlacement;

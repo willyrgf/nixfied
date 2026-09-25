@@ -6,6 +6,8 @@ use super::events::{EventInsert, insert_event};
 use super::sqlite::RegistryContext;
 use super::status::{DbStatus, FinalizationStatus};
 use super::{Registry, RegistryIdentity};
+use crate::admission::RunAdmission;
+use crate::state::HostPlacement;
 use crate::{ErrorCode, RuntimeError, RuntimeResult};
 
 pub use super::status::ExecutionOutcome;
@@ -29,7 +31,8 @@ fn decode(outcome: Option<&str>, finalization: &str) -> RuntimeResult<SessionPro
     }
 }
 
-fn progress(
+/// The owner's exact run row. Every run transition checks it first.
+pub(crate) fn require_run(
     connection: &Connection,
     identity: &RegistryIdentity,
     run_id: &str,
@@ -47,6 +50,92 @@ fn progress(
     let (outcome, finalization) =
         row.ok_or_else(|| invalid("session provenance does not match its owner"))?;
     decode(outcome.as_deref(), &finalization)
+}
+
+/// Closed source registration forbids every new process source for the run.
+pub(crate) fn require_open_sources(connection: &Connection, run_id: &str) -> RuntimeResult<()> {
+    let sources: String = connection
+        .query_row(
+            "SELECT sources FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if sources != "open" {
+        return Err(RuntimeError::new(
+            ErrorCode::LifecycleFailed,
+            "the session closed source registration; no new workload may register",
+        ));
+    }
+    Ok(())
+}
+
+/// Record the run row up front, before any service starts, so every admitted run
+/// leaves durable evidence — including a service-less selection (a task or
+/// environment of only service-less tasks) whose service loop never runs and so
+/// never reaches `record_service_start_intent`. This is the only run-row creator.
+pub fn record_run_created(
+    registry: &mut Registry,
+    run_id: &str,
+    admission: &RunAdmission,
+    placement: &HostPlacement,
+) -> RuntimeResult<()> {
+    let source_json =
+        serde_json::to_string(&admission.source()).map_err(|error| invalid(error.to_string()))?;
+    // The owner's own process identity is recovery evidence for its session.
+    let owner = std::process::id();
+    let owner_identity = serde_json::json!({
+        "pid": owner,
+        "platformStart": crate::service::platform_start_identity(owner),
+    })
+    .to_string();
+    let RegistryContext {
+        connection,
+        identity,
+        redactor,
+    } = registry.context()?;
+    let transaction = connection.transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT INTO runs (
+              run_id, environment, slot, manifest_path, computed_manifest_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path, owner_identity, diagnostic_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ",
+            params![
+                run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                admission.common().manifest_path().display().to_string(),
+                admission.common().computed_manifest_hash(),
+                admission.common().runtime_abi(),
+                admission.common().toolchain_id(),
+                admission.common().generator_json(),
+                admission.common().target_json(),
+                source_json,
+                placement.summary_path().display().to_string(),
+                owner_identity,
+                crate::output::DIAGNOSTIC_SOURCE,
+            ],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        identity,
+        redactor,
+        EventInsert {
+            event_type: "run.created",
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: None,
+            computed_manifest_hash: Some(admission.common().computed_manifest_hash()),
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
 }
 
 /// Commit the execution result before presentation or resource finalization.
@@ -70,7 +159,7 @@ pub fn record_execution_outcome(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    match progress(&transaction, identity, run_id, manifest_hash)? {
+    match require_run(&transaction, identity, run_id, manifest_hash)? {
         SessionProgress::Executing => {}
         SessionProgress::Finalizing(stored) | SessionProgress::Finalized(stored) => {
             return if stored == outcome {
@@ -173,7 +262,7 @@ pub fn record_finalization_complete(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    match progress(&transaction, identity, run_id, manifest_hash)? {
+    match require_run(&transaction, identity, run_id, manifest_hash)? {
         SessionProgress::Executing => {
             return Err(invalid(
                 "finalization cannot complete before the execution outcome is known",
@@ -293,7 +382,7 @@ pub fn close_source_registration(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    progress(&transaction, identity, run_id, manifest_hash)?;
+    require_run(&transaction, identity, run_id, manifest_hash)?;
     let changed = transaction
         .execute(
             "UPDATE runs SET sources = 'closed' WHERE run_id = ?1 AND sources = 'open'",
@@ -334,7 +423,7 @@ pub fn seal_output(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    progress(&transaction, identity, run_id, manifest_hash)?;
+    require_run(&transaction, identity, run_id, manifest_hash)?;
     let (sources, pending): (String, i64) = transaction
         .query_row(
             "SELECT sources, (SELECT count(*) FROM processes WHERE run_id = ?1 AND capture = 'pending')

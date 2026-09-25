@@ -16,11 +16,12 @@ use nixfied_runtime::output::{
 };
 use nixfied_runtime::presenter::{CommandPresenter, PresentationMode, PresenterInit};
 use nixfied_runtime::redaction::Redactor;
+use nixfied_runtime::registry::session::record_run_created;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
     PrepareRunner, ReadyService, RunContext, SelectedEndpoint, ServiceSelection, TaskExecution,
-    TaskExecutionError, TaskRun, check_services_live, record_run_created,
-    run_dependent_task_cancellable, run_slot_clean, start_service_for_slot,
+    TaskExecutionError, TaskRun, check_services_live, run_dependent_task_cancellable,
+    run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{

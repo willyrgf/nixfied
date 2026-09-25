@@ -1273,9 +1273,9 @@ mod tests {
         use crate::ErrorCode;
         use crate::admission::{AdmissionContext, InvocationRoot, StoreOriginPolicy};
         use crate::cancellation::CancellationToken;
+        use crate::registry::session::record_run_created;
         use crate::registry::{Registry, RegistryIdentity};
         use crate::service::process::{ServiceSelection, start_service_for_slot};
-        use crate::service::record_run_created;
         use crate::slot::select_slot;
         use nixfied_manifest::Manifest;
         use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};

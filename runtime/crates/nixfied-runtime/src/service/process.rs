@@ -1338,7 +1338,7 @@ pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> +
 /// Start a declared service from the lowered manifest: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
 /// the admission's `ExecutionManifest`, never the raw `Manifest`. The caller must have
-/// recorded this exact `run_id` with [`super::record_run_created`] first.
+/// recorded this exact `run_id` with [`crate::registry::session::record_run_created`] first.
 pub fn start_service_for_slot(
     admission: &RunAdmission,
     placement: &HostPlacement,
