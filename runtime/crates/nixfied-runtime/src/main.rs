@@ -242,16 +242,22 @@ impl<'a> RunSession<'a> {
             let Some(service) = self.started.pop() else {
                 break;
             };
+            // The teardown policy is chosen once per service. Late
+            // cancellation of an otherwise healthy teardown cancels what
+            // remains; a failed session keeps stopping its services.
+            let timeout_ms = self.options.timeout_ms;
             let result = if canceled {
-                service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
+                service.cancel(&mut self.registry, timeout_ms, "run canceled")
             } else if had_initial_failure {
-                service.stop(&mut self.registry, self.options.timeout_ms)
-            } else {
-                service.stop_cancellable(
+                service.stop(&mut self.registry, timeout_ms)
+            } else if self.cancellation.is_canceled() {
+                service.cancel(
                     &mut self.registry,
-                    self.options.timeout_ms,
-                    self.cancellation,
+                    timeout_ms,
+                    "run canceled during shutdown",
                 )
+            } else {
+                service.stop_observing(&mut self.registry, timeout_ms, self.cancellation)
             };
             if let Err(error) = result {
                 failures.push(error);
