@@ -17,7 +17,7 @@ use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{self, CleanupStatus, DbStatus};
-use crate::state::marker::{StateIdentity, StateMarker};
+use crate::state::marker::{StateIdentity, StateMarker, refuse_unmarked_state_root};
 use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -127,15 +127,11 @@ fn open_marked(
             identity,
         } => (parent, root, identity),
     };
-    let marker = read_root_marker(&root)?.ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "state root {} has no state marker; refusing to delete unmarked state",
-                target.path.display()
-            ),
-        )
-    })?;
+    let Some(marker) = read_root_marker(&root)? else {
+        // A fresh unmarked tree owns no data generation to retain or delete.
+        refuse_unmarked_state_root(target, &root)?;
+        return Ok(None);
+    };
     if !marker.matches_ownership(expected) {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
