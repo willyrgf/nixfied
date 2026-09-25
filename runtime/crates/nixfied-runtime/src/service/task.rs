@@ -17,10 +17,7 @@ use crate::service::process::{
     ReadyService, SlotEndpoints, TerminationReason, check_services_live, resolve_exec_cwd,
     spawn_gated_captured_exec,
 };
-use crate::service::registry::{
-    InvocationOwner, TaskTerminalStatus, ensure_service_instance_probe_ready,
-    mark_invocation_finished,
-};
+use crate::service::registry::{InvocationOwner, TaskTerminalStatus, mark_invocation_finished};
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
 
@@ -135,7 +132,7 @@ pub fn run_dependent_task_cancellable(
     cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
     let declared_dependencies =
-        required_services(registry, task, started).map_err(TaskExecutionError::before)?;
+        required_services(task, started).map_err(TaskExecutionError::before)?;
     check_services_live(started.iter().copied()).map_err(TaskExecutionError::before)?;
     // The first dependency is the primary, providing bare ${port}/${host};
     // every declared dependency is addressable by name via ${port:<serviceId>}
@@ -389,17 +386,16 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-/// Resolve every service the task requires among the started services, each
-/// in a task-ready state.
+/// Resolve every service the task requires among the started services. A
+/// started service is in memory as ready; checkpoints observe its liveness.
 fn required_services<'s>(
-    registry: &Registry,
     task: &ExecTask,
     started: &[&'s ReadyService],
 ) -> RuntimeResult<Vec<&'s ReadyService>> {
     task.requires
         .iter()
         .map(|name| {
-            let service = started
+            started
                 .iter()
                 .copied()
                 .find(|service| service.service_name() == name.as_str())
@@ -411,13 +407,7 @@ fn required_services<'s>(
                             task.task_id
                         ),
                     )
-                })?;
-            ensure_service_instance_probe_ready(
-                registry,
-                name.as_str(),
-                &service.info().service_instance_id,
-            )?;
-            Ok(service)
+                })
         })
         .collect()
 }

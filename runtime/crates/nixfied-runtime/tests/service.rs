@@ -796,34 +796,6 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 }
 
 #[test]
-fn dependent_task_rechecks_registry_readiness_after_ready_transition() {
-    let port = available_port_window(1);
-    let mut fixture = test_child_listener_fixture(port);
-    let service = fixture.start_ready("run-task-not-ready", port);
-    fixture
-        .registry
-        .connection()
-        .execute(
-            "UPDATE processes SET status = 'running' WHERE process_key = ?1",
-            [&service.info().process_key],
-        )
-        .unwrap();
-    let error = fixture
-        .run_smoke(&service, &CancellationToken::new())
-        .expect_err("task should wait for probe-ready service");
-
-    assert_eq!(error.error().code, ErrorCode::DependencyUnavailable);
-    let task_events: i64 = fixture.query(
-        "SELECT count(*) FROM events WHERE event_type LIKE 'task.%'",
-        [],
-    );
-    assert_eq!(task_events, 0);
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("service should stop");
-}
-
-#[test]
 fn readiness_timeout_stops_started_service_and_records_failed() {
     let port = available_port_window(1);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
