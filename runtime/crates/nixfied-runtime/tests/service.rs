@@ -373,7 +373,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
 
 #[test]
 fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
-    let port = 45000 + (unique_suffix() % 1000) as u16;
+    let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
     let mut service = fixture.start_ready("run-lifecycle-order", port);
     service
