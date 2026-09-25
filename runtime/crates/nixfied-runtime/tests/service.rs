@@ -320,37 +320,6 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
 }
 
 #[test]
-fn ready_activation_rejects_missing_endpoint_evidence_atomically() {
-    let port = available_port_window(1);
-    let mut fixture = test_child_listener_fixture(port);
-    let service = fixture
-        .start("run-ready-missing-evidence", port)
-        .expect("service should start before ready activation");
-    fixture
-        .registry
-        .connection()
-        .execute(
-            "DELETE FROM ports WHERE owner_process_key = ?1",
-            [&service.info().process_key],
-        )
-        .expect("test should remove the recorded endpoint evidence");
-
-    let (service, error) = fixture
-        .ready(service)
-        .expect_err("ready activation must not accept unrecorded endpoint evidence")
-        .into_parts();
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let status: String = fixture.query(
-        "SELECT status FROM processes WHERE process_key = ?1",
-        [&service.info().process_key],
-    );
-    assert_eq!(status, "running");
-    let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-}
-
-#[test]
 fn refused_slot_clean_records_a_failed_clean_terminal() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);

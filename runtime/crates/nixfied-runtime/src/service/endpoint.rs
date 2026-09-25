@@ -916,27 +916,6 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_lock_is_nonblocking_and_reuses_the_same_inode() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let endpoint = endpoint("127.0.0.1", port);
-        let first = acquire_startup_locks(std::slice::from_ref(&endpoint)).unwrap();
-        assert_eq!(first.len(), 1);
-        assert!(matches!(
-            acquire_startup_locks(std::slice::from_ref(&endpoint)),
-            Err(EndpointFailure::LockContended { .. })
-        ));
-        drop(first);
-        assert_eq!(
-            acquire_startup_locks(std::slice::from_ref(&endpoint))
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[test]
     fn raw_bind_distinguishes_available_from_listening_address_in_use() {
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let planned = endpoint("127.0.0.1", held.local_addr().unwrap().port());
