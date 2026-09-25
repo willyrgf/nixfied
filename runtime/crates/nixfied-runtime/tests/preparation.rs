@@ -271,7 +271,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
                 [&process_key],
             )
             .unwrap();
-        nixfied_runtime::control::down_owned_process_groups(&mut registry, 5000)
+        nixfied_runtime::control::stop_recorded_processes(&mut registry, 5000)
             .expect("exclusive recovery settles all manifest provenances");
         let report = prepare_slot_state(&identity_b, &mut registry)
             .expect("preparation follows successful recovery");
@@ -366,7 +366,7 @@ impl PreparationFixture {
         let placement = self.placement(run_id);
         materialize_registry_root(&placement)?;
         let mut registry = open_registry(&placement, &self.manifest);
-        nixfied_runtime::control::down_owned_process_groups(&mut registry, 1000)?;
+        nixfied_runtime::control::stop_recorded_processes(&mut registry, 1000)?;
         prepare_slot_state(identity, &mut registry)
     }
 

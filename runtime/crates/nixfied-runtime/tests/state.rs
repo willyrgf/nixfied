@@ -1231,7 +1231,7 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
     assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
     assert_eq!(unsafe { libc::kill(member, 0) }, 0, "the member still runs");
 
-    let report = nixfied_runtime::control::down_owned_process_groups(&mut registry, 2000).unwrap();
+    let report = nixfied_runtime::control::stop_recorded_processes(&mut registry, 2000).unwrap();
     assert_eq!(report.stopped, ["process-leader"]);
     poll_until(
         std::time::Duration::from_secs(5),
@@ -1250,6 +1250,6 @@ fn recover_then_clean(
     identity: &StateIdentity,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    nixfied_runtime::control::down_owned_process_groups(registry, 1000)?;
+    nixfied_runtime::control::stop_recorded_processes(registry, 1000)?;
     clean_marked_state(identity, registry, mode)
 }
