@@ -545,21 +545,14 @@ in
         "<name>"
         "requires"
       ])
-      (option [
-        "nixfied"
-        "closures"
-        "<name>"
-        "operationBindings"
-      ])
     ];
     fragments = [
       (fragment ../../docs/DERIVATION_SPEC.md "## Specification ownership and scope")
       (fragment ../../docs/DERIVATION_SPEC.md "## 1. Identifiers and canonical order")
       (fragment ../../docs/DERIVATION_SPEC.md "## 2. Flattening and step paths")
       (fragment ../../docs/DERIVATION_SPEC.md "## 3. `servicesRequired(task)`")
-      (fragment ../../docs/DERIVATION_SPEC.md "## 4. `operationBindings(closure)`")
-      (fragment ../../docs/DERIVATION_SPEC.md "## 5. Default operation ids and terminal tokens")
-      (fragment ../../docs/DERIVATION_SPEC.md "## 6. Golden vectors")
+      (fragment ../../docs/DERIVATION_SPEC.md "## 4. Default operation ids and terminal tokens")
+      (fragment ../../docs/DERIVATION_SPEC.md "## 5. Golden vectors")
     ];
     related = [
       "manifest"

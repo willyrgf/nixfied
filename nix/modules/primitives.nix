@@ -24,7 +24,7 @@ let
     default = null;
     description = "Globally unique lifecycle operation identifier; derived (`service.<name>.<op>`) unless overridden.";
   };
-  # Terminal tokens default per lifecycle class (docs/DERIVATION_SPEC.md §5.2);
+  # Terminal tokens default per lifecycle class (docs/DERIVATION_SPEC.md §4.2);
   # declare to override.
   terminalDefaults = (import ../lib/derive-facts.nix { inherit lib; }).terminalDefaults;
   mkTerminal =
@@ -284,16 +284,6 @@ let
         type = types.bool;
         default = true;
         description = "Whether the runtime must verify the executable bit.";
-      };
-      operationBindings = mkOption {
-        type = types.nullOr (types.listOf types.str);
-        default = null;
-        description = ''
-          Optional authoring restriction: the operation ids this closure may be
-          dispatched against. Nix derives bindings from the invocation graph and
-          requires them to be a subset of this list. No binding set is emitted
-          into the manifest.
-        '';
       };
       effects = mkOption {
         type = types.listOf (types.enum vocabulary."enum ClosureEffect".members);

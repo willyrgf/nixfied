@@ -1,4 +1,4 @@
-# The derivation spec's golden vectors (docs/DERIVATION_SPEC.md §6) as eval
+# The derivation spec's golden vectors (docs/DERIVATION_SPEC.md §5) as eval
 # fixtures on the Nix side. The runtime carries the same vectors as cargo
 # fixtures; a divergence between either implementation and the spec text is a
 # bug in that implementation (DERIVE-1).
@@ -124,44 +124,6 @@ let
     };
   };
 
-  # V5/V7 — operationBindings: run[0] closure binds, tools do not; one closure
-  # dispatched by several leaves sorts its bindings.
-  v5Basenames = {
-    cargoC = "cargo";
-    gitC = "git";
-    psqlC = "psql";
-    pg-serverC = "postgres";
-  };
-  v5Positions = [
-    {
-      operationId = "task.build.run";
-      toolIds = [
-        "cargoC"
-        "gitC"
-      ];
-      program = "cargo";
-    }
-    {
-      operationId = "task.query.run";
-      toolIds = [ "psqlC" ];
-      program = "psql";
-    }
-    {
-      operationId = "service.postgres.start";
-      toolIds = [ "pg-serverC" ];
-      program = "postgres";
-    }
-    {
-      operationId = "task.fmt.run";
-      toolIds = [ "cargoC" ];
-      program = "cargo";
-    }
-  ];
-  bindings = deriveFacts.operationBindings {
-    positions = v5Positions;
-    executableBasenames = v5Basenames;
-  };
-
   vectors = [
     {
       name = "V1 flatten(ci)";
@@ -242,26 +204,6 @@ let
           "api"
           "postgres"
         ];
-    }
-    {
-      name = "V5/V7 bindings(cargoC) sorted";
-      ok =
-        bindings "cargoC" == [
-          "task.build.run"
-          "task.fmt.run"
-        ];
-    }
-    {
-      name = "V5 bindings(gitC) tool-set member binds nothing";
-      ok = bindings "gitC" == [ ];
-    }
-    {
-      name = "V5 bindings(psqlC)";
-      ok = bindings "psqlC" == [ "task.query.run" ];
-    }
-    {
-      name = "V5 bindings(pg-serverC)";
-      ok = bindings "pg-serverC" == [ "service.postgres.start" ];
     }
     {
       name = "V6 default leaf operation id";

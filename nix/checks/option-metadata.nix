@@ -243,7 +243,7 @@ assert builtins.length (parentEntries { }) == 4;
 assert
   (lib.findFirst (entry: entry.name == "parent.contextual") null (parentEntries { })).default.text
   == "nativeContext";
-assert builtins.length entries == 125;
+assert builtins.length entries == 124;
 assert rejects (mkOption {
   type = lib.types.str;
 });

@@ -613,7 +613,7 @@ mod tests {
             .collect()
     }
 
-    /// Golden vector V1 (docs/DERIVATION_SPEC.md §6): nesting, step paths,
+    /// Golden vector V1 (docs/DERIVATION_SPEC.md §5): nesting, step paths,
     /// canonical step order, whole-subtree dependencies.
     #[test]
     fn flattening_vector_v1_nesting_and_step_paths() {

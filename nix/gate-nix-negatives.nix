@@ -184,14 +184,6 @@ else
       }
     ))
 
-    (reject "an operation binding gate narrower than the derivation" (
-      { lib, ... }:
-      {
-        imports = [ composite ];
-        nixfied.closures.synthetic-helper.operationBindings = lib.mkForce [ "task.smoke.run" ];
-      }
-    ))
-
     (reject "a duplicate effective operation id" (
       { ... }:
       {
