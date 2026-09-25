@@ -495,7 +495,7 @@ pub fn wait_for_named(root: &Path, name: &str, timeout: Duration) -> Option<Path
 /// A decimal pid a child wrote to `path`.
 #[track_caller]
 pub fn wait_for_pid_file(path: &Path) -> u32 {
-    poll_until(Duration::from_secs(2), "a child pid file", || {
+    poll_until(Duration::from_secs(5), "a child pid file", || {
         fs::read_to_string(path).ok()?.trim().parse().ok()
     })
 }

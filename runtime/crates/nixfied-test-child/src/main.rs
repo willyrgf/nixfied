@@ -674,8 +674,15 @@ fn write_pid(path: &Path) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create pid-file parent {}: {error}", parent.display()))?;
     }
-    fs::write(path, std::process::id().to_string())
-        .map_err(|error| format!("write pid file {}: {error}", path.display()))
+    // Readers poll for the path; publish it only once its contents are whole.
+    let pid = std::process::id();
+    let mut staged = path.as_os_str().to_owned();
+    staged.push(format!(".{pid}.tmp"));
+    let staged = PathBuf::from(staged);
+    fs::write(&staged, pid.to_string())
+        .map_err(|error| format!("write pid file {}: {error}", staged.display()))?;
+    fs::rename(&staged, path)
+        .map_err(|error| format!("publish pid file {}: {error}", path.display()))
 }
 
 fn park_forever() -> ! {
