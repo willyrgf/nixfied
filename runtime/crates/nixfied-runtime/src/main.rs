@@ -377,6 +377,23 @@ fn main() {
     if let Some(exit) = nixfied_runtime::presenter::dispatch(&native_args) {
         std::process::exit(exit);
     }
+    if let Some(received) = nixfied_runtime::background::receive(&native_args) {
+        let exit = match received {
+            Err(exit) => exit,
+            Ok((request, establishment)) => match ProcessSignalGuard::install() {
+                Ok(signals) => {
+                    let exit = match run_background_owner(request, establishment) {
+                        Ok(()) => 0,
+                        Err(error) => exit_code(&error),
+                    };
+                    drop(signals);
+                    exit
+                }
+                Err(error) => exit_code(&error),
+            },
+        };
+        std::process::exit(exit);
+    }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let exit = match ProcessSignalGuard::install() {
         Ok(signals) => {
@@ -627,8 +644,75 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         return Ok(());
     }
     let parsed_options = parse_run_options(args)?;
-    let cancellation = CancellationToken::new();
+    if parsed_options.daemon {
+        return launch_background(args, parsed_options.timeout_ms);
+    }
+    run_session(parsed_options, new_run_id(), None)
+}
+
+/// The launcher validated syntax and option combinations; the owner performs
+/// the one authoritative admission. Acknowledgement means establishment, not
+/// readiness or task success.
+fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeError> {
+    let runtime = std::env::current_exe().map_err(|_| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            "cannot locate the runtime executable for background launch",
+        )
+    })?;
     let run_id = new_run_id();
+    let request = nixfied_runtime::background::Request {
+        run_id: run_id.clone(),
+        args: args
+            .iter()
+            .filter(|arg| arg.as_str() != RUN_DAEMON)
+            .cloned()
+            .collect(),
+    };
+    // Establishment includes predecessor recovery, bounded by the operation timeout.
+    let wait = std::time::Duration::from_millis(timeout_ms)
+        .saturating_add(std::time::Duration::from_secs(10));
+    use nixfied_runtime::background::LaunchOutcome;
+    match nixfied_runtime::background::launch(&runtime, &request, wait)? {
+        LaunchOutcome::Established(acknowledgement) => print_json(&acknowledgement),
+        LaunchOutcome::Rejected(error) => Err(error),
+        LaunchOutcome::Uncertain => Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            "the background launch outcome is uncertain; the session may have been established",
+        )
+        .with_detail("runId", &run_id)),
+        LaunchOutcome::Interrupted => {
+            Err(nixfied_runtime::cancellation::canceled_error().with_detail("runId", &run_id))
+        }
+    }
+}
+
+/// The background owner: the same session path with no terminal presenter.
+fn run_background_owner(
+    request: nixfied_runtime::background::Request,
+    mut establishment: nixfied_runtime::background::Establishment,
+) -> Result<(), RuntimeError> {
+    let result = parse_run_options(&request.args).and_then(|parsed| {
+        if parsed.daemon || parsed.output_mode.is_some() {
+            return Err(RuntimeError::new(
+                nixfied_runtime::ErrorCode::OutputModeConflict,
+                "a background session has no output projection",
+            ));
+        }
+        run_session(parsed, request.run_id, Some(&mut establishment))
+    });
+    if let Err(error) = &result {
+        establishment.reject(error);
+    }
+    result
+}
+
+fn run_session(
+    parsed_options: ParsedRunOptions,
+    run_id: String,
+    establishment: Option<&mut nixfied_runtime::background::Establishment>,
+) -> Result<(), RuntimeError> {
+    let cancellation = CancellationToken::new();
     let admission = load_admitted_manifest(
         parsed_options.manifest_path.clone(),
         parsed_options.allow_non_store,
@@ -643,7 +727,8 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         output_mode,
         parsed_options.task.as_deref(),
     )?;
-    let options = parsed_options.resolve(output_mode, selected_task);
+    let background = establishment.is_some();
+    let options = parsed_options.resolve(output_mode, selected_task, background);
     let redactor = Redactor::from_secrets(admission.secrets());
     let manifest_path = admission.common().manifest_path().to_path_buf();
     let computed_manifest_hash = admission.common().computed_manifest_hash().to_owned();
@@ -655,6 +740,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         run_id,
         &cancellation,
         &mut presenter,
+        establishment,
     );
     // The slot is released. The command may now wait for its presenter to
     // drain retained evidence, with no default deadline; a termination signal
@@ -696,6 +782,7 @@ fn run_m0_admitted(
     run_id: String,
     cancellation: &CancellationToken,
     presenter: &mut Option<CommandPresenter>,
+    establishment: Option<&mut nixfied_runtime::background::Establishment>,
 ) -> Result<RunOutput, RuntimeError> {
     let manifest = admission.common().manifest();
     cancellation.check()?;
@@ -706,6 +793,9 @@ fn run_m0_admitted(
         selected_slot.slot,
     )
     .map_err(post_admission_error)?;
+    if options.background {
+        reject_interactive_stdin(&plan)?;
+    }
     let placement =
         derive_host_placement_for_slot(manifest, &selected_slot, &run_id, &options.state_base)
             .map_err(post_admission_error)?;
@@ -722,6 +812,7 @@ fn run_m0_admitted(
         &placement,
         cancellation,
         presenter,
+        establishment,
     )
     .map_err(|error| enrich_run_error(error, &run_id, &placement, &selected_slot))
 }
@@ -782,6 +873,7 @@ fn run_m0_placed(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
     presenter: &mut Option<CommandPresenter>,
+    mut establishment: Option<&mut nixfied_runtime::background::Establishment>,
 ) -> Result<RunOutput, RuntimeError> {
     let launcher = std::env::current_exe().map_err(|_| {
         RuntimeError::new(
@@ -840,7 +932,19 @@ fn run_m0_placed(
     // selection (a task tree whose leaves require nothing) leaves durable run
     // evidence for `ps`/reconcile. Service transitions require this exact row
     // and never create or repair it themselves.
+    // Observed abandonment before the commit prevents all new work. After the
+    // commit the session is established and independent of its launcher.
+    if let Some(establishment) = establishment.as_deref_mut() {
+        establishment.check_abandonment()?;
+    }
     record_run_created(&mut registry, run_id, admission, placement)?;
+    if let Some(establishment) = establishment {
+        establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
+            run_id: run_id.to_owned(),
+            run_dir: placement.run_dir.clone(),
+            logs_dir: placement.logs_dir.clone(),
+        });
+    }
 
     // The slot's cross-service endpoint map, known deterministically before
     // anything spawns: `${port:<serviceId>}` substitution addresses each service's
@@ -892,7 +996,11 @@ fn run_m0_placed(
     }
     // The command-owned presenter exists before any workload is released; its
     // establishment failure releases no workload.
-    if let Some(mode) = options.output_mode.presentation() {
+    if let Some(mode) = options
+        .output_mode
+        .presentation()
+        .filter(|_| !options.background)
+    {
         let init = PresenterInit {
             run_id: run_id.to_owned(),
             run_dir: placement.run_dir.clone(),
@@ -1064,6 +1172,32 @@ fn run_m0_placed(
     }
 
     session.finalize(None, Some(ExecutionOutcome::Succeeded))
+}
+
+/// A background owner has null stdin; a workload declaring inherited
+/// interactive stdin rejects before any workload runs.
+fn reject_interactive_stdin(
+    plan: &nixfied_runtime::execution::RunPlan<'_>,
+) -> Result<(), RuntimeError> {
+    let inherits = plan
+        .nodes
+        .iter()
+        .chain(
+            plan.services
+                .iter()
+                .flat_map(|binding| binding.prepare_nodes.iter()),
+        )
+        .any(|node| node.task.exec.stdin == nixfied_manifest::StdinPolicy::Inherit)
+        || plan.services.iter().any(|binding| {
+            binding.service.start.exec.stdin == nixfied_manifest::StdinPolicy::Inherit
+        });
+    if inherits {
+        return Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+            format!("{RUN_DAEMON} cannot run a workload that inherits interactive stdin"),
+        ));
+    }
+    Ok(())
 }
 
 fn services_output(services: &[ReadyService]) -> Vec<ServiceRunOutput> {
@@ -1711,6 +1845,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     let mut timeout_ms = RUN_TIMEOUT_MS_INITIAL;
     let mut output_mode = RUN_OUTPUT_INITIAL;
     let mut task = RUN_TASK_INITIAL.map(str::to_string);
+    let mut daemon = RUN_DAEMON_INITIAL;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -1737,6 +1872,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
                     ));
                 }
             }
+            RUN_DAEMON => daemon = true,
             RUN_TIMEOUT_MS => {
                 index += 1;
                 timeout_ms =
@@ -1778,7 +1914,14 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     }
     let (manifest_path, allow_non_store, slot) = common.finish()?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
+    if daemon && output_mode.is_some() {
+        return Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::OutputModeConflict,
+            format!("{RUN_DAEMON} has no output projection; omit {RUN_OUTPUT}"),
+        ));
+    }
     Ok(ParsedRunOptions {
+        daemon,
         manifest_path,
         allow_non_store,
         state_base,
@@ -1790,6 +1933,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
 }
 
 struct ParsedRunOptions {
+    daemon: bool,
     manifest_path: PathBuf,
     allow_non_store: bool,
     state_base: PathBuf,
@@ -1800,8 +1944,14 @@ struct ParsedRunOptions {
 }
 
 impl ParsedRunOptions {
-    fn resolve(self, output_mode: RunOutputValue, task: nixfied_manifest::TaskId) -> RunOptions {
+    fn resolve(
+        self,
+        output_mode: RunOutputValue,
+        task: nixfied_manifest::TaskId,
+        background: bool,
+    ) -> RunOptions {
         RunOptions {
+            background,
             state_base: self.state_base,
             timeout_ms: self.timeout_ms,
             output_mode,
@@ -1812,6 +1962,8 @@ impl ParsedRunOptions {
 }
 
 struct RunOptions {
+    /// A background owner retains evidence without a terminal presenter.
+    background: bool,
     state_base: PathBuf,
     timeout_ms: RunTimeoutMsValue,
     output_mode: RunOutputValue,

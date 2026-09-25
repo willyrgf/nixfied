@@ -415,6 +415,19 @@ nix run .#down -- --slot 2
 nix run .#clean -- --slot 2
 ```
 
+Add `--daemon` to run a task session in the background, for example a
+long-running server task and its services:
+
+```sh
+nix run .#serve -- --daemon   # prints {"runId", "runDir", "logsDir"}
+nix run .#down                # later: cancel that session
+```
+
+The printed identity means the session was established, not that the task
+succeeded or that services are ready. Its redacted output stays in `logsDir`,
+and its final outcome is recorded under that `runId`. `--daemon` cannot be
+combined with `--output`, and it rejects tasks that read interactive stdin.
+
 `down` asks the slot's live session to cancel through that session's own
 control endpoint and waits for it to finish its normal teardown; if the owning
 runtime has died, `down` takes the slot and stops the recorded processes. It

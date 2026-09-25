@@ -10,4 +10,5 @@ Options:
   --timeout-ms <number>   Set the runtime operation timeout in milliseconds
   --output <mode>         Select summary, json, both, or task-output (default: task default or summary)
                            task-output requires one directly selected leaf and presents its redacted output live
+  --daemon                Establish the session in the background and print its identity, not its result
   -h, --help              Show this help

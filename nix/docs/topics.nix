@@ -437,6 +437,7 @@ in
         "defaultOutput"
       ])
       (entry "record" "output-schema/run-json")
+      (entry "record" "output-schema/run-daemon-json")
       (entry "record" "output-schema/run-summary-json")
       (entry "record" "output-schema/run-task")
       (entry "record" "output-schema/run-node")

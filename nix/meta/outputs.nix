@@ -195,6 +195,14 @@ in
         (required "live" boolean "Native host liveness observation.")
       ]
     )
+    (record (output "run-daemon-json") "NoDecoder"
+      "Background establishment acknowledgement: identity and evidence location, never readiness or task success."
+      [
+        (required "runId" text "Immutable identity of the established session.")
+        (required "runDir" path "Retained evidence directory of the session.")
+        (required "logsDir" path "Retained redacted log directory of the session.")
+      ]
+    )
     (record (local "DownReport") "NoDecoder"
       "Native down result: a canceled live session, or dead-owner recovery."
       [
@@ -304,6 +312,8 @@ in
         "Native failure classes; no per-code exit policy is generated."
       )
       // {
+        # The background launcher decodes an owner's pre-establishment rejection.
+        decoder = "Closed";
         annotations = {
           MANIFEST_NOT_STORE_OUTPUT = annotation "Manifest input is not an allowed realised store output." "manifest";
           MANIFEST_INVALID = annotation "Raw manifest bytes or structural values are invalid." "manifest";
