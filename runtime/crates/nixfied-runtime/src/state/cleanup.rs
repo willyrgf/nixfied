@@ -530,14 +530,7 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
         &transaction,
         identity,
         redactor,
-        EventInsert {
-            event_type: "cleanup.intent",
-            run_id: None,
-            service_instance_id: None,
-            process_key: None,
-            computed_manifest_hash: Some(&record.marker.computed_manifest_hash),
-            payload_json: &payload,
-        },
+        cleanup_event("cleanup.intent", record, &payload),
     )?;
     transaction.commit().map_err(sql_error)
 }
@@ -572,14 +565,7 @@ fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()
         &transaction,
         identity,
         redactor,
-        EventInsert {
-            event_type: "cleanup.completed",
-            run_id: None,
-            service_instance_id: None,
-            process_key: None,
-            computed_manifest_hash: Some(&record.marker.computed_manifest_hash),
-            payload_json: &payload,
-        },
+        cleanup_event("cleanup.completed", record, &payload),
     )?;
     transaction.commit().map_err(sql_error)
 }
@@ -604,12 +590,21 @@ fn attempt_failed(
         "reason": error.to_string(),
     })
     .to_string();
-    let mut event = EventInsert::new("cleanup.attempt-failed", &payload);
-    event.computed_manifest_hash = Some(&record.marker.computed_manifest_hash);
-    match registry.append_event(event) {
+    match registry.append_event(cleanup_event("cleanup.attempt-failed", record, &payload)) {
         Ok(_) => failure,
         Err(recording) => failure.with_cause(recording),
     }
+}
+
+/// Cleanup events carry the manifest provenance of the generation's marker.
+fn cleanup_event<'a>(
+    event_type: &'a str,
+    record: &'a CleanupRecord,
+    payload: &'a str,
+) -> EventInsert<'a> {
+    let mut event = EventInsert::new(event_type, payload);
+    event.computed_manifest_hash = Some(&record.marker.computed_manifest_hash);
+    event
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
