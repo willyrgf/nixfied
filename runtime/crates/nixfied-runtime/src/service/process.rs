@@ -305,6 +305,9 @@ struct OwnedService {
 
 impl OwnedService {
     fn check_liveness(&self) -> RuntimeResult<()> {
+        if let Some(capture) = &self.log_relays {
+            capture.check()?;
+        }
         if let Some(error) = self.escape_error() {
             return Err(error);
         }
@@ -2096,6 +2099,7 @@ impl OwnedCapturedChild {
         mut transition: impl FnMut(CapturedExecTransition<'_>) -> RuntimeResult<()>,
     ) -> Result<CapturedExecOutcome, CapturedExecFailure> {
         let started = Instant::now();
+        let mut capture_failed = false;
         let observed = loop {
             if cancellation.is_canceled() {
                 break Ok(CapturedExecOutcome::Canceled);
@@ -2112,6 +2116,10 @@ impl OwnedCapturedChild {
                         format!("failed to inspect {}: {error}", self.label),
                     ));
                 }
+            }
+            if let Err(error) = self.capture.as_ref().expect("capture is owned").check() {
+                capture_failed = true;
+                break Err(error);
             }
             if self
                 .timeout
@@ -2144,6 +2152,9 @@ impl OwnedCapturedChild {
         };
         let (outcome, operation) = match observed {
             Ok(outcome) => (Some(outcome), intent.err()),
+            // Shutdown consumes the retained capture failure; do not duplicate
+            // its checkpoint preview as a second operation failure.
+            Err(_) if capture_failed => (None, intent.err()),
             Err(error) => (
                 None,
                 Some(match intent {
@@ -3062,6 +3073,84 @@ mod tests {
                 })
             };
             assert_eq!(actual, expected);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capture_failure_preserves_observed_exit_or_interrupts_live_child() {
+        for exited in [false, true] {
+            let root = std::env::temp_dir()
+                .join(format!("nixfied-capture-failure-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let authority = crate::state::ownership::fixture_guard(
+                &root,
+                &crate::registry::RegistryIdentity::default_slot("test", "abi", "toolchain"),
+            );
+            let child = spawn_gated_captured_exec(
+                &CapturedExec {
+                    authority: &authority,
+                    executable: "/bin/sh",
+                    args: &[
+                        "-c".into(),
+                        if exited {
+                            "printf x; exit 0"
+                        } else {
+                            "printf x; /bin/sleep 30"
+                        }
+                        .into(),
+                    ],
+                    env: &BTreeMap::new(),
+                    cwd: &root,
+                    stdin: StdinPolicy::Null,
+                    timeout: None,
+                    stdout_path: Path::new("/dev/full"),
+                    stderr_path: &root.join("stderr"),
+                    redactor: &Redactor::empty(),
+                    log_file_mode: LogFileMode::Replace,
+                    label: "capture-failure",
+                },
+                &crate::launch::test_launcher(),
+            )
+            .unwrap()
+            .register_and_release(|_| Ok(()), || Ok(()))
+            .unwrap();
+            let pid = child.pid();
+            if exited {
+                let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                assert_eq!(
+                    unsafe {
+                        libc::waitid(libc::P_PID, pid, &mut status, libc::WEXITED | libc::WNOWAIT)
+                    },
+                    0
+                );
+            }
+            let started = Instant::now();
+            let result = child.complete(&CancellationToken::new(), || Ok(()), |_| Ok(()));
+            let failure = match result {
+                Err(failure) => failure,
+                Ok(_) => panic!("failed capture must stop execution"),
+            };
+            assert_eq!(failure.error.code, ErrorCode::SecretLeakBlocked);
+            assert!(failure.error.message.contains("failed to write"));
+            match (exited, failure.outcome) {
+                (false, None) => {}
+                (true, Some(CapturedExecOutcome::Exited(status))) => assert!(status.success()),
+                _ => panic!("capture failure must preserve an already observed exit"),
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            assert!(!process_group_has_live_member(pid as i32).unwrap());
+            let mut status = 0;
+            assert_eq!(
+                unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+            drop(authority);
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
 
