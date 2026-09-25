@@ -743,22 +743,12 @@ mod tests {
     use std::fs::{File, OpenOptions};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_TEST_ROOT: AtomicU64 = AtomicU64::new(1);
-
-    struct TestRoot(PathBuf);
+    struct TestRoot(crate::test_support::TestDir);
 
     impl TestRoot {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "nixfied-endpoint-test-{}-{}",
-                std::process::id(),
-                NEXT_TEST_ROOT.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::create_dir(&path).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-            Self(path)
+            Self(crate::test_support::TestDir::new("endpoint-test"))
         }
 
         fn open(&self) -> File {
@@ -767,12 +757,6 @@ mod tests {
 
         fn locks(&self) -> PathBuf {
             self.0.join("endpoint-locks")
-        }
-    }
-
-    impl Drop for TestRoot {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -1368,7 +1352,7 @@ mod tests {
         let manifest_path = workspace.0.join("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
-        context.invocation_root = InvocationRoot::Path(workspace.0.clone());
+        context.invocation_root = InvocationRoot::Path(workspace.0.to_path_buf());
         let admission = crate::admit_run(&manifest_path, &context).unwrap();
         let selected = select_slot(&manifest, None).unwrap();
         let placement = derive_host_placement_for_slot(

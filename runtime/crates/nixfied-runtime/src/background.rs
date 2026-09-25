@@ -406,14 +406,8 @@ mod tests {
     #[test]
     fn launcher_cancellation_reports_whether_it_reached_the_owner() {
         use std::os::unix::fs::DirBuilderExt;
-        let run_dir = std::env::temp_dir()
-            .join(format!(
-                "nixfied-launch-cancel-{}-{}",
-                std::process::id(),
-                crate::token::random_hex().unwrap()
-            ))
-            .join("runs")
-            .join("session");
+        let root = crate::test_support::TestDir::new("launch-cancel");
+        let run_dir = root.join("runs/session");
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)

@@ -1547,7 +1547,6 @@ fn json_error(error: serde_json::Error) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -1561,37 +1560,28 @@ mod tests {
     const START_IDENTITY: &str =
         r#"{"pid":123,"pgid":123,"platformStart":null,"trackedProcesses":[]}"#;
 
-    static NEXT_TEST_REGISTRY: AtomicU64 = AtomicU64::new(0);
-
     struct TestRegistry {
-        root: PathBuf,
         registry: Registry,
+        _root: crate::test_support::TestDir,
     }
 
     impl TestRegistry {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "nixfied-service-registry-test-{}-{}",
-                std::process::id(),
-                NEXT_TEST_REGISTRY.fetch_add(1, Ordering::Relaxed)
-            ));
+            let root = crate::test_support::TestDir::new("service-registry-test");
             let identity = RegistryIdentity::default_slot("test-project", "test-abi", "test-tool");
             let registry = Registry::open_or_create(
                 crate::state::ownership::fixture_guard(&root, &identity),
                 &identity,
             )
             .expect("test registry should open");
-            Self { root, registry }
+            Self {
+                registry,
+                _root: root,
+            }
         }
 
         fn path(&self) -> PathBuf {
             self.registry.path().to_path_buf()
-        }
-    }
-
-    impl Drop for TestRegistry {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
 

@@ -21,6 +21,8 @@ pub mod slot;
 mod spawn;
 pub mod state;
 mod template;
+#[cfg(test)]
+mod test_support;
 mod token;
 
 pub use admission::{

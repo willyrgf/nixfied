@@ -602,15 +602,7 @@ mod tests {
 
     #[test]
     fn cancellation_recording_failure_still_contains_and_reaps_child() {
-        let root = std::env::temp_dir().join(format!(
-            "nixfied-task-cancel-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&root).unwrap();
+        let root = crate::test_support::TestDir::new("task-cancel");
         let mut registry = Registry::open_or_create(
             crate::state::ownership::fixture_guard(
                 &root,
@@ -678,7 +670,6 @@ mod tests {
             Some(CapturedExecOutcome::Canceled)
         ));
         drop(registry);
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(failure.error.code, ErrorCode::RegistryCorrupt);
         assert!(
             exited,

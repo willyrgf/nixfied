@@ -320,22 +320,16 @@ mod tests {
     use super::*;
 
     /// A private `<registry>/runs/<session>` layout, as placement creates it.
-    fn directory() -> PathBuf {
+    fn directory() -> (crate::test_support::TestDir, PathBuf) {
         use std::os::unix::fs::DirBuilderExt;
-        let path = std::env::temp_dir()
-            .join(format!(
-                "nixfied-control-{}-{}",
-                std::process::id(),
-                crate::token::random_hex().unwrap()
-            ))
-            .join("runs")
-            .join("session");
+        let root = crate::test_support::TestDir::new("control");
+        let path = root.join("runs/session");
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&path)
             .unwrap();
-        path
+        (root, path)
     }
 
     fn wait_for(token: &CancellationToken) -> bool {
@@ -351,8 +345,8 @@ mod tests {
 
     #[test]
     fn duplicate_requests_set_only_the_selected_token_and_shutdown_removes_the_endpoint() {
-        let first_dir = directory();
-        let second_dir = directory();
+        let (_first_root, first_dir) = directory();
+        let (_second_root, second_dir) = directory();
         let first = CancellationToken::new();
         let second = CancellationToken::new();
         let first_control = SessionControl::establish(&first_dir, &first).unwrap();
@@ -384,7 +378,7 @@ mod tests {
 
     #[test]
     fn collisions_absent_readers_and_substituted_objects_never_deliver() {
-        let dir = directory();
+        let (_root, dir) = directory();
         let token = CancellationToken::new();
         let control = SessionControl::establish(&dir, &token).unwrap();
         assert!(
@@ -428,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_full_buffer_already_holds_the_pending_request_and_never_blocks() {
-        let dir = directory();
+        let (_root, dir) = directory();
         let fifo =
             std::ffi::CString::new(dir.join(CONTROL_FIFO_NAME).as_os_str().as_encoded_bytes())
                 .unwrap();
@@ -468,7 +462,7 @@ mod tests {
 
     #[test]
     fn many_requests_cancel_once_and_shutdown_stays_bounded() {
-        let dir = directory();
+        let (_root, dir) = directory();
         let token = CancellationToken::new();
         let control = SessionControl::establish(&dir, &token).unwrap();
         // A sender that connects and closes without a byte is not a request:
@@ -519,7 +513,7 @@ mod tests {
     #[test]
     fn non_private_or_misplaced_session_directories_are_refused() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = directory();
+        let (_root, dir) = directory();
         let runs = dir.parent().unwrap().to_path_buf();
         for target in [&dir, &runs] {
             std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).unwrap();
