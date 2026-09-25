@@ -909,16 +909,9 @@ fn run_m0_placed(
         options.timeout_ms,
     )?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry)?;
-    // Runtime progress is retained evidence from here on; the presenter, not
-    // the session owner, shows it while session duties remain.
-    let mut diagnostics =
-        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
-    if upgrade.upgraded {
-        diagnostics.write(format_args!(
-            "  updated slot provenance from manifest {} (data retained)",
-            upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
-        ));
-    }
+    // The never-reused evidence directory: an existing one is an identity
+    // collision, refused before any session fact is published.
+    nixfied_runtime::state::claim_run_evidence(placement)?;
 
     let direct_selected = admission
         .common()
@@ -942,6 +935,17 @@ fn run_m0_placed(
         establishment.check_abandonment()?;
     }
     record_run_created(&mut registry, run_id, admission, placement)?;
+    // The diagnostic source is registered with the run before its first write.
+    // Runtime progress is retained evidence from here on; the presenter, not
+    // the session owner, shows it while session duties remain.
+    let mut diagnostics =
+        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
+    if upgrade.upgraded {
+        diagnostics.write(format_args!(
+            "  updated slot provenance from manifest {} (data retained)",
+            upgrade.from_manifest_hash.as_deref().unwrap_or("unknown"),
+        ));
+    }
     if let Some(establishment) = establishment {
         establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
             run_id: run_id.to_owned(),

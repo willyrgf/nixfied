@@ -318,11 +318,11 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path) VALUES (
+            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
               'process-interrupted', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-interrupted', 'service-interrupted', 'running', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
             ",
         )
         .expect("interrupted process row should insert");

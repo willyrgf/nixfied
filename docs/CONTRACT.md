@@ -283,6 +283,16 @@ when the manifest/runtime contract changes.
   observe every already-started service as well as cancellation. A failure of
   any owned service, including a prepare-only dependency during preparation,
   withholds release of every further workload.
+- Every process record stores the stop signal, stop timeout, and containment
+  (`process-group` or `process-tree`) needed to terminate it; tasks and probes
+  record SIGTERM, 1,000 ms, and their process group. Recovery terminates with
+  these recorded facts, capped by the command timeout, never with a newly
+  supplied manifest.
+- Each session claims its `runs/<runId>` directory exclusively; an existing
+  directory is a run identity collision and refuses before any session fact is
+  published. The diagnostic source is created only after the run record that
+  names it commits. After source registration closes, no process may register
+  a new source.
 - Service teardown observes pending exits before recording stop intent; an exit
   observed then remains an unexpected failure. The stop lifecycle start event is
   the durable stop intent and precedes every stop signal; its recording failure
@@ -463,7 +473,9 @@ when the manifest/runtime contract changes.
   probe logs), and run-relative stdout/stderr paths before release. The helper
   discovers sources in short read-only transactions, tails them by run identity
   and offset with bounded per-stream queues, and treats temporary EOF as
-  progress. Human rendering bounds unterminated lines to 8 KiB fragments.
+  progress. Human rendering bounds unterminated lines to 8 KiB fragments. A
+  full stream queue holds back only the sources routed to that stream; other
+  sources and the other stream keep flowing.
 - Finalization never waits for delivery: after teardown, retention, and
   finalization, the owner closes source registration, writes the run summary
   and footer, closes the diagnostic writer, and publishes the output seal only

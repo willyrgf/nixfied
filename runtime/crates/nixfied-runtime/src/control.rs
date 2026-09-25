@@ -11,11 +11,11 @@ use crate::registry::session::{record_interrupted_sessions, record_recovered_ses
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity, RegistryReader};
 use crate::service::{
-    ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
+    ProcessRecord, StopPolicy, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
     mark_service_stopped, mark_task_finished, process_escape_start_identity,
     process_group_has_live_member, process_is_live_with_identity,
     process_is_live_with_start_identity, process_present, settle_unresolved_process,
-    terminate_process_group, terminate_process_tree_with_snapshot,
+    terminate_process_group_signal, terminate_process_tree_with_snapshot,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
@@ -266,8 +266,8 @@ pub fn down_owned_process_groups(
             terminate_process_tree_with_snapshot(
                 row.pid,
                 row.pgid,
-                libc::SIGTERM,
-                timeout_ms,
+                row.stop.signal,
+                row.stop.timeout_ms.min(timeout_ms),
                 &row.start_identity.tracked_processes,
             )?;
             settle_down_process(registry, &row)?;
@@ -282,7 +282,21 @@ pub fn down_owned_process_groups(
                 &row.start_identity.tracked_processes,
             )
         });
-        if let Err(error) = terminate_process_group(row.pgid, timeout_ms) {
+        // Terminate with the recorded policy; the command timeout only caps it.
+        let stop_timeout = row.stop.timeout_ms.min(timeout_ms);
+        let terminated = if row.stop.tree {
+            terminate_process_tree_with_snapshot(
+                row.pid,
+                row.pgid,
+                row.stop.signal,
+                stop_timeout,
+                &row.start_identity.tracked_processes,
+            )
+            .map(|_| ())
+        } else {
+            terminate_process_group_signal(row.pgid, row.stop.signal, stop_timeout).map(|_| ())
+        };
+        if let Err(error) = terminated {
             return Err(settle_control_escape(
                 registry,
                 &row,
@@ -371,6 +385,7 @@ struct ProcessRow {
     status: ProcessStatus,
     computed_manifest_hash: String,
     unsettled: bool,
+    stop: StopPolicy,
 }
 
 impl ProcessRow {
@@ -477,7 +492,8 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
               p.run_id, p.service_instance_id, p.status, r.computed_manifest_hash,
               CASE WHEN {escaped_process}
-                   THEN 1 ELSE 0 END, p.role, p.service_name
+                   THEN 1 ELSE 0 END, p.role, p.service_name,
+              p.stop_signal, p.stop_timeout_ms, p.containment
             FROM processes p
             LEFT JOIN runs r ON r.run_id = p.run_id
             ORDER BY p.process_key
@@ -501,6 +517,11 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 row.get::<_, i64>(9)? != 0,
                 row.get::<_, String>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                (
+                    row.get::<_, i32>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, String>(14)?,
+                ),
             ))
         })
         .map_err(sql_error)?
@@ -521,8 +542,25 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                 unsettled,
                 role,
                 service_name,
+                (stop_signal, stop_timeout_ms, containment),
             )| {
                 let role = ProcessRole::parse_db(&role)?;
+                let stop = StopPolicy {
+                    signal: stop_signal,
+                    timeout_ms: u64::try_from(stop_timeout_ms).map_err(|_| {
+                        RuntimeError::new(ErrorCode::RegistryCorrupt, "invalid stop timeout")
+                    })?,
+                    tree: match containment.as_str() {
+                        "process-group" => false,
+                        "process-tree" => true,
+                        _ => {
+                            return Err(RuntimeError::new(
+                                ErrorCode::RegistryCorrupt,
+                                "invalid process containment",
+                            ));
+                        }
+                    },
+                };
                 let coherent = match role {
                     ProcessRole::Task => service_instance_id.is_none() && service_name.is_none(),
                     ProcessRole::Service => {
@@ -562,6 +600,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
                     status: ProcessStatus::parse_db(&status)?,
                     computed_manifest_hash,
                     unsettled,
+                    stop,
                 })
             },
         )

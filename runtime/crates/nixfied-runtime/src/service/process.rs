@@ -33,10 +33,10 @@ use crate::service::identity::service_instance_id;
 use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     EndpointRecord, Ownership, ProcessRecord, ServiceRecord, ServiceSettlement,
-    ServiceStartOutcome, VerifiedEndpointActivation, activate_service_ready, mark_process_escape,
-    mark_service_canceled, mark_service_failed, mark_service_stopped, read_service_snapshot,
-    record_service_canceling, record_service_lifecycle_event, record_service_start,
-    record_service_start_intent, settle_service_start,
+    ServiceStartOutcome, StopPolicy, VerifiedEndpointActivation, activate_service_ready,
+    mark_process_escape, mark_service_canceled, mark_service_failed, mark_service_stopped,
+    read_service_snapshot, record_service_canceling, record_service_lifecycle_event,
+    record_service_start, record_service_start_intent, settle_service_start,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -1516,6 +1516,11 @@ pub(super) fn start_service_with_lock_root(
         service_instance_id: &service_instance_id,
         service_name,
         source: &evidence,
+        stop: StopPolicy {
+            signal: stop_signal_number(service.stop.signal),
+            timeout_ms: service.stop.timeout.as_millis() as u64,
+            tree: matches!(service.containment, ContainmentRequirement::ProcessTree),
+        },
     };
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(own_endpoints.values(), lock_root) {

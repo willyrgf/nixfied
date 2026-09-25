@@ -14,7 +14,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 
 const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
@@ -84,6 +84,9 @@ const SCHEMA_SQL: &str = "
               stdout_path TEXT NOT NULL,
               stderr_path TEXT NOT NULL,
               capture TEXT NOT NULL DEFAULT 'pending' CHECK (capture IN ('pending', 'complete', 'incomplete', 'unknown')),
+              stop_signal INTEGER NOT NULL CHECK (stop_signal > 0),
+              stop_timeout_ms INTEGER NOT NULL CHECK (stop_timeout_ms >= 0),
+              containment TEXT NOT NULL CHECK (containment IN ('process-group', 'process-tree')),
               UNIQUE (run_id, stdout_path),
               UNIQUE (run_id, stderr_path),
               CHECK (ownership = 'unresolved' OR status NOT IN ('starting', 'running', 'ready')),
