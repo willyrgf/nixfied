@@ -1,7 +1,10 @@
 # Duplication, layers, and architectural ownership
 
 Status: architectural review and decision discussion, not an accepted implementation plan.
-Written 2026-09-24 against commit `a889fa3`.
+Written 2026-09-24 against commit `a889fa3`. Historical record: the accepted
+solutions are in [RFC_REFACTOR_DEDUP_LAYERS.md](RFC_REFACTOR_DEDUP_LAYERS.md),
+and [CONTRACT.md](docs/CONTRACT.md) describes current behavior. Paths below may
+name files that the refactor deleted.
 
 This document records the architecture review of Nixfied and expands the decisions
 behind its findings. The original review used four independent architect reviews:

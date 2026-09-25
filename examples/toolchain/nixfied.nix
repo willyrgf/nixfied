@@ -1,4 +1,4 @@
-# The toolchain-shaped standing regression proof for the current task/service
+# The toolchain-shaped permanent regression proof for the current task/service
 # algebra, based on the adopter shape the previous vocabulary could not express.
 #
 # It demonstrates, in one manifest the gate runs like every other example:
