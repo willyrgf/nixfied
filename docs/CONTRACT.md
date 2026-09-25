@@ -305,7 +305,9 @@ when the manifest/runtime contract changes.
   own exit and never as stopped or canceled. The stop lifecycle start event is
   the durable stop intent and precedes every stop signal; its recording failure
   still contains and reaps the service. An unexpected service exit, including
-  status zero, fails the session with `DEPENDENCY_UNAVAILABLE`.
+  status zero, fails the session: a session checkpoint reports it as
+  `DEPENDENCY_UNAVAILABLE`; an exit that teardown observes before recording stop
+  intent reports `PROC_ESCAPE`, which outranks a concurrent cancellation.
 - `run --daemon` places the same session in the background. The launcher
   validates arguments (it rejects `--output`), allocates the immutable run ID,
   and spawns the hidden `__session-owner` mode once in a new OS session with null
