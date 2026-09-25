@@ -54,7 +54,7 @@ fn gate_with_descriptor() -> (Child, UnixStream, i32) {
 
 fn request(root: &std::path::Path) -> serde_json::Value {
     serde_json::json!({
-        "executable": std::env::var("NIXFIED_TEST_SHELL").unwrap().as_bytes(),
+        "executable": test_shell().as_bytes(),
         "args": [b"-c".as_slice(), b"printf ran > marker".as_slice()],
         "env": [],
         "cwd": root.as_os_str().as_bytes(),
@@ -245,17 +245,12 @@ fn startup_descriptor_is_closed_in_the_executed_workload() {
     let root = TempDir::new();
     let (child, mut channel, fd) = gate_with_descriptor();
     let mut value = request(&root.path);
-    value["executable"] =
-        serde_json::json!(std::env::var("NIXFIED_TEST_CHILD").unwrap().as_bytes());
+    value["executable"] = serde_json::json!(test_child().as_os_str().as_bytes());
     value["args"] = serde_json::json!([b"assert-fd-closed".to_vec(), fd.to_string().into_bytes()]);
     channel.write_all(&frame(&value)).unwrap();
     channel.shutdown(Shutdown::Write).unwrap();
     let output = wait_for_child_output(child, Duration::from_secs(5));
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
@@ -271,7 +266,7 @@ fn owner_registry(root: &std::path::Path) -> nixfied_runtime::registry::Registry
 }
 fn prepared(root: &std::path::Path) -> nixfied_runtime::launch::PreparedLaunch {
     nixfied_runtime::launch::PreparedLaunch::new(
-        &std::env::var("NIXFIED_TEST_SHELL").unwrap(),
+        &test_shell(),
         &["-c".into(), "printf ran > marker".into()],
         &std::collections::BTreeMap::from([("PAYLOAD".into(), "x".repeat(60_000))]),
         root,
@@ -451,7 +446,7 @@ fn abandoned_pending_launch_returns_an_inert_child_for_reaping() {
 fn owner_rejects_invalid_or_oversized_requests_before_constructing_a_launch() {
     use nixfied_runtime::launch::PreparedLaunch;
     let root = TempDir::new();
-    let executable = std::env::var("NIXFIED_TEST_SHELL").unwrap();
+    let executable = test_shell();
     for (args, env) in [
         (
             vec!["secret\0value".into()],

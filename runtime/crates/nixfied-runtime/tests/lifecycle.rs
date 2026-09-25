@@ -1,7 +1,6 @@
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod common;
 use common::*;
@@ -31,31 +30,27 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
 
     let tmp = TempDir::new();
     let state_base = tmp.path.join("state");
+    // The store manifest is admitted as-is: no non-store escape hatch.
+    let runtime = |operation: &str, extra: &[&str]| {
+        let mut command = Command::new(runtime_binary());
+        command
+            .arg(operation)
+            .arg("--manifest")
+            .arg(&manifest_path)
+            .args(extra)
+            .env("NIXFIED_STATE_DIR", &state_base);
+        command
+    };
+    let run_args = ["--task", "smoke-query", "--timeout-ms", "120000"];
 
-    let mut child = Command::new(runtime_binary())
-        .arg("run")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--task")
-        .arg("smoke-query")
-        .arg("--timeout-ms")
-        .arg("120000")
-        .env("NIXFIED_STATE_DIR", &state_base)
+    let mut child = runtime("run", &run_args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("runtime should spawn");
 
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let mut postgres_up = false;
-    while Instant::now() < deadline {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            postgres_up = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    if !postgres_up {
+    let deadline = Duration::from_secs(90);
+    if poll(deadline, || TcpStream::connect(("127.0.0.1", port)).ok()).is_none() {
         let _ = child.kill();
         child.wait().ok();
         panic!("postgres never came up on port {port} within 90 s");
@@ -64,55 +59,33 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
     // Listening can precede the runtime's process-record commit. Interrupt only
     // after this run has durable ownership evidence, so recovery has a row to
     // reconcile rather than accidentally exercising unrecorded-child loss.
-    let registry_path = state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
-    loop {
-        let recorded = rusqlite::Connection::open_with_flags(
-            &registry_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .ok()
-        .and_then(|connection| {
-            connection
-                .query_row(
-                    "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL
-                     AND status IN ('running', 'ready') LIMIT 1",
-                    [],
-                    |row| row.get::<_, i32>(0),
-                )
-                .ok()
-        })
-        .is_some_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
-        if recorded {
-            break;
-        }
+    let recorded = poll(deadline, || {
         assert!(
             child.try_wait().unwrap().is_none(),
             "runtime exited before committed live service evidence"
         );
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("postgres listened but no committed live service process appeared");
-        }
-        thread::sleep(Duration::from_millis(1));
+        try_registry_ro(&state_base)?
+            .query_row(
+                "SELECT pid FROM processes WHERE service_instance_id IS NOT NULL
+                 AND status IN ('running', 'ready') LIMIT 1",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .ok()
+            .filter(|pid| unsafe { libc::kill(*pid, 0) } == 0)
+    });
+    if recorded.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("postgres listened but no committed live service process appeared");
     }
 
     let pid = child.id() as libc::pid_t;
     let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
     child.wait().expect("killed child should reap");
 
-    let ps = Command::new(runtime_binary())
-        .arg("ps")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .env("NIXFIED_STATE_DIR", &state_base)
-        .output()
-        .expect("ps should run");
-    assert!(
-        ps.status.success(),
-        "ps after interrupt failed: {}",
-        String::from_utf8_lossy(&ps.stderr)
-    );
+    let ps = runtime("ps", &[]).output().expect("ps should run");
+    assert_success(&ps);
     let ps_json: serde_json::Value =
         serde_json::from_slice(&ps.stdout).expect("ps output should be JSON");
     let live_processes: Vec<&serde_json::Value> = ps_json["processes"]
@@ -126,45 +99,22 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
         "interrupted run should leave at least one live orphaned process: {ps_json}"
     );
 
-    let (predecessor_run, predecessor_outcome): (String, Option<String>) = {
-        let connection = rusqlite::Connection::open_with_flags(
-            &registry_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
+    let (predecessor_run, predecessor_outcome): (String, Option<String>) = registry_ro(&state_base)
+        .query_row("SELECT run_id, execution_outcome FROM runs", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
         .unwrap();
-        connection
-            .query_row("SELECT run_id, execution_outcome FROM runs", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .unwrap()
-    };
     let sentinel = state_base.join("data/postgres-example/dev/0/retained-sentinel");
     std::fs::write(&sentinel, b"retained application data").unwrap();
 
     // The next owner must recover the live orphan itself, without fixture
-    // signaling, lease expiry, or adoption into the new session.
-    let recovery = Command::new(runtime_binary())
-        .arg("run")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .arg("--task")
-        .arg("smoke-query")
-        .arg("--timeout-ms")
-        .arg("120000")
-        .env("NIXFIED_STATE_DIR", &state_base)
+    // signaling or adoption into the new session.
+    let recovery = runtime("run", &run_args)
         .output()
         .expect("recovery run should complete");
-    assert!(
-        recovery.status.success(),
-        "recovery run failed: {}",
-        String::from_utf8_lossy(&recovery.stderr)
-    );
+    assert_success(&recovery);
 
-    let connection = rusqlite::Connection::open_with_flags(
-        &registry_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
+    let connection = registry_ro(&state_base);
     let (processes, runs, starts): (i64, i64, i64) = connection.query_row(
         "SELECT (SELECT count(*) FROM processes WHERE service_instance_id IS NOT NULL),
                 (SELECT count(DISTINCT run_id) FROM processes WHERE service_instance_id IS NOT NULL),
@@ -208,19 +158,10 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
     let pgdata = state_base.join("data/postgres-example/dev/0/pgdata/PG_VERSION");
     assert!(pgdata.exists(), "recovery must retain persistent pgdata");
 
-    let clean = Command::new(runtime_binary())
-        .arg("clean")
-        .arg("--purge")
-        .arg("--manifest")
-        .arg(&manifest_path)
-        .env("NIXFIED_STATE_DIR", &state_base)
+    let clean = runtime("clean", &["--purge"])
         .output()
         .expect("clean should run");
-    assert!(
-        clean.status.success(),
-        "clean after recovery failed: {}",
-        String::from_utf8_lossy(&clean.stderr)
-    );
+    assert_success(&clean);
     let state_root = state_base.join("data/postgres-example/dev/0");
     assert!(
         !state_root.exists(),

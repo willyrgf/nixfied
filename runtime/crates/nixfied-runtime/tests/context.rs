@@ -2,7 +2,7 @@
 //! shared test process environment or substituting metadata for filesystem I/O.
 mod common;
 
-use common::TempDir;
+use common::{TempDir, assert_success};
 use nixfied_runtime::{ErrorCode, admission::secrets::resolve_secrets, state::state_base_from_env};
 use serde_json::json;
 use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
@@ -19,11 +19,7 @@ fn child(kind: &str, cwd: &std::path::Path) -> Command {
 
 fn succeeds(command: &mut Command) {
     let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "context probe failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
 }
 

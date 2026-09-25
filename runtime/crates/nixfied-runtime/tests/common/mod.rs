@@ -2,7 +2,6 @@
 //! pulls this in with `mod common;`; no single binary uses every item, so dead
 //! code is expected here rather than a sign of rot.
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
 use std::fs;
 use std::net::TcpListener;
@@ -13,15 +12,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rusqlite::params;
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use nixfied_manifest::Manifest;
 use nixfied_manifest::fixtures::{self, SyntheticManifestOptions};
-pub use nixfied_manifest::fixtures::{SYNTHETIC_EXECUTABLE, SYNTHETIC_START_ARGS};
+use nixfied_runtime::registry::{Registry, RegistryIdentity};
+use nixfied_runtime::service::{
+    ServiceSelection, SlotEndpoints, StartingService, record_run_created, start_service_for_slot,
+};
+use nixfied_runtime::slot::SelectedSlot;
+use nixfied_runtime::state::HostPlacement;
+use nixfied_runtime::{RunAdmission, RuntimeResult};
 
 pub fn add_slot_one(value: &mut Value, start: u16, end: u16) {
-    value["slotPolicy"]["max"] = serde_json::json!(1);
-    value["placement"]["slotPlacements"]["1"] = serde_json::json!({
+    value["slotPolicy"]["max"] = json!(1);
+    value["placement"]["slotPlacements"]["1"] = json!({
         "slot": 1,
         "candidatePorts": {
             "start": start,
@@ -55,20 +60,50 @@ impl RuntimeFixture {
     }
 
     pub fn command(&self, operation: &str, extra: &[&str]) -> Command {
+        self.command_at(&self.state_base, operation, extra)
+    }
+
+    /// The same manifest against another state base, as an independent root.
+    pub fn command_at(&self, state_base: &Path, operation: &str, extra: &[&str]) -> Command {
         let mut command = Command::new(runtime_binary());
         command
             .arg(operation)
             .arg("--allow-non-store-manifest")
             .arg("--manifest")
-            .arg(&self.manifest_path)
-            .arg("--state-base")
-            .arg(&self.state_base)
+            .arg(&self.manifest_path);
+        // `check` reads no state and takes no state base.
+        if operation != "check" {
+            command.arg("--state-base").arg(state_base);
+        }
+        command
             .args(extra)
             .current_dir(&self.tmp.path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command
     }
+
+    pub fn output(&self, operation: &str, extra: &[&str]) -> Output {
+        self.command(operation, extra)
+            .output()
+            .expect("runtime command should execute")
+    }
+
+    /// The slot registry this fixture's commands wrote, opened read-only.
+    pub fn registry(&self) -> rusqlite::Connection {
+        registry_ro(&self.state_base)
+    }
+}
+
+#[track_caller]
+pub fn assert_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "command failed with {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 pub fn runtime_binary() -> PathBuf {
@@ -153,35 +188,91 @@ pub fn synthetic_manifest(
 
 /// [`synthetic_manifest`] with the default executable and start arguments.
 pub fn synthetic_manifest_default(port_start: u16, port_end: u16) -> Value {
+    fixtures::synthetic_manifest(&SyntheticManifestOptions {
+        port_start,
+        port_end,
+        ..SyntheticManifestOptions::default()
+    })
+}
+
+/// The test child's listener that holds its endpoint until stopped.
+pub const LISTEN_HOLD: &[&str] = &["listen", "127.0.0.1", "${port}", "hold"];
+
+/// The fixture over the realised test child, started with `start_args`.
+pub fn test_child_service(start_args: &[&str], port_start: u16, port_end: u16) -> Value {
     synthetic_manifest(
-        SYNTHETIC_EXECUTABLE,
-        SYNTHETIC_START_ARGS,
+        test_child()
+            .to_str()
+            .expect("test child path should be UTF-8"),
+        start_args,
         port_start,
         port_end,
     )
 }
 
-/// A realised service executable for lifecycle/state fixtures that will undergo admission.
+/// A realised listener service for lifecycle/state fixtures that will undergo admission.
 pub fn test_child_manifest(port_start: u16, port_end: u16) -> Value {
-    synthetic_manifest(
-        test_child().to_str().unwrap(),
-        &["listen", "127.0.0.1", "${port}", "hold"],
-        port_start,
-        port_end,
-    )
+    test_child_service(LISTEN_HOLD, port_start, port_end)
 }
 
-pub use nixfied_manifest::fixtures::{host_arch, host_os, host_system};
+/// Replace the smoke task's argv tail (`run[1..]`), keeping the program word.
+pub fn set_task_run_args(value: &mut Value, args: &[&str]) {
+    let run = value["tasks"]["smoke"]["invocation"]["run"]
+        .as_array_mut()
+        .expect("run is an array");
+    run.truncate(1);
+    run.extend(args.iter().map(|arg| json!(arg)));
+}
 
-use nixfied_manifest::Manifest;
-use nixfied_runtime::registry::Registry;
-use nixfied_runtime::service::{
-    ServiceSelection, SlotEndpoints, StartingService, record_run_created, run_slot_clean,
-    start_service_for_slot,
-};
-use nixfied_runtime::slot::{SelectedSlot, select_slot};
-use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
-use nixfied_runtime::{RunAdmission, RuntimeResult};
+/// Remove a task's authored deadline so only cancellation or failure ends it.
+pub fn clear_task_deadline(value: &mut Value, task: &str) {
+    value["tasks"][task]["invocation"]
+        .as_object_mut()
+        .expect("task invocation is an object")
+        .remove("timeoutMs");
+}
+
+/// Clone the fixture's `smoke` task under `name` with its own arguments.
+pub fn add_task_clone(value: &mut Value, name: &str, requires: &[&str], args: &[&str]) {
+    let mut task = value["tasks"]["smoke"].clone();
+    task["operationId"] = json!(format!("task.{name}.run"));
+    task["requires"] = json!(requires);
+    task["logRefs"] = json!([format!("task.{name}")]);
+    let run = task["invocation"]["run"]
+        .as_array_mut()
+        .expect("task run is an array");
+    run.truncate(1);
+    run.extend(args.iter().map(|arg| json!(arg)));
+    value["tasks"][name] = task;
+}
+
+/// Clone the fixture's `synthetic` service under `name` with its own endpoint
+/// and start arguments.
+pub fn add_service_clone(value: &mut Value, name: &str, start_args: &[&str], connects_to: &[&str]) {
+    let mut service = value["services"]["synthetic"].clone();
+    for operation in ["start", "ready", "health", "stop", "clean"] {
+        service["lifecycle"][operation]["operationId"] =
+            json!(format!("service.{name}.{operation}"));
+    }
+    let run = service["lifecycle"]["start"]["invocation"]["run"]
+        .as_array_mut()
+        .expect("start run is an array");
+    run.truncate(1);
+    run.extend(start_args.iter().map(|arg| json!(arg)));
+    let endpoint = format!("{name}-tcp");
+    service["endpoints"] =
+        json!({ endpoint.clone(): { "endpointId": endpoint, "host": "127.0.0.1" } });
+    service["primaryEndpoint"] = json!(endpoint);
+    service["logRefs"] = json!([format!("service.{name}")]);
+    service["connectsTo"] = json!(connects_to);
+    value["services"][name] = service;
+}
+
+/// Bind `synthetic` to a prepare task named `endpoint-prepare` that runs `args`.
+pub fn add_endpoint_prepare(value: &mut Value, args: &[&str]) {
+    value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
+    add_task_clone(value, "endpoint-prepare", &[], args);
+}
 
 /// Admit raw fixture bytes with explicit workspace and store boundaries.
 pub fn admit_fixture_bytes(raw: &[u8], source_root: &Path, store_root: &Path) -> RunAdmission {
@@ -202,58 +293,45 @@ pub fn fixture_admission(manifest: &Manifest, source_root: &Path) -> RunAdmissio
     )
 }
 
-/// The fixture service name. The production runtime crate is service-name
-/// agnostic — it starts whatever `ServiceSelection` names — so the concrete
-/// `synthetic` name lives here in test support, not in the runtime.
-pub const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
-
-/// Record a fixture run and start its service through the generic runtime API.
+/// Record a fixture run and start its `synthetic` service in the registry's
+/// slot through the generic runtime API. The production runtime crate is
+/// service-name agnostic, so the concrete name lives here in test support. An
+/// empty `endpoint_ports` starts an endpoint-less service.
 pub fn start_fixture_service(
     admission: &RunAdmission,
     placement: &HostPlacement,
     registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_slot: &SelectedSlot<'_>,
-    selected_port: u16,
+    run_id: &str,
+    endpoint_ports: &std::collections::BTreeMap<String, u16>,
+    cancellation: &nixfied_runtime::cancellation::CancellationToken,
+    prepare_runner: Option<nixfied_runtime::service::PrepareRunner<'_>>,
 ) -> RuntimeResult<StartingService> {
-    let run_id = run_id.into();
-    record_run_created(registry, &run_id, admission, placement)?;
-    // The synthetic fixture binds a single endpoint, `synthetic-tcp`.
-    let endpoint_ports =
-        std::collections::BTreeMap::from([("synthetic-tcp".to_string(), selected_port)]);
+    let slot = u32::try_from(registry.identity().slot).expect("registry slot is a u32");
+    let selected_slot =
+        nixfied_runtime::slot::select_slot(admission.common().manifest(), Some(slot))?;
+    record_run_created(registry, run_id, admission, placement)?;
     start_service_for_slot(
         admission,
         placement,
         registry,
         run_id,
-        selected_slot,
+        &selected_slot,
         ServiceSelection {
             launcher: &runtime_binary(),
             session_checkpoint: &|| Ok(()),
-            service_name: SYNTHETIC_SERVICE_NAME,
-            endpoint_ports: &endpoint_ports,
+            service_name: "synthetic",
+            endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
             run_timeout_ms: 5000,
-            cancellation: &nixfied_runtime::cancellation::CancellationToken::new(),
-            prepare_runner: None,
+            cancellation,
+            prepare_runner,
         },
     )
 }
 
-/// Clean the synthetic fixture's slot. The fixture's `dev` environment is exactly
-/// `[synthetic]`, so the generic slot clean equals cleaning the single service
-/// plus the slot state.
-pub fn run_synthetic_service_clean_for_slot(
-    admission: &RunAdmission,
-    registry: &mut Registry,
-    selected_slot: &SelectedSlot<'_>,
-) -> RuntimeResult<CleanupOutcome> {
-    run_slot_clean(
-        admission.common(),
-        registry,
-        selected_slot,
-        CleanupMode::Standard,
-    )
+/// The synthetic fixture's single endpoint, `synthetic-tcp`, on `port`.
+pub fn synthetic_endpoint(port: u16) -> std::collections::BTreeMap<String, u16> {
+    std::collections::BTreeMap::from([("synthetic-tcp".to_string(), port)])
 }
 
 /// A unique temporary directory removed on drop.
@@ -263,12 +341,7 @@ pub struct TempDir {
 
 impl TempDir {
     pub fn new() -> Self {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "nixfied-test-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
+        let path = temp_marker("nixfied-test");
         fs::create_dir_all(&path).expect("temp dir should be created");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self { path }
@@ -293,13 +366,11 @@ pub fn stderr_json(bytes: &[u8]) -> Value {
 
 /// A unique temporary path (not created) with the given prefix.
 pub fn temp_marker(prefix: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
+    std::env::temp_dir().join(format!(
         "{prefix}-{}-{}",
         std::process::id(),
         unique_suffix()
-    ));
-    path
+    ))
 }
 
 pub fn unique_suffix() -> u128 {
@@ -345,79 +416,129 @@ pub fn find_named(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn wait_for_path(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    path.exists()
-}
-
-pub fn wait_for_named(root: &Path, name: &str, timeout: Duration) -> Option<PathBuf> {
+/// Probe until it yields a value or `timeout` elapses; the probe always runs
+/// at least once and once more at the deadline.
+pub fn poll<T>(timeout: Duration, mut probe: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(path) = find_named(root, name) {
-            return Some(path);
+        if let Some(value) = probe() {
+            return Some(value);
         }
         if Instant::now() >= deadline {
             return None;
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
+/// [`poll`] that fails the test when `what` never happens.
+#[track_caller]
+pub fn poll_until<T>(timeout: Duration, what: &str, probe: impl FnMut() -> Option<T>) -> T {
+    poll(timeout, probe).unwrap_or_else(|| panic!("timed out waiting for {what}"))
+}
+
+pub fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    poll(timeout, || path.exists().then_some(())).is_some()
+}
+
+pub fn wait_for_named(root: &Path, name: &str, timeout: Duration) -> Option<PathBuf> {
+    poll(timeout, || find_named(root, name))
+}
+
+/// A decimal pid a child wrote to `path`.
+#[track_caller]
+pub fn wait_for_pid_file(path: &Path) -> u32 {
+    poll_until(Duration::from_secs(2), "a child pid file", || {
+        fs::read_to_string(path).ok()?.trim().parse().ok()
+    })
+}
+
 pub fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child
+    let exited = poll(timeout, || {
+        child
             .try_wait()
             .expect("child status should be inspectable")
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .expect("child output should be collected");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .expect("timed-out child output should be collected");
-            panic!(
-                "child did not exit before timeout\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        thread::sleep(Duration::from_millis(20));
+    });
+    if exited.is_none() {
+        let _ = child.kill();
+        let output = child
+            .wait_with_output()
+            .expect("timed-out child output should be collected");
+        panic!(
+            "child did not exit before timeout\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
+    child
+        .wait_with_output()
+        .expect("child output should be collected")
+}
+
+/// Whether any non-zombie process remains in the group. A stopped child stays
+/// a zombie until its owner reaps it, so a raw `kill(-pgid, 0)` would count it.
+pub fn process_group_has_non_zombie_member(pgid: i32) -> bool {
+    let output = Command::new("ps")
+        .arg("-axo")
+        .arg("pgid=,stat=")
+        .output()
+        .expect("ps should inspect process groups");
+    assert_success(&output);
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next().and_then(|field| field.parse::<i32>().ok()) == Some(pgid)
+            && !fields.next().unwrap_or("").starts_with('Z')
+    })
 }
 
 /// Concurrent harness threads fork children that briefly share every open
 /// lock description until exec; a fixture's own slot is otherwise uncontended.
-pub fn registry_guard(
-    placement: &nixfied_runtime::state::HostPlacement,
-) -> nixfied_runtime::state::ownership::SlotGuard {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match nixfied_runtime::state::ownership::SlotGuard::try_acquire(
+pub fn registry_guard(placement: &HostPlacement) -> nixfied_runtime::state::ownership::SlotGuard {
+    poll_until(Duration::from_secs(5), "fixture slot authority", || {
+        nixfied_runtime::state::ownership::SlotGuard::try_acquire(
             placement,
             &nixfied_runtime::cancellation::CancellationToken::new(),
         )
         .expect("fixture slot authority")
-        {
-            Some(guard) => return guard,
-            None if std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            None => panic!("fixture slot authority stayed contended"),
-        }
-    }
+    })
+}
+
+/// Open the slot registry recorded for `placement` and `manifest`.
+pub fn open_slot_registry(
+    placement: &HostPlacement,
+    manifest: &Manifest,
+    selected_slot: &SelectedSlot<'_>,
+) -> Registry {
+    Registry::open_or_create(
+        registry_guard(placement),
+        &RegistryIdentity::for_slot(
+            &manifest.project.project_id,
+            selected_slot.environment,
+            selected_slot.slot,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
+        ),
+    )
+    .expect("slot registry should open")
+}
+
+/// The only registry under `state_base`, opened read-only, once it exists.
+pub fn try_registry_ro(state_base: &Path) -> Option<rusqlite::Connection> {
+    rusqlite::Connection::open_with_flags(
+        find_named(state_base, "registry.sqlite3")?,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()
+}
+
+/// The only registry under `state_base`, opened read-only.
+#[track_caller]
+pub fn registry_ro(state_base: &Path) -> rusqlite::Connection {
+    try_registry_ro(state_base).expect("a registry should exist and open read-only")
 }
 
 pub fn observe_registry(
-    registry: &nixfied_runtime::registry::Registry,
+    registry: &Registry,
 ) -> nixfied_runtime::RuntimeResult<nixfied_runtime::control::PsReport> {
     let reader = nixfied_runtime::registry::RegistryReader::open_existing(
         registry.path(),
@@ -425,4 +546,124 @@ pub fn observe_registry(
     )?
     .expect("fixture registry exists");
     nixfied_runtime::control::ps(&reader)
+}
+
+/// The registry identity of the schema-level registry tests.
+pub fn registry_identity() -> RegistryIdentity {
+    RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
+}
+
+/// A registry placement for `identity` whose slot authority is free.
+pub fn registry_placement(root: &Path, identity: &RegistryIdentity) -> HostPlacement {
+    let placement = nixfied_runtime::state::placement::derive_slot_placement(
+        &identity.project_id,
+        &identity.environment,
+        identity.slot.try_into().unwrap(),
+        "registry-test",
+        root,
+    )
+    .unwrap();
+    registry_guard(&placement).release().unwrap();
+    placement
+}
+
+pub fn assert_empty_unversioned_database(path: &Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let count = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("PRAGMA user_version"), 0);
+    assert_eq!(
+        count("SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"),
+        0
+    );
+}
+
+/// Seed a session row in the registry's own slot, below the supported writer
+/// boundary.
+pub fn seed_run(connection: &rusqlite::Connection, run_id: &str, outcome: Option<&str>) {
+    connection
+        .execute(
+            "INSERT INTO runs (run_id, environment, slot, execution_outcome, manifest_path,
+               computed_manifest_hash, runtime_abi, toolchain_id, generator_json, target_json,
+               source_json, owner_identity, diagnostic_path)
+             SELECT ?1, environment, slot, ?2, '/nix/store/test-manifest/manifest.json', 'hash',
+               runtime_abi, toolchain_id, '{}', '{}', '[]', '{}', 'diagnostics.log'
+             FROM registry_meta",
+            rusqlite::params![run_id, outcome],
+        )
+        .expect("fixture run should be seeded");
+}
+
+/// A process row seeded below the supported writer boundary.
+pub struct SeedProcess<'a> {
+    pub key: &'a str,
+    pub run_id: &'a str,
+    /// Also the process group.
+    pub pid: i64,
+    pub start_identity: &'a str,
+    pub status: &'a str,
+    pub ownership: &'a str,
+    /// A service's `(instance, name)`; a task has neither.
+    pub service: Option<(&'a str, &'a str)>,
+    pub presentation: &'a str,
+}
+
+impl Default for SeedProcess<'_> {
+    fn default() -> Self {
+        Self {
+            key: "process-1",
+            run_id: "run-1",
+            pid: 999_999,
+            start_identity: r#"{"platformStart":"missing"}"#,
+            status: "running",
+            ownership: "unresolved",
+            service: None,
+            presentation: "hidden",
+        }
+    }
+}
+
+pub fn seed_process(connection: &rusqlite::Connection, process: SeedProcess<'_>) {
+    let (instance, name) = process.service.unzip();
+    connection
+        .execute(
+            "INSERT INTO processes (process_key, environment, slot, pid, pgid, start_identity,
+               command_json, run_id, service_instance_id, service_name, role, status, ownership,
+               source_label, presentation, stdout_path, stderr_path, stop_signal,
+               stop_timeout_ms, containment)
+             SELECT ?1, environment, slot, ?2, ?2, ?3, '{}', ?4, ?5, ?6,
+               CASE WHEN ?5 IS NULL THEN 'task' ELSE 'service' END, ?7, ?8, 'fixture', ?9,
+               'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err', 15, 1000, 'process-group'
+             FROM registry_meta",
+            rusqlite::params![
+                process.key,
+                process.pid,
+                process.start_identity,
+                process.run_id,
+                instance,
+                name,
+                process.status,
+                process.ownership,
+                process.presentation,
+            ],
+        )
+        .expect("fixture process should be seeded");
+}
+
+/// Seed an endpoint row owned by `owner`.
+pub fn seed_port(
+    connection: &rusqlite::Connection,
+    endpoint_key: &str,
+    service_instance_id: &str,
+    port: u16,
+    status: &str,
+    owner: &str,
+) {
+    connection
+        .execute(
+            "INSERT INTO ports (endpoint_key, environment, slot, service_instance_id, address,
+               port, status, owner_process_key)
+             SELECT ?1, environment, slot, ?2, '127.0.0.1', ?3, ?4, ?5 FROM registry_meta",
+            rusqlite::params![endpoint_key, service_instance_id, port, status, owner],
+        )
+        .expect("fixture port should be seeded");
 }

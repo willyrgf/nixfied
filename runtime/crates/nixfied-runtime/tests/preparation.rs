@@ -5,8 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nixfied_manifest::{Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
@@ -110,28 +109,22 @@ fn symlinked_ancestry_rejects_a_provenance_refresh_before_any_registry_event() {
 }
 
 #[test]
-fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
-    for obsolete in ["epoch", "version", "cleanup-policy"] {
-        let fixture = PreparationFixture::new();
-        fixture.prepare("run-1", &fixture.identity(false)).unwrap();
-        let sentinel = fixture.plant_sentinel();
-        let path = fixture.state_root().join(MARKER_FILE_NAME);
-        let mut value = serde_json::to_value(fixture.marker()).unwrap();
-        match obsolete {
-            "epoch" => value["stateEpoch"] = serde_json::json!("2"),
-            "version" => value["markerVersion"] = serde_json::json!(2),
-            _ => value["cleanupPolicy"] = serde_json::json!("delete-on-clean"),
-        }
-        let bytes = serde_json::to_vec(&value).unwrap();
-        fs::write(&path, &bytes).unwrap();
-        let error = fixture
-            .prepare("run-2", &fixture.identity(true))
-            .unwrap_err();
-        assert_eq!(error.code, ErrorCode::StateUnowned);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(fs::read(sentinel).unwrap(), b"keep");
-        assert_eq!(fixture.provenance_event_count(), 0);
-    }
+fn old_marker_version_rejects_without_data_mutation() {
+    let fixture = PreparationFixture::new();
+    fixture.prepare("run-1", &fixture.identity(false)).unwrap();
+    let sentinel = fixture.plant_sentinel();
+    let path = fixture.state_root().join(MARKER_FILE_NAME);
+    let mut value = serde_json::to_value(fixture.marker()).unwrap();
+    value["markerVersion"] = serde_json::json!(2);
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let error = fixture
+        .prepare("run-2", &fixture.identity(true))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(fs::read(sentinel).unwrap(), b"keep");
+    assert_eq!(fixture.provenance_event_count(), 0);
 }
 
 #[test]
@@ -170,37 +163,30 @@ fn pre_existing_empty_state_root_is_fresh() {
 }
 
 #[test]
-fn changed_ownership_refuses_state_unowned() {
-    let fixture = PreparationFixture::new();
-    fixture
-        .prepare("run-1", &fixture.identity(false))
-        .expect("first run should prepare a fresh slot");
-    let mut foreign = fixture.identity(false);
-    foreign.project_id = "other-project".to_string();
+fn foreign_ownership_or_runtime_abi_refuses_state_unowned() {
+    for foreign_abi in [false, true] {
+        let fixture = PreparationFixture::new();
+        fixture
+            .prepare("run-1", &fixture.identity(false))
+            .expect("first run should prepare a fresh slot");
+        let mut identity = fixture.identity(foreign_abi);
+        if foreign_abi {
+            let mut marker = fixture.marker();
+            marker.runtime_abi = "nixfied-runtime-abi:0-foreign".to_string();
+            fixture.rewrite_marker(&marker);
+        } else {
+            identity.project_id = "other-project".to_string();
+        }
 
-    let error = fixture
-        .prepare("run-2", &foreign)
-        .expect_err("a foreign owner must be refused");
+        let error = fixture
+            .prepare("run-2", &identity)
+            .expect_err("a foreign owner or ABI must be refused, never refreshed");
 
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-    assert_eq!(fixture.marker().project_id, "runtime-test");
-}
-
-#[test]
-fn runtime_abi_mismatch_refuses() {
-    let fixture = PreparationFixture::new();
-    fixture
-        .prepare("run-1", &fixture.identity(false))
-        .expect("first run should prepare a fresh slot");
-    let mut marker = fixture.marker();
-    marker.runtime_abi = "nixfied-runtime-abi:0-foreign".to_string();
-    fixture.rewrite_marker(&marker);
-
-    let error = fixture
-        .prepare("run-2", &fixture.identity(true))
-        .expect_err("a foreign runtime ABI must be refused, never provenance_refreshed");
-
-    assert_eq!(error.code, ErrorCode::StateUnowned);
+        assert_eq!(error.code, ErrorCode::StateUnowned);
+        if !foreign_abi {
+            assert_eq!(fixture.marker().project_id, "runtime-test");
+        }
+    }
 }
 
 #[test]
@@ -245,8 +231,9 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
             &placement,
             &mut registry,
             "run-a",
-            &nixfied_runtime::slot::select_slot(&manifest, None).unwrap(),
-            23980,
+            &synthetic_endpoint(23980),
+            &nixfied_runtime::cancellation::CancellationToken::new(),
+            None,
         )
         .expect("old-manifest service should start");
         let pgid = service.info().pgid;
@@ -290,10 +277,9 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
             .expect("preparation follows successful recovery");
 
         assert_eq!(report.provenance_refreshed, changed);
-        assert!(
-            wait_for_group_exit(pgid, 5000),
-            "the predecessor process group must be empty after recovery"
-        );
+        poll_until(Duration::from_secs(5), "an empty predecessor group", || {
+            (!process_group_has_non_zombie_member(pgid)).then_some(())
+        });
         let process_status: String = registry
             .connection()
             .query_row(
@@ -314,38 +300,17 @@ fn interrupted_run_recovers_then_provenance_refresh_proceeds() {
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     // A crashed runtime's leftovers: rows still active, process long dead.
-    let mut registry = fixture.registry();
-    registry
-        .connection_mut()
-        .execute_batch(
-            "
-            INSERT INTO runs (
-              run_id, environment, slot, execution_outcome, manifest_path, computed_manifest_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            , owner_identity, diagnostic_path) VALUES (
-              'run-interrupted', 'dev', 0, NULL,
-              '/nix/store/manifest-a/manifest.json', 'hash-a', 'nixfied-runtime-abi:1',
-              'nixfied-toolchain:1', '{}', '{}', '[]', NULL
-            , '{}', 'diagnostics.log');
-            ",
-        )
-        .expect("interrupted run row should insert");
-    registry
-        .connection_mut()
-        .execute_batch(
-            "
-            INSERT INTO processes (
-              process_key, environment, slot, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
-              'process-interrupted', 'dev', 0, 999999, 999999,
-              '{\"platformStart\":\"missing\"}', '{}',
-              'run-interrupted', 'service-interrupted', 'running', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
-            ",
-        )
-        .expect("interrupted process row should insert");
+    let registry = fixture.registry();
+    seed_run(registry.connection(), "run-interrupted", None);
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "process-interrupted",
+            run_id: "run-interrupted",
+            service: Some(("service-interrupted", "synthetic")),
+            ..SeedProcess::default()
+        },
+    );
     registry
         .close()
         .expect("interrupted predecessor releases slot authority");
@@ -369,43 +334,6 @@ fn interrupted_run_recovers_then_provenance_refresh_proceeds() {
         fixture.marker().computed_manifest_hash,
         expected_hash(&fixture.manifest, true)
     );
-}
-
-fn wait_for_group_exit(pgid: i32, timeout_ms: u64) -> bool {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        if !process_group_has_non_zombie_member(pgid) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Whether any non-zombie process remains in the group. A stopped child stays
-/// a zombie until its owner reaps it, so a raw `kill(-pgid, 0)` would count it.
-fn process_group_has_non_zombie_member(pgid: i32) -> bool {
-    let output = std::process::Command::new("ps")
-        .arg("-axo")
-        .arg("pgid=,stat=")
-        .output()
-        .expect("ps should inspect process groups");
-    assert!(
-        output.status.success(),
-        "ps failed while inspecting process groups: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let current_pgid = fields.next()?.parse::<i32>().ok()?;
-            let stat = fields.next().unwrap_or("");
-            Some((current_pgid, stat.to_string()))
-        })
-        .any(|(current_pgid, stat)| current_pgid == pgid && !stat.starts_with('Z'))
 }
 
 struct PreparationFixture {

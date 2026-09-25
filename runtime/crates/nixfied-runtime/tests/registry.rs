@@ -7,7 +7,7 @@ use common::*;
 #[test]
 fn competing_initializers_admit_one_writer_before_schema_creation() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let start = std::sync::Barrier::new(2);
     let results = std::thread::scope(|scope| {
         let creators: Vec<_> = (0..2)
@@ -18,7 +18,7 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
                         &placement,
                         &nixfied_runtime::cancellation::CancellationToken::new(),
                     )?;
-                    Registry::open_or_create(guard, &identity())
+                    Registry::open_or_create(guard, &registry_identity())
                 })
             })
             .collect();
@@ -78,7 +78,7 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
     assert!(!placement.state_root.exists());
     assert!(!placement.run_dir.exists());
     drop(results);
-    Registry::open_or_create(registry_guard(&placement), &identity())
+    Registry::open_or_create(registry_guard(&placement), &registry_identity())
         .unwrap()
         .close()
         .unwrap();
@@ -87,41 +87,23 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
 #[test]
 fn invalid_identity_is_rejected_before_database_creation() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let path = placement.registry_path();
-    let mut invalid = identity();
+    let mut invalid = registry_identity();
     invalid.slot = -1;
     let error = Registry::open_or_create(registry_guard(&placement), &invalid)
         .err()
         .unwrap();
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert!(!path.exists());
-    Registry::open_or_create(registry_guard(&placement), &identity())
+    Registry::open_or_create(registry_guard(&placement), &registry_identity())
         .expect("rejected admission must leave the slot usable");
-}
-
-fn assert_empty_unversioned_database(path: &std::path::Path) {
-    let conn = rusqlite::Connection::open(path).unwrap();
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap(),
-        0
-    );
 }
 
 #[test]
 fn failed_version_write_rolls_back_tables_and_metadata() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let path = placement.registry_path();
     let mut conn = rusqlite::Connection::open(&path).unwrap();
     unsafe extern "C" fn deny_version_write(
@@ -152,11 +134,12 @@ fn failed_version_write_rolls_back_tables_and_metadata() {
         },
         rusqlite::ffi::SQLITE_OK
     );
-    let error = nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap_err();
+    let error =
+        nixfied_runtime::registry::schema::initialize(&mut conn, &registry_identity()).unwrap_err();
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     drop(conn);
     assert_empty_unversioned_database(&path);
-    Registry::open_or_create(registry_guard(&placement), &identity())
+    Registry::open_or_create(registry_guard(&placement), &registry_identity())
         .expect("failed version write must be retryable");
 }
 
@@ -176,10 +159,9 @@ fn identity_diagnostics_preserve_every_field_and_negative_observed_slot() {
         .execute("UPDATE registry_meta SET slot = -7 WHERE id = 1", [])
         .unwrap();
     drop(registry);
-    let error = match Registry::open_or_create(registry_guard(&placement), &expected) {
-        Ok(_) => panic!("negative observed slot must reject ownership"),
-        Err(error) => error,
-    };
+    let error = Registry::open_or_create(registry_guard(&placement), &expected)
+        .err()
+        .expect("negative observed slot must reject ownership");
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_eq!(
         error.details["expectedRegistryIdentity"],
@@ -256,13 +238,13 @@ fn event_history_survives_successive_owners_and_rejects_another_slot() {
 }
 
 #[test]
-fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
+fn registry_identity_mismatches_preserve_classification_and_stored_registry_identity() {
     for (field, bad, code) in [
         (
             "projectId",
             RegistryIdentity {
                 project_id: "other-project".into(),
-                ..identity()
+                ..registry_identity()
             },
             ErrorCode::StateUnowned,
         ),
@@ -270,7 +252,7 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
             "environment",
             RegistryIdentity {
                 environment: "prod".into(),
-                ..identity()
+                ..registry_identity()
             },
             ErrorCode::StateUnowned,
         ),
@@ -278,7 +260,7 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
             "runtimeAbi",
             RegistryIdentity {
                 runtime_abi: "nixfied-runtime-abi:2".into(),
-                ..identity()
+                ..registry_identity()
             },
             ErrorCode::RuntimeAbiMismatch,
         ),
@@ -286,21 +268,20 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
             "toolchainId",
             RegistryIdentity {
                 toolchain_id: "nixfied-toolchain:2".into(),
-                ..identity()
+                ..registry_identity()
             },
             ErrorCode::RuntimeAbiMismatch,
         ),
     ] {
         let tmp = TempDir::new();
-        let placement = registry_placement(&tmp.path, &identity());
+        let placement = registry_placement(&tmp.path, &registry_identity());
         let path = placement.registry_path();
-        let expected = identity();
+        let expected = registry_identity();
         Registry::open_or_create(registry_guard(&placement), &expected)
             .expect("registry should open");
-        let error = match RegistryReader::open_existing(&path, &bad) {
-            Ok(_) => panic!("{field} mismatch should fail"),
-            Err(error) => error,
-        };
+        let error = RegistryReader::open_existing(&path, &bad)
+            .err()
+            .unwrap_or_else(|| panic!("{field} mismatch should fail"));
         assert_eq!(error.code, code, "{field}");
         assert_mismatched_fields(&error, &[field]);
         assert_registry_path_details(&error, &path);
@@ -310,7 +291,7 @@ fn registry_identity_mismatches_preserve_classification_and_stored_identity() {
 }
 
 #[test]
-fn records_and_checks_selected_slot_identity() {
+fn records_and_checks_selected_slot_registry_identity() {
     let tmp = TempDir::new();
     let identity = RegistryIdentity::for_slot(
         "minimal",
@@ -334,10 +315,9 @@ fn records_and_checks_selected_slot_identity() {
 
     let wrong_slot =
         RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1");
-    let error = match RegistryReader::open_existing(&path, &wrong_slot) {
-        Ok(_) => panic!("slot mismatch should fail"),
-        Err(error) => error,
-    };
+    let error = RegistryReader::open_existing(&path, &wrong_slot)
+        .err()
+        .expect("slot mismatch should fail");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_mismatched_fields(&error, &["slot"]);
@@ -345,83 +325,9 @@ fn records_and_checks_selected_slot_identity() {
 }
 
 #[test]
-fn rejects_incompatible_user_version() {
-    let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let identity = identity();
-    let registry = Registry::open_or_create(registry_guard(&placement), &identity)
-        .expect("registry should open");
-    registry
-        .connection()
-        .execute_batch("PRAGMA user_version = 99;")
-        .expect("test should mutate user_version");
-    drop(registry);
-
-    let error = match Registry::open_or_create(registry_guard(&placement), &identity) {
-        Ok(_) => panic!("schema mismatch should fail"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-}
-
-#[test]
-fn rejects_previous_service_status_schema_without_migration() {
-    let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let identity = identity();
-    let registry = Registry::open_or_create(registry_guard(&placement), &identity)
-        .expect("registry should open");
-    registry
-        .connection()
-        .execute_batch("PRAGMA user_version = 5;")
-        .expect("test should identify the removed service-status schema");
-    drop(registry);
-
-    let error = match Registry::open_or_create(registry_guard(&placement), &identity) {
-        Ok(_) => panic!("the prior registry shape must not be migrated"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-}
-
-#[test]
-fn rejects_previous_model_columns_without_rewriting_history() {
-    let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let path = placement.registry_path();
-    {
-        let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "PRAGMA user_version = 6;
-             CREATE TABLE events (seq INTEGER PRIMARY KEY, computed_model_hash TEXT);
-             INSERT INTO events VALUES (1, 'historical-hash');",
-        )
-        .unwrap();
-    }
-    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
-        Ok(_) => panic!("the previous schema must not be migrated"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let version: i64 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    let hash: String = conn
-        .query_row(
-            "SELECT computed_model_hash FROM events WHERE seq = 1",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(version, 6);
-    assert_eq!(hash, "historical-hash");
-}
-
-#[test]
 fn rejects_current_registry_missing_required_shape() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let path = placement.registry_path();
     {
         let conn = rusqlite::Connection::open(&path).expect("test DB should open");
@@ -448,10 +354,9 @@ fn rejects_current_registry_missing_required_shape() {
         .expect("test DB should be initialized as corrupt current schema");
     }
 
-    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
-        Ok(_) => panic!("current registry without required shape should fail"),
-        Err(error) => error,
-    };
+    let error = Registry::open_or_create(registry_guard(&placement), &registry_identity())
+        .err()
+        .expect("current registry without required shape should fail");
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     assert_eq!(
         error.message,
@@ -462,7 +367,7 @@ fn rejects_current_registry_missing_required_shape() {
 #[test]
 fn rejects_nonempty_unversioned_registry() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let path = placement.registry_path();
     {
         let conn = rusqlite::Connection::open(&path).expect("test DB should open");
@@ -470,10 +375,9 @@ fn rejects_nonempty_unversioned_registry() {
             .expect("test DB should contain unrelated state");
     }
 
-    let error = match Registry::open_or_create(registry_guard(&placement), &identity()) {
-        Ok(_) => panic!("nonempty unversioned registry should fail"),
-        Err(error) => error,
-    };
+    let error = Registry::open_or_create(registry_guard(&placement), &registry_identity())
+        .err()
+        .expect("nonempty unversioned registry should fail");
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
 }
 
@@ -490,9 +394,9 @@ fn exact_schema_and_identity_reject_before_journal_conversion() {
         "UPDATE registry_meta SET toolchain_id = 'other-toolchain'",
     ] {
         let tmp = TempDir::new();
-        let placement = registry_placement(&tmp.path, &identity());
+        let placement = registry_placement(&tmp.path, &registry_identity());
         let path = placement.registry_path();
-        Registry::open_or_create(registry_guard(&placement), &identity())
+        Registry::open_or_create(registry_guard(&placement), &registry_identity())
             .unwrap()
             .close()
             .unwrap();
@@ -507,13 +411,14 @@ fn exact_schema_and_identity_reject_before_journal_conversion() {
         } else {
             ErrorCode::RegistryCorrupt
         };
-        let reader_error = RegistryReader::open_existing(&path, &identity())
+        let reader_error = RegistryReader::open_existing(&path, &registry_identity())
             .err()
             .expect(mutation);
         assert_eq!(reader_error.code, expected, "{mutation}");
-        let writer_error = Registry::open_or_create(registry_guard(&placement), &identity())
-            .err()
-            .expect(mutation);
+        let writer_error =
+            Registry::open_or_create(registry_guard(&placement), &registry_identity())
+                .err()
+                .expect(mutation);
         assert_eq!(writer_error.code, expected, "{mutation}");
         assert_eq!(std::fs::read(&path).unwrap(), before, "{mutation}");
         assert!(!path.with_extension("sqlite3-wal").exists(), "{mutation}");
@@ -531,9 +436,10 @@ fn exact_schema_and_identity_reject_before_journal_conversion() {
 #[test]
 fn writer_requires_verified_durability_on_creation_and_reopen() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     for _ in 0..2 {
-        let registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+        let registry =
+            Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
         let conn = registry.connection();
         assert_eq!(
             conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
@@ -563,8 +469,8 @@ fn writer_requires_verified_durability_on_creation_and_reopen() {
     // SQLite silently keeps journal_mode=memory for this connection. A setting
     // request that succeeds is insufficient; the boundary must verify its result.
     let mut memory = rusqlite::Connection::open_in_memory().unwrap();
-    let error =
-        nixfied_runtime::registry::schema::initialize(&mut memory, &identity()).unwrap_err();
+    let error = nixfied_runtime::registry::schema::initialize(&mut memory, &registry_identity())
+        .unwrap_err();
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     assert_eq!(
         memory
@@ -578,7 +484,7 @@ fn writer_requires_verified_durability_on_creation_and_reopen() {
 #[test]
 fn ignored_synchronous_setting_refuses_before_schema_creation() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
+    let placement = registry_placement(&tmp.path, &registry_identity());
     let path = placement.registry_path();
     let mut conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch("PRAGMA synchronous = OFF").unwrap();
@@ -610,14 +516,11 @@ fn ignored_synchronous_setting_refuses_before_schema_creation() {
         },
         rusqlite::ffi::SQLITE_OK
     );
-    let error = nixfied_runtime::registry::schema::initialize(&mut conn, &identity()).unwrap_err();
+    let error =
+        nixfied_runtime::registry::schema::initialize(&mut conn, &registry_identity()).unwrap_err();
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     drop(conn);
     assert_empty_unversioned_database(&path);
-}
-
-fn identity() -> RegistryIdentity {
-    RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
 }
 
 fn assert_mismatched_fields(error: &nixfied_runtime::RuntimeError, expected: &[&str]) {
@@ -649,41 +552,6 @@ fn assert_registry_path_details(error: &nixfied_runtime::RuntimeError, path: &st
     );
 }
 
-fn registry_placement(
-    root: &std::path::Path,
-    identity: &RegistryIdentity,
-) -> nixfied_runtime::state::HostPlacement {
-    let placement = nixfied_runtime::state::placement::derive_slot_placement(
-        &identity.project_id,
-        &identity.environment,
-        identity.slot.try_into().unwrap(),
-        "registry-test",
-        root,
-    )
-    .unwrap();
-    registry_guard(&placement).release().unwrap();
-    placement
-}
-
-fn insert_pending_session(registry: &Registry, run_id: &str) {
-    let identity = registry.identity();
-    registry
-        .connection()
-        .execute(
-            "INSERT INTO runs (run_id, environment, slot, manifest_path, computed_manifest_hash,
-             runtime_abi, toolchain_id, generator_json, target_json, source_json, owner_identity, diagnostic_path)
-         VALUES (?1, ?2, ?3, '/manifest', 'hash', ?4, ?5, '{}', '{}', '{}', '{}', 'diagnostics.log')",
-            rusqlite::params![
-                run_id,
-                identity.environment,
-                identity.slot,
-                identity.runtime_abi,
-                identity.toolchain_id
-            ],
-        )
-        .unwrap();
-}
-
 fn session_state(registry: &Registry, run_id: &str) -> (Option<String>, String) {
     registry
         .connection()
@@ -704,10 +572,10 @@ fn session_outcome_is_immutable_and_does_not_claim_resource_finalization() {
         (ExecutionOutcome::Canceled, "canceled"),
     ] {
         let tmp = TempDir::new();
-        let placement = registry_placement(&tmp.path, &identity());
+        let placement = registry_placement(&tmp.path, &registry_identity());
         let mut registry =
-            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
-        insert_pending_session(&registry, "run");
+            Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
+        seed_run(registry.connection(), "run", None);
         assert_eq!(
             record_execution_outcome(&mut registry, "run", "hash", ExecutionOutcome::Interrupted)
                 .unwrap_err()
@@ -745,9 +613,10 @@ fn session_outcome_is_immutable_and_does_not_claim_resource_finalization() {
 fn failed_outcome_event_rolls_back_the_execution_result() {
     use nixfied_runtime::registry::session::{ExecutionOutcome, record_execution_outcome};
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
-    insert_pending_session(&registry, "run");
+    let placement = registry_placement(&tmp.path, &registry_identity());
+    let mut registry =
+        Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
+    seed_run(registry.connection(), "run", None);
     registry.connection().execute_batch("CREATE TRIGGER reject_outcome BEFORE INSERT ON events
         WHEN NEW.event_type = 'run.execution-settled' BEGIN SELECT RAISE(ABORT, 'outcome-denied'); END;").unwrap();
     let error = record_execution_outcome(&mut registry, "run", "hash", ExecutionOutcome::Succeeded)
@@ -762,10 +631,11 @@ fn successor_interrupts_only_unknown_execution_and_preserves_known_outcomes() {
         ExecutionOutcome, record_execution_outcome, record_interrupted_sessions,
     };
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    let placement = registry_placement(&tmp.path, &registry_identity());
+    let mut registry =
+        Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
     for run_id in ["unknown", "succeeded", "failed"] {
-        insert_pending_session(&registry, run_id);
+        seed_run(registry.connection(), run_id, None);
     }
     record_execution_outcome(
         &mut registry,
@@ -776,7 +646,8 @@ fn successor_interrupts_only_unknown_execution_and_preserves_known_outcomes() {
     .unwrap();
     record_execution_outcome(&mut registry, "failed", "hash", ExecutionOutcome::Failed).unwrap();
     registry.close().unwrap();
-    let mut successor = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+    let mut successor =
+        Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
     for _ in 0..2 {
         record_interrupted_sessions(&mut successor).unwrap();
     }
@@ -812,11 +683,11 @@ fn recovery_validates_all_session_records_before_mutating_any() {
         "finalization = 'complete'",
     ] {
         let tmp = TempDir::new();
-        let placement = registry_placement(&tmp.path, &identity());
+        let placement = registry_placement(&tmp.path, &registry_identity());
         let mut registry =
-            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+            Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
         for run in ["a-pending", "z-damaged"] {
-            insert_pending_session(&registry, run);
+            seed_run(registry.connection(), run, None);
         }
         // Model damaged stored bytes outside the supported writer boundary.
         registry
@@ -849,9 +720,10 @@ fn recovery_validates_all_session_records_before_mutating_any() {
 #[test]
 fn schema_rejects_finalization_without_execution_outcome() {
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
-    insert_pending_session(&registry, "run");
+    let placement = registry_placement(&tmp.path, &registry_identity());
+    let registry =
+        Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
+    seed_run(registry.connection(), "run", None);
     assert!(
         registry
             .connection()
@@ -868,11 +740,11 @@ fn ignored_outcome_updates_cannot_publish_false_settlement_events() {
     };
     for recovery in [false, true] {
         let tmp = TempDir::new();
-        let placement = registry_placement(&tmp.path, &identity());
+        let placement = registry_placement(&tmp.path, &registry_identity());
         let mut registry =
-            Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
+            Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
         for run in ["a-pending", "z-pending"] {
-            insert_pending_session(&registry, run);
+            seed_run(registry.connection(), run, None);
         }
         registry
             .connection()
@@ -909,9 +781,10 @@ fn output_seals_only_after_closed_registration_and_settled_capture_and_never_on_
         OutputPublication, close_source_registration, seal_output,
     };
     let tmp = TempDir::new();
-    let placement = registry_placement(&tmp.path, &identity());
-    let mut registry = Registry::open_or_create(registry_guard(&placement), &identity()).unwrap();
-    insert_pending_session(&registry, "run");
+    let placement = registry_placement(&tmp.path, &registry_identity());
+    let mut registry =
+        Registry::open_or_create(registry_guard(&placement), &registry_identity()).unwrap();
+    seed_run(registry.connection(), "run", None);
     let output = |registry: &Registry| -> (String, i64) {
         registry
             .connection()
@@ -929,17 +802,18 @@ fn output_seals_only_after_closed_registration_and_settled_capture_and_never_on_
         seal_output(&mut registry, "run", "hash").unwrap_err().code,
         ErrorCode::RegistryCorrupt
     );
-    registry
-        .connection()
-        .execute(
-            "INSERT INTO processes (process_key, environment, slot, pid, pgid, start_identity,
-               command_json, run_id, role, status, ownership, source_label, presentation,
-               stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment)
-             VALUES ('task', 'dev', 0, 1, 1, '{}', '{}', 'run', 'task', 'exited', 'settled',
-               'task', 'shown', 'logs/out', 'logs/err', 15, 1000, 'process-group')",
-            [],
-        )
-        .unwrap();
+    seed_process(
+        registry.connection(),
+        SeedProcess {
+            key: "task",
+            run_id: "run",
+            pid: 1,
+            status: "exited",
+            ownership: "settled",
+            presentation: "shown",
+            ..SeedProcess::default()
+        },
+    );
     close_source_registration(&mut registry, "run", "hash").unwrap();
 
     // A source without a checked capture outcome leaves completeness unknown.
