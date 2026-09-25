@@ -161,7 +161,7 @@ pub(crate) fn record_service_start_intent(
     require_run(&transaction, identity, run_id, computed_manifest_hash)?;
     read_open_endpoints(&transaction, None)?;
     ensure_predecessor_settled(&transaction, run_id)?;
-    ensure_service_start_allowed_transaction(&transaction, service_instance_id)?;
+    refuse_active_service(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
         identity,
@@ -302,7 +302,7 @@ pub(crate) fn record_service_start(
     require_run(&transaction, identity, run_id, computed_manifest_hash)?;
     require_open_sources(&transaction, run_id)?;
     ensure_predecessor_settled(&transaction, run_id)?;
-    ensure_service_start_allowed_transaction(&transaction, service.service_instance_id)?;
+    refuse_active_service(&transaction, service.service_instance_id)?;
     transaction
         .execute(
             "
@@ -537,29 +537,12 @@ pub(crate) fn activate_service_ready(
     Ok(())
 }
 
-pub(crate) fn mark_service_stopped(
-    registry: &mut Registry,
-    run_id: &str,
-    service_instance_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    capture: Option<CaptureOutcome>,
-) -> RuntimeResult<()> {
-    settle_service_terminal(
-        registry,
-        run_id,
-        service_instance_id,
-        process_key,
-        computed_manifest_hash,
-        ServiceTerminal::Stopped(capture),
-    )
-}
-
-enum ServiceTerminal<'a> {
+/// A service's terminal record; the payload accompanies its event.
+pub(crate) enum ServiceTerminal<'a> {
     /// `None` from recovery: the predecessor's capture outcome stays as recorded.
     Stopped(Option<CaptureOutcome>),
-    Canceled(&'a str, Ownership, CaptureOutcome),
-    Failed(&'a str, Ownership, CaptureOutcome),
+    Canceled(&'a str, ServiceSettlement),
+    Failed(&'a str, ServiceSettlement),
 }
 
 /// What the owner proved when a service reached a terminal status.
@@ -586,7 +569,7 @@ impl Ownership {
     }
 }
 
-fn settle_service_terminal(
+pub(crate) fn settle_service_terminal(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -610,19 +593,19 @@ fn settle_service_terminal(
             Ownership::Settled,
             capture,
         ),
-        ServiceTerminal::Canceled(payload, ownership, capture) => (
+        ServiceTerminal::Canceled(payload, settlement) => (
             ProcessStatus::Canceled,
             "service.canceled",
             payload,
-            ownership,
-            Some(capture),
+            settlement.ownership,
+            Some(settlement.capture),
         ),
-        ServiceTerminal::Failed(payload, ownership, capture) => (
+        ServiceTerminal::Failed(payload, settlement) => (
             ProcessStatus::Failed,
             "service.failed",
             payload,
-            ownership,
-            Some(capture),
+            settlement.ownership,
+            Some(settlement.capture),
         ),
     };
     transaction
@@ -657,77 +640,8 @@ fn settle_service_terminal(
     Ok(())
 }
 
-pub(crate) fn record_service_canceling(
-    registry: &mut Registry,
-    run_id: &str,
-    service_instance_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    payload_json: &str,
-) -> RuntimeResult<()> {
-    record_canceling(
-        registry,
-        run_id,
-        Some(service_instance_id),
-        process_key,
-        computed_manifest_hash,
-        "service.canceling",
-        payload_json,
-    )
-}
-
-fn record_canceling(
-    registry: &mut Registry,
-    run_id: &str,
-    service_instance_id: Option<&str>,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    event_type: &str,
-    payload_json: &str,
-) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        identity,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
-    insert_event(
-        &transaction,
-        identity,
-        redactor,
-        EventInsert {
-            event_type,
-            run_id: Some(run_id),
-            service_instance_id,
-            process_key: Some(process_key),
-            computed_manifest_hash: Some(computed_manifest_hash),
-            payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
-pub(crate) fn mark_service_canceled(
-    registry: &mut Registry,
-    run_id: &str,
-    service_instance_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    payload_json: &str,
-    settlement: ServiceSettlement,
-) -> RuntimeResult<()> {
-    settle_service_terminal(
-        registry,
-        run_id,
-        service_instance_id,
-        process_key,
-        computed_manifest_hash,
-        ServiceTerminal::Canceled(payload_json, settlement.ownership, settlement.capture),
-    )
-}
-
-pub(crate) fn record_service_lifecycle_event(
+/// Append one event outside any other registry transition.
+pub(crate) fn record_event(
     registry: &mut Registry,
     event_type: &str,
     run_id: Option<&str>,
@@ -755,25 +669,6 @@ pub(crate) fn record_service_lifecycle_event(
         },
     )?;
     Ok(())
-}
-
-pub(crate) fn mark_service_failed(
-    registry: &mut Registry,
-    run_id: &str,
-    service_instance_id: &str,
-    process_key: &str,
-    computed_manifest_hash: &str,
-    payload_json: &str,
-    settlement: ServiceSettlement,
-) -> RuntimeResult<()> {
-    settle_service_terminal(
-        registry,
-        run_id,
-        service_instance_id,
-        process_key,
-        computed_manifest_hash,
-        ServiceTerminal::Failed(payload_json, settlement.ownership, settlement.capture),
-    )
 }
 
 /// Record a process's checked capture outcome learned outside a terminal
@@ -1133,16 +1028,16 @@ pub(crate) fn record_invocation_canceling(
     invocation: InvocationIdentity<'_>,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    record_canceling(
+    record_event(
         registry,
-        invocation.run_id,
-        None,
-        invocation.process_key,
-        invocation.manifest_hash,
         match invocation.owner {
             InvocationOwner::Task => "task.canceling",
             InvocationOwner::Probe(_) => "probe.canceling",
         },
+        Some(invocation.run_id),
+        None,
+        Some(invocation.process_key),
+        invocation.manifest_hash,
         payload_json,
     )
 }
@@ -1403,19 +1298,10 @@ fn ensure_predecessor_settled(transaction: &Transaction<'_>, run_id: &str) -> Ru
     Ok(())
 }
 
-fn ensure_service_start_allowed_transaction(
-    transaction: &Transaction<'_>,
-    service_instance_id: &str,
-) -> RuntimeResult<()> {
-    let existing = actionable_process_status(transaction, service_instance_id)?;
-    refuse_active_service(service_instance_id, existing)
-}
-
-fn actionable_process_status(
-    connection: &Connection,
-    service_instance_id: &str,
-) -> RuntimeResult<Option<String>> {
-    connection
+/// A service instance starts at most once while an earlier process of it is
+/// still an ownership obligation.
+fn refuse_active_service(connection: &Connection, service_instance_id: &str) -> RuntimeResult<()> {
+    let existing: Option<String> = connection
         .query_row(
             &format!(
                 "
@@ -1432,17 +1318,13 @@ fn actionable_process_status(
             |row| row.get(0),
         )
         .optional()
-        .map_err(sql_error)
-}
-
-fn refuse_active_service(service_instance_id: &str, existing: Option<String>) -> RuntimeResult<()> {
-    if let Some(status) = existing {
-        Err(RuntimeError::new(
+        .map_err(sql_error)?;
+    match existing {
+        Some(status) => Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             format!("service instance {service_instance_id} has actionable process {status}"),
-        ))
-    } else {
-        Ok(())
+        )),
+        None => Ok(()),
     }
 }
 
@@ -1948,13 +1830,13 @@ mod tests {
                     .is_err()
             );
         }
-        mark_service_stopped(
+        settle_service_terminal(
             &mut fixture.registry,
             RUN_ID,
             SERVICE_ID,
             PROCESS_KEY,
             MANIFEST_HASH,
-            Some(CaptureOutcome::Complete),
+            ServiceTerminal::Stopped(Some(CaptureOutcome::Complete)),
         )
         .unwrap();
         let evidence: (String, String) = fixture
