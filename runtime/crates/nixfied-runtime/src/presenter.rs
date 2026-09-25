@@ -344,13 +344,27 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
         if sealed || finishing_now {
             // Drain every stable file to its end, however large the backlog;
             // a slow healthy reader is never truncated.
-            while tails
-                .values_mut()
-                .map(|tail| tail.pump(&stdout, &stderr))
-                .fold(false, |progress, read| progress | (read > 0))
-            {}
+            loop {
+                let moved = tails
+                    .values_mut()
+                    .map(|tail| tail.pump(&stdout, &stderr))
+                    .sum::<usize>();
+                let waiting = tails.values().any(|tail| tail.blocked.is_some());
+                if moved == 0 && !waiting {
+                    break;
+                }
+                if moved == 0 {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
             for tail in tails.values_mut() {
                 tail.flush_partial(&stdout, &stderr);
+            }
+            while tails.values().any(|tail| tail.blocked.is_some()) {
+                for tail in tails.values_mut() {
+                    tail.retry(&stdout, &stderr);
+                }
+                thread::sleep(Duration::from_millis(5));
             }
             break sealed;
         }
@@ -504,6 +518,9 @@ struct Tail {
     file: Option<File>,
     route: Route,
     partial: Vec<u8>,
+    /// Rendered bytes a full queue refused. While present this source reads
+    /// nothing more, so a stalled stream holds back only its own sources.
+    blocked: Option<(OutputStream, Vec<u8>)>,
 }
 
 impl Tail {
@@ -513,13 +530,17 @@ impl Tail {
             file: None,
             route: source.route.clone(),
             partial: Vec::new(),
+            blocked: None,
         }
     }
 
     /// Temporary EOF while capture is active is not completion; the offset
-    /// simply waits for more bytes.
-    /// Returns the bytes delivered in this pass.
+    /// simply waits for more bytes. Returns the bytes moved in this pass.
     fn pump(&mut self, stdout: &Writer, stderr: &Writer) -> usize {
+        let mut moved = self.retry(stdout, stderr);
+        if self.blocked.is_some() {
+            return moved;
+        }
         if self.file.is_none() {
             self.file = std::fs::OpenOptions::new()
                 .read(true)
@@ -528,11 +549,11 @@ impl Tail {
                 .ok();
         }
         let Some(mut file) = self.file.take() else {
-            return 0;
+            return moved;
         };
         let mut budget = SOURCE_BUDGET;
         let mut buffer = vec![0_u8; CHUNK];
-        while budget > 0 {
+        while budget > 0 && self.blocked.is_none() {
             let read = match file.read(&mut buffer[..CHUNK.min(budget)]) {
                 Ok(0) => break,
                 Ok(read) => read,
@@ -540,44 +561,73 @@ impl Tail {
                 Err(_) => break,
             };
             budget -= read;
+            moved += read;
             self.deliver(&buffer[..read], stdout, stderr);
         }
         self.file = Some(file);
-        SOURCE_BUDGET - budget
+        moved
+    }
+
+    fn retry(&mut self, stdout: &Writer, stderr: &Writer) -> usize {
+        match self.blocked.take() {
+            Some((stream, bytes)) => {
+                let length = bytes.len();
+                self.offer(stream, bytes, stdout, stderr);
+                if self.blocked.is_some() { 0 } else { length }
+            }
+            None => 0,
+        }
+    }
+
+    fn offer(&mut self, stream: OutputStream, bytes: Vec<u8>, stdout: &Writer, stderr: &Writer) {
+        let writer = match stream {
+            OutputStream::Stdout => stdout,
+            OutputStream::Stderr => stderr,
+        };
+        if let Err(refused) = writer.try_send(bytes) {
+            self.blocked = Some((stream, refused));
+        }
     }
 
     fn deliver(&mut self, bytes: &[u8], stdout: &Writer, stderr: &Writer) {
         match &self.route {
-            Route::Raw(OutputStream::Stdout) => stdout.send(bytes.to_vec()),
-            Route::Raw(OutputStream::Stderr) => stderr.send(bytes.to_vec()),
+            Route::Raw(stream) => {
+                let stream = *stream;
+                self.offer(stream, bytes.to_vec(), stdout, stderr);
+            }
             Route::Labeled(label) => {
+                let label = label.clone();
                 self.partial.extend_from_slice(bytes);
                 let mut rendered = Vec::new();
                 while let Some(end) = self.partial.iter().position(|byte| *byte == b'\n') {
-                    rendered.extend_from_slice(label);
+                    rendered.extend_from_slice(&label);
                     rendered.extend(self.partial.drain(..=end));
                 }
                 // A source without a newline cannot consume unbounded memory.
                 while self.partial.len() > MAX_LINE {
-                    rendered.extend_from_slice(label);
+                    rendered.extend_from_slice(&label);
                     rendered.extend(self.partial.drain(..MAX_LINE));
                     rendered.push(b'\n');
                 }
                 if !rendered.is_empty() {
-                    stderr.send(rendered);
+                    self.offer(OutputStream::Stderr, rendered, stdout, stderr);
                 }
             }
         }
     }
 
-    fn flush_partial(&mut self, _stdout: &Writer, stderr: &Writer) {
+    fn flush_partial(&mut self, stdout: &Writer, stderr: &Writer) {
         if let Route::Labeled(label) = &self.route
             && !self.partial.is_empty()
         {
             let mut rendered = label.clone();
             rendered.append(&mut self.partial);
             rendered.push(b'\n');
-            stderr.send(rendered);
+            match self.blocked.as_mut() {
+                // Keep order: append behind bytes the queue already refused.
+                Some((_, pending)) => pending.extend(rendered),
+                None => self.offer(OutputStream::Stderr, rendered, stdout, stderr),
+            }
         }
     }
 }
@@ -602,9 +652,15 @@ impl Writer {
         })
     }
 
-    fn send(&self, bytes: Vec<u8>) {
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(bytes);
+    /// Never blocks: a full queue hands the bytes back. A disconnected
+    /// queue (a failed stream) accepts and drops them.
+    fn try_send(&self, bytes: Vec<u8>) -> Result<(), Vec<u8>> {
+        match &self.sender {
+            Some(sender) => match sender.try_send(bytes) {
+                Err(std::sync::mpsc::TrySendError::Full(bytes)) => Err(bytes),
+                Ok(()) | Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Ok(()),
+            },
+            None => Ok(()),
         }
     }
 
@@ -744,6 +800,7 @@ mod tests {
             file: None,
             route: Route::Labeled(b"[api] ".to_vec()),
             partial: Vec::new(),
+            blocked: None,
         };
         tail.deliver(b"one\ntw", &stdout, &stderr);
         tail.deliver(b"o\n", &stdout, &stderr);

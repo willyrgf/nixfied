@@ -20,6 +20,33 @@ pub(crate) struct ServiceRecord<'a> {
     pub(crate) service_instance_id: &'a str,
     pub(crate) service_name: &'a str,
     pub(crate) source: &'a EvidenceSource,
+    pub(crate) stop: StopPolicy,
+}
+
+/// How to terminate a recorded process without the manifest that started it.
+/// Recovery uses these persisted facts, never a newly supplied manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StopPolicy {
+    pub(crate) signal: i32,
+    pub(crate) timeout_ms: u64,
+    pub(crate) tree: bool,
+}
+
+impl StopPolicy {
+    /// Tasks and probes: their owning group, SIGTERM, then SIGKILL after 1 s.
+    pub(crate) const INVOCATION: Self = Self {
+        signal: libc::SIGTERM,
+        timeout_ms: 1000,
+        tree: false,
+    };
+
+    fn containment(self) -> &'static str {
+        if self.tree {
+            "process-tree"
+        } else {
+            "process-group"
+        }
+    }
 }
 
 /// Endpoint evidence recorded atomically with its owning service process.
@@ -248,6 +275,7 @@ pub(crate) fn record_service_start(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     require_run(&transaction, identity, run_id, computed_manifest_hash)?;
+    require_open_sources(&transaction, run_id)?;
     ensure_predecessor_settled(&transaction, run_id)?;
     ensure_service_start_allowed_transaction(&transaction, service.service_instance_id)?;
     transaction
@@ -256,8 +284,10 @@ pub(crate) fn record_service_start(
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status, service_name, role,
-              source_label, presentation, stdout_path, stderr_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service', ?12, ?13, ?14, ?15)
+              source_label, presentation, stdout_path, stderr_path,
+              stop_signal, stop_timeout_ms, containment
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'service', ?12, ?13, ?14, ?15,
+                      ?16, ?17, ?18)
             ",
             params![
                 process.process_key,
@@ -275,6 +305,9 @@ pub(crate) fn record_service_start(
                 service.source.presentation.as_str(),
                 service.source.stdout_relative,
                 service.source.stderr_relative,
+                service.stop.signal,
+                service.stop.timeout_ms,
+                service.stop.containment(),
             ],
         )
         .map_err(sql_error)?;
@@ -981,14 +1014,17 @@ pub(crate) fn record_invocation_started(
         process.run_id,
         process.computed_manifest_hash,
     )?;
+    require_open_sources(&transaction, process.run_id)?;
     transaction
         .execute(
             "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status, role, service_name,
-              source_label, presentation, stdout_path, stderr_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+              source_label, presentation, stdout_path, stderr_path,
+              stop_signal, stop_timeout_ms, containment
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                      ?16, ?17, ?18)
             ",
             params![
                 process.process_key,
@@ -1006,6 +1042,9 @@ pub(crate) fn record_invocation_started(
                 process.source.presentation.as_str(),
                 process.source.stdout_relative,
                 process.source.stderr_relative,
+                StopPolicy::INVOCATION.signal,
+                StopPolicy::INVOCATION.timeout_ms,
+                StopPolicy::INVOCATION.containment(),
             ],
         )
         .map_err(sql_error)?;
@@ -1331,6 +1370,24 @@ fn stored_endpoint_map(
         .collect()
 }
 
+/// Closed source registration forbids every new process source for the run.
+fn require_open_sources(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
+    let sources: String = transaction
+        .query_row(
+            "SELECT sources FROM runs WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if sources != "open" {
+        return Err(RuntimeError::new(
+            ErrorCode::LifecycleFailed,
+            "the session closed source registration; no new workload may register",
+        ));
+    }
+    Ok(())
+}
+
 fn require_run(
     transaction: &Transaction<'_>,
     identity: &RegistryIdentity,
@@ -1557,6 +1614,7 @@ mod tests {
             service_instance_id: SERVICE_ID,
             service_name: "service",
             source: fixture_source("service"),
+            stop: StopPolicy::INVOCATION,
         }
     }
 
@@ -1619,6 +1677,44 @@ mod tests {
             &[endpoint()],
         )
         .expect("test service should be recorded");
+    }
+
+    #[test]
+    fn closed_source_registration_rejects_every_new_process_source() {
+        let mut fixture = TestRegistry::new();
+        let registry = &mut fixture.registry;
+        insert_run(registry, RUN_ID);
+        registry
+            .connection()
+            .execute("UPDATE runs SET sources = 'closed'", [])
+            .unwrap();
+        let task = InvocationProcessRecord {
+            source: fixture_source("task"),
+            run_id: RUN_ID,
+            process_key: PROCESS_KEY,
+            pid: 123,
+            pgid: 123,
+            start_identity: START_IDENTITY,
+            command_json: "{}",
+            computed_manifest_hash: MANIFEST_HASH,
+        };
+        let error = record_task_started(registry, &task).unwrap_err();
+        assert_eq!(error.code, ErrorCode::LifecycleFailed);
+        let error = record_service_start(
+            registry,
+            RUN_ID,
+            MANIFEST_HASH,
+            &service_record(),
+            &process_record(123),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::LifecycleFailed);
+        let processes: i64 = registry
+            .connection()
+            .query_row("SELECT count(*) FROM processes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(processes, 0);
     }
 
     #[test]
@@ -1937,10 +2033,10 @@ mod tests {
                 "INSERT INTO processes (
                 process_key, environment, slot, pid, pgid, start_identity,
                 command_json, run_id, service_instance_id, status, service_name, role,
-                source_label, presentation, stdout_path, stderr_path
+                source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
              ) SELECT 'z-second', environment, slot, pid, pgid, 'invalid-json',
                       command_json, run_id, service_instance_id, status, service_name, role,
-                      source_label, presentation, stdout_path || '.2', stderr_path || '.2' FROM processes;",
+                      source_label, presentation, stdout_path || '.2', stderr_path || '.2', stop_signal, stop_timeout_ms, containment FROM processes;",
             )
             .unwrap();
         let error = read_service_snapshot(&fixture.registry, SERVICE_ID).unwrap_err();

@@ -2245,3 +2245,52 @@ fn recovery_settles_a_dead_owners_service_without_inventing_capture() {
         );
     }
 }
+
+#[test]
+fn stalled_stdout_does_not_hold_back_stderr_presentation() {
+    use std::io::Read;
+    let stdout_count = 8 * 1024 * 1024;
+    let stderr_count = 4096;
+    let manifest = task_manifest(&[
+        "output".into(),
+        "repeat".into(),
+        "78".into(),
+        stdout_count.to_string(),
+        "79".into(),
+        stderr_count.to_string(),
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    // Never read stdout until stderr has fully arrived.
+    let mut seen = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while seen.iter().filter(|byte| **byte == b'y').count() < stderr_count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stderr was held back by the stalled stdout reader"
+        );
+        let read = stderr.read(&mut chunk).unwrap();
+        assert!(read > 0, "stderr closed before its bytes arrived");
+        seen.extend_from_slice(&chunk[..read]);
+    }
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "stdout is still stalled"
+    );
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let mut rest = Vec::new();
+    stderr.read_to_end(&mut rest).unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert_eq!(reader.join().unwrap().len(), stdout_count);
+}

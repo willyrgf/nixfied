@@ -2800,10 +2800,10 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
                     "INSERT INTO processes (
                    process_key, environment, slot, pid, pgid, start_identity,
                    command_json, run_id, service_instance_id, status, role,
-                   source_label, presentation, stdout_path, stderr_path
+                   source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
                  ) SELECT ?1, environment, slot, 2147483647, 2147483647, start_identity,
                           command_json, ?2, NULL, ?3, 'task',
-                          'fixture', 'hidden', 'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err'
+                          'fixture', 'hidden', 'logs/' || ?1 || '.out', 'logs/' || ?1 || '.err', 15, 1000, 'process-group'
                    FROM processes WHERE process_key = ?4",
                     rusqlite::params![key, run_id, status, service.info().process_key],
                 )
@@ -2894,8 +2894,8 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status, role,
-              source_label, presentation, stdout_path, stderr_path
-            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))
+              source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
+            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group')
             ",
             rusqlite::params![
                 task_process_key,

@@ -113,8 +113,37 @@ pub fn derive_slot_placement(
     })
 }
 
+/// Fixture convenience: application and registry roots plus this run's
+/// evidence directories, without the session's exclusive claim.
 pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
-    materialize_state_root(placement)
+    materialize_state_root(placement)?;
+    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.run_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)
+}
+
+/// Claim the session's never-reused evidence directory exclusively. An
+/// existing directory is a run identity collision, never reused.
+pub fn claim_run_evidence(placement: &HostPlacement) -> RuntimeResult<()> {
+    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
+    let runs = placement.registry_dir.join("runs");
+    materialize_owned_dir(&placement.registry_dir, &root, &runs)?;
+    reject_existing_symlink_components(&placement.registry_dir, &placement.run_dir)?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&placement.run_dir)
+        .map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                format!(
+                    "failed to claim session evidence {}: {error}",
+                    placement.run_dir.display()
+                ),
+            )
+        })?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
+    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)
 }
 
 /// Materialize only the state base and registry dir. The registry must exist
@@ -127,19 +156,13 @@ pub fn materialize_registry_root(placement: &HostPlacement) -> RuntimeResult<()>
     materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)
 }
 
-/// Materialize application state and this run's retained evidence directories.
-/// Runs after the marker decision so an upgrade-clean can delete previous
-/// application data without deleting run evidence.
+/// Materialize the application root and the registry root. Session evidence
+/// is claimed separately by the owner with [`claim_run_evidence`].
 pub fn materialize_state_root(placement: &HostPlacement) -> RuntimeResult<()> {
     create_dir(&placement.state_base)?;
     let base = canonicalize_materialized("state base", &placement.state_base)?;
     materialize_owned_dir(&placement.state_base, &base, &placement.state_root)?;
-    materialize_registry_root(placement)?;
-    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.run_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)?;
-    Ok(())
+    materialize_registry_root(placement)
 }
 
 pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {

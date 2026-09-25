@@ -337,7 +337,7 @@ fn purge_still_refuses_active_registry_refs() {
             "INSERT INTO processes (
                process_key, environment, slot, pid, pgid, start_identity, command_json,
                run_id, status, role
-             , source_label, presentation, stdout_path, stderr_path) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))",
+             , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group')",
         )
         .expect("active process should be inserted");
 
@@ -390,7 +390,7 @@ fn cleanup_refuses_active_registry_refs() {
         "INSERT INTO processes (
            process_key, environment, slot, pid, pgid, start_identity, command_json,
            run_id, status, role
-         , source_label, presentation, stdout_path, stderr_path) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)))",
+         , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running', 'task', 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group')",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO ports (
@@ -477,11 +477,11 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path) VALUES (
+            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
               'process-stale', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-stale', 'service-stale', 'running', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
@@ -718,11 +718,11 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, service_name, role
-            , source_label, presentation, stdout_path, stderr_path) VALUES (
+            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
               'process-stale-port', 'dev', 0, 999998, 999998,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-stale-port', 'service-stale-port', 'stopped', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
             INSERT INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
@@ -1058,11 +1058,11 @@ fn endpoint_less_unresolved_process_blocks_deletion_until_recovery_proves_death(
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status, ownership, service_name, role
-            , source_label, presentation, stdout_path, stderr_path) VALUES (
+            , source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment) VALUES (
               'process-escaped', 'dev', 0, 999997, 999997,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-escaped', 'service-escaped', 'escaped', 'unresolved', 'synthetic', 'service'
-            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)));
+            , 'fixture', 'hidden', 'logs/' || hex(randomblob(8)), 'logs/' || hex(randomblob(8)), 15, 1000, 'process-group');
             ",
         )
         .unwrap();
@@ -1140,10 +1140,10 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
         .execute(
             "INSERT INTO processes (
                process_key, environment, slot, pid, pgid, start_identity, command_json,
-               run_id, status, role, source_label, presentation, stdout_path, stderr_path
+               run_id, status, role, source_label, presentation, stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
              ) VALUES (
                'process-leader', 'dev', 0, ?1, ?1, '{\"platformStart\":\"gone\"}', '{}',
-               'run-leader', 'running', 'task', 'fixture', 'hidden', 'logs/a', 'logs/b'
+               'run-leader', 'running', 'task', 'fixture', 'hidden', 'logs/a', 'logs/b', 15, 1000, 'process-group'
              )",
             [leader_pid],
         )
