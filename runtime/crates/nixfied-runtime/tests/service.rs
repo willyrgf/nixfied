@@ -118,9 +118,10 @@ fn probe_registration_event_failure_prevents_workload_effects() {
 
 #[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23180);
+    let port = available_port_window(1);
+    let mut fixture = test_child_listener_fixture(port);
     let service = fixture
-        .start("run-service", 23180)
+        .start("run-service", port)
         .expect("foreground service should start");
 
     assert_eq!(service.info().pid as i32, service.info().pgid);
@@ -171,7 +172,9 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         json!(fixture.admission.source().observed_root.to_string_lossy())
     );
 
-    service
+    fixture
+        .ready(service)
+        .expect("service should become ready")
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
     let stopped_process_status: String = fixture.query(
@@ -310,10 +313,10 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
     );
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let replacement = contender
-        .start("run-contender-after-settlement", port)
-        .expect("settlement must release the startup guard and terminate the owner");
-    replacement.stop(&mut contender.registry, 1000).unwrap();
+    contender
+        .start_ready("run-contender-after-settlement", port)
+        .stop(&mut contender.registry, 1000)
+        .unwrap();
 }
 
 #[test]
@@ -533,8 +536,10 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
 #[test]
 fn slot_one_service_uses_slot_placement_port_window() {
     let tmp = TempDir::new();
-    let mut value = synthetic_manifest(&test_sleep(), &["30"], 23180, 23180);
-    add_slot_one(&mut value, 23280, 23280);
+    let port = available_port_window(2);
+    let slot_port = port + 1;
+    let mut value = test_child_manifest(port, port);
+    add_slot_one(&mut value, slot_port, slot_port);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let admission = fixture_admission(&manifest, &tmp.path);
     let selected_slot = select_slot(&manifest, Some(1)).expect("slot 1 should select");
@@ -548,18 +553,23 @@ fn slot_one_service_uses_slot_placement_port_window() {
         &placement,
         &mut registry,
         "run-slot-1",
-        &synthetic_endpoint(23280),
+        &synthetic_endpoint(slot_port),
         &CancellationToken::new(),
         None,
     )
     .expect("slot 1 service should accept slot placement port");
 
-    assert_eq!(service.selected_endpoint().expect("endpoint").port, 23280);
+    assert_eq!(
+        service.selected_endpoint().expect("endpoint").port,
+        slot_port
+    );
     assert_eq!(
         placement.state_root(),
         tmp.path.join("data/runtime-test/dev/1")
     );
     service
+        .ready(&mut registry, &CancellationToken::new(), &mut || Ok(()))
+        .expect("slot 1 service should become ready")
         .stop(&mut registry, 1000)
         .expect("service should stop");
     // The registry itself binds the slot; its rows do not repeat it.
@@ -1639,7 +1649,7 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
     let request_arg = request.to_string_lossy().to_string();
     let armed_arg = armed.to_string_lossy().to_string();
     let detached_arg = detached.to_string_lossy().to_string();
-    let mut fixture = ServiceFixture::from_value(test_child_service(
+    let mut fixture = endpoint_less_fixture_from(test_child_service(
         &[
             "detached-sleeper",
             "after-marker",
@@ -1651,8 +1661,9 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
         23185,
     ));
     let service = fixture
-        .start("run-delayed-escape", 23185)
+        .start_endpoint_less("run-delayed-escape")
         .expect("service should initially pass handoff");
+    let service = fixture.ready(service).expect("service should become ready");
     assert!(wait_for_path(&armed, Duration::from_secs(3)));
     fs::write(&request, []).expect("escape request should be written");
     assert!(wait_for_path(&detached, Duration::from_secs(3)));
@@ -1873,11 +1884,13 @@ fn second_start_against_a_live_owner_is_refused_without_mutation() {
             before,
             "the refused start registered nothing"
         );
-        match owner {
-            Ok(owner) => owner.stop(&mut fixture.registry, 1000),
-            Err(owner) => owner.stop(&mut fixture.registry, 1000),
-        }
-        .expect("owner should stop");
+        let owner = match owner {
+            Ok(owner) => owner,
+            Err(owner) => fixture.ready(owner).expect("owner should become ready"),
+        };
+        owner
+            .stop(&mut fixture.registry, 1000)
+            .expect("owner should stop");
     }
 }
 
@@ -2278,9 +2291,7 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
         "explicit down must prove the escaped containment dead"
     );
     fixture.begin_run("run-after-escaped-exact-listener");
-    let replacement = fixture
-        .start("run-after-escaped-exact-listener", port)
-        .expect("a new owner should start only after explicit down");
+    let replacement = fixture.start_ready("run-after-escaped-exact-listener", port);
 
     assert_ne!(replacement.info().process_key, escaped_process_key);
     replacement
@@ -2342,8 +2353,8 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
     // A process of a missing run is unrepresentable: it references its run.
     for (status, run_id) in [("unknown", "run-corrupt-control")] {
         let port = available_port_window(1);
-        let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
-        let service = fixture.start("run-corrupt-control", port).unwrap();
+        let mut fixture = test_child_listener_fixture(port);
+        let service = fixture.start_ready("run-corrupt-control", port);
         for (key, status, run_id) in [
             ("a-dead", "running", "run-corrupt-control"),
             ("z-corrupt", status, run_id),
@@ -2692,7 +2703,11 @@ fn endpoint_less_successor_requires_settlement_and_retains_distinct_history() {
         [],
     );
     assert_eq!(starts, 1, "rejection precedes prepare/start intent");
-    first.stop(&mut fixture.registry, 1000).unwrap();
+    fixture
+        .ready(first)
+        .unwrap()
+        .stop(&mut fixture.registry, 1000)
+        .unwrap();
 
     fixture.begin_run("second-session");
     let second = fixture.start_endpoint_less("second-session").unwrap();
@@ -2711,7 +2726,11 @@ fn endpoint_less_successor_requires_settlement_and_retains_distinct_history() {
         predecessor,
         ("first-session".into(), "synthetic".into(), "stopped".into())
     );
-    second.stop(&mut fixture.registry, 1000).unwrap();
+    fixture
+        .ready(second)
+        .unwrap()
+        .stop(&mut fixture.registry, 1000)
+        .unwrap();
 }
 
 #[test]
@@ -3916,7 +3935,8 @@ fn expect_service_start_failure(
 ) -> RuntimeError {
     match result {
         Ok(service) => {
-            let _ = service.stop(registry, 1000);
+            let error = RuntimeError::new(ErrorCode::TaskFailed, message);
+            service.finalize_failed_start(registry, 1000, error);
             panic!("{message}");
         }
         Err(error) => error,
@@ -3933,9 +3953,9 @@ fn assert_prepared_retry(fixture: &mut ServiceFixture, run_id: &str, port: u16) 
             Some(Box::new(|_| Ok(()))),
         )
         .expect("a corrected run should reacquire the endpoint");
-    retry
-        .stop(&mut fixture.registry, 1000)
-        .expect("retry service should stop");
+    // The sleep fixture cannot answer readiness; settle it as a failed start.
+    let error = RuntimeError::new(ErrorCode::ReadinessTimeout, "retry fixture is not probed");
+    retry.finalize_failed_start(&mut fixture.registry, 1000, error);
 }
 
 fn assert_pre_child_settlement(registry: &Registry, run_id: &str) {
