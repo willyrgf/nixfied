@@ -171,7 +171,7 @@ in
     (record "SourcePolicy" "Native source-admission choices." [
       (field "dirtyPolicy" (enum "DirtyPolicy") required "RequiredPresent" "Uncommitted-change policy.")
       (field "admissionFingerprintPolicy" text required "RequiredPresent"
-        "Declared fingerprint policy; native validation enforces the supported choice."
+        "Declared fingerprint policy, carried as text; the runtime neither validates nor interprets it."
       )
     ])
     (record "StatePolicy" "State-marker ownership and data retention policy." [
