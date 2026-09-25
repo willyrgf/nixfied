@@ -10,10 +10,11 @@ use crate::registry::session::{record_interrupted_sessions, record_recovered_ses
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity, RegistryReader};
 use crate::service::{
-    Leader, ProcessRecord, StopPolicy, StoredProcessIdentity, TaskTerminalStatus, contain,
-    mark_process_escape, mark_service_stopped, mark_task_finished, poll_until,
-    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, process_present, settle_unresolved_process,
+    InvocationIdentity, InvocationOwner, Leader, ProcessRecord, StopPolicy, StoredProcessIdentity,
+    TaskTerminalStatus, contain, mark_invocation_finished, mark_process_escape,
+    mark_service_stopped, poll_until, process_escape_start_identity, process_group_has_live_member,
+    process_is_live_with_identity, process_is_live_with_start_identity, process_present,
+    settle_unresolved_process,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
@@ -732,29 +733,22 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
         "command": row.command_json,
     })
     .to_string();
-    if row.role == ProcessRole::Probe {
-        return crate::service::mark_invocation_finished(
-            registry,
-            crate::service::InvocationIdentity {
-                run_id: &row.run_id,
-                process_key: &row.process_key,
-                manifest_hash: &row.computed_manifest_hash,
-                owner: crate::service::InvocationOwner::Probe(
-                    row.service_name
-                        .as_deref()
-                        .expect("probe attribution decoded"),
-                ),
-            },
-            TaskTerminalStatus::Canceled,
-            &payload_json,
-            None,
-        );
-    }
-    mark_task_finished(
+    let owner = match row.role {
+        ProcessRole::Probe => InvocationOwner::Probe(
+            row.service_name
+                .as_deref()
+                .expect("probe attribution decoded"),
+        ),
+        _ => InvocationOwner::Task,
+    };
+    mark_invocation_finished(
         registry,
-        &row.run_id,
-        &row.process_key,
-        &row.computed_manifest_hash,
+        InvocationIdentity {
+            run_id: &row.run_id,
+            process_key: &row.process_key,
+            manifest_hash: &row.computed_manifest_hash,
+            owner,
+        },
         TaskTerminalStatus::Canceled,
         &payload_json,
         None,

@@ -13,14 +13,12 @@ use crate::redaction::CaptureOutcome;
 use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
-    CapturedExec, CapturedExecFailure, CapturedExecOutcome, CapturedExecTransition,
-    ExecSubstitution, ReadyService, SlotEndpoints, TerminationReason, get_process_group,
-    platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
+    CapturedExec, CapturedExecOutcome, ExecSubstitution, Invocation, InvocationFailure,
+    ReadyService, SlotEndpoints, TerminationReason, resolve_exec_cwd, spawn_gated_captured_exec,
 };
 use crate::service::registry::{
-    InvocationProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready,
-    mark_task_finished, record_capture_outcome, record_task_canceling, record_task_observed,
-    record_task_started,
+    InvocationOwner, TaskTerminalStatus, ensure_service_instance_probe_ready,
+    mark_invocation_finished,
 };
 use crate::state::HostPlacement;
 use nixfied_manifest::ServiceId;
@@ -209,8 +207,29 @@ pub fn run_dependent_task_cancellable(
         ))
     })?;
     cancellation.check().map_err(TaskExecutionError::before)?;
+    let manifest_hash = run_context.admission.common().computed_manifest_hash();
+    let invocation = Invocation {
+        owner: InvocationOwner::Task,
+        run_id: run_context.run_id,
+        manifest_hash,
+        source: &evidence,
+        command_json: &command_json,
+        terminal: &|outcome| task_terminal(task, outcome),
+        canceling: &|pgid, reason| {
+            serde_json::json!({
+                "taskId": task_id,
+                "pgid": pgid,
+                "reason": match reason {
+                    TerminationReason::Canceled => "run canceled",
+                    TerminationReason::TimedOut => "task timeout",
+                    TerminationReason::ObservationFailed => "session observation failed",
+                },
+            })
+            .to_string()
+        },
+    };
     let started = Instant::now();
-    let child = spawn_gated_captured_exec(
+    let pending = spawn_gated_captured_exec(
         &CapturedExec {
             authority: registry.authority(),
             executable: &exec.executable,
@@ -228,94 +247,16 @@ pub fn run_dependent_task_cancellable(
         run_context.launcher,
     )
     .map_err(TaskExecutionError::before)?;
-    let pid = child.pid();
-    // process_group(0) establishes the owned group before the child execs.
-    let pgid = pid as i32;
-    let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
-    let child = child
-        .register_and_release(
-            |_| {
-                if get_process_group(pid)? != pgid {
-                    return Err(RuntimeError::new(
-                        ErrorCode::ProcEscape,
-                        "task launcher process group changed",
-                    ));
-                }
-                let platform_start = platform_start_identity(pid).ok_or_else(|| {
-                    RuntimeError::new(
-                        ErrorCode::ProcEscape,
-                        "task launcher start identity is unavailable",
-                    )
-                })?;
-                let start_identity =
-                    super::StoredProcessIdentity::encode(pid, pgid, Some(&platform_start), None);
-                record_task_started(
-                    registry,
-                    &InvocationProcessRecord {
-                        source: &evidence,
-                        run_id: run_context.run_id,
-                        process_key: &process_key,
-                        pid,
-                        pgid,
-                        start_identity: &start_identity,
-                        command_json: &command_json,
-                        computed_manifest_hash: run_context
-                            .admission
-                            .common()
-                            .computed_manifest_hash(),
-                    },
-                )
-            },
-            || {
-                cancellation.check()?;
-                check_services_live(dependencies)
-            },
-        )
-        .map_err(|failure| match failure {
-            crate::launch::Refusal::Unregistered(error) => TaskExecutionError::before(*error),
-            crate::launch::Refusal::Registered(failure) => {
-                settle_task_failure(registry, &run_context, task, &process_key, failure)
-            }
-        })?;
-    let outcome = child
-        .complete(
+    let (process_key, outcome) = invocation
+        .run(
+            registry,
+            pending,
+            // The gate's own process group has the leader's pid as its id.
+            |pid| format!("process-{}-task-{node_id}-{pid}-{pid}", run_context.run_id),
             cancellation,
-            || check_services_live(dependencies),
-            |transition| match transition {
-                CapturedExecTransition::Observed(outcome) => {
-                    let (exit_code, terminal) = task_terminal(task, outcome);
-                    record_task_observed(
-                        registry,
-                        run_context.run_id,
-                        &process_key,
-                        run_context.admission.common().computed_manifest_hash(),
-                        execution_outcome(terminal),
-                        exit_code,
-                    )
-                }
-                CapturedExecTransition::Terminating(reason) => record_task_cancellation_intent(
-                    registry,
-                    &TaskCancellationContext {
-                        run_id: run_context.run_id,
-                        task_id,
-                        process_key: &process_key,
-                        computed_manifest_hash: run_context
-                            .admission
-                            .common()
-                            .computed_manifest_hash(),
-                    },
-                    pgid,
-                    match reason {
-                        TerminationReason::Canceled => "run canceled",
-                        TerminationReason::TimedOut => "task timeout",
-                        TerminationReason::ObservationFailed => "session observation failed",
-                    },
-                ),
-            },
+            &mut || check_services_live(dependencies),
         )
-        .map_err(|failure| {
-            settle_task_failure(registry, &run_context, task, &process_key, failure)
-        })?;
+        .map_err(|failure| task_failure(task, failure))?;
     let duration_ms = elapsed_ms(started);
     let (exit_code, terminal_status) = task_terminal(task, &outcome);
     let success = terminal_status == TaskTerminalStatus::Succeeded;
@@ -361,11 +302,9 @@ pub fn run_dependent_task_cancellable(
             ));
         }
     };
-    if let Err(error) = mark_task_finished(
+    if let Err(error) = mark_invocation_finished(
         registry,
-        run_context.run_id,
-        &process_key,
-        run_context.admission.common().computed_manifest_hash(),
+        invocation.identity(&process_key),
         terminal_status,
         &payload_json,
         Some(CaptureOutcome::Complete),
@@ -382,64 +321,21 @@ pub fn run_dependent_task_cancellable(
     }
 }
 
-/// Settle the registered task row from a failed release or completion. A
-/// settled child leaves only terminal evidence; an unsettled child keeps its
-/// obligation and records the capture outcome for recovery.
-fn settle_task_failure(
-    registry: &mut Registry,
-    run_context: &RunContext<'_>,
-    task: &ExecTask,
-    process_key: &str,
-    failure: CapturedExecFailure,
-) -> TaskExecutionError {
-    let mut error = *failure.error;
-    if failure.settled {
-        let status = failure
-            .outcome
-            .as_ref()
-            .map_or(TaskTerminalStatus::Canceled, |outcome| {
-                task_terminal(task, outcome).1
-            });
-        let payload = serde_json::json!({
-            "interrupted": true,
-            "code": error.code,
-        })
-        .to_string();
-        if let Err(settlement) = mark_task_finished(
-            registry,
-            run_context.run_id,
-            process_key,
-            run_context.admission.common().computed_manifest_hash(),
-            status,
-            &payload,
-            Some(failure.capture),
-        ) {
-            error = error.with_cause(settlement);
-        }
-    } else if let Err(recording) =
-        record_capture_outcome(registry, run_context.run_id, process_key, failure.capture)
-    {
-        error = error.with_cause(recording);
+/// A failed task invocation. An outcome observed before the failure keeps
+/// its execution result and outcome error as evidence.
+fn task_failure(task: &ExecTask, failure: InvocationFailure) -> TaskExecutionError {
+    let InvocationFailure { error, outcome } = failure;
+    let Some(outcome) = outcome else {
+        return TaskExecutionError::BeforeTerminal(error);
+    };
+    let mut error = *error;
+    let (_, terminal) = task_terminal(task, &outcome);
+    if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
+        error = error.with_cause(outcome_error);
     }
-    if let Some(outcome) = failure.outcome {
-        let (_, terminal) = task_terminal(task, &outcome);
-        if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
-            error = error.with_cause(outcome_error);
-        }
-        return TaskExecutionError::ObservedWithoutEvidence {
-            error: Box::new(error),
-            outcome: execution_outcome(terminal),
-        };
-    }
-    TaskExecutionError::before(error)
-}
-
-fn execution_outcome(terminal: TaskTerminalStatus) -> crate::registry::session::ExecutionOutcome {
-    use crate::registry::session::ExecutionOutcome;
-    match terminal {
-        TaskTerminalStatus::Succeeded => ExecutionOutcome::Succeeded,
-        TaskTerminalStatus::Failed | TaskTerminalStatus::TimedOut => ExecutionOutcome::Failed,
-        TaskTerminalStatus::Canceled => ExecutionOutcome::Canceled,
+    TaskExecutionError::ObservedWithoutEvidence {
+        error: Box::new(error),
+        outcome: terminal.execution_outcome(),
     }
 }
 
@@ -535,35 +431,6 @@ fn ensure_task_dependencies(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct TaskCancellationContext<'a> {
-    run_id: &'a str,
-    task_id: &'a str,
-    process_key: &'a str,
-    computed_manifest_hash: &'a str,
-}
-
-fn record_task_cancellation_intent(
-    registry: &mut Registry,
-    context: &TaskCancellationContext<'_>,
-    pgid: i32,
-    reason: &str,
-) -> RuntimeResult<()> {
-    let payload = serde_json::json!({
-        "taskId": context.task_id,
-        "pgid": pgid,
-        "reason": reason,
-    })
-    .to_string();
-    record_task_canceling(
-        registry,
-        context.run_id,
-        context.process_key,
-        context.computed_manifest_hash,
-        &payload,
-    )
-}
-
 fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
     let mut summary = serde_json::to_value(run)
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
@@ -648,16 +515,15 @@ mod tests {
                         0,
                         "intent precedes termination"
                     );
-                    record_task_cancellation_intent(
+                    crate::service::registry::record_invocation_canceling(
                         &mut registry,
-                        &TaskCancellationContext {
+                        crate::service::registry::InvocationIdentity {
                             run_id: "test",
-                            task_id: "task",
                             process_key: "process",
-                            computed_manifest_hash: "hash",
+                            manifest_hash: "hash",
+                            owner: InvocationOwner::Task,
                         },
-                        pgid,
-                        "task canceled",
+                        "{}",
                     )
                 },
             )
