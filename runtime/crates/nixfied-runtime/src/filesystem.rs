@@ -266,6 +266,42 @@ impl Directory {
         }))
     }
 
+    /// Whether the named entry is the root of a mount. Linux reports this
+    /// through `statx`, which also sees a bind mount of the same filesystem.
+    /// A kernel that cannot report it fails closed.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn is_mount_root(&self, name: &CStr) -> io::Result<bool> {
+        component(name)?;
+        let mut observed = std::mem::MaybeUninit::<libc::statx>::zeroed();
+        if unsafe {
+            libc::statx(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+                libc::STATX_BASIC_STATS,
+                observed.as_mut_ptr(),
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: statx initialized the complete buffer on success.
+        let observed = unsafe { observed.assume_init() };
+        let mount_root = libc::STATX_ATTR_MOUNT_ROOT as u64;
+        if observed.stx_attributes_mask & mount_root == 0 {
+            return Err(invalid("the kernel cannot report mount roots"));
+        }
+        Ok(observed.stx_attributes & mount_root != 0)
+    }
+
+    /// Other platforms have no same-device mounts; a device change is the
+    /// available evidence and the caller checks it.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn is_mount_root(&self, name: &CStr) -> io::Result<bool> {
+        component(name)?;
+        Ok(false)
+    }
+
     /// All entry names except `.` and `..`, read through a duplicate descriptor.
     pub(crate) fn entry_names(&self) -> io::Result<Vec<CString>> {
         let duplicate =
@@ -524,4 +560,27 @@ fn check_directory(fd: RawFd, uid: libc::uid_t, mode: DirectoryMode) -> io::Resu
         return Err(invalid("directory has unsafe permissions"));
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mount_roots_are_reported_through_statx() {
+        let root = Directory::root().unwrap();
+        assert!(root.is_mount_root(c"proc").unwrap());
+        let base = std::env::temp_dir().join(format!(
+            "nixfied-mount-root-{}-{}",
+            std::process::id(),
+            crate::token::random_hex().unwrap()
+        ));
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .recursive(true)
+            .create(base.join("child"))
+            .unwrap();
+        let parent = Directory::private_anchor(&base).unwrap();
+        assert!(!parent.is_mount_root(c"child").unwrap());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

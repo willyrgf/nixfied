@@ -380,6 +380,10 @@ when the manifest/runtime contract changes.
   slot guard's held state-base descriptor, never by resolving its path again,
   and through directory descriptors without following symlinks; entries inside the owned tree are unlinked relative to their held
   directory without being followed, truncated, or crossing a nested mount.
+  A directory on another device or, on Linux, any mount root reported by
+  `statx` (including a bind mount of the same filesystem) refuses; so does a
+  tree nested more than 128 directories deep. A refused step keeps the intent
+  pending.
 - Deletion commits one pending intent (operation ID, relative target, data
   generation, marker snapshot, purge authorization, observed root identity) and
   its event before any destructive effect. Payload removal, marker removal, and

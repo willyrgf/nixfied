@@ -268,7 +268,7 @@ fn finish_deletion(
     root: Directory,
 ) -> RuntimeResult<CleanupOutcome> {
     let removed = (|| {
-        remove_contents(&root, record.root.device, true)?;
+        remove_contents(&root, record.root.device, true, 0)?;
         root.sync()?;
         let remaining = root.entry_names()?;
         if remaining.iter().any(|name| name.as_c_str() != MARKER) {
@@ -301,7 +301,16 @@ fn remove_root(
     parent.sync()
 }
 
-fn remove_contents(directory: &Directory, device: u64, keep_marker: bool) -> io::Result<()> {
+/// Nesting bound for the descriptor-held traversal. Each level holds one
+/// descriptor, so a deeper tree refuses before exhausting descriptors or stack.
+const MAX_DEPTH: usize = 128;
+
+fn remove_contents(
+    directory: &Directory,
+    device: u64,
+    keep_marker: bool,
+    depth: usize,
+) -> io::Result<()> {
     for name in directory.entry_names()? {
         if keep_marker && name.as_c_str() == MARKER {
             continue;
@@ -309,13 +318,18 @@ fn remove_contents(directory: &Directory, device: u64, keep_marker: bool) -> io:
         match directory.entry(&name)? {
             None => {}
             Some(EntryKind::Directory(identity)) => {
-                if identity.device != device {
+                if identity.device != device || directory.is_mount_root(&name)? {
                     return Err(io::Error::other(
                         "cleanup refuses to traverse a nested mount",
                     ));
                 }
+                if depth >= MAX_DEPTH {
+                    return Err(io::Error::other(
+                        "cleanup refuses a tree deeper than its traversal bound",
+                    ));
+                }
                 let child = directory.open_owned_child(&name)?;
-                remove_contents(&child, device, false)?;
+                remove_contents(&child, device, false, depth + 1)?;
                 drop(child);
                 directory.remove_entry(&name, true)?;
             }
