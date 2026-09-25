@@ -743,6 +743,34 @@ fn failed_deletion_step_keeps_the_intent_pending_and_retry_reuses_it() {
 }
 
 #[test]
+fn a_tree_deeper_than_the_traversal_bound_refuses_and_keeps_the_intent_pending() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let mut deepest = fixture.layout.state_root.clone();
+    for _ in 0..130 {
+        deepest.push("d");
+    }
+    fs::create_dir_all(&deepest).unwrap();
+    fs::write(deepest.join("leaf"), b"x").unwrap();
+
+    let error = fixture
+        .clean(&mut registry, CleanupMode::Standard)
+        .expect_err("an unbounded traversal must refuse");
+    assert_eq!(error.code, ErrorCode::CleanupRefused);
+    let pending: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM cleanups WHERE status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending, 1);
+    assert!(deepest.join("leaf").is_file());
+    assert!(fixture.layout.state_root.join(MARKER_FILE_NAME).is_file());
+}
+
+#[test]
 fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
