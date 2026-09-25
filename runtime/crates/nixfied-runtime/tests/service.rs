@@ -426,7 +426,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     let selected = select_slot(fixture.admission.common().manifest(), None)
         .expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
-    commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
+    commit_slot_marker(&fixture.registry, &identity).expect("slot marker should be written");
     let cleanup =
         run_synthetic_service_clean_for_slot(&fixture.admission, &mut fixture.registry, &selected)
             .expect("clean lifecycle should succeed");
@@ -2427,7 +2427,7 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     let selected = select_slot(fixture.admission.common().manifest(), None)
         .expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(fixture.admission.common(), &selected);
-    commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
+    commit_slot_marker(&fixture.registry, &identity).expect("slot marker should be written");
     let cleanup_error = clean_marked_state(&identity, &mut fixture.registry, CleanupMode::Standard)
         .expect_err("open unresolved escape must block cleanup");
     assert_eq!(cleanup_error.code, ErrorCode::CleanupRefused);
@@ -2659,7 +2659,7 @@ fn owned_process_cleanup_does_not_settle_the_session() {
         .start("run-down-canceling-process", 23231)
         .expect("foreground service should start");
     commit_slot_marker(
-        &fixture.placement,
+        &fixture.registry,
         &StateIdentity::from_admission(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
@@ -2879,7 +2879,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         )
         .expect("task process fixture should be recorded");
     commit_slot_marker(
-        &fixture.placement,
+        &fixture.registry,
         &StateIdentity::from_admission(fixture.admission.common()),
     )
     .expect("slot marker should be written for cleanup proof");
@@ -3401,7 +3401,6 @@ impl<'a> StartedSlot<'a> {
             .expect("slot placement should derive");
         materialize_run_roots(&placement).expect("slot roots should materialize");
         let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
-        commit_slot_marker(&placement, &identity).expect("slot marker should be written");
         let mut registry = Registry::open_or_create(
             registry_guard(&placement),
             &RegistryIdentity::for_slot(
@@ -3413,6 +3412,7 @@ impl<'a> StartedSlot<'a> {
             ),
         )
         .expect("slot registry should open");
+        commit_slot_marker(&registry, &identity).expect("slot marker should be written");
         let service = start_fixture_service(
             admission,
             &placement,

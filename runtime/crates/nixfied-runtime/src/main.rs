@@ -938,7 +938,7 @@ fn run_m0_placed(
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
-    let preparation = prepare_slot_state(placement, &identity, &mut registry)?;
+    let preparation = prepare_slot_state(&identity, &mut registry)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.
     nixfied_runtime::state::claim_run_evidence(placement)?;

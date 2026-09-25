@@ -1,4 +1,4 @@
-//! Marker upgrade semantics: a slot is owned by project/environment/slot, not
+//! Marker preparation semantics: a slot is owned by project/environment/slot, not
 //! by one manifest build. These tests drive `prepare_slot_state` through the
 //! second-run / changed-manifest / retention / interrupted-run matrix that
 //! first surfaced in MFM's v2 adoption.
@@ -22,7 +22,7 @@ use common::*;
 
 #[test]
 fn second_run_same_manifest_adopts_marker() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     let identity = fixture.identity(false);
     let first = fixture
         .prepare("run-1", &identity)
@@ -40,12 +40,12 @@ fn second_run_same_manifest_adopts_marker() {
         fixture.marker().computed_manifest_hash,
         expected_hash(&fixture.manifest, false)
     );
-    assert_eq!(fixture.upgrade_event_count(), 0);
+    assert_eq!(fixture.provenance_event_count(), 0);
 }
 
 #[test]
 fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     fixture
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
@@ -54,7 +54,7 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
 
     let report = fixture
         .prepare("run-2", &fixture.identity(true))
-        .expect("a changed manifest hash should upgrade, not refuse");
+        .expect("a changed manifest hash should refresh provenance, not refuse");
 
     assert!(report.provenance_refreshed);
     assert_eq!(
@@ -74,8 +74,8 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
         marker.data_generation, generation,
         "provenance refresh preserves the data generation"
     );
-    assert_eq!(fixture.upgrade_event_count(), 1);
-    let payload = fixture.last_upgrade_event_payload();
+    assert_eq!(fixture.provenance_event_count(), 1);
+    let payload = fixture.last_provenance_event_payload();
     assert_eq!(
         payload["fromManifestHash"],
         expected_hash(&fixture.manifest, false)
@@ -89,7 +89,7 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
 
 #[test]
 fn symlinked_ancestry_rejects_a_provenance_refresh_before_any_registry_event() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     fixture.prepare("run-1", &fixture.identity(false)).unwrap();
     let state_root = fixture.state_root();
     let project = state_root.parent().unwrap().parent().unwrap().to_path_buf();
@@ -102,15 +102,17 @@ fn symlinked_ancestry_rejects_a_provenance_refresh_before_any_registry_event() {
         .prepare("run-2", &fixture.identity(true))
         .expect_err("a symlinked state ancestry must reject");
 
-    assert_eq!(error.code, ErrorCode::StateUnwritable, "{error:?}");
-    assert_eq!(fixture.upgrade_event_count(), 0);
+    // The marker is inspected through held descriptors, so the redirected
+    // ancestry is rejected before any registry event or marker write.
+    assert_eq!(error.code, ErrorCode::StateUnowned, "{error:?}");
+    assert_eq!(fixture.provenance_event_count(), 0);
     assert_eq!(fs::read(state_root.join(MARKER_FILE_NAME)).unwrap(), marker);
 }
 
 #[test]
 fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
     for obsolete in ["epoch", "version", "cleanup-policy"] {
-        let fixture = UpgradeFixture::new();
+        let fixture = PreparationFixture::new();
         fixture.prepare("run-1", &fixture.identity(false)).unwrap();
         let sentinel = fixture.plant_sentinel();
         let path = fixture.state_root().join(MARKER_FILE_NAME);
@@ -128,13 +130,13 @@ fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
         assert_eq!(error.code, ErrorCode::StateUnowned);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::read(sentinel).unwrap(), b"keep");
-        assert_eq!(fixture.upgrade_event_count(), 0);
+        assert_eq!(fixture.provenance_event_count(), 0);
     }
 }
 
 #[test]
 fn pre_existing_unmarked_state_root_refuses() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     let state_root = fixture.state_root();
     fs::create_dir_all(&state_root).expect("state root should be creatable");
     fs::write(state_root.join("leftover"), b"data").expect("leftover should be written");
@@ -152,7 +154,7 @@ fn pre_existing_unmarked_state_root_refuses() {
 
 #[test]
 fn pre_existing_empty_state_root_is_fresh() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     let state_root = fixture.state_root();
     fs::create_dir_all(&state_root).expect("state root should be creatable");
 
@@ -169,7 +171,7 @@ fn pre_existing_empty_state_root_is_fresh() {
 
 #[test]
 fn changed_ownership_refuses_state_unowned() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     fixture
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
@@ -186,7 +188,7 @@ fn changed_ownership_refuses_state_unowned() {
 
 #[test]
 fn runtime_abi_mismatch_refuses() {
-    let fixture = UpgradeFixture::new();
+    let fixture = PreparationFixture::new();
     fixture
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
@@ -204,7 +206,7 @@ fn runtime_abi_mismatch_refuses() {
 #[test]
 fn changed_manifest_cannot_weaken_existing_retention() {
     {
-        let fixture = UpgradeFixture::new();
+        let fixture = PreparationFixture::new();
         let mut persistent = fixture.identity(false);
         persistent.persistence = PersistencePolicy::Persistent;
         fixture.prepare("run-1", &persistent).unwrap();
@@ -216,7 +218,7 @@ fn changed_manifest_cannot_weaken_existing_retention() {
         assert_eq!(error.code, ErrorCode::CleanupRefused);
         assert_eq!(fixture.marker(), before);
         assert_eq!(fs::read(sentinel).unwrap(), b"keep");
-        assert_eq!(fixture.upgrade_event_count(), 0);
+        assert_eq!(fixture.provenance_event_count(), 0);
     }
 }
 
@@ -236,8 +238,8 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
             derive_host_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
         materialize_run_roots(&placement).expect("roots should materialize");
         let identity_a = StateIdentity::from_admission(admission_a.common());
-        commit_slot_marker(&placement, &identity_a).expect("marker should be written");
         let mut registry = open_registry(&placement, &manifest);
+        commit_slot_marker(&registry, &identity_a).expect("marker should be written");
         let service = start_fixture_service(
             &admission_a,
             &placement,
@@ -252,8 +254,6 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
 
         let admission_b = admission(&manifest, &tmp.path, changed);
         let identity_b = StateIdentity::from_admission(admission_b.common());
-        let placement_b =
-            derive_host_placement(&manifest, "run-b", &tmp.path).expect("layout derives");
         let marker_path = placement.state_root.join(MARKER_FILE_NAME);
         let marker_before = fs::read(&marker_path).unwrap();
         for (status, expected) in [
@@ -269,7 +269,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
                     rusqlite::params![process_key, status],
                 )
                 .unwrap();
-            let error = prepare_slot_state(&placement_b, &identity_b, &mut registry).unwrap_err();
+            let error = prepare_slot_state(&identity_b, &mut registry).unwrap_err();
             assert_eq!(error.code, expected);
             assert!(
                 process_group_has_non_zombie_member(pgid),
@@ -286,7 +286,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
             .unwrap();
         nixfied_runtime::control::down_owned_process_groups(&mut registry, 5000)
             .expect("exclusive recovery settles all manifest provenances");
-        let report = prepare_slot_state(&placement_b, &identity_b, &mut registry)
+        let report = prepare_slot_state(&identity_b, &mut registry)
             .expect("preparation follows successful recovery");
 
         assert_eq!(report.provenance_refreshed, changed);
@@ -308,8 +308,8 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
 }
 
 #[test]
-fn interrupted_run_reconciles_then_upgrade_proceeds() {
-    let fixture = UpgradeFixture::new();
+fn interrupted_run_recovers_then_provenance_refresh_proceeds() {
+    let fixture = PreparationFixture::new();
     fixture
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
@@ -352,7 +352,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
 
     let report = fixture
         .prepare("run-2", &fixture.identity(true))
-        .expect("the upgrade must reconcile interrupted leftovers, not trip on them");
+        .expect("the refresh must recover interrupted leftovers, not trip on them");
 
     assert!(report.provenance_refreshed);
     let process_status: String = fixture
@@ -408,12 +408,12 @@ fn process_group_has_non_zombie_member(pgid: i32) -> bool {
         .any(|(current_pgid, stat)| current_pgid == pgid && !stat.starts_with('Z'))
 }
 
-struct UpgradeFixture {
+struct PreparationFixture {
     tmp: TempDir,
     manifest: Manifest,
 }
 
-impl UpgradeFixture {
+impl PreparationFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
         let manifest: Manifest =
@@ -439,7 +439,7 @@ impl UpgradeFixture {
         materialize_registry_root(&placement)?;
         let mut registry = open_registry(&placement, &self.manifest);
         nixfied_runtime::control::down_owned_process_groups(&mut registry, 1000)?;
-        prepare_slot_state(&placement, identity, &mut registry)
+        prepare_slot_state(identity, &mut registry)
     }
 
     fn registry(&self) -> Registry {
@@ -473,7 +473,7 @@ impl UpgradeFixture {
         .expect("marker should be rewritten");
     }
 
-    fn upgrade_event_count(&self) -> i64 {
+    fn provenance_event_count(&self) -> i64 {
         self.registry()
             .connection()
             .query_row(
@@ -484,7 +484,7 @@ impl UpgradeFixture {
             .expect("events should query")
     }
 
-    fn last_upgrade_event_payload(&self) -> Value {
+    fn last_provenance_event_payload(&self) -> Value {
         let payload: String = self
             .registry()
             .connection()
@@ -494,7 +494,7 @@ impl UpgradeFixture {
                 [],
                 |row| row.get(0),
             )
-            .expect("upgrade event should exist");
+            .expect("provenance event should exist");
         serde_json::from_str(&payload).expect("payload should parse")
     }
 }

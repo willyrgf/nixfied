@@ -1,13 +1,14 @@
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nixfied_manifest::{PersistencePolicy, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::ControlAdmission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::filesystem::{Directory, EntryKind, is_temporary_of};
+use crate::registry::Registry;
 use crate::slot::SelectedSlot;
-use crate::state::placement::HostPlacement;
+use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
 
 pub const MARKER_FILE_NAME: &str = ".nixfied-state.json";
 
@@ -168,36 +169,24 @@ pub enum MarkerDecision {
     Refresh { existing: StateMarker },
 }
 
-/// Inspect the slot's marker (read-only) and classify what the run must do
-/// before using the state root. Refusals are ownership or runtime-ABI
-/// mismatches; a provenance mismatch is returned as an upgrade decision for
-/// the caller to process, never silently absorbed.
+/// Inspect the slot's marker (read-only) through the slot guard's held
+/// descriptor and classify what the run must do before using the state root.
+/// Refusals are ownership or runtime-ABI mismatches; a provenance mismatch is
+/// returned as a refresh decision for the caller to process, never silently
+/// absorbed.
 pub fn evaluate_slot_marker(
-    placement: &HostPlacement,
+    registry: &Registry,
     identity: &StateIdentity,
 ) -> RuntimeResult<MarkerDecision> {
-    let path = marker_path(&placement.state_root);
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(RuntimeError::new(
-                    ErrorCode::StateUnowned,
-                    format!("state marker is a symlink at {}", path.display()),
-                ));
-            }
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            refuse_unmarked_state_root(&placement.state_root)?;
-            return Ok(MarkerDecision::Fresh);
-        }
-        Err(error) => {
-            return Err(RuntimeError::new(
-                ErrorCode::StateUnowned,
-                format!("failed to inspect state marker {}: {error}", path.display()),
-            ));
-        }
-    }
-    let existing = read_marker(&placement.state_root)?;
+    let tree = ApplicationTree::new(registry.authority(), identity)?;
+    let root = match tree.open()? {
+        Observed::Absent => return Ok(MarkerDecision::Fresh),
+        Observed::Present { root, .. } => root,
+    };
+    let Some(existing) = read_root_marker(&root)? else {
+        refuse_unmarked_state_root(&tree, &root)?;
+        return Ok(MarkerDecision::Fresh);
+    };
     match existing.compare(identity) {
         MarkerComparison::Match => Ok(MarkerDecision::Adopt(existing)),
         MarkerComparison::RefreshProvenance => Ok(MarkerDecision::Refresh { existing }),
@@ -216,117 +205,61 @@ pub fn evaluate_slot_marker(
     }
 }
 
-/// A missing marker only means a fresh slot when the state root itself is
-/// absent (or an empty directory). A state root with content but no marker is
-/// state the runtime never claimed — adopting it would write a marker into an
-/// unowned tree that cleanup rightly refuses, so the run refuses it too.
-fn refuse_unmarked_state_root(state_root: &Path) -> RuntimeResult<()> {
-    let metadata = match std::fs::symlink_metadata(state_root) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
+/// A missing marker only means a fresh slot when the state root is empty, or
+/// holds only temporaries of an interrupted first marker publication. Other
+/// content is state the runtime never claimed — adopting it would write a
+/// marker into an unowned tree that cleanup rightly refuses, so the run
+/// refuses it too.
+fn refuse_unmarked_state_root(tree: &ApplicationTree, root: &Directory) -> RuntimeResult<()> {
+    for name in root.entry_names().map_err(|error| tree.io_error(error))? {
+        if !interrupted_publication(root, &name).map_err(|error| tree.io_error(error))? {
             return Err(RuntimeError::new(
                 ErrorCode::StateUnowned,
                 format!(
-                    "failed to inspect state root {}: {error}",
-                    state_root.display()
+                    "state root {} exists without a state marker; refusing to adopt unmarked state",
+                    tree.path.display()
                 ),
             ));
         }
-    };
-    if !metadata.file_type().is_dir() {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "state root {} exists but is not a directory",
-                state_root.display()
-            ),
-        ));
-    }
-    let mut entries = std::fs::read_dir(state_root).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "failed to inspect state root {}: {error}",
-                state_root.display()
-            ),
-        )
-    })?;
-    if entries.next().is_some() {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "state root {} exists without a state marker; refusing to adopt unmarked state",
-                state_root.display()
-            ),
-        ));
     }
     Ok(())
 }
 
-/// Publish the marker for a fresh application tree. The caller must have
-/// processed an [`evaluate_slot_marker`] decision first — this is the
-/// post-decision commit, not a guard.
+fn interrupted_publication(root: &Directory, name: &std::ffi::CStr) -> std::io::Result<bool> {
+    Ok(is_temporary_of(name, MARKER) && matches!(root.entry(name)?, Some(EntryKind::File(_))))
+}
+
+/// Publish the marker for a fresh application tree, creating the tree through
+/// the slot guard's held descriptor. Temporaries of an interrupted earlier
+/// publication are removed first. The caller must have processed an
+/// [`evaluate_slot_marker`] decision first — this is the post-decision commit,
+/// not a guard.
 pub fn commit_slot_marker(
-    placement: &HostPlacement,
+    registry: &Registry,
     identity: &StateIdentity,
 ) -> RuntimeResult<StateMarker> {
+    let tree = ApplicationTree::new(registry.authority(), identity)?;
+    let root = tree.materialize()?;
+    for name in root.entry_names().map_err(|error| tree.io_error(error))? {
+        if interrupted_publication(&root, &name).map_err(|error| tree.io_error(error))? {
+            root.remove_entry(&name, false)
+                .map_err(|error| tree.io_error(error))?;
+        }
+    }
     let marker = StateMarker::slot(identity)?;
-    publish_marker(&placement.state_root, &marker)?;
+    tree.publish_marker(&root, &marker)?;
     Ok(marker)
 }
 
 /// Refresh provenance of an existing tree without changing its generation.
 pub fn refresh_slot_marker(
-    placement: &HostPlacement,
+    registry: &Registry,
     identity: &StateIdentity,
     existing: &StateMarker,
 ) -> RuntimeResult<StateMarker> {
+    let tree = ApplicationTree::new(registry.authority(), identity)?;
+    let root = tree.materialize()?;
     let marker = StateMarker::refreshed(identity, existing);
-    publish_marker(&placement.state_root, &marker)?;
+    tree.publish_marker(&root, &marker)?;
     Ok(marker)
-}
-
-/// Write a complete temporary file, make it durable, then atomically replace
-/// the marker entry and make the directory entry durable. Readers never
-/// observe a partially written marker.
-fn publish_marker(root: &Path, marker: &StateMarker) -> RuntimeResult<()> {
-    let bytes = serde_json::to_vec_pretty(marker).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!("failed to serialize state marker: {error}"),
-        )
-    })?;
-    crate::filesystem::publish_file(root, MARKER_FILE_NAME, &bytes).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!(
-                "failed to publish state marker {}: {error}",
-                marker_path(root).display()
-            ),
-        )
-    })
-}
-
-pub fn read_marker(target: &Path) -> RuntimeResult<StateMarker> {
-    let path = marker_path(target);
-    let bytes = std::fs::read(&path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!(
-                "state marker is missing or unreadable at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("state marker is invalid at {}: {error}", path.display()),
-        )
-    })
-}
-
-pub fn marker_path(target: &Path) -> PathBuf {
-    target.join(MARKER_FILE_NAME)
 }
