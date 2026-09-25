@@ -26,7 +26,7 @@ use crate::registry::Registry;
 use crate::registry::status::{self, DbStatus, PortStatus};
 use crate::service::endpoint::{
     EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
-    LockRoot, OwnershipObservation, acquire_startup_locks, observe_ownership,
+    OwnershipObservation, acquire_startup_locks, observe_ownership,
     observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
 use crate::service::identity::service_instance_id;
@@ -1343,7 +1343,7 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
-    selection: ServiceSelection<'_>,
+    mut selection: ServiceSelection<'_>,
 ) -> RuntimeResult<StartingService> {
     if registry.identity().environment != selected_slot.environment
         || registry.identity().slot != i64::from(selected_slot.slot)
@@ -1353,24 +1353,6 @@ pub fn start_service_for_slot(
             "service selection does not match the owned slot",
         ));
     }
-    start_service_with_lock_root(
-        admission,
-        placement,
-        registry,
-        run_id,
-        selection,
-        LockRoot::Fixed,
-    )
-}
-
-pub(super) fn start_service_with_lock_root(
-    admission: &RunAdmission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    mut selection: ServiceSelection<'_>,
-    lock_root: LockRoot<'_>,
-) -> RuntimeResult<StartingService> {
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
     let cancellation = selection.cancellation;
@@ -1475,7 +1457,7 @@ pub(super) fn start_service_with_lock_root(
         },
     };
     cancellation.check()?;
-    let startup_guards = match acquire_startup_locks(own_endpoints.values(), lock_root) {
+    let startup_guards = match acquire_startup_locks(own_endpoints.values()) {
         Ok(guards) => guards,
         Err(failure) => return Err(endpoint_failure_error(registry, service, failure)),
     };
