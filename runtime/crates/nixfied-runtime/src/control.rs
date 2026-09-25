@@ -176,21 +176,6 @@ pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
     Ok(PsReport { processes })
 }
 
-/// State preparation never performs teardown. The slot owner must first settle
-/// all recorded process and endpoint obligations through recovery.
-pub(crate) fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
-    registry.authority().validate()?;
-    let processes = process_rows(registry.connection())?;
-    let endpoints = read_open_endpoints(registry.connection(), None)?;
-    if processes.iter().any(ProcessRow::is_obligation) || !endpoints.is_empty() {
-        return Err(RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            "state preparation requires settled predecessor processes and endpoints",
-        ));
-    }
-    Ok(())
-}
-
 /// Recovery's process pass under slot authority: settle every recorded
 /// obligation proven gone, release endpoint evidence no live owner holds, then
 /// stop every live obligation with its recorded policy.
@@ -293,6 +278,32 @@ pub fn stop_recorded_processes(
 pub struct RecoveryReport {
     pub down: DownReport,
     pub retention: RetentionOutcome,
+    pub recovered: Recovered,
+}
+
+/// Proof that exclusive predecessor recovery completed under one registry's
+/// slot authority: every recorded process obligation settled, no endpoint
+/// evidence remained open, any pending deletion was resumed, and the
+/// predecessor tree's own retention was applied. Only [`recover_slot`]
+/// produces it; state preparation consumes it.
+#[derive(Debug)]
+#[must_use]
+pub struct Recovered {
+    registry: std::path::PathBuf,
+}
+
+impl Recovered {
+    /// The proof holds only for the registry, and so the slot authority, that
+    /// produced it.
+    pub(crate) fn check(&self, registry: &Registry) -> RuntimeResult<()> {
+        if self.registry != registry.path() {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnowned,
+                "predecessor recovery was proven for a different slot registry",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The exclusive successor's settlement of every interrupted or unfinished
@@ -309,7 +320,13 @@ pub fn recover_slot(
     let down = stop_recorded_processes(registry, timeout_ms)?;
     let retention = apply_retention(identity, registry)?;
     record_recovered_sessions(registry)?;
-    Ok(RecoveryReport { down, retention })
+    Ok(RecoveryReport {
+        down,
+        retention,
+        recovered: Recovered {
+            registry: registry.path().to_path_buf(),
+        },
+    })
 }
 
 #[derive(Debug)]

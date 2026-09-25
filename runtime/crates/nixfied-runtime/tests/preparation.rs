@@ -193,14 +193,12 @@ fn foreign_ownership_or_runtime_abi_refuses_state_unowned() {
 fn changed_manifest_cannot_weaken_existing_retention() {
     {
         let fixture = PreparationFixture::new();
-        let mut persistent = fixture.identity(false);
-        persistent.persistence = PersistencePolicy::Persistent;
-        fixture.prepare("run-1", &persistent).unwrap();
+        fixture.prepare("run-1", &fixture.identity(false)).unwrap();
         let sentinel = fixture.plant_sentinel();
         let before = fixture.marker();
-        let error = fixture
-            .prepare("run-2", &fixture.identity(true))
-            .unwrap_err();
+        let mut weaker = fixture.identity(true);
+        weaker.persistence = PersistencePolicy::RunScoped;
+        let error = fixture.prepare("run-2", &weaker).unwrap_err();
         assert_eq!(error.code, ErrorCode::CleanupRefused);
         assert_eq!(fixture.marker(), before);
         assert_eq!(fs::read(sentinel).unwrap(), b"keep");
@@ -221,7 +219,8 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         .expect("manifest should parse");
         let admission_a = admission(&manifest, &tmp.path, false);
         let placement = default_placement(&manifest, "run-a", &tmp.path).expect("layout derives");
-        let identity_a = default_state_identity(admission_a.common());
+        let mut identity_a = default_state_identity(admission_a.common());
+        identity_a.persistence = PersistencePolicy::Persistent;
         let mut registry = open_registry(&placement, &manifest);
         registry.authority().claim_run_dir(&placement).unwrap();
         commit_slot_marker(&registry, &identity_a).expect("marker should be written");
@@ -239,30 +238,27 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         let process_key = service.info().process_key.clone();
 
         let admission_b = admission(&manifest, &tmp.path, changed);
-        let identity_b = default_state_identity(admission_b.common());
+        let mut identity_b = default_state_identity(admission_b.common());
+        identity_b.persistence = PersistencePolicy::Persistent;
         let marker_path = placement.state_root().join(MARKER_FILE_NAME);
         let marker_before = fs::read(&marker_path).unwrap();
-        for (status, expected) in [
-            ("running", ErrorCode::CleanupRefused),
-            // Even terminal process evidence cannot hide the open endpoint.
-            ("stopped", ErrorCode::CleanupRefused),
-            ("invalid", ErrorCode::RegistryCorrupt),
-        ] {
-            registry
-                .connection()
-                .execute(
-                    "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-                    rusqlite::params![process_key, status],
-                )
-                .unwrap();
-            let error = prepare_slot_state(&identity_b, &mut registry).unwrap_err();
-            assert_eq!(error.code, expected);
-            assert!(
-                process_group_has_non_zombie_member(pgid),
-                "preparation must not signal a predecessor"
-            );
-            assert_eq!(fs::read(&marker_path).unwrap(), marker_before);
-        }
+        // Preparation requires the recovery proof; recovery refuses corrupt
+        // evidence without signaling the predecessor or touching its data.
+        registry
+            .connection()
+            .execute(
+                "UPDATE processes SET status = 'invalid' WHERE process_key = ?1",
+                [&process_key],
+            )
+            .unwrap();
+        let error =
+            nixfied_runtime::control::recover_slot(&mut registry, &identity_b, 5000).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert!(
+            process_group_has_non_zombie_member(pgid),
+            "refused recovery must not signal a predecessor"
+        );
+        assert_eq!(fs::read(&marker_path).unwrap(), marker_before);
         registry
             .connection()
             .execute(
@@ -270,9 +266,9 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
                 [&process_key],
             )
             .unwrap();
-        nixfied_runtime::control::stop_recorded_processes(&mut registry, 5000)
+        let recovery = nixfied_runtime::control::recover_slot(&mut registry, &identity_b, 5000)
             .expect("exclusive recovery settles all manifest provenances");
-        let report = prepare_slot_state(&identity_b, &mut registry)
+        let report = prepare_slot_state(&identity_b, &mut registry, recovery.recovered)
             .expect("preparation follows successful recovery");
 
         assert_eq!(report.provenance_refreshed, changed);
@@ -348,9 +344,13 @@ impl PreparationFixture {
         Self { tmp, manifest }
     }
 
+    /// Persistent data is what survives recovery into the next preparation;
+    /// recovery deletes a predecessor's run-scoped tree.
     fn identity(&self, pretty: bool) -> StateIdentity {
         let admission = admission(&self.manifest, &self.tmp.path, pretty);
-        default_state_identity(admission.common())
+        let mut identity = default_state_identity(admission.common());
+        identity.persistence = PersistencePolicy::Persistent;
+        identity
     }
 
     fn placement(&self, run_id: &str) -> HostPlacement {
@@ -364,8 +364,8 @@ impl PreparationFixture {
     ) -> Result<nixfied_runtime::state::PreparationReport, nixfied_runtime::RuntimeError> {
         let placement = self.placement(run_id);
         let mut registry = open_registry(&placement, &self.manifest);
-        nixfied_runtime::control::stop_recorded_processes(&mut registry, 1000)?;
-        prepare_slot_state(identity, &mut registry)
+        let recovery = nixfied_runtime::control::recover_slot(&mut registry, identity, 1000)?;
+        prepare_slot_state(identity, &mut registry, recovery.recovered)
     }
 
     fn registry(&self) -> Registry {
