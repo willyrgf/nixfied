@@ -241,27 +241,13 @@ fn acquire_keys(
                 format!("invalid endpoint coordination object: {error}"),
             )
         };
-        let fd = lock_dir.0.open_private_file(&name).map_err(failure)?;
-        let result = unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result != 0 {
-            let error = io::Error::last_os_error();
-            if error
-                .raw_os_error()
-                .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-            {
-                return Err(EndpointFailure::LockContended {
-                    endpoint: key.endpoint,
-                });
-            }
-            return Err(EndpointFailure::unverifiable(
-                Some(key.endpoint),
-                format!("failed to acquire endpoint startup lock: {error}"),
-            ));
-        }
-        lock_dir
+        let fd = lock_dir
             .0
-            .verify_private_file(&name, &fd)
-            .map_err(failure)?;
+            .try_lock_private_file(&name)
+            .map_err(failure)?
+            .ok_or_else(|| EndpointFailure::LockContended {
+                endpoint: key.endpoint.clone(),
+            })?;
         guards.push(fd);
     }
     Ok(EndpointLockGuards { _guards: guards })

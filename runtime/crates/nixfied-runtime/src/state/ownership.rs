@@ -102,26 +102,12 @@ impl SlotGuard {
         }
         cancellation.check()?;
         refuse_network_filesystem(&directory)?;
-        let file = directory
-            .open_private_file(c"slot.lock")
-            .map_err(acquisition_error)?;
-        loop {
-            cancellation.check()?;
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                break;
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            if error.kind() == io::ErrorKind::WouldBlock {
-                return Ok(None);
-            }
-            return Err(acquisition_error(error));
-        }
-        directory
-            .verify_private_file(c"slot.lock", &file)
-            .map_err(acquisition_error)?;
+        let Some(file) = directory
+            .try_lock_private_file(c"slot.lock")
+            .map_err(acquisition_error)?
+        else {
+            return Ok(None);
+        };
         cancellation.check()?;
         let guard = Self {
             file,
