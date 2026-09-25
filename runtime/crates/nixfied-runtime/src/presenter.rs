@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
@@ -32,8 +31,10 @@ use crate::output::{
 use crate::registry::{RegistryIdentity, RegistryReader};
 
 pub const COMMAND: &str = "__presenter";
-const MAGIC: &[u8; 4] = b"NXP1";
-const MAX_FRAME: usize = 64 * 1024;
+const PROTOCOL: crate::channel::Protocol = crate::channel::Protocol {
+    magic: *b"NXP1",
+    max: 64 * 1024,
+};
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(50);
 const CHUNK: usize = 64 * 1024;
@@ -42,7 +43,7 @@ const SOURCE_BUDGET: usize = 1024 * 1024;
 /// A human line longer than this is emitted as a labeled fragment.
 const MAX_LINE: usize = 8 * 1024;
 const WRITER_QUEUE: usize = 64;
-const FAILURE_EXIT: i32 = 125;
+const FAILURE_EXIT: i32 = crate::channel::FAILURE_EXIT;
 const FINISH: u8 = b'F';
 const CANCEL: u8 = b'C';
 
@@ -106,35 +107,23 @@ impl CommandPresenter {
         launcher: &Path,
         init: &PresenterInit,
     ) -> RuntimeResult<Self> {
-        use std::os::unix::process::CommandExt;
         let failure = |message: &str| RuntimeError::new(ErrorCode::LifecycleFailed, message);
         let body = serde_json::to_vec(init)
             .map_err(|_| failure("cannot encode presenter initialization"))?;
-        if body.len() > MAX_FRAME {
-            return Err(failure("presenter initialization exceeds its limit"));
-        }
-        let (mut channel, child_channel) = crate::launch::startup_pair()
-            .map_err(|_| failure("cannot create presenter channel"))?;
-        let inherited = child_channel.as_raw_fd();
-        let owner_end = channel.as_raw_fd();
+        let frame = PROTOCOL
+            .encode(&body)
+            .map_err(|_| failure("presenter initialization exceeds its limit"))?;
+        let (mut channel, child_channel) =
+            crate::channel::pair().map_err(|_| failure("cannot create presenter channel"))?;
         let mut command = Command::new(launcher);
+        command.arg(COMMAND);
+        crate::channel::inherit(&mut command, &child_channel, &channel);
         command
-            .arg(COMMAND)
-            .arg(inherited.to_string())
             .env_clear()
             .current_dir("/")
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-        // SAFETY: only async-signal-safe descriptor syscalls run after fork.
-        unsafe {
-            command.pre_exec(move || {
-                if libc::close(owner_end) != 0 || libc::fcntl(inherited, libc::F_SETFD, 0) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
         let child = authority
             .spawn(command)
             .map_err(|_| failure("cannot spawn presenter"))?;
@@ -145,11 +134,9 @@ impl CommandPresenter {
                 .try_clone()
                 .map_err(|_| failure("cannot own presenter channel"))?,
         };
-        let mut frame = Vec::with_capacity(8 + body.len());
-        frame.extend(MAGIC);
-        frame.extend((body.len() as u32).to_be_bytes());
-        frame.extend(body);
-        if write_all_until(&mut channel, &frame, Instant::now() + STARTUP_TIMEOUT).is_err() {
+        if crate::channel::write_all(&mut channel, &frame, Instant::now() + STARTUP_TIMEOUT)
+            .is_err()
+        {
             presenter.kill_and_reap();
             return Err(failure("cannot initialize presenter"));
         }
@@ -162,7 +149,7 @@ impl CommandPresenter {
     /// final output the session retained.
     pub fn finish(mut self) -> DeliveryOutcome {
         let signals = crate::cancellation::signal_count();
-        let _ = write_all_until(
+        let _ = crate::channel::write_all(
             &mut self.channel,
             &[FINISH],
             Instant::now() + Duration::from_secs(1),
@@ -189,7 +176,8 @@ impl CommandPresenter {
         if !status.success() {
             return DeliveryOutcome::HelperFailed;
         }
-        match read_frame(&mut self.channel, Instant::now() + Duration::from_secs(1))
+        match PROTOCOL
+            .read(&mut self.channel, Instant::now() + Duration::from_secs(1))
             .ok()
             .and_then(|body| serde_json::from_slice::<PresenterReport>(&body).ok())
         {
@@ -255,46 +243,17 @@ impl DeliveryOutcome {
 
 /// Return None for ordinary runtime commands. Runs before signal ownership.
 pub fn dispatch(args: &[OsString]) -> Option<i32> {
-    if args.first().is_none_or(|arg| arg != COMMAND) {
-        return None;
-    }
-    let [_, descriptor] = args else {
-        return Some(FAILURE_EXIT);
+    let mut channel = match crate::channel::admit(args, COMMAND)? {
+        Ok(channel) => channel,
+        Err(exit) => return Some(exit),
     };
-    let Some(fd) = descriptor
-        .to_str()
-        .and_then(|value| value.parse::<i32>().ok())
-        .filter(|fd| *fd >= 3)
-    else {
-        return Some(FAILURE_EXIT);
-    };
-    let mut kind: libc::c_int = 0;
-    let mut kind_length = std::mem::size_of_val(&kind) as libc::socklen_t;
-    if unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_TYPE,
-            (&raw mut kind).cast(),
-            &mut kind_length,
-        )
-    } != 0
-        || kind != libc::SOCK_STREAM
-    {
-        return Some(FAILURE_EXIT);
-    }
     // Delivery reports EPIPE as a typed failure instead of dying. Termination
     // signals keep their default action: Ctrl-C ends presentation at once.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
     }
-    // SAFETY: this internal process takes sole ownership of its inherited socket.
-    let mut channel = unsafe { UnixStream::from_raw_fd(fd) };
-    if channel.set_nonblocking(true).is_err() {
-        return Some(FAILURE_EXIT);
-    }
-    let Some(init) = read_frame(&mut channel, Instant::now() + STARTUP_TIMEOUT)
+    let Some(init) = PROTOCOL
+        .read(&mut channel, Instant::now() + STARTUP_TIMEOUT)
         .ok()
         .and_then(|body| serde_json::from_slice::<PresenterInit>(&body).ok())
     else {
@@ -389,17 +348,10 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
     let Ok(body) = serde_json::to_vec(&PresenterReport { sealed, issues }) else {
         return FAILURE_EXIT;
     };
-    let mut frame = Vec::with_capacity(8 + body.len());
-    frame.extend(MAGIC);
-    frame.extend((body.len() as u32).to_be_bytes());
-    frame.extend(body);
     let mut channel = channel;
-    if write_all_until(
-        &mut channel,
-        &frame,
-        Instant::now() + Duration::from_secs(1),
-    )
-    .is_err()
+    if PROTOCOL
+        .write(&mut channel, &body, Instant::now() + Duration::from_secs(1))
+        .is_err()
     {
         return FAILURE_EXIT;
     }
@@ -765,65 +717,6 @@ fn deliver(stream: OutputStream, receiver: Receiver<Vec<u8>>) -> Vec<ProjectionI
         }
     }
     issue.into_iter().collect()
-}
-
-fn write_all_until(
-    channel: &mut UnixStream,
-    mut bytes: &[u8],
-    deadline: Instant,
-) -> io::Result<()> {
-    while !bytes.is_empty() {
-        match channel.write(bytes) {
-            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-            Ok(written) => bytes = &bytes[written..],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err(io::ErrorKind::TimedOut.into());
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-fn read_frame(channel: &mut UnixStream, deadline: Instant) -> io::Result<Vec<u8>> {
-    let mut header = [0_u8; 8];
-    read_exact_until(channel, &mut header, deadline)?;
-    if &header[..4] != MAGIC {
-        return Err(io::ErrorKind::InvalidData.into());
-    }
-    let size = u32::from_be_bytes(header[4..].try_into().expect("four bytes")) as usize;
-    if size == 0 || size > MAX_FRAME {
-        return Err(io::ErrorKind::InvalidData.into());
-    }
-    let mut body = vec![0_u8; size];
-    read_exact_until(channel, &mut body, deadline)?;
-    Ok(body)
-}
-
-fn read_exact_until(
-    channel: &mut UnixStream,
-    mut bytes: &mut [u8],
-    deadline: Instant,
-) -> io::Result<()> {
-    while !bytes.is_empty() {
-        match channel.read(bytes) {
-            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
-            Ok(read) => bytes = &mut bytes[read..],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err(io::ErrorKind::TimedOut.into());
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
