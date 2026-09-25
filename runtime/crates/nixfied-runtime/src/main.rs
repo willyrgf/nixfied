@@ -123,6 +123,7 @@ struct RunSession<'a> {
     evidence: RunEvidence,
     diagnostics: SessionDiagnostics,
     control: nixfied_runtime::session_control::SessionControl,
+    presenter: &'a mut Option<CommandPresenter>,
 }
 
 struct FailureAccumulator {
@@ -280,6 +281,11 @@ impl<'a> RunSession<'a> {
             close_source_registration(&mut self.registry, self.run_id, manifest_hash)
         {
             failures.push(error);
+        }
+        // The session's last cancellation observation: a later signal ends
+        // the presenter's drain rather than being absorbed by the session.
+        if let Some(presenter) = self.presenter.as_mut() {
+            presenter.observe_session_signals();
         }
         record_cancellation_once(self.cancellation, &mut cancellation_recorded, &mut failures);
         let duration_ms = elapsed_ms(self.run_started);
@@ -1025,6 +1031,7 @@ fn run_m0_placed(
         evidence: RunEvidence::default(),
         diagnostics,
         control,
+        presenter,
     };
     macro_rules! finish_run {
         ($error:expr, $extra_services:expr) => {{
@@ -1052,7 +1059,7 @@ fn run_m0_placed(
             mode,
         };
         match CommandPresenter::spawn(session.registry.authority(), &launcher, &init) {
-            Ok(spawned) => *presenter = Some(spawned),
+            Ok(spawned) => *session.presenter = Some(spawned),
             Err(error) => finish_run!(error, Vec::new()),
         }
     }
