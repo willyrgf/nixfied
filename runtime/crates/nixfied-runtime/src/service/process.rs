@@ -708,7 +708,7 @@ impl OwnedService {
         timeout_ms: u64,
         error: RuntimeError,
     ) -> RuntimeError {
-        let containment = self.terminate_after_failure(timeout_ms);
+        let containment = self.contain(libc::SIGTERM, timeout_ms).map(|_| ());
         let (containment, capture) = self.finish_terminal_capture(containment);
         self.settle_failure_after_cleanup(registry, containment, capture, error)
     }
@@ -793,7 +793,7 @@ impl OwnedService {
             &self.info.computed_manifest_hash,
             &payload,
         );
-        let containment = self.terminate_owned(timeout_ms);
+        let containment = self.contain(libc::SIGTERM, timeout_ms).map(|_| ());
         let (containment, capture) = self.finish_terminal_capture(containment);
         if let Err(termination) = containment {
             let canceled = RuntimeError::new(ErrorCode::Canceled, reason);
@@ -878,7 +878,7 @@ impl OwnedService {
             return Err(self.settle_failed_service(registry, timeout_ms, error));
         }
         let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
-        let stopped = self.stop_owned(stop_signal_number(self.service.stop.signal), stop_timeout);
+        let stopped = self.contain(stop_signal_number(self.service.stop.signal), stop_timeout);
         let containment = match stopped {
             Ok(escalated) => {
                 self.record_stop_signaled(registry, escalated, stop_timeout);
@@ -946,20 +946,12 @@ impl OwnedService {
     }
 
     fn escape_error(&self) -> Option<RuntimeError> {
-        let descendants = &self.descendants;
         // Refresh at the decision boundary so shutdown cannot signal the
-        // foreground group before recording a child that has already escaped it.
-        if let Err(error) = descendants.refresh(
-            self.info.pid,
-            self.info.pgid,
-            matches!(
-                self.service.containment,
-                ContainmentRequirement::ProcessGroup
-            ),
-        ) {
+        // group before recording a child that has already escaped it.
+        if let Err(error) = self.refresh_descendants() {
             return Some(error);
         }
-        let escaped = descendants.escaped_descendants();
+        let escaped = self.descendants.escaped_descendants();
         if escaped.is_empty() {
             return None;
         }
@@ -1049,54 +1041,34 @@ impl OwnedService {
         );
     }
 
-    /// Terminate the owned process(es) according to containment: a single
-    /// process group, or the whole supervised process tree.
-    fn terminate_owned(&self, timeout_ms: u64) -> RuntimeResult<()> {
-        match self.service.containment {
-            ContainmentRequirement::ProcessGroup => {
-                terminate_process_group(self.info.pgid, timeout_ms)
-            }
-            ContainmentRequirement::ProcessTree => {
-                terminate_process_tree(self.info.pid, self.info.pgid, timeout_ms)
-            }
-        }
+    /// Contain the owned tree: refresh descendant evidence at this decision
+    /// boundary, then signal and escalate across the group, the leader, and
+    /// every descendant this owner ever tracked, whatever the declared
+    /// containment. An escapee that already left the group, or that would
+    /// reparent after the first signal, stays identity-tracked. Returns
+    /// whether escalation to SIGKILL was required.
+    fn contain(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
+        let refreshed = self.refresh_descendants();
+        let tracked = self.descendants.known_descendants();
+        let contained = contain(
+            &Leader::Child(&self.child),
+            self.info.pgid,
+            signal,
+            timeout_ms,
+            &tracked,
+        );
+        crate::error::both(contained, refreshed)
     }
 
-    /// Failure cleanup is stronger than the declared steady-state containment:
-    /// once a strict process-group service has demonstrated an escape, every
-    /// descendant captured by the owner must also be killed and identity-
-    /// checked before ports can be released.
-    fn terminate_after_failure(&self, timeout_ms: u64) -> RuntimeResult<()> {
-        let monitored = self.descendants.known_descendants();
-        terminate_process_tree_with_snapshot(
+    fn refresh_descendants(&self) -> RuntimeResult<()> {
+        self.descendants.refresh(
             self.info.pid,
             self.info.pgid,
-            libc::SIGTERM,
-            timeout_ms,
-            &monitored,
-        )
-        .map(|_| ())
-    }
-
-    /// Graceful shutdown: signal the owned process(es) with the manifest's declared
-    /// stop signal, then escalate to SIGKILL after the budget. Returns `true` if
-    /// escalation to SIGKILL was required.
-    fn stop_owned(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
-        match self.service.containment {
-            // Preserve the refreshed descendant identities across the first
-            // signal, when an escapee can otherwise reparent and disappear
-            // from both the foreground group and the live process tree.
-            ContainmentRequirement::ProcessGroup => terminate_process_tree_with_snapshot(
-                self.info.pid,
-                self.info.pgid,
-                signal,
-                timeout_ms,
-                &self.descendants.known_descendants(),
+            matches!(
+                self.service.containment,
+                ContainmentRequirement::ProcessGroup
             ),
-            ContainmentRequirement::ProcessTree => {
-                terminate_process_tree_signal(self.info.pid, self.info.pgid, signal, timeout_ms)
-            }
-        }
+        )
     }
 
     fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
@@ -1326,14 +1298,11 @@ fn endpoint_failure_error(
 }
 
 impl Drop for OwnedService {
+    /// Best-effort unwind containment of a still-running leader, including
+    /// its tracked descendants.
     fn drop(&mut self) {
-        let child = &mut self.child;
-        if child.observe().ok().flatten().is_none() {
-            let _ = signal_process_group(self.info.pgid, libc::SIGTERM);
-            if wait_for_child_exit(child, 100).ok() != Some(true) {
-                let _ = signal_process_group(self.info.pgid, libc::SIGKILL);
-                let _ = wait_for_child_exit(child, 1000);
-            }
+        if self.child.observe().ok().flatten().is_none() {
+            let _ = self.contain(libc::SIGTERM, 100);
         }
         let _ = self.shutdown_capture();
     }
@@ -1854,11 +1823,8 @@ fn terminate_unrecorded_child(
     })?);
     let timeout_ms =
         (service.stop.timeout.as_millis().min(u128::from(u64::MAX)) as u64).min(run_timeout_ms);
-    let containment = match service.containment {
-        ContainmentRequirement::ProcessGroup => terminate_process_group(pgid, timeout_ms),
-        ContainmentRequirement::ProcessTree => terminate_process_tree(pid, pgid, timeout_ms),
-    };
-    crate::error::both(containment, reap_owned_child(child))
+    let containment = contain(&Leader::Child(child), pgid, libc::SIGTERM, timeout_ms, &[]);
+    crate::error::both(containment.map(|_| ()), reap_owned_child(child))
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
@@ -2319,16 +2285,22 @@ fn completion_error(
 /// Finish an owned bounded child, including descendants left after direct exit.
 /// Reaping is attempted even if group containment fails; it cannot erase that failure.
 pub(crate) fn terminate_and_reap(child: &mut OwnedChild, pgid: i32) -> RuntimeResult<()> {
-    let containment = terminate_process_group(pgid, 1000);
-    crate::error::both(containment, reap_owned_child(child))
+    let containment = contain(&Leader::Child(child), pgid, libc::SIGTERM, 1000, &[]);
+    crate::error::both(containment.map(|_| ()), reap_owned_child(child))
 }
 
 fn reap_owned_child(child: &mut OwnedChild) -> RuntimeResult<()> {
-    if wait_for_child_exit(child, 1000)? {
+    let exited = || {
+        child
+            .observe()
+            .map(|status| status.is_some())
+            .map_err(|error| RuntimeError::new(ErrorCode::ProcEscape, error.to_string()))
+    };
+    if poll_until(Duration::from_secs(1), exited)? {
         return Ok(());
     }
     let killed = child.kill();
-    if wait_for_child_exit(child, 1000)? {
+    if poll_until(Duration::from_secs(1), exited)? {
         return Ok(());
     }
     Err(RuntimeError::new(
@@ -2593,61 +2565,129 @@ fn ensure_foreground_child_alive(
     Ok(())
 }
 
-/// Terminate a process tree rooted at a supervisor whose children may live in
-/// their own process groups. SIGTERM the supervisor's group first (a well-behaved
-/// supervisor shuts its tree down), then escalate to SIGKILL across the tree.
-pub(crate) fn terminate_process_tree(pid: u32, pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
-    terminate_process_tree_signal(pid, pgid, libc::SIGTERM, timeout_ms).map(|_| ())
+/// The leader of an owned process tree, identified so that a reused PID is
+/// never mistaken for it.
+pub(crate) enum Leader<'a> {
+    /// An owned direct child: its PID stays ours until it is reaped.
+    Child(&'a OwnedChild),
+    /// A recorded leader. Its start identity distinguishes PID reuse; without
+    /// one, presence stands for identity and the PID is never signaled alone.
+    Recorded {
+        pid: u32,
+        platform_start: Option<&'a str>,
+    },
 }
 
-/// Signal the supervisor's group with `signal`, wait for the tree to drain, then
-/// escalate to SIGKILL across the tree. Returns `true` if escalation was required.
-pub(crate) fn terminate_process_tree_signal(
-    pid: u32,
+impl Leader<'_> {
+    fn pid(&self) -> u32 {
+        match self {
+            Self::Child(child) => child.id(),
+            Self::Recorded { pid, .. } => *pid,
+        }
+    }
+
+    /// Still the same live, non-zombie process. An unobservable owned child
+    /// counts as live, so containment never claims it gone.
+    fn alive(&self) -> bool {
+        match self {
+            Self::Child(child) => !matches!(child.observe(), Ok(Some(_))),
+            Self::Recorded {
+                pid,
+                platform_start: Some(start),
+            } => identity_alive(*pid, start),
+            Self::Recorded {
+                pid,
+                platform_start: None,
+            } => process_present(*pid).unwrap_or(true),
+        }
+    }
+
+    /// A PID is never reused while its process group exists, so the group is
+    /// ours unless the leader PID now names another process.
+    fn owns_group(&self) -> bool {
+        match self {
+            Self::Child(_)
+            | Self::Recorded {
+                platform_start: None,
+                ..
+            } => true,
+            Self::Recorded {
+                pid,
+                platform_start: Some(start),
+            } => {
+                platform_start_identity(*pid).as_deref() == Some(*start)
+                    || matches!(process_group(*pid), Ok(None))
+            }
+        }
+    }
+
+    /// Signal the leader itself only when its identity is proven.
+    fn kill(&self) {
+        match self {
+            Self::Child(child) => {
+                let _ = child.kill();
+            }
+            Self::Recorded {
+                pid,
+                platform_start: Some(_),
+            } if self.alive() => unsafe {
+                libc::kill(*pid as libc::pid_t, libc::SIGKILL);
+            },
+            Self::Recorded { .. } => {}
+        }
+    }
+}
+
+/// The one containment primitive. Snapshot the leader's descendants with
+/// their start identities, add every tracked identity, signal the leader's
+/// group, and wait until the leader, its descendants, its group, and every
+/// snapshotted process are gone; then escalate to SIGKILL across all of them.
+/// A snapshotted process may reparent and leave the group after the first
+/// signal; its identity keeps it tracked and makes the tracking PID-reuse
+/// safe. Returns whether escalation was required.
+pub(crate) fn contain(
+    leader: &Leader<'_>,
     pgid: i32,
     signal: i32,
     timeout_ms: u64,
+    tracked: &[TrackedProcessIdentity],
 ) -> RuntimeResult<bool> {
-    terminate_process_tree_with_snapshot(pid, pgid, signal, timeout_ms, &[])
-}
-
-pub(crate) fn terminate_process_tree_with_snapshot(
-    pid: u32,
-    pgid: i32,
-    signal: i32,
-    timeout_ms: u64,
-    monitored: &[TrackedProcessIdentity],
-) -> RuntimeResult<bool> {
-    // Snapshot owned descendants with their start identities BEFORE signaling. A
-    // process-tree child may reparent to init and move to its own group after the
-    // supervisor exits, making it invisible to a descendant/pgid scan; the
-    // snapshot keeps it tracked, and the identity makes the tracking pid-reuse
-    // safe (a recycled pid has a different start identity). The owner's
-    // earlier snapshot also covers a strict-group escape that has already been
-    // reparented and is no longer discoverable below the foreground child.
-    let mut snapshot_by_pid = descendant_pids(pid)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|child| (child, platform_start_identity(child)))
-        .collect::<BTreeMap<_, _>>();
-    for process in monitored {
+    let pid = leader.pid();
+    let mut snapshot_by_pid = if leader.alive() {
+        descendant_pids(pid).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+    .into_iter()
+    .map(|child| (child, platform_start_identity(child)))
+    .collect::<BTreeMap<_, _>>();
+    for process in tracked {
         snapshot_by_pid
             .entry(process.pid)
             .or_insert_with(|| process.platform_start.clone());
     }
     let snapshot = snapshot_by_pid.into_iter().collect::<Vec<_>>();
-    signal_process_group(pgid, signal)?;
-    if wait_until_process_tree_empty(pid, pgid, &snapshot, timeout_ms)? {
+    let owns_group = leader.owns_group();
+    if owns_group {
+        signal_process_group(pgid, signal)?;
+    }
+    let gone = || tree_gone(leader, pgid, owns_group, &snapshot);
+    if poll_until(Duration::from_millis(timeout_ms), gone)? {
         return Ok(false);
     }
     kill_snapshot_survivors(&snapshot);
-    for descendant in descendant_pids(pid).unwrap_or_default() {
-        unsafe {
-            libc::kill(descendant as libc::pid_t, libc::SIGKILL);
+    if leader.alive() {
+        for descendant in descendant_pids(pid).unwrap_or_default() {
+            unsafe {
+                libc::kill(descendant as libc::pid_t, libc::SIGKILL);
+            }
         }
+        leader.kill();
     }
-    signal_process_group(pgid, libc::SIGKILL)?;
-    if wait_until_process_tree_empty(pid, pgid, &snapshot, 1000)? {
+    if owns_group {
+        signal_process_group(pgid, libc::SIGKILL)?;
+    }
+    if poll_until(Duration::from_secs(1), gone)? {
         Ok(true)
     } else {
         Err(RuntimeError::new(
@@ -2657,17 +2697,37 @@ pub(crate) fn terminate_process_tree_with_snapshot(
     }
 }
 
+fn tree_gone(
+    leader: &Leader<'_>,
+    pgid: i32,
+    owns_group: bool,
+    snapshot: &[(u32, Option<String>)],
+) -> RuntimeResult<bool> {
+    if leader.alive() {
+        return Ok(false);
+    }
+    // A child that escaped to its own group after reparenting is neither a
+    // descendant of the leader nor in its group; only the snapshot sees it.
+    if snapshot
+        .iter()
+        .any(|(child, identity)| snapshot_member_alive(*child, identity))
+    {
+        return Ok(false);
+    }
+    Ok(!(owns_group && process_group_has_live_member(pgid)?))
+}
+
 /// `true` if the snapshotted pid is still the *same* live process — including one
 /// that escaped to its own process group. A dead, zombie, or pid-reused entry
 /// (start identity no longer matches) is treated as gone.
 fn snapshot_member_alive(pid: u32, expected: &Option<String>) -> bool {
-    match expected {
-        Some(identity) => {
-            !process_is_zombie(pid)
-                && platform_start_identity(pid).as_deref() == Some(identity.as_str())
-        }
-        None => false,
-    }
+    expected
+        .as_deref()
+        .is_some_and(|identity| identity_alive(pid, identity))
+}
+
+fn identity_alive(pid: u32, identity: &str) -> bool {
+    !process_is_zombie(pid) && platform_start_identity(pid).as_deref() == Some(identity)
 }
 
 /// SIGKILL every snapshotted descendant still running as its original process,
@@ -2686,96 +2746,24 @@ fn kill_snapshot_survivors(snapshot: &[(u32, Option<String>)]) {
     }
 }
 
-fn wait_until_process_tree_empty(
-    pid: u32,
-    pgid: i32,
-    snapshot: &[(u32, Option<String>)],
-    timeout_ms: u64,
+/// Poll `done` until it holds or `timeout` passes; it always runs at least
+/// once and once more at the deadline.
+pub(crate) fn poll_until(
+    timeout: Duration,
+    mut done: impl FnMut() -> RuntimeResult<bool>,
 ) -> RuntimeResult<bool> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    const INTERVAL: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + timeout;
     loop {
-        let root_alive = process_group(pid)?.is_some() && !process_is_zombie(pid);
-        let descendants_alive = descendant_pids(pid)
-            .unwrap_or_default()
-            .into_iter()
-            .any(|child| {
-                process_group(child)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|_| !process_is_zombie(child))
-            });
-        // A child that escaped to its own group after reparenting is neither a
-        // current descendant of `pid` nor in the supervisor's group, so the
-        // snapshot is the only thing that still sees it.
-        let escapee_alive = snapshot
-            .iter()
-            .any(|(child, identity)| snapshot_member_alive(*child, identity));
-        if !root_alive
-            && !descendants_alive
-            && !escapee_alive
-            && !process_group_has_live_member(pgid)?
-        {
+        if done()? {
             return Ok(true);
         }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Ok(false);
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(remaining.min(INTERVAL));
     }
-}
-
-pub(crate) fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
-    terminate_process_group_signal(pgid, libc::SIGTERM, timeout_ms).map(|_| ())
-}
-
-/// Signal the owned process group with `signal`, wait up to `timeout_ms` for it to
-/// empty, then escalate to SIGKILL. Returns `true` if escalation was required.
-pub(crate) fn terminate_process_group_signal(
-    pgid: i32,
-    signal: i32,
-    timeout_ms: u64,
-) -> RuntimeResult<bool> {
-    signal_process_group(pgid, signal)?;
-    if wait_until_process_group_empty(pgid, timeout_ms)? {
-        return Ok(false);
-    }
-    signal_process_group(pgid, libc::SIGKILL)?;
-    if wait_until_process_group_empty(pgid, 1000)? {
-        Ok(true)
-    } else {
-        Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to terminate owned process group {pgid}"),
-        ))
-    }
-}
-
-pub(crate) fn wait_until_process_group_empty(pgid: i32, timeout_ms: u64) -> RuntimeResult<bool> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        if !process_group_has_live_member(pgid)? {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-pub(crate) fn wait_for_child_exit(child: &mut OwnedChild, timeout_ms: u64) -> RuntimeResult<bool> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    while Instant::now() < deadline {
-        if child
-            .observe()
-            .map_err(|error| RuntimeError::new(ErrorCode::ProcEscape, error.to_string()))?
-            .is_some()
-        {
-            return Ok(true);
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    Ok(false)
 }
 
 pub(crate) fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> {

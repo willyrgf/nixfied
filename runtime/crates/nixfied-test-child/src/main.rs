@@ -346,13 +346,16 @@ fn detached_sleeper(args: &[String]) -> Result<(), String> {
             spawn_detached_sleeper(Path::new(detached), Some(Path::new(pid_file)))?;
             park_forever()
         }
-        ("after-marker", [request, armed, detached]) => {
+        ("after-marker", [request, armed, detached, pid_file @ ..]) if pid_file.len() <= 1 => {
             remove_if_present(Path::new(request))?;
             remove_if_present(Path::new(armed))?;
             remove_if_present(Path::new(detached))?;
             touch(Path::new(armed))?;
             wait_for_path(Path::new(request), MARKER_TIMEOUT)?;
-            spawn_detached_sleeper(Path::new(detached), None)?;
+            spawn_detached_sleeper(
+                Path::new(detached),
+                pid_file.first().map(|path| Path::new(path.as_str())),
+            )?;
             park_forever()
         }
         ("parent-exit", [child_ready]) => {
