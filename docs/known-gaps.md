@@ -40,18 +40,14 @@ Parity does not require identical Nix and Rust representations.
 
 ### Concrete evidence
 
-The former `stateRefs` description incorrectly claimed participation in service
-identity. [primitives.nix](../nix/modules/primitives.nix) and the
-[state guide](GUIDE.md#services-slots-and-state) now explain its actual role:
-execution lowering discards it, while it remains serialized manifest data.
-The `descriptive_refs_change_manifest_bytes_but_not_lowered_service` test in
+Service `stateRefs` are serialized manifest data that execution lowering
+discards; [primitives.nix](../nix/modules/primitives.nix) and the
+[state guide](GUIDE.md#services-slots-and-state) describe that role. The
+`descriptive_refs_change_manifest_bytes_but_not_lowered_service` test in
 [execution lowering](../runtime/crates/nixfied-runtime/src/execution/lower.rs)
-independently proves changed manifest bytes with unchanged the lowered service contract.
-
-That specific documentation defect is resolved. It illustrates why shared
-structural declarations alone cannot establish complete behavioral parity.
-Correcting an explanation, changing behavior and removing a field remain
-distinct decisions.
+independently proves that changed manifest bytes leave the lowered service
+contract unchanged. Shared structural declarations alone could not establish
+that distinction.
 
 ### Ownership and follow-up evidence
 
@@ -80,23 +76,120 @@ Correct inaccurate explanations independently of that broader work. Changes to
 manifest fields, identity, or runtime behavior follow the existing atomic contract
 procedure and verification guidance in [DEVELOPMENT.md](DEVELOPMENT.md).
 
+## Unproven runtime guarantees
+
+The session-ownership runtime has these open platform and proof limits:
+
+- **macOS coverage:** the session-ownership commits were built and tested on
+  Linux only; CI macOS coverage is still required. The Linux-only `statx`
+  mount-root check has a macOS fallback that relies on the device comparison
+  alone.
+- **Power-loss durability:** deletion and marker publication use `fsync`
+  ordering, which supports only process-death recovery. Host power-loss
+  durability is not claimed.
+- **Unsupported filesystems:** only known network filesystems are refused.
+  Other filesystems are assumed to provide local `flock`, `rename`, and `fsync`
+  semantics.
+- **Supervision shape:** there is no single in-memory supervisor collection
+  that owns all children. Checkpoints meet the requirement instead: every wait,
+  release, startup grace, and node success observes every started service. The
+  owner does not poll presenter status at checkpoints.
+- **Concurrent teardown observation:** ordered teardown observes every
+  remaining service before each stop signal. A service that exits while
+  another service stops is classified as failed from its own exit when that
+  sweep or its own stop observes it; no concurrent observation runs inside one
+  service's stop wait.
+- **Owner-kill proofs:** tests kill the owner during preparation,
+  registration, readiness, background owner death, and interrupted deletion
+  (pending intents and injected commit failures). No test kills a process during
+  a real deletion walk, or at each handshake boundary of the background launch
+  with a deterministic barrier.
+- **Success checkpoint after task exit:** it has no deterministic black-box
+  proof. The window between the task loop's last checkpoint and its exit
+  observation cannot be forced from outside the runtime.
+
+## Registry schema redundancy
+
+The registry DDL in
+[schema.rs](../runtime/crates/nixfied-runtime/src/registry/schema.rs) declares
+no foreign keys, and `service_instance_id` repeats `run_id` and the service name
+in three tables. Relations between records are enforced by runtime transactions
+and checked decoding, not by SQLite constraints.
+
+## Generation boundary leftovers
+
+Generation is meant to cover shared wire meaning only; private Rust
+representation belongs to native Rust definitions. Nix still declares Rust
+`visibility` and `derives` for wire vocabularies and manifest types
+([outputs.nix](../nix/meta/outputs.nix), [manifest.nix](../nix/meta/manifest.nix),
+[rust.nix](../nix/meta/rust.nix), [structure.nix](../nix/meta/structure.nix)).
+
 ## Separately scoped review candidates
 
-These were explicitly outside the completed reference delivery. They are not
-merge blockers or approved implementation assignments:
+These are not merge blockers or approved implementation assignments. Each
+candidate needs its own invariant, owner, rejection boundary and proof. Do not
+bundle unrelated changes merely to share an ABI rotation. Wire removals follow
+the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-- **Descriptive refs:** consider removing service `stateRefs`/`logRefs` and task
-  `artifactRefs`/`logRefs`/`summaryRefs`. They remain manifest/ABI data despite their
-  execution non-effects; removal requires an atomic contract change.
+### Authoring and compiler boundary
+
+- **Flat authoring alternatives:** [primitives.nix](../nix/modules/primitives.nix)
+  combines a `kind` discriminator with nullable or defaulted payload fields for
+  tasks, probes, endpoint topology, and secret resolvers. Nix projection
+  silently drops some inapplicable values before emission: composite
+  `exitPolicy` and `artifactRefs`/`logRefs`/`summaryRefs`, a `tcp` probe's
+  `invocation`, `primaryEndpoint` beside the singular `endpoint` form, and
+  `primaryEndpoint` on an endpoint-less service. Nix does not check that a
+  multi-endpoint `primaryEndpoint` names a declared endpoint; Rust structural
+  validation still rejects it. Native tagged alternatives (`types.attrTag`) would make
+  these combinations unrepresentable; relational checks stay explicit.
+- **Configured-value barrier:** `resolve.nix` returns a lazy configuration and
+  `validate.nix` forces only the values its checks read. An invalid value that
+  no check or projection reads is never evaluated.
+  `surfaceDescriptionsForced` is an isolated workaround for one case. One
+  compilation-only forcing boundary before relational validation would close
+  this without forcing package internals or metadata-only reference queries.
+- **Descriptive refs:** service `stateRefs`/`logRefs` and task
+  `artifactRefs`/`logRefs`/`summaryRefs` are manifest/ABI data that execution
+  lowering discards.
+- **Unused invocation deadlines:** the shared invocation `timeoutMs` is
+  accepted and serialized for service start and exec-probe invocations, but
+  lowering discards it there. Only leaf tasks consume it; probe attempts use
+  `probe.timeoutMs`.
+- **Unused terminal labels:** lifecycle `terminal.success`/`failure` tokens are
+  configurable event labels and do not define outcomes.
+  `lifecycle.clean.terminal.failure` has no consumer. Slot `clean` records each
+  service's clean start and success events before the aggregate slot cleanup
+  runs, so a later refusal or deletion failure never uses the failure label.
+  Options: a fixed runtime outcome vocabulary, or clean events that follow the
+  real cleanup outcome.
+- **Closure metadata:** closure `kind` (`executable`/`helper`) selects nothing
+  at runtime. Closure `effects` other than `network-listener` are attestations
+  with no consumer. The `network-listener` attestation may also be redundant
+  where endpoint declarations already express addressability; endpoint
+  ownership checks remain either way.
+- **Source policy knobs:** `admissionFingerprintPolicy` accepts any nonempty
+  string and computes or compares no fingerprint. `dirtyPolicy = "warn"`
+  behaves like `allow`. In `live-workspace` mode, `sourceIdentity` is recorded
+  but does not select or verify the root. `snapshot` and `flake-input` share one
+  immutable-root resolver and differ only in provenance.
 - **Placeholder typos:** define reserved grammar and literal child-program syntax
   before considering rejection of unknown `${...}` forms.
 - **Declaration diagnostics:** consider naming offending references and legal
   alternatives more precisely; diagnostics do not replace discovery.
+
+### Adapters and commands
+
+- **Adapter host propagation:** the synthetic and PostgreSQL adapters hardcode
+  `127.0.0.1` in child arguments and probes, and the Reth adapter defaults to it
+  without passing the declared host. A declared endpoint host override changes
+  runtime planning and ownership checks but not these children.
 - **Adapter catalog:** consider a derived view of adapter defaults, clearly
   distinguished from supported module overrides and native wrapper conventions.
-
-Each candidate needs its own invariant, owner, rejection boundary and proof.
-Do not bundle unrelated changes merely to share an ABI rotation.
+- **Framework `.#check` arguments:** the root check app ignores all arguments,
+  including `--help`.
+- **Installer report:** with an existing `nixfied.nix`, `install` preserves the
+  module but still prints the requested `projectId` and `name` as if applied.
 
 ## PostgreSQL lifecycle test reliability
 
