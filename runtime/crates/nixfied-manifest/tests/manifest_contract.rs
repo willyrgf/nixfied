@@ -165,23 +165,6 @@ fn composite_task_default_output_is_rejected() {
 }
 
 #[test]
-fn cache_env_is_an_unknown_invocation_field() {
-    let mut value = valid_manifest_json();
-    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
-        "CARGO_TARGET_DIR": {
-            "family": "cargo-target",
-            "mode": "fast-dev",
-            "scope": "slot",
-            "key": { "parts": ["cache-v1"] }
-        }
-    });
-
-    let error = serde_json::from_value::<Manifest>(value)
-        .expect_err("removed cacheEnv field must fail deserialization");
-    assert!(error.to_string().contains("unknown field `cacheEnv`"));
-}
-
-#[test]
 fn accepts_immutable_source_modes() {
     for mode in ["snapshot", "flake-input"] {
         let mut value = valid_manifest_json();
@@ -269,26 +252,6 @@ fn validates_explicit_slot_placement_range() {
 }
 
 #[test]
-fn unknown_top_level_field_is_invalid() {
-    let mut value = valid_manifest_json();
-    value["computedManifestHash"] = json!("must-not-be-embedded");
-
-    let error =
-        serde_json::from_value::<Manifest>(value).expect_err("unknown field must be refused");
-    assert!(error.to_string().contains("computedManifestHash"));
-}
-
-#[test]
-fn removed_docs_field_is_invalid() {
-    let mut value = valid_manifest_json();
-    value["docs"] = json!({ "title": "legacy", "summary": "legacy" });
-
-    let error = serde_json::from_value::<Manifest>(value)
-        .expect_err("the removed docs manifest section must be refused");
-    assert!(error.to_string().contains("docs"));
-}
-
-#[test]
 fn duplicate_environment_is_refused_at_the_wire() {
     // `environments` is a set of isolation namespaces; a duplicate is
     // inexpressible at the wire.
@@ -306,22 +269,6 @@ fn duplicate_task_success_code_is_refused_at_the_wire() {
     let error = serde_json::from_value::<Manifest>(value)
         .expect_err("a duplicate exit code must be refused");
     assert!(error.to_string().contains("duplicate element"));
-}
-
-#[test]
-fn secret_descriptor_rejects_unknown_fields() {
-    let mut value = valid_manifest_json();
-    value["secrets"]["api-token"] = json!({
-        "secretId": "api-token",
-        "source": {
-            "kind": "env-var",
-            "envVar": "API_TOKEN"
-        },
-        "value": "must-not-be-in-manifest"
-    });
-    let error =
-        serde_json::from_value::<Manifest>(value).expect_err("secret values must not parse");
-    assert!(error.to_string().contains("value"));
 }
 
 #[test]
@@ -386,24 +333,6 @@ fn probe_kind_is_required_on_the_wire() {
 }
 
 #[test]
-fn probe_rejects_unknown_fields() {
-    let mut value = valid_manifest_json();
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["httpPath"] = json!("/health");
-    serde_json::from_value::<Manifest>(value).expect_err("an unknown probe field must not parse");
-}
-
-#[test]
-fn clean_operation_stays_marker_gated_runtime_cleanup() {
-    // clean binds nothing: an invocation on it is an unknown field, rejected at
-    // parse.
-    let mut value = valid_manifest_json();
-    value["services"]["synthetic"]["lifecycle"]["clean"]["invocation"] =
-        helper_invocation(json!(["synthetic-helper"]));
-    serde_json::from_value::<Manifest>(value)
-        .expect_err("a clean invocation binding must not parse");
-}
-
-#[test]
 fn connects_to_chain_is_accepted() {
     let mut value = valid_manifest_json();
     add_worker_service(&mut value);
@@ -412,25 +341,58 @@ fn connects_to_chain_is_accepted() {
     ValidatedManifest::try_from(manifest).expect("acyclic wiring should validate");
 }
 
+/// Every closed record refuses unknown fields, including removed ones: no
+/// alias, migration, or null-as-absent reading.
 #[test]
-fn removed_derived_fields_reject_at_the_wire_boundary() {
-    let valid = valid_manifest_json();
-    for (kind, id, field) in [
-        ("closures", "synthetic-helper", "operationBindings"),
-        ("tasks", "smoke", "servicesRequired"),
+fn unknown_and_removed_fields_reject_at_the_wire_boundary() {
+    for (parent, field, extra) in [
+        ("", "computedManifestHash", json!("must-not-be-embedded")),
+        (
+            "",
+            "docs",
+            json!({ "title": "legacy", "summary": "legacy" }),
+        ),
+        ("", "modelVersion", json!(1)),
+        ("/state", "stateEpoch", json!("1")),
+        ("/state", "stateEpoch", Value::Null),
+        ("/state", "cleanupPolicy", json!("protected")),
+        ("/closures/synthetic-helper", "operationBindings", json!([])),
+        ("/tasks/smoke", "servicesRequired", json!([])),
+        ("/tasks/smoke", "serviceLifetime", json!("run-scoped")),
+        ("/tasks/smoke/invocation", "cacheEnv", json!({})),
+        (
+            "/services/synthetic/lifecycle/ready/probe",
+            "httpPath",
+            json!("/health"),
+        ),
+        // clean binds nothing: runtime cleanup stays marker-gated.
+        (
+            "/services/synthetic/lifecycle/clean",
+            "invocation",
+            helper_invocation(json!(["synthetic-helper"])),
+        ),
+        (
+            "/secrets/api-token",
+            "value",
+            json!("must-not-be-in-manifest"),
+        ),
     ] {
-        let mut value = valid.clone();
+        let mut value = valid_manifest_json();
+        value["secrets"]["api-token"] = json!({
+            "secretId": "api-token",
+            "source": { "kind": "env-var", "envVar": "API_TOKEN" }
+        });
         value
-            .get_mut(kind)
-            .unwrap()
-            .get_mut(id)
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert(field.into(), json!([]));
+            .pointer_mut(parent)
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("{parent} should be a record"))
+            .insert(field.into(), extra);
+        let error = serde_json::from_value::<Manifest>(value)
+            .expect_err("an unknown field must be refused")
+            .to_string();
         assert!(
-            serde_json::from_value::<Manifest>(value).is_err(),
-            "{field}"
+            error.contains(&format!("unknown field `{field}`")),
+            "{parent}/{field}: {error}"
         );
     }
 }

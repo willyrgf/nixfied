@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use nixfied_manifest::PersistencePolicy;
+use nixfied_manifest::fixtures::host_system;
 use nixfied_runtime::{
     AdmissionContext, ErrorCode, StoreOriginPolicy, load_manifest, read_raw_manifest,
 };
@@ -135,41 +136,6 @@ fn load_manifest_hashes_raw_bytes() {
 
     assert_eq!(loaded.raw_len(), raw.len());
     assert_eq!(loaded.computed_manifest_hash(), expected);
-}
-
-#[test]
-fn obsolete_model_version_is_rejected_before_admission() {
-    for retain_manifest_version in [false, true] {
-        let mut value = fixture_manifest();
-        value["modelVersion"] = value["manifestVersion"].clone();
-        if !retain_manifest_version {
-            value.as_object_mut().unwrap().remove("manifestVersion");
-        }
-        let (_tmp, manifest_path, _closure) = write_fixture_manifest(value, true);
-        let error = load_manifest(&manifest_path).expect_err("old field must not be an alias");
-        assert_eq!(error.code, ErrorCode::ManifestInvalid);
-        assert!(error.message.contains("unknown field `modelVersion`"));
-    }
-}
-
-#[test]
-fn removed_cache_env_is_manifest_invalid_before_admission_or_lowering() {
-    let mut value = fixture_manifest();
-    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
-        "CARGO_TARGET_DIR": {
-            "family": "cargo-target",
-            "mode": "fast-dev",
-            "scope": "slot",
-            "key": { "parts": ["cache-v1"] }
-        }
-    });
-    let (_tmp, manifest_path, _closure) = write_fixture_manifest(value, true);
-
-    let error =
-        load_manifest(&manifest_path).expect_err("removed cacheEnv must fail while parsing");
-
-    assert_eq!(error.code, ErrorCode::ManifestInvalid);
-    assert!(error.message.contains("unknown field `cacheEnv`"));
 }
 
 #[test]
@@ -578,13 +544,7 @@ fn logical_root_escape_is_rejected() {
 }
 
 #[test]
-fn persistence_is_the_sole_retention_policy_at_the_wire_boundary() {
-    let mut removed = fixture_manifest();
-    removed["state"]["cleanupPolicy"] = json!("protected");
-    let (_tmp, manifest_path, _closure_root) = write_fixture_manifest(removed, true);
-    let error = load_manifest(&manifest_path).expect_err("removed retention field must reject");
-    assert_eq!(error.code, ErrorCode::ManifestInvalid);
-
+fn persistent_state_loads_and_admits() {
     let mut manifest = fixture_manifest();
     manifest["state"]["persistence"] = json!("persistent");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);

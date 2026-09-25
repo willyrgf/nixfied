@@ -859,6 +859,19 @@ mod tests {
         assert_eq!(task.success_codes, vec![0]);
         assert_eq!(task.exec.tool_roots, vec!["/nix/store/ct/bin"]);
         assert_eq!(task.requires, vec![ServiceId::new("svc")]);
+        assert_eq!(task.timeout, Some(Duration::from_millis(1000)));
+    }
+
+    /// An absent authored deadline lowers to none: no former default returns.
+    #[test]
+    fn missing_task_timeout_lowers_to_no_deadline() {
+        let mut value = manifest_value();
+        value["tasks"]["t"]["invocation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("timeoutMs");
+        let execution = lower(&manifest_from(value)).expect("a task without a deadline lowers");
+        assert_eq!(execution.leaf("t").expect("task lowered").timeout, None);
     }
 
     #[test]
