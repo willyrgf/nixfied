@@ -128,6 +128,9 @@ in
         visible "Select ${presentation.choices modes} (default: task default or ${mode "Summary"})\n${mode "TaskOutput"} requires one directly selected leaf and presents its redacted output live" "<mode>"
       )
     )
+    (argument "daemon" "--daemon" (domain "Flag") (literal false) (
+      visible "Establish the session in the background and print its identity, not its result" null
+    ))
   ] 26 "output-schema/run-json")
   (runtime "ps" "Reconcile and report Nixfied-owned processes for a slot." [
     manifest

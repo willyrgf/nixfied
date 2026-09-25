@@ -285,6 +285,22 @@ when the manifest/runtime contract changes.
   the durable stop intent and precedes every stop signal; its recording failure
   still contains and reaps the service. An unexpected service exit, including
   status zero, fails the session with `DEPENDENCY_UNAVAILABLE`.
+- `run --daemon` places the same session in the background. The launcher
+  validates arguments (it rejects `--output`), allocates the immutable run ID,
+  and spawns the hidden `__session-owner` mode once in a new OS session with null
+  stdio; it holds no slot guard or registry writer. The owner performs the same
+  admission, acquisition, recovery, and establishment as a foreground run,
+  rejects workloads that inherit interactive stdin, and checks for launcher
+  abandonment immediately before committing its run record. The committed run
+  record is the establishment; the owner then replies with
+  `{runId, runDir, logsDir}` and continues independently with no terminal
+  presenter. The launcher prints that acknowledgement and exits 0: it means an
+  established session, never readiness or task success; later failures belong
+  to the session's recorded outcome. A complete rejection reply reports the
+  owner's pre-establishment error and exit code with no new workload. EOF,
+  timeout, or a malformed reply is `LIFECYCLE_FAILED` with the original `runId`:
+  the launch outcome is uncertain. Reply failure after the commit never cancels
+  the session; `down` and signals remain its cancellation inputs.
 - Each session creates a private FIFO named `control` in its never-reused
   `runs/<runId>` evidence directory before publishing its run record, opens a
   reader and a separate keeper writer (both close-on-exec), and removes the

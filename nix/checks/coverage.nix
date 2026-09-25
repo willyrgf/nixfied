@@ -40,6 +40,7 @@ let
     escaped-port-reconciliation = "runtime";
     session-cancellation = "runtime";
     internal-presenter = "runtime";
+    internal-session-owner = "runtime";
     output-publication = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;

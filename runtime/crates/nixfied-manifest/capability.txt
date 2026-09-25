@@ -63,6 +63,8 @@ session-cancellation: runs-session-control-fifo any-byte-cancels separate-keeper
 # Private command-owned presenter: read-only evidence tailing, never a workload.
 internal-presenter: __presenter connected-unix-stream-fd NXP1 u32be-length json-init max-65536 finish-F cancel-C report-frame null-stdin env-clear failure-exit-125
 output-publication: diagnostic-source source-registration-before-release selected-shown-hidden run-relative-paths capture-outcome-per-source sources-closed-after-teardown seal-after-writer-closure no-active-session-caller-writes post-release-drain labeled-human-lines fragment-8192 command-local-delivery
+# Private background session owner: the launcher holds no slot or registry.
+internal-session-owner: __session-owner connected-unix-stream-fd NXD1 u32be-length json-request max-1048576 json-reply setsid null-stdio launcher-allocated-run-id same-admission abandonment-check-before-commit committed-run-is-establishment reply-after-commit rejection-before-commit uncertain-without-reply no-terminal-presenter reject-inherited-stdin
 internal-workload-gate: __workload-gate connected-unix-stream-fd NXG1 u32be-length json-unix-bytes max-1048576 write-half-eof deadline-10000ms failure-exit-125
 workload-gate-request: executable args env cwd
 workload-gate-failure: frame-1 request-2 setup-3 exec-4
@@ -79,6 +81,7 @@ run-output-mode: summary json both task-output
 # for the current ABI, same as the admitted manifest and error vocabulary; changing
 # required fields or field meaning records a contract change here and rotates the
 # runtime ABI digest.
+output-schema run-daemon-json: runId runDir logsDir
 output-schema run-json: runId manifestPath computedManifestHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
 output-schema run-summary-json: runId success durationMs services nodes tasks
 output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath

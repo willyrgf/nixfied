@@ -1971,3 +1971,176 @@ fn service_failure_during_another_services_preparation_releases_no_further_workl
     assert_eq!(finalization, "complete");
     assert!(!release.exists());
 }
+
+fn run_row(fixture: &RuntimeFixture, run_id: &str) -> Option<(Option<String>, String)> {
+    rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?
+    .query_row(
+        "SELECT execution_outcome, finalization FROM runs WHERE run_id = ?1",
+        [run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .ok()
+}
+
+fn wait_for_settled(fixture: &RuntimeFixture, run_id: &str) -> Option<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some((outcome, finalization)) = run_row(fixture, run_id)
+            && finalization == "complete"
+        {
+            return outcome;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background session did not settle"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn background_launch_acknowledges_establishment_not_task_success() {
+    let marker = tempfile_marker("daemon-live");
+    let fixture = blocking_session(&marker);
+    let started = std::time::Instant::now();
+    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
+    let run_id = acknowledgement["runId"].as_str().unwrap().to_owned();
+    assert!(
+        acknowledgement["logsDir"]
+            .as_str()
+            .unwrap()
+            .ends_with("/logs")
+    );
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    assert_eq!(
+        run_row(&fixture, &run_id),
+        Some((None, "unfinished".into())),
+        "acknowledgement never claims task completion"
+    );
+    let owner: i32 = rusqlite::Connection::open_with_flags(
+        fixture
+            .state_base
+            .join("registry/runtime-test/dev/0/registry.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row(
+        "SELECT json_extract(owner_identity, '$.pid') FROM runs WHERE run_id = ?1",
+        [&run_id],
+        |row| row.get(0),
+    )
+    .unwrap();
+    assert_ne!(
+        unsafe { libc::getsid(owner) },
+        unsafe { libc::getsid(0) },
+        "the owner leads its own OS session"
+    );
+    #[cfg(target_os = "linux")]
+    for fd in 0..3 {
+        assert_eq!(
+            fs::read_link(format!("/proc/{owner}/fd/{fd}")).unwrap(),
+            PathBuf::from("/dev/null"),
+            "the owner holds no caller terminal or pipe"
+        );
+    }
+    let down = fixture.command("down", &[]).output().unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert_eq!(report["canceledRunId"], json!(run_id));
+    assert_eq!(
+        wait_for_settled(&fixture, &run_id).as_deref(),
+        Some("canceled")
+    );
+}
+
+#[test]
+fn background_failure_after_acknowledgement_belongs_to_the_session() {
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "3".into()]));
+    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
+    let run_id = acknowledgement["runId"].as_str().unwrap();
+    assert_eq!(
+        wait_for_settled(&fixture, run_id).as_deref(),
+        Some("failed")
+    );
+    let runs = fixture.state_base.join("registry/runtime-test/dev/0/runs");
+    assert!(
+        runs.join(run_id).join("logs/task.0.stdout.log").is_file(),
+        "background evidence is retained under the acknowledged identity"
+    );
+}
+
+#[test]
+fn background_launch_rejects_before_establishment_without_new_work() {
+    // An occupied slot rejects without a second session record.
+    let marker = tempfile_marker("daemon-occupied");
+    let fixture = blocking_session(&marker);
+    let owner = fixture
+        .command("run", &["--task", "smoke", "--output", "json"])
+        .spawn()
+        .unwrap();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (first, _) = published_session(&fixture);
+    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    assert_eq!(
+        launch.status.code(),
+        Some(22),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    assert!(String::from_utf8_lossy(&launch.stderr).contains("CLEANUP_REFUSED"));
+    let runs: i64 = registry_connection(&fixture)
+        .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(runs, 1);
+    assert!(
+        fixture
+            .command("down", &[])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let _ = wait_for_child_output(owner, Duration::from_secs(10));
+    assert_eq!(
+        wait_for_settled(&fixture, &first).as_deref(),
+        Some("canceled")
+    );
+
+    // Interactive stdin and an output projection reject before any state.
+    let mut manifest = leaf_task_manifest(&["exit".into(), "0".into()]);
+    manifest["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
+    let fixture = RuntimeFixture::new(manifest);
+    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    assert_eq!(launch.status.code(), Some(37));
+    assert!(!fixture.state_base.join("registry").exists());
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["exit".into(), "0".into()]));
+    let launch = run(
+        &fixture,
+        &["--task", "smoke", "--daemon", "--output", "json"],
+    );
+    assert_eq!(launch.status.code(), Some(36));
+    assert!(!fixture.state_base.exists());
+}
