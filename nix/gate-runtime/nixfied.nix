@@ -49,7 +49,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-minimal-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke --timeout-ms 60000 --output json \
@@ -103,7 +102,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-postgres-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime run --manifest "$POSTGRES_MANIFEST/manifest.json" --task smoke-query --timeout-ms 60000 --output json \
@@ -146,7 +144,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-composite-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
             nixfied-runtime run --manifest "$COMPOSITE_MANIFEST/manifest.json" --task pipeline --timeout-ms 60000 --output json \
@@ -192,7 +189,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-polyglot-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
             nixfied-runtime run --manifest "$POLYGLOT_MANIFEST/manifest.json" --task all --timeout-ms 60000 --output json \
@@ -216,7 +212,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-downstream-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" --task release --timeout-ms 60000 --output json \
@@ -240,7 +235,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-reth-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime run --manifest "$RETH_MANIFEST/manifest.json" --task reth-smoke --timeout-ms 60000 --output json \
@@ -264,7 +258,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-toolchain-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime run --manifest "$TOOLCHAIN_MANIFEST/manifest.json" --task ci --timeout-ms 60000 --output json \
@@ -291,7 +284,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           inner="''${stateDir}/task-output-inner"
           artifacts="''${stateDir}/gate-artifacts/task-output"
           mkdir -p "$artifacts"
@@ -402,7 +394,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner" \
              nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --output json \
@@ -428,7 +419,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/negative-inner"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner" \
              nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task does-not-exist \
@@ -453,7 +443,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner/identity"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner/identity" \
              nixfied-runtime run --manifest "$NEGATIVE_FAIL_MANIFEST/manifest.json" --task failing --output json \
@@ -490,7 +479,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/lifecycle-inner-state"
           NIXFIED_STATE_DIR="''${stateDir}/lifecycle-inner-state" \
             nixfied-runtime run --manifest "$MINIMAL_MANIFEST/manifest.json" --task smoke >/dev/null
@@ -516,7 +504,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
@@ -544,7 +531,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           root="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0"
           marker="$root/.nixfied-state.json"
           hash1=$(cat "''${stateDir}/gate-artifacts/lifecycle-hash1.txt")
@@ -574,7 +560,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           marker="''${stateDir}/lifecycle-inner-state/data/minimal/dev/0/.nixfied-state.json"
           mkdir -p "''${stateDir}/gate-artifacts"
           jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
@@ -610,7 +595,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           inner="''${stateDir}/session-ownership-inner"
           artifacts="''${stateDir}/gate-artifacts"
           mkdir -p "$artifacts" "$inner"
@@ -653,7 +637,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           inner="''${stateDir}/purge-inner"
           mkdir -p "''${stateDir}/gate-artifacts" "$inner"
           NIXFIED_STATE_DIR="$inner" \
@@ -698,7 +681,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           root_a="''${stateDir}/endpoint-root-a"
           root_b="''${stateDir}/endpoint-root-b"
           artifacts="''${stateDir}/gate-artifacts"
@@ -779,7 +761,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" \
@@ -802,7 +783,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --manifest "$DOWNSTREAM_MANIFEST/manifest.json" \
@@ -826,7 +806,6 @@
         "-c"
         ''
           set -euo pipefail
-          umask 077
           s0="''${stateDir}/gate-artifacts/slots-0.json"
           s1="''${stateDir}/gate-artifacts/slots-1.json"
           disjoint() {

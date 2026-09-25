@@ -512,7 +512,9 @@
           nixfiedGateRuntime = pkgs.writeShellApplication {
             name = "nixfied-gate-runtime";
             runtimeInputs = [ nixfiedRuntimeDebug ];
+            # Every gate task inherits this umask through the runtime.
             text = ''
+              umask 077
               nixfied-runtime run \
                 --manifest "${gateRuntimeManifest}/manifest.json" \
                 --task all \
