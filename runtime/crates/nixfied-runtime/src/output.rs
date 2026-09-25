@@ -6,7 +6,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -24,25 +23,16 @@ pub enum ProjectionOperation {
     Join,
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectionDiagnostic<'a> {
-    pub stream: &'a OutputStream,
-    pub operation: &'a ProjectionOperation,
-    pub kind: &'a str,
-    pub path: &'a str,
-    pub bytes_written: u64,
-}
-
 /// A redaction-safe description of one delivery failure. It stores an error
 /// kind rather than an operating-system error string; paths are runtime-owned
-/// evidence paths or the caller stream name.
+/// evidence paths or the caller stream name, serialized as lossy display text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectionIssue {
     pub stream: OutputStream,
     pub operation: ProjectionOperation,
     pub kind: String,
+    #[serde(serialize_with = "lossy_path")]
     pub path: PathBuf,
     pub bytes_written: u64,
 }
@@ -142,51 +132,32 @@ impl EvidenceSource {
 /// The run-owned diagnostic source: runtime progress lines presented on stderr.
 pub const DIAGNOSTIC_SOURCE: &str = "diagnostics.log";
 
-/// Collect delivery failures into the public projection error.
-pub fn projection_error(message: &str, issues: Vec<ProjectionIssue>) -> crate::error::RuntimeError {
-    let projections = issues
-        .into_iter()
-        .map(|issue| {
-            let path = issue.path.to_string_lossy();
-            json!(ProjectionDiagnostic {
-                stream: &issue.stream,
-                operation: &issue.operation,
-                kind: &issue.kind,
-                path: path.as_ref(),
-                bytes_written: issue.bytes_written,
-            })
-        })
-        .collect::<Vec<_>>();
-    crate::error::RuntimeError::new(crate::error::ErrorCode::OutputProjectionFailed, message)
-        .with_detail("projections", projections)
+fn lossy_path<S: serde::Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.to_string_lossy())
 }
 
-/// Command-scoped writes after slot release keep their narrower kind mapping.
+/// Collect delivery failures into the public projection error.
+pub fn projection_error(message: &str, issues: Vec<ProjectionIssue>) -> crate::error::RuntimeError {
+    crate::error::RuntimeError::new(crate::error::ErrorCode::OutputProjectionFailed, message)
+        .with_detail("projections", issues)
+}
+
+/// A command-scoped write failure after slot release.
 pub fn output_projection_io_error(
     stream: OutputStream,
     operation: ProjectionOperation,
     path: &str,
     error: io::Error,
 ) -> crate::error::RuntimeError {
-    let kind = match error.kind() {
-        io::ErrorKind::BrokenPipe => "broken-pipe",
-        io::ErrorKind::PermissionDenied => "permission-denied",
-        io::ErrorKind::Interrupted => "interrupted",
-        _ => "io",
-    };
-    crate::error::RuntimeError::new(
-        crate::error::ErrorCode::OutputProjectionFailed,
+    projection_error(
         "runtime output projection failed",
-    )
-    .with_detail(
-        "projections",
-        vec![ProjectionDiagnostic {
-            stream: &stream,
-            operation: &operation,
-            kind,
-            path,
-            bytes_written: 0,
-        }],
+        vec![ProjectionIssue::io(
+            stream,
+            operation,
+            Path::new(path),
+            &error,
+            0,
+        )],
     )
 }
 
@@ -202,6 +173,7 @@ pub fn io_kind(error: &io::Error) -> &'static str {
         io::ErrorKind::UnexpectedEof => "unexpected-eof",
         io::ErrorKind::WouldBlock => "would-block",
         io::ErrorKind::TimedOut => "timed-out",
+        io::ErrorKind::Interrupted => "interrupted",
         _ => "io",
     }
 }
@@ -209,21 +181,19 @@ pub fn io_kind(error: &io::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn summary_projection_preserves_safe_kind_policy() {
-        for (kind, summary_kind, delivery_kind) in [
-            (io::ErrorKind::BrokenPipe, "broken-pipe", "broken-pipe"),
-            (
-                io::ErrorKind::PermissionDenied,
-                "permission-denied",
-                "permission-denied",
-            ),
-            (io::ErrorKind::Interrupted, "interrupted", "io"),
-            (io::ErrorKind::NotFound, "io", "not-found"),
+        for (kind, safe_kind) in [
+            (io::ErrorKind::BrokenPipe, "broken-pipe"),
+            (io::ErrorKind::PermissionDenied, "permission-denied"),
+            (io::ErrorKind::Interrupted, "interrupted"),
+            (io::ErrorKind::NotFound, "not-found"),
+            (io::ErrorKind::Other, "io"),
         ] {
             let source = io::Error::new(kind, "private OS diagnostic must not escape");
-            assert_eq!(io_kind(&source), delivery_kind);
+            assert_eq!(io_kind(&source), safe_kind);
             let error = output_projection_io_error(
                 OutputStream::Stdout,
                 ProjectionOperation::Write,
@@ -235,7 +205,7 @@ mod tests {
             assert_eq!(
                 error.details,
                 json!({"projections":[{
-                    "stream":"stdout", "operation":"write", "kind":summary_kind,
+                    "stream":"stdout", "operation":"write", "kind":safe_kind,
                     "path":"summary.json", "bytesWritten":0
                 }]})
             );
