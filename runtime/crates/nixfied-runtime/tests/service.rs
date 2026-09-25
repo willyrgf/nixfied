@@ -587,13 +587,14 @@ fn slot_one_service_uses_slot_placement_port_window() {
 #[test]
 fn two_slots_keep_services_state_and_controls_isolated() {
     let tmp = TempDir::new();
-    let mut value = test_child_manifest(23210, 23210);
-    add_slot_one(&mut value, 23310, 23320);
+    let (port0, port1) = (available_port_window(1), available_port_window(1));
+    let mut value = test_child_manifest(port0, port0);
+    add_slot_one(&mut value, port1, port1);
     let manifest: Manifest = serde_json::from_value(value).expect("fixture manifest should parse");
     let admission = fixture_admission(&manifest, &tmp.path);
 
-    let mut slot0 = StartedSlot::start(&manifest, &admission, &tmp.path, 0, "run-slot-0", 23210);
-    let mut slot1 = StartedSlot::start(&manifest, &admission, &tmp.path, 1, "run-slot-1", 23310);
+    let mut slot0 = StartedSlot::start(&manifest, &admission, &tmp.path, 0, "run-slot-0", port0);
+    let mut slot1 = StartedSlot::start(&manifest, &admission, &tmp.path, 1, "run-slot-1", port1);
 
     assert_ne!(slot0.placement.state_root(), slot1.placement.state_root());
     assert_ne!(
@@ -1694,9 +1695,7 @@ fn readiness_refuses_monitored_setsid_escape() {
     let request_arg = request.to_string_lossy().to_string();
     let armed_arg = armed.to_string_lossy().to_string();
     let detached_arg = detached.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_service(
         &[
             "detached-sleeper",
@@ -1742,9 +1741,7 @@ fn readiness_records_foreground_exit_as_escape() {
     let exit_request = temp_marker("nixfied-readiness-exit-request");
     let started_arg = started.to_string_lossy().to_string();
     let exit_request_arg = exit_request.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_service(
         &["prepare", &started_arg, &exit_request_arg],
         port,
@@ -1785,9 +1782,7 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
     let bound_arg = bound.to_string_lossy().to_string();
     let exit_request_arg = exit_request.to_string_lossy().to_string();
     let exiting_arg = exiting.to_string_lossy().to_string();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut value = test_child_service(
         &[
             "detached-listener",
@@ -1896,9 +1891,10 @@ fn second_start_against_a_live_owner_is_refused_without_mutation() {
 
 #[test]
 fn ps_observes_dead_process_without_mutating_evidence() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["1"], 23187);
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["1"], port);
     let service = fixture
-        .start("run-ps-stale", 23187)
+        .start("run-ps-stale", port)
         .expect("foreground service should start");
     thread::sleep(Duration::from_millis(1300));
 
@@ -1931,9 +1927,10 @@ fn ps_observes_dead_process_without_mutating_evidence() {
 
 #[test]
 fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23233);
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
-        .start("run-ps-pid-reuse", 23233)
+        .start("run-ps-pid-reuse", port)
         .expect("foreground service should start");
     assert!(
         process_group_has_non_zombie_member(service.info().pgid),
@@ -2030,9 +2027,10 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
 
 #[test]
 fn down_stops_verified_owned_process_group_only() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23188);
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
-        .start("run-down", 23188)
+        .start("run-down", port)
         .expect("foreground service should start");
 
     let report =
@@ -2302,9 +2300,10 @@ fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
 
 #[test]
 fn owned_process_cleanup_does_not_settle_the_session() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23231);
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
-        .start("run-down-canceling-process", 23231)
+        .start("run-down-canceling-process", port)
         .expect("foreground service should start");
     commit_slot_marker(
         &fixture.registry,
@@ -2416,9 +2415,10 @@ fn down_rejects_corrupt_process_rows_before_reconciliation_or_signaling() {
 
 #[test]
 fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
-    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], 23232);
+    let port = available_port_window(1);
+    let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
     let service = fixture
-        .start("run-down-task-canceling", 23232)
+        .start("run-down-task-canceling", port)
         .expect("foreground service should start");
     let mut command = Command::new(test_sleep());
     command
@@ -2532,13 +2532,14 @@ fn down_escalates_until_owned_process_group_is_empty() {
     let started = temp_marker("nixfied-down-escalate-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
+    let port = available_port_window(1);
     let mut fixture = ServiceFixture::from_value(test_child_service(
         &["term-tree", &started_arg, &marker_arg],
-        23189,
-        23189,
+        port,
+        port,
     ));
     let service = fixture
-        .start("run-down-escalate", 23189)
+        .start("run-down-escalate", port)
         .expect("foreground service should start");
     assert!(
         wait_for_path(&started, Duration::from_secs(3)),
