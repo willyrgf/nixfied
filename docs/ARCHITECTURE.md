@@ -266,9 +266,14 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 
 ## Registry and liveness
 
-- **Per-slot SQLite WAL registry** owns shared mutable state transactionally, with
-  a total per-slot event order (timestamps are diagnostic only). It is a *durable
-  record, not a liveness oracle*. (v1: the registry was treated as liveness truth.)
+The normative registry, session, process, and cleanup rules are in
+[Registry, state, and processes](CONTRACT.md#registry-state-and-processes).
+This section records why they take that shape and which runtime component owns
+each rule.
+
+- **Per-slot SQLite WAL registry** is a *durable record, not a liveness oracle*
+  (v1: the registry was treated as liveness truth). Timestamps are diagnostic
+  only; the per-slot event order is the order.
   Existing version, complete SQLite schema objects, and placed-slot identity
   validate in a read snapshot before journal conversion. The same authored DDL
   creates the registry and defines its exact schema; added triggers, indexes,
@@ -279,33 +284,28 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   Darwin additionally requests and verifies `fullfsync` and
   `checkpoint_fullfsync`. These settings do not by themselves establish filesystem
   publication ordering or a tested host-power-loss guarantee.
-- **Liveness is observed against the OS** before being reported — `ps` confirms
-  process identity (surviving PID reuse) before saying `running`/`stale`/etc., and
-  writes nothing.
+- **Liveness is observed against the OS** because PIDs are reused and records
+  outlive processes; `ps` confirms process identity before it reports a status
+  and writes nothing.
 - **Registry readers own stored representation.** Endpoint rows are immutable:
   one per owning process and endpoint id, with the raw address spelling for exact
   comparison. Ready activation compares the complete recorded set with the
   verified set within its transaction; no path rewrites endpoint rows.
   Shared actionable-process SQL preserves each caller's multiplicity and conflict
   rules. Observation returns typed facts; `ps` alone projects public strings.
-  A live session is canceled only through its own control FIFO; recovery of a
-  dead owner re-reads rows and refreshes identity under the slot guard before
-  signaling anything.
 - **Transitions borrow registry context.** Connection, immutable identity, and
   redactor are borrowed together after revalidating the held slot guard. Each
   transition visibly selects its transaction
   mode and commits mutations with redacted events through one borrowed event record.
-- **Endpoint evidence belongs to a process.** Startup intent is recorded before
-  prepare. Endpoint rows are inserted atomically with the process row, are keyed
-  by that process, and settle with it. Unsafe or conflicting
-  stored process evidence rejects before new startup.
-- **Session completion has one owner.** Workload transitions update local process
-  evidence, never aggregate execution outcome. The live session
-  records its outcome before teardown. Recovery under the slot guard
-  marks only unknown executions interrupted and preserves known outcomes.
-  `SessionProgress` distinguishes execution, finalizing a known outcome, and
-  finalized execution; checked decoding and SQL constraints reject completion
-  without an outcome. Resource finalization and output sealing are separate facts.
+- **Endpoint evidence belongs to a process.** An endpoint claim is only as
+  trustworthy as the process obligation behind it. Recording endpoint rows with
+  their owning process means no claim can outlive, or exist without, a process
+  that recovery must settle.
+- **Session completion has one owner.** Workload transitions write only local
+  evidence, so no task or service path can race the session over its aggregate
+  outcome. `SessionProgress` distinguishes execution, finalizing a known outcome,
+  and finalized execution; checked decoding and SQL constraints reject completion
+  without an outcome.
 - **Process lifetime belongs to the session.** Starting handles own
   startup guards and child resources; committed readiness consumes a starting
   handle into a ready owner. Failure settlement consumes that ownership, and
@@ -318,15 +318,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   obligations. Ready-service and probe checkpoints observe this same child owner,
   retaining its exit status before teardown; service metadata has no separate
   liveness implementation.
-- **Descendant evidence stays on the execution thread.** Service checkpoints
-  refresh retained descendant identities and escape evidence directly. There is
-  no background scanner, shared monitor mutex, or ignored monitor join. Ready
-  service liveness checks include containment observation; startup grace polls
-  that same evidence and cancellation.
+- **Descendant evidence stays on the execution thread.** Checkpoints refresh it
+  directly, so there is no shared monitor mutex or monitor thread whose failure
+  could go unobserved.
 - **Slot mutation has one owner.** A writable registry owns a non-cloneable
   slot guard through SQLite closure. Acquisition validates the private registry
   ancestry and a stable, non-followed lock file before admitting a writer.
-  Read-only `ps` uses a separate snapshot reader and does not reconcile records.
   Workload spawning borrows that guard and consumes its command. The child closes
   the inherited ownership descriptor before exec, without unlocking the parent's
   shared lock; close failure refuses exec. Close-on-exec remains defense in depth.
@@ -334,22 +331,21 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 
 ## Ports, state, containment
 
+The normative endpoint rules are in
+[Source, identity, and endpoints](CONTRACT.md#source-identity-and-endpoints);
+state, deletion, and containment rules are in
+[Registry, state, and processes](CONTRACT.md#registry-state-and-processes).
+
 - **Ports: host-coordinated, ownership-verified readiness.** Pure derivation and
   per-state-root registry reservations are insufficient because TCP endpoints
-  are host resources. A fixed per-euid endpoint lock serializes
-  service-specific mutation across independent roots; Linux `SOCK_DIAG` and
-  macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. Exact-bind
-  preflight enables `SO_REUSEADDR` so compatible `TIME_WAIT` residue from a
-  stopped service does not masquerade as a live conflict. A stable listener
-  snapshot remains authoritative after either bind outcome: exact and wildcard
-  listeners conflict, while readiness requires a successful probe and exact
-  ownership of every endpoint by the expected containment. Complete observation
-  with no exact listener remains pending and ends as `READINESS_TIMEOUT`;
-  incomplete ownership proof is `PORT_UNVERIFIABLE`. Locks end after the atomic
-  ready commit; sockets remain
-  steady-state ownership. The lock is transient coordination, never durable
-  service identity, liveness evidence, or owner attribution; the registry
-  remains the only durable runtime authority.
+  are host resources. A fixed per-euid endpoint lock therefore serializes
+  service-specific mutation across independent state roots; Linux `SOCK_DIAG`
+  and macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. Complete
+  observation with no exact listener remains pending and ends as
+  `READINESS_TIMEOUT`; incomplete ownership proof is `PORT_UNVERIFIABLE`. Locks
+  end after the atomic ready commit; sockets remain steady-state ownership. The
+  lock is never durable service identity, liveness evidence, or owner
+  attribution.
 - **Coordination objects are opened through held directories.** The private
   runtime filesystem boundary owns non-following component access, private
   owner/mode checks, atomic close-on-exec, and opened-object/entry comparison.
@@ -358,28 +354,25 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   locking. These checks detect observed substitution; they do not protect
   managed ancestry against future same-user interference. Endpoint selection
   and lock lifetime remain with the endpoint owner.
-- **TCP probing keeps observation live.** An owned pending connection can only
-  be polled, not reconnected. The same native socket creation and address encoding
+- **TCP probing keeps observation live.** Polling one owned pending connection,
+  instead of blocking in a connect, lets every probe wait observe cancellation
+  and service liveness. The same native socket creation and address encoding
   serve endpoint preflight. Linux creates nonblocking, close-on-exec sockets
   atomically; macOS coordinates socket flag setup with every workload spawn.
   Coordination poisoning refuses effects. This process-local synchronization
   protects descriptor inheritance.
-- **Application data compatibility belongs to the application.** Marker version 3
-  records ownership, retention, data generation, and provenance. State preparation has no deletion
-  branch and refuses retention downgrades. Application startup owns its format
-  checks and migrations; configuration changes grant no reset authority.
-- **Slot ownership precedes recovery and state preparation.** Recovery settles
-  predecessors regardless of manifest hash. State preparation refuses unresolved
-  process evidence, which covers the endpoint evidence it owns, and never
-  signals processes. Endpoint locks
+- **Application data compatibility belongs to the application.** Only the
+  application knows its data format, so a framework compatibility check could
+  only delete or refuse data without real evidence. The marker records
+  ownership, retention, data generation, and provenance. State preparation has
+  no deletion branch; application startup owns format checks and migrations.
+- **Slot ownership precedes recovery and state preparation.** Endpoint locks
   cover preflight, service prepare, spawn, and readiness after slot preparation.
-- **Listener loss requires explicit teardown.** `ps` remains process liveness
-  and never signals solely because an endpoint is missing. Endpoint acquisition
-  also never signals a pre-existing process: missing or unprovable ownership is
+- **Listener loss requires explicit teardown.** A missing listener is an
+  observation, not proof of who owns the process, so neither `ps` nor endpoint
+  acquisition signals on it: missing or unprovable ownership is
   `PORT_UNVERIFIABLE` and an outside listener is `PORT_CONFLICT`. The recorded
-  process and ownership evidence remain
-  unresolved obligations; the next exclusive owner's recovery settles them before
-  any fresh session starts.
+  obligations remain for the next exclusive owner's recovery.
 - **The coordination boundary is deliberately narrow.** Endpoint locks
   coordinate participating runtimes for the same effective user and relevant
   network scope, not arbitrary external binders. An unrelated process can still
@@ -389,31 +382,18 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   the generic invocation and adapter contracts, or a lifetime lock or guardian,
   which adds another supervision protocol. Nixfied therefore does not claim
   atomic reservation against arbitrary host processes.
-- **State: one retention policy and marker-last deletion.** Every owned state
-  root carries a `.nixfied-state.json` marker holding its ownership, its
-  `persistence`, and a runtime-generated data generation. `persistence` is the
-  only retention policy: `run-scoped` data is deleted automatically after safe
-  session teardown and may be deleted by ordinary `clean`, while `persistent`
-  data survives sessions and requires `clean --purge`. Purge overrides retention
-  only. Cleanup derives the target from the held slot's identity, opens the
-  managed ancestry and target from the slot guard's held state-base descriptor
-  through directory descriptors without following symlinks, commits
-  one pending intent with the marker snapshot before any deletion, deletes
-  payload entries relative to held directories without crossing mounts, keeps
-  the marker until every payload entry is gone, removes the root through its
-  held parent, and commits completion last. A pending intent is resumed with its
-  original identity and authorization before any new generation; contradictory
-  observations refuse instead of guessing. Directory `fsync` orders each step for
-  process-death recovery; no host power-loss guarantee is claimed.
-- **Evidence outlives application data.** `registry/project/environment/slot`
-  contains SQLite and `runs/runId` evidence. The parallel `data/` namespace
-  contains application state only; cleanup cannot target registry or run
-  directories even if an ownership marker was copied there.
-- **Containment is runtime-owned.** Services run foreground under a runtime-owned
-  process group; cancellation propagates to the whole group; a process counts as
-  started only after a registry record exists. A supervisor whose children form
-  their own groups uses `process-tree` containment. Daemonization/double-fork
-  without a stable handoff is refused as `PROC_ESCAPE`, but only after an exact
+- **State: one retention policy and marker-last deletion.** One `persistence`
+  policy keeps retention a single fact that the marker, not a later manifest,
+  carries. The marker stays until every payload entry is gone, so an interrupted
+  deletion always leaves an attributable, resumable tree; one pending intent per
+  slot means recovery resumes the recorded operation instead of guessing. User
+  wording is in the [guide](GUIDE.md#services-slots-and-state).
+- **Evidence outlives application data.** Disjoint `data/` and `registry/`
+  namespaces let cleanup delete application state without any path that reaches
+  registry or run evidence, even if an ownership marker is copied there.
+- **Containment is runtime-owned.** A supervisor whose children form their own
+  groups uses `process-tree` containment. Daemonization/double-fork without a
+  stable handoff is refused as `PROC_ESCAPE`, but only after an exact
   process/run/event transaction durably records the escape while retaining open
   ports; registry failure takes precedence. (v1: containment differed by platform
   with no single owner.)
@@ -429,68 +409,29 @@ govern files, cache contents, or sockets a child chooses to write on its own.
 
 ## Output Control
 
-`run` selects output through one canonical runtime-owned option; its accepted
-domain is rendered by `nix run .#docs -- api command run`.
-`--output summary` is the human default: progress, concise pass/fail
-summaries, and pointers to the run summary and log directory on stderr, with
-stdout empty. `--output json` emits the structured automation contract on stdout,
-with human run-summary narration suppressed. Its fields and nested records are
-rendered by `nix run .#docs -- api record output-schema/run-json`.
-`--output both` emits both projections
-explicitly for diagnostics. When the option is omitted, the runtime uses the
-selected root task's manifest `defaultOutput`, whose normal value is `summary`.
+The output modes, capture, presenter, finalization, and error-precedence rules
+are in [Output and failure contract](CONTRACT.md#output-and-failure-contract);
+the launch ordering is in [Internal workload gate](CONTRACT.md#internal-workload-gate).
 
-Capture workers retain their checked completion result after nonblocking
-checkpoint observation. Task/probe execution and captured-service liveness
-checkpoints observe worker failures before waiting for process completion;
-shutdown still consumes both results and settles every remaining worker.
+Task, preparation, and probe completion share one captured-child owner, and
+services use the same owned capture workers, so containment, reaping, and
+capture ordering have one implementation. Capture
+workers own the evidence files and children receive only pipe writers; capture
+completion is therefore checked, never inferred from a leader's exit.
+`ObservedWithoutEvidence` preserves an observed task result when settlement
+cannot produce completed evidence.
 
-Task and probe completion share a concrete captured-child owner. Tasks first own
-an inert captured launcher, verify its process identity, and commit their process
-record before releasing execution permission. Preparation uses the same task path.
-Service startup establishes monitoring and commits process/endpoint evidence before
-release; post-registration exec failure retains and settles that evidence.
-Exec probes commit their own role, service attribution and process identity through
-the same gate, retaining separate evidence for every attempt. Task and probe
-observation records the execution outcome and exit code
-before containment and capture settlement. `ObservedWithoutEvidence` preserves
-that result when settlement cannot produce completed evidence. Cancellation/timeout intent precedes signaling. Every exit
-path attempts containment and reap, then shuts down both capture workers under
-one absolute deadline. Workers own evidence files, and captured children receive only pipe
-writers, including when no secrets are configured. Actual EOF alone completes
-capture; an incomplete stream records an `incomplete` (or `unknown`) capture
-outcome and cannot issue completed evidence. Service capture always uses the same
-owned workers, so service writer closure is checked, not inferred. Capture
-workers remain owned through session teardown.
+Presentation is separate from the session because a slow or stalled caller
+stream must never delay supervision, teardown, retention, or slot release.
+Evidence files are the data path; the command-owned `__presenter` only reads
+them, so a stalled reader can block only the presenter.
 
-Presentation is separate from the session. Evidence is the data path: capture
-writes redacted per-source files and the owner writes runtime progress into its
-diagnostic source. A command-owned auxiliary process (`__presenter`) tails those
-files by run identity and offset, discovers sources through committed process
-records in short read-only transactions, and writes the caller's streams through
-one bounded queue per stream. `task-output` routes the directly selected leaf's
-exact bytes; `summary`/`both` route labeled lines of every shown source. A
-stalled reader can block only the presenter. The owner closes source
-registration, closes its writers, publishes the output seal, and releases the
-slot without waiting; the command then lets the presenter drain the sealed files
-with no default deadline, and reports delivery failure without rewriting the
-settled session.
-
-The run session is the single finalization owner. It never waits for output
-delivery before service teardown, retention, finalization, or slot release, and
-it runs every remaining cleanup stage even when an earlier stage fails.
-One node runner executes prepare and root occurrences, appending completed task
-records directly to the session's canonical evidence vector. Root and selected
-projections retain private indices; finalization derives owned output records
-once. A separate monotonic attempt counter allocates exclusive log and summary
-paths, so repeated task IDs and step paths cannot overwrite prior evidence.
-Before-terminal failures append no record; after-terminal failures retain one.
-Typed evidence crosses registry, summary, and error boundaries without being
-reconstructed from serialized JSON. Compound errors
-retain non-recursive causes, with safety/registry/ownership failures first,
-projection failures second, and task outcomes third. Captured child
-stdout/stderr otherwise stays in redacted log files, and no `logs` command is
-part of the public surface.
+The run session is the single finalization owner and runs every remaining
+cleanup stage even when an earlier stage fails. One node runner executes prepare
+and root occurrences, appending completed task records directly to the session's
+canonical evidence vector. Root and selected projections retain private indices;
+finalization derives owned output records once. Typed evidence crosses registry,
+summary, and error boundaries without being reconstructed from serialized JSON.
 
 Runtime failures use the same projection rule: default runtime execution prints a
 human-readable error on stderr; `run --output json` prints the structured
