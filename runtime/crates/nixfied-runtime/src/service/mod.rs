@@ -60,8 +60,8 @@ pub use task::{
 
 pub(crate) use process::{
     platform_start_identity, process_escape_start_identity, process_group_has_live_member,
-    process_is_live_with_identity, process_is_live_with_start_identity, terminate_process_group,
-    terminate_process_tree_with_snapshot,
+    process_is_live_with_identity, process_is_live_with_start_identity, process_present,
+    terminate_process_group, terminate_process_tree_with_snapshot,
 };
 pub(crate) use registry::{
     InvocationIdentity, InvocationOwner, ProcessRecord, TaskTerminalStatus,

@@ -277,6 +277,7 @@ impl<'a> RunSession<'a> {
         let duration_ms = elapsed_ms(self.run_started);
         let run_succeeded = failures.is_empty();
         let node_results = self.evidence.nodes();
+        let mut publication_complete = true;
         let run_summary_path = match write_run_summary(RunSummary {
             placement: self.placement,
             run_id: self.run_id,
@@ -289,6 +290,8 @@ impl<'a> RunSession<'a> {
         }) {
             Ok(path) => Some(path),
             Err(error) => {
+                // A missing final-result artifact leaves publication unsealed.
+                publication_complete = false;
                 failures.push(error);
                 None
             }
@@ -305,11 +308,12 @@ impl<'a> RunSession<'a> {
         // Close every evidence writer before publishing the seal; a failed
         // close or write leaves the output unsealed rather than claiming it.
         match self.diagnostics.close() {
-            Ok(()) => {
+            Ok(()) if publication_complete => {
                 if let Err(error) = seal_output(&mut self.registry, self.run_id, manifest_hash) {
                     failures.push(error);
                 }
             }
+            Ok(()) => {}
             Err(error) => failures.push(error),
         }
 

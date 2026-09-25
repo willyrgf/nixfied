@@ -342,8 +342,14 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
         }
         let sealed = snapshot.as_ref().is_ok_and(|snapshot| snapshot.sealed);
         if sealed || finishing_now {
+            // Drain every stable file to its end, however large the backlog;
+            // a slow healthy reader is never truncated.
+            while tails
+                .values_mut()
+                .map(|tail| tail.pump(&stdout, &stderr))
+                .fold(false, |progress, read| progress | (read > 0))
+            {}
             for tail in tails.values_mut() {
-                tail.pump(&stdout, &stderr);
                 tail.flush_partial(&stdout, &stderr);
             }
             break sealed;
@@ -512,7 +518,8 @@ impl Tail {
 
     /// Temporary EOF while capture is active is not completion; the offset
     /// simply waits for more bytes.
-    fn pump(&mut self, stdout: &Writer, stderr: &Writer) {
+    /// Returns the bytes delivered in this pass.
+    fn pump(&mut self, stdout: &Writer, stderr: &Writer) -> usize {
         if self.file.is_none() {
             self.file = std::fs::OpenOptions::new()
                 .read(true)
@@ -521,7 +528,7 @@ impl Tail {
                 .ok();
         }
         let Some(mut file) = self.file.take() else {
-            return;
+            return 0;
         };
         let mut budget = SOURCE_BUDGET;
         let mut buffer = vec![0_u8; CHUNK];
@@ -536,6 +543,7 @@ impl Tail {
             self.deliver(&buffer[..read], stdout, stderr);
         }
         self.file = Some(file);
+        SOURCE_BUDGET - budget
     }
 
     fn deliver(&mut self, bytes: &[u8], stdout: &Writer, stderr: &Writer) {
