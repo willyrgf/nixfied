@@ -1,4 +1,5 @@
 //! The session owner records execution outcome; workload transitions cannot.
+use super::sql_error;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::events::{EventInsert, insert_event};
@@ -417,8 +418,4 @@ fn write_unknown_outcome(
 
 fn invalid(message: impl Into<String>) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, message)
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    invalid(error.to_string())
 }

@@ -1,4 +1,5 @@
 use crate::registry::records::{StoredEndpoint as PortRow, read_open_endpoints};
+use crate::registry::sql_error;
 use crate::registry::sqlite::RegistryContext;
 
 use rusqlite::{OptionalExtension, params};
@@ -765,12 +766,5 @@ fn settle_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<
         &row.process_key,
         &row.run_id,
         &row.computed_manifest_hash,
-    )
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::RegistryCorrupt,
-        format!("control registry operation failed: {error}"),
     )
 }

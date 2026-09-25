@@ -1,4 +1,7 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The facts one registry binds: the owning project/environment/slot and the
+/// runtime ABI/toolchain that wrote it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegistryIdentity {
     pub project_id: String,
     pub environment: String,
@@ -51,10 +54,9 @@ pub(crate) fn read_open_endpoints(
     connection: &rusqlite::Connection,
     service_instance_id: Option<&str>,
 ) -> crate::RuntimeResult<Vec<StoredEndpoint>> {
+    use super::sql_error;
     use super::status::{self, DbStatus, PortStatus};
     use crate::{ErrorCode, RuntimeError};
-    let sql_error =
-        |error: rusqlite::Error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string());
     let mut statement = connection
         .prepare(&format!(
             "SELECT ep.endpoint_key, ep.address, ep.port, ep.status, ep.owner_process_key, ep.service_instance_id,

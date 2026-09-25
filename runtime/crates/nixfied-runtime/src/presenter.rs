@@ -63,11 +63,7 @@ pub struct PresenterInit {
     pub run_id: String,
     pub run_dir: PathBuf,
     pub registry_path: PathBuf,
-    pub project_id: String,
-    pub environment: String,
-    pub slot: i64,
-    pub runtime_abi: String,
-    pub toolchain_id: String,
+    pub identity: RegistryIdentity,
     pub mode: PresentationMode,
 }
 
@@ -294,19 +290,12 @@ fn present(init: PresenterInit, channel: UnixStream) -> i32 {
     let (Ok(stdout), Ok(stderr)) = (stdout, stderr) else {
         return FAILURE_EXIT;
     };
-    let identity = RegistryIdentity {
-        project_id: init.project_id.clone(),
-        environment: init.environment.clone(),
-        slot: init.slot,
-        runtime_abi: init.runtime_abi.clone(),
-        toolchain_id: init.toolchain_id.clone(),
-    };
     let mut tails: BTreeMap<String, Tail> = BTreeMap::new();
     let sealed = loop {
         let finishing_now = finishing.load(Ordering::SeqCst);
         // Discovery happens before draining: a seal observed here means every
         // writer closed, so the drain below reaches the final bytes.
-        let snapshot = discover(&init, &identity);
+        let snapshot = discover(&init);
         if let Ok(snapshot) = &snapshot {
             for source in &snapshot.sources {
                 tails
@@ -402,21 +391,19 @@ struct Snapshot {
 
 /// One short read-only transaction per pass; never a writer and never the
 /// latest slot occupant, only this run's committed sources.
-fn discover(init: &PresenterInit, identity: &RegistryIdentity) -> RuntimeResult<Snapshot> {
+fn discover(init: &PresenterInit) -> RuntimeResult<Snapshot> {
     let reader =
-        RegistryReader::open_existing(&init.registry_path, identity)?.ok_or_else(|| {
+        RegistryReader::open_existing(&init.registry_path, &init.identity)?.ok_or_else(|| {
             RuntimeError::new(ErrorCode::RegistryCorrupt, "session registry is missing")
         })?;
     let connection = reader.connection();
-    let sql =
-        |error: rusqlite::Error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string());
     let (diagnostic, output): (String, String) = connection
         .query_row(
             "SELECT diagnostic_path, output FROM runs WHERE run_id = ?1",
             [&init.run_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(sql)?;
+        .map_err(crate::registry::sql_error)?;
     let mut sources = vec![DiscoveredSource {
         relative: validated(&diagnostic)?,
         route: Route::Raw(OutputStream::Stderr),
@@ -426,7 +413,7 @@ fn discover(init: &PresenterInit, identity: &RegistryIdentity) -> RuntimeResult<
             "SELECT source_label, presentation, stdout_path, stderr_path FROM processes
              WHERE run_id = ?1 ORDER BY rowid",
         )
-        .map_err(sql)?;
+        .map_err(crate::registry::sql_error)?;
     let rows = statement
         .query_map([&init.run_id], |row| {
             Ok((
@@ -436,9 +423,9 @@ fn discover(init: &PresenterInit, identity: &RegistryIdentity) -> RuntimeResult<
                 row.get::<_, String>(3)?,
             ))
         })
-        .map_err(sql)?
+        .map_err(crate::registry::sql_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(sql)?;
+        .map_err(crate::registry::sql_error)?;
     for (label, presentation, stdout, stderr) in rows {
         let presentation = SourcePresentation::parse(&presentation).ok_or_else(|| {
             RuntimeError::new(ErrorCode::RegistryCorrupt, "unknown source presentation")

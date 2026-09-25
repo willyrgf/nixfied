@@ -5,6 +5,7 @@
 //! symlinks, keeps the root marker until every payload entry is gone, and then
 //! commits completion. A pending intent is resumed by the same operation ID;
 //! it is never replaced by a new attempt identity.
+use crate::registry::sql_error;
 use std::io;
 use std::path::PathBuf;
 
@@ -605,8 +606,4 @@ fn cleanup_event<'a>(
     let mut event = EventInsert::new(event_type, payload);
     event.computed_manifest_hash = Some(&record.marker.computed_manifest_hash);
     event
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }

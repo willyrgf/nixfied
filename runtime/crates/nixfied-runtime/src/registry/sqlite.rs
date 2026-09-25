@@ -149,8 +149,7 @@ impl RegistryReader {
                 path,
             )
         })?;
-        conn.execute_batch("BEGIN")
-            .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+        conn.execute_batch("BEGIN").map_err(super::sql_error)?;
         schema::verify_existing(&conn, identity)
             .map_err(|error| with_registry_path(error, path))?;
         Ok(Some(Self { conn }))

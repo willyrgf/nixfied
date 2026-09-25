@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 
-use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::error::RuntimeResult;
 use crate::redaction::Redactor;
 use crate::registry::RegistryIdentity;
 
@@ -32,13 +32,9 @@ pub(crate) fn append_event(
     redactor: &Redactor,
     event: EventInsert<'_>,
 ) -> RuntimeResult<i64> {
-    let transaction = conn
-        .transaction()
-        .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+    let transaction = conn.transaction().map_err(super::sql_error)?;
     let seq = insert_event(&transaction, identity, redactor, event)?;
-    transaction
-        .commit()
-        .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+    transaction.commit().map_err(super::sql_error)?;
     Ok(seq)
 }
 
@@ -70,6 +66,6 @@ pub(crate) fn insert_event(
                 payload_json,
             ],
         )
-        .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+        .map_err(super::sql_error)?;
     Ok(transaction.last_insert_rowid())
 }

@@ -1,3 +1,4 @@
+use crate::registry::sql_error;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1772,13 +1773,6 @@ fn terminate_unrecorded_child(
         (service.stop.timeout.as_millis().min(u128::from(u64::MAX)) as u64).min(run_timeout_ms);
     let containment = contain(&Leader::Child(child), pgid, libc::SIGTERM, timeout_ms, &[]);
     crate::error::both(containment.map(|_| ()), reap_owned_child(child))
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::RegistryCorrupt,
-        format!("endpoint attribution registry operation failed: {error}"),
-    )
 }
 
 /// The slot plan's endpoint map: every service selected for the run, resolved
