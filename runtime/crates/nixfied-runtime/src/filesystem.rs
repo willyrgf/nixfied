@@ -151,6 +151,23 @@ impl Directory {
         Ok(file)
     }
 
+    /// Open the private file and take its exclusive lock without waiting.
+    /// Contention is `None`. The locked descriptor is rechecked against its
+    /// entry before it is returned.
+    pub(crate) fn try_lock_private_file(&self, name: &CStr) -> io::Result<Option<PrivateFile>> {
+        let file = self.open_private_file(name)?;
+        while unsafe { libc::flock(file.0.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = io::Error::last_os_error();
+            match error.kind() {
+                io::ErrorKind::Interrupted => {}
+                io::ErrorKind::WouldBlock => return Ok(None),
+                _ => return Err(error),
+            }
+        }
+        self.verify_private_file(name, &file)?;
+        Ok(Some(file))
+    }
+
     /// Repeat after acquiring a lock: the locked descriptor must still name the
     /// expected private object. This does not authorize replacement or repair.
     pub(crate) fn verify_private_file(&self, name: &CStr, file: &PrivateFile) -> io::Result<()> {
@@ -183,31 +200,15 @@ impl Directory {
             unsafe { libc::geteuid() },
             DirectoryMode::Private,
         )?;
-        let held = stat_fd(self.0.as_raw_fd())?;
-        let observed = stat_fd(current.0.as_raw_fd())?;
-        if held.st_dev != observed.st_dev || held.st_ino != observed.st_ino {
+        if self.identity()? != current.identity()? {
             return Err(invalid("coordination anchor was replaced"));
         }
         Ok(())
     }
 
     fn verify_entry(&self, name: &CStr, fd: RawFd) -> io::Result<()> {
-        component(name)?;
         let opened = stat_fd(fd)?;
-        let mut entry = std::mem::MaybeUninit::<libc::stat>::zeroed();
-        if unsafe {
-            libc::fstatat(
-                self.0.as_raw_fd(),
-                name.as_ptr(),
-                entry.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fstatat initialized the complete stat on success.
-        let entry = unsafe { entry.assume_init() };
+        let entry = self.stat_entry(name)?;
         if opened.st_dev != entry.st_dev
             || opened.st_ino != entry.st_ino
             || opened.st_mode & libc::S_IFMT != entry.st_mode & libc::S_IFMT
@@ -238,6 +239,21 @@ impl Directory {
 
     /// Observe one entry without following it. Absence is `None`.
     pub(crate) fn entry(&self, name: &CStr) -> io::Result<Option<EntryKind>> {
+        let entry = match self.stat_entry(name) {
+            Ok(entry) => entry,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let identity = FileIdentity::from(&entry);
+        Ok(Some(match entry.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => EntryKind::Directory(identity),
+            libc::S_IFREG => EntryKind::File(identity),
+            _ => EntryKind::Other(identity),
+        }))
+    }
+
+    /// Stat one entry without following it.
+    fn stat_entry(&self, name: &CStr) -> io::Result<libc::stat> {
         component(name)?;
         let mut entry = std::mem::MaybeUninit::<libc::stat>::zeroed();
         if unsafe {
@@ -249,21 +265,10 @@ impl Directory {
             )
         } != 0
         {
-            let error = io::Error::last_os_error();
-            return if error.raw_os_error() == Some(libc::ENOENT) {
-                Ok(None)
-            } else {
-                Err(error)
-            };
+            return Err(io::Error::last_os_error());
         }
         // SAFETY: fstatat initialized the complete stat on success.
-        let entry = unsafe { entry.assume_init() };
-        let identity = FileIdentity::from(&entry);
-        Ok(Some(match entry.st_mode & libc::S_IFMT {
-            libc::S_IFDIR => EntryKind::Directory(identity),
-            libc::S_IFREG => EntryKind::File(identity),
-            _ => EntryKind::Other(identity),
-        }))
+        Ok(unsafe { entry.assume_init() })
     }
 
     /// Whether the named entry is the root of a mount. Linux reports this
@@ -521,7 +526,7 @@ fn network_filesystem(observed: &libc::statfs) -> Option<&'static str> {
 
 /// The temporary entry [`Directory::publish_file`] writes before its rename.
 /// Only a process killed between creation and rename leaves one behind.
-pub(crate) fn temporary_name(name: &CStr, token: &str) -> io::Result<CString> {
+fn temporary_name(name: &CStr, token: &str) -> io::Result<CString> {
     let mut bytes = b".".to_vec();
     bytes.extend_from_slice(name.to_bytes());
     bytes.extend_from_slice(format!(".{token}.tmp").as_bytes());
