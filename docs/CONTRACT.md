@@ -467,7 +467,8 @@ when the manifest/runtime contract changes.
   when every source recorded a checked capture outcome (`complete`,
   `incomplete`, or `unknown`); then it releases the slot. The command then lets
   the helper drain the sealed sources with no default deadline. A termination
-  signal to the command ends the drain; a remote `down` does not. Delivery is
+  signal received during the drain ends it; a signal that already canceled the
+  session, or a remote `down`, does not truncate the retained final output. Delivery is
   command-local: a failed, interrupted, or unconfirmed (unsealed) delivery of a
   successful session fails the command with `OUTPUT_PROJECTION_FAILED` without
   rewriting any session record; a canceled session stays `CANCELED`. A slow

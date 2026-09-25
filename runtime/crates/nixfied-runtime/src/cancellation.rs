@@ -1,10 +1,11 @@
 use std::mem;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 static PROCESS_SIGNAL_CANCELED: AtomicBool = AtomicBool::new(false);
+static PROCESS_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
@@ -46,6 +47,13 @@ pub fn canceled_error() -> RuntimeError {
 
 extern "C" fn handle_signal(_signal: libc::c_int) {
     PROCESS_SIGNAL_CANCELED.store(true, Ordering::SeqCst);
+    PROCESS_SIGNALS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Termination signals received so far. A later value than an earlier
+/// snapshot means a new request arrived after that point.
+pub fn signal_count() -> usize {
+    PROCESS_SIGNALS.load(Ordering::SeqCst)
 }
 
 pub struct ProcessSignalGuard {
