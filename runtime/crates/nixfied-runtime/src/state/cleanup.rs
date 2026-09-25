@@ -57,7 +57,7 @@ pub fn clean_marked_state(
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let target = ApplicationTree::new(registry.authority(), expected)?;
-    refuse_active_refs(registry)?;
+    require_settled_slot(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(outcome);
     }
@@ -90,7 +90,7 @@ pub fn apply_retention(
     registry: &mut Registry,
 ) -> RuntimeResult<RetentionOutcome> {
     let target = ApplicationTree::new(registry.authority(), expected)?;
-    refuse_active_refs(registry)?;
+    require_settled_slot(registry)?;
     if let Some(outcome) = resume_pending(registry, &target, expected)? {
         return Ok(RetentionOutcome::Deleted(outcome));
     }
@@ -163,21 +163,6 @@ fn delete_generation(
     };
     record_intent(registry, &record)?;
     finish_deletion(registry, target, &record, opened.parent, opened.root)
-}
-
-/// Settle a pending deletion before any application-root materialization,
-/// marker admission, or provenance refresh. Returns `None` when nothing is
-/// pending.
-pub fn resume_pending_cleanup(
-    expected: &StateIdentity,
-    registry: &mut Registry,
-) -> RuntimeResult<Option<CleanupOutcome>> {
-    let target = ApplicationTree::new(registry.authority(), expected)?;
-    if pending_cleanup(registry)?.is_none() {
-        return Ok(None);
-    }
-    refuse_active_refs(registry)?;
-    resume_pending(registry, &target, expected)
 }
 
 fn resume_pending(
@@ -359,7 +344,9 @@ struct CleanupRecord {
     root: FileIdentity,
 }
 
-fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
+/// The slot's one settled check: no recorded process obligation and no open
+/// endpoint evidence. Retention and cleanup refuse before any deletion.
+fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     registry.authority().validate()?;
     // Quiescence is the absence of recorded process obligations, independent of
     // endpoint evidence: leader exit or a terminal status alone settles nothing.

@@ -3,10 +3,9 @@
 
 use serde::Serialize;
 
-use crate::control::require_settled_slot;
+use crate::control::Recovered;
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry};
-use crate::state::cleanup::resume_pending_cleanup;
 use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, publish_slot_marker,
 };
@@ -30,17 +29,17 @@ impl PreparationReport {
 }
 
 /// Prepare the marker-owned state root after the slot owner has completed
-/// predecessor recovery. This function never signals processes. Unsettled
-/// registry evidence rejects before marker inspection or filesystem mutation.
-/// The application tree is inspected and created only through the slot
-/// guard's held descriptor.
+/// predecessor recovery, which the consumed proof attests: no process or
+/// endpoint obligation remains and no deletion is pending, so no generation or
+/// provenance rewrite can race an unfinished deletion. This function never
+/// signals processes. The application tree is inspected and created only
+/// through the slot guard's held descriptor.
 pub fn prepare_slot_state(
     identity: &StateIdentity,
     registry: &mut Registry,
+    recovered: Recovered,
 ) -> RuntimeResult<PreparationReport> {
-    require_settled_slot(registry)?;
-    // An unfinished deletion blocks any new generation or provenance rewrite.
-    resume_pending_cleanup(identity, registry)?;
+    recovered.check(registry)?;
     let report = match evaluate_slot_marker(registry, identity)? {
         MarkerDecision::Fresh => {
             commit_slot_marker(registry, identity)?;

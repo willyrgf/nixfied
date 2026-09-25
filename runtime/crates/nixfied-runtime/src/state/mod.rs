@@ -7,7 +7,6 @@ pub(crate) mod tree;
 
 pub use cleanup::{
     CleanupMode, CleanupOutcome, RetentionOutcome, apply_retention, clean_marked_state,
-    resume_pending_cleanup,
 };
 pub use marker::{
     MARKER_FILE_NAME, MARKER_VERSION, MarkerDecision, StateIdentity, StateMarker,

@@ -303,7 +303,8 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
         nixfied_runtime::state::RetentionOutcome::Absent
     ));
     assert!(leftover.exists());
-    prepare_slot_state(&identity, &mut registry).expect("a publication leftover is not data");
+    prepare_slot_state(&identity, &mut registry, recovery.recovered)
+        .expect("a publication leftover is not data");
 
     assert!(!leftover.exists());
     let marker: StateMarker =
@@ -322,8 +323,6 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
     )
     .unwrap();
     let error = nixfied_runtime::control::recover_slot(&mut registry, &identity, 1000).unwrap_err();
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-    let error = prepare_slot_state(&identity, &mut registry).unwrap_err();
     assert_eq!(error.code, ErrorCode::StateUnowned);
 }
 
@@ -686,8 +685,10 @@ fn pending_state_preparation_settles_deletion_before_a_new_generation() {
     let old = read_marker(&fixture);
     insert_pending(&registry, &fixture, "cleanup-before-run", &old, false);
     fs::write(fixture.layout.state_root().join("stale"), b"old").unwrap();
-    prepare_slot_state(&fixture.identity, &mut registry)
-        .expect("pending run-scoped deletion should settle before preparation");
+    let recovery = nixfied_runtime::control::recover_slot(&mut registry, &fixture.identity, 1000)
+        .expect("recovery settles the pending run-scoped deletion");
+    prepare_slot_state(&fixture.identity, &mut registry, recovery.recovered)
+        .expect("preparation follows the settled deletion");
     let fresh = read_marker(&fixture);
     assert_ne!(fresh.data_generation, old.data_generation);
     assert!(!fixture.layout.state_root().join("stale").exists());
@@ -713,7 +714,7 @@ fn deleted_generation_reappearing_is_contradictory_history() {
     assert_eq!(read_marker(&fixture), marker);
     assert_eq!(cleanup_rows(&registry), 1);
     // State preparation never adopts it as application data either.
-    let error = prepare_slot_state(&fixture.identity, &mut registry).unwrap_err();
+    let error = evaluate_slot_marker(&registry, &fixture.identity).unwrap_err();
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert_eq!(read_marker(&fixture), marker);
 }

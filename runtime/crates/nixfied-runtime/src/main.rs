@@ -946,13 +946,14 @@ fn run_placed(
         ),
     )?;
     registry.set_redactor(redactor.clone());
-    nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
+    let recovery =
+        nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
     // Recovery effects already settled are kept; abandonment observed now
     // still prevents any new generation or session.
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
-    let preparation = prepare_slot_state(&identity, &mut registry)?;
+    let preparation = prepare_slot_state(&identity, &mut registry, recovery.recovered)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.
     let run_dir = registry.authority().claim_run_dir(placement)?;
