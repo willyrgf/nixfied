@@ -154,17 +154,6 @@ impl StartingService {
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
         self.info().selected_endpoint()
     }
-    /// Stop a started service before readiness with its declared stop policy.
-    pub fn stop(self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
-        let Self {
-            mut owned,
-            startup_guards,
-        } = self;
-        let result = owned.teardown(registry, timeout_ms, Teardown::Stop(None));
-        drop(owned);
-        startup_guards.release();
-        result
-    }
     pub fn ready(
         mut self,
         registry: &mut Registry,
