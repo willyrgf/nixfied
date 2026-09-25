@@ -91,7 +91,7 @@ output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoi
 output-schema selected-endpoint: endpointId host port
 output-schema ps-json: processes
 # ps reads a coherent snapshot without reconciliation or absent-registry creation.
-output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus reconciledStatus ownership live
+output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus observedStatus ownership live
 output-schema runtime-error-port-conflict: portConflict
 output-schema port-conflict: reason projectId endpoint nixfiedOwner?
 output-schema port-conflict-endpoint: transport family address port endpointId
@@ -116,7 +116,7 @@ task-evidence: gated-process-registration verified-launcher-identity-before-perm
 bounded-capture: service-always-captured minimal-secret-prefix-holdback typed-capture-outcome checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
 state-preparation: refuse-deleted-generation marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation single-settlement-writer retention-after-quiescence run-scoped-deleted persistent-retained complete-after-settlement unfinished-retains-data recovery-applies-predecessor-retention recovered-sessions-complete
-escaped-port-reconciliation: persisted-stop-policy leader-group-and-tracked-liveness absent-leader-group-is-owned present-mismatched-leader-is-reuse post-termination-settle-wait-1000ms recovery-never-invents-capture explicit-process-ownership unresolved-until-proven endpoint-independent ps-visible down-actionable cleanup-blocked settle-after-death-proof capture-failure-unresolved
+process-obligation-recovery: persisted-stop-policy leader-group-and-tracked-liveness absent-leader-group-is-owned present-mismatched-leader-is-reuse post-termination-settle-wait-1000ms recovery-never-invents-capture explicit-process-ownership unresolved-until-proven endpoint-independent ps-visible down-actionable cleanup-blocked settle-after-death-proof capture-failure-unresolved
 
 # The closed stop signals the runtime can send.
 signal: TERM INT QUIT HUP

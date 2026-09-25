@@ -176,7 +176,7 @@ in
       ]
     )
     (record (output "ps-json") "NoDecoder"
-      "Native reconciled process observations; serialization performs no liveness checks."
+      "Read-only process observations from one registry snapshot; ps writes nothing."
       [
         (required "processes" (list (ref (output "ps-process"))) "Observed rows in native query order.")
       ]
@@ -190,7 +190,7 @@ in
         (required "pid" u32 "Observed process id.")
         (required "pgid" i32 "Observed signed process-group id.")
         (required "registryStatus" text "Native registry status string.")
-        (required "reconciledStatus" text "Native reconciled status string.")
+        (required "observedStatus" text "Recorded status as currently observed on the host; observation writes nothing.")
         (required "ownership" text "`unresolved` until process, group, and tracked descendants are proven gone; otherwise `settled`.")
         (required "live" boolean "Native host liveness observation.")
       ]
@@ -208,7 +208,7 @@ in
       [
         (omitted "canceledRunId" text "The live session that received the request and settled.")
         (required "stopped" (list text) "Process keys stopped by native control.")
-        (required "stale" (list text) "Process keys classified stale by native reconciliation.")
+        (required "stale" (list text) "Process keys that recovery found already gone.")
       ]
     )
     (record (local "CleanupOutcome") "NoDecoder"
@@ -244,7 +244,7 @@ in
           "Native stdout/stderr enum serialization."
         ) "Affected native output stream.")
         (required "operation" (native "ProjectionOperation" text
-          "Native open/read/write/flush/join enum serialization."
+          "Native open/read/write/join enum serialization."
         ) "Failed native projection operation.")
         (required "kind" text "Redaction-safe native error-kind classification.")
         (required "path" text "Already formatted path; delivery deliberately uses to_string_lossy.")
@@ -359,10 +359,10 @@ in
       "Durable workload role; preparation is a task occurrence and probes own separate process evidence."
     )
     (vocabulary "status ProcessStatus" "ProcessStatus" status "pub" copy
-      "Native processes.status vocabulary; host reconciliation stays native."
+      "Native processes.status vocabulary; ownership settlement is the separate ownership column."
     )
     (vocabulary "status PortStatus" "PortStatus" status "pub" copy
-      "Native ports.status vocabulary; reservation and ownership checks stay native."
+      "Native ports.status vocabulary: endpoint evidence (reserved until verified, then active), never a socket reservation."
     )
     (vocabulary "status CleanupStatus" "CleanupStatus" status "pub" copy
       "Native cleanups.status vocabulary; marker-gated deletion stays native."

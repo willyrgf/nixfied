@@ -132,7 +132,7 @@ in
       visible "Establish the session in the background and print its identity, not its result" null
     ))
   ] 26 "output-schema/run-json")
-  (runtime "ps" "Reconcile and report Nixfied-owned processes for a slot." [
+  (runtime "ps" "Report recorded Nixfied processes and their observed liveness for a slot." [
     manifest
     allow
     state

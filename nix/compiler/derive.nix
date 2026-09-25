@@ -267,9 +267,8 @@ let
           };
     };
 
-  # Service identity is no longer emitted: the runtime derives a service's reuse
-  # identity from its own lowered contract, so the manifest carries no identity
-  # hashes for it to trust.
+  # Services carry no identity hashes: a session owns every service it starts,
+  # and the runtime identifies a service instance by its run and declared name.
   #
   # `endpoint` (single) is sugar for the common one-endpoint service; `endpoints`
   # (keyed by id) + `primaryEndpoint` is the multi-endpoint form. Exactly one must

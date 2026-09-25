@@ -1,4 +1,4 @@
-Reconcile and report Nixfied-owned processes for a slot.
+Report recorded Nixfied processes and their observed liveness for a slot.
 
 Usage:
   nix run .#ps -- [options]

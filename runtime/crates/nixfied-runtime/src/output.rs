@@ -21,7 +21,6 @@ pub enum ProjectionOperation {
     Open,
     Read,
     Write,
-    Flush,
     Join,
 }
 

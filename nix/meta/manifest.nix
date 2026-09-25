@@ -310,7 +310,7 @@ in
         )
         (field "start" (ref "StartSpec") required "RequiredPresent" "Spawn-and-own contract.")
         (field "ready" (ref "ReadySpec") required "RequiredPresent" "Readiness contract.")
-        (field "health" (ref "HealthSpec") required "RequiredPresent" "Reuse-health contract.")
+        (field "health" (ref "HealthSpec") required "RequiredPresent" "Post-readiness startup health contract.")
         (field "stop" (ref "StopSpec") required "RequiredPresent" "Signal shutdown contract.")
         (field "clean" (ref "CleanSpec") required "RequiredPresent" "Marker-gated cleanup contract.")
       ]
@@ -329,7 +329,7 @@ in
       (field "terminal" (ref "TerminalSemantics") required "RequiredPresent" "Terminal evidence tokens.")
     ])
     (probeRecord "ReadySpec" "Probe until ready under the native lifecycle rules." "Readiness probe.")
-    (probeRecord "HealthSpec" "Verify whether an existing service remains reusable." "Health probe.")
+    (probeRecord "HealthSpec" "Verify a newly ready service before the session relies on it." "Health probe.")
     (record "StopSpec" "Signal-based shutdown, with native timeout escalation." [
       (field "operationId" (id "OperationId") required "RequiredPresent"
         "Globally unique operation identity."

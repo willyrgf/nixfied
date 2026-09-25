@@ -11,8 +11,9 @@ use crate::error::RuntimeResult;
 use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
-    CapturedExec, CapturedExecOutcome, CapturedExecTransition, RenderedInvocation,
-    get_process_group, platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
+    CapturedExec, CapturedExecFailure, CapturedExecOutcome, CapturedExecTransition,
+    CapturedReleaseFailure, RenderedInvocation, get_process_group, platform_start_identity,
+    resolve_exec_cwd, spawn_gated_captured_exec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,11 +136,9 @@ pub(crate) fn exec_probe_attempt(
         },
         launcher,
     )?;
-    use crate::registry::session::ExecutionOutcome;
     use crate::service::registry::{
-        InvocationIdentity, InvocationOwner, InvocationProcessRecord, TaskTerminalStatus,
-        mark_invocation_finished, record_invocation_observed, record_invocation_started,
-        record_probe_canceling,
+        InvocationIdentity, InvocationOwner, InvocationProcessRecord, mark_invocation_finished,
+        record_invocation_observed, record_invocation_started, record_probe_canceling,
     };
     let pid = pending.pid();
     let pgid = pid as i32;
@@ -154,98 +153,62 @@ pub(crate) fn exec_probe_attempt(
         "label": probe.label, "serviceId": service_name, "executable": command.executable,
         "args": command.args, "cwd": command_cwd, "stdoutPath": stdout_path, "stderrPath": stderr_path,
     }).to_string();
-    let child = pending.register_and_release(
-        |_| {
-            if get_process_group(pid)? != pgid {
-                return Err(crate::RuntimeError::new(
-                    crate::ErrorCode::ProcEscape,
-                    "probe launcher process group changed",
-                ));
-            }
-            let start = platform_start_identity(pid).ok_or_else(|| {
-                crate::RuntimeError::new(
-                    crate::ErrorCode::ProcEscape,
-                    "probe launcher start identity is unavailable",
+    let child = pending
+        .register_and_release(
+            |_| {
+                if get_process_group(pid)? != pgid {
+                    return Err(crate::RuntimeError::new(
+                        crate::ErrorCode::ProcEscape,
+                        "probe launcher process group changed",
+                    ));
+                }
+                let start = platform_start_identity(pid).ok_or_else(|| {
+                    crate::RuntimeError::new(
+                        crate::ErrorCode::ProcEscape,
+                        "probe launcher start identity is unavailable",
+                    )
+                })?;
+                let start_identity =
+                    crate::service::StoredProcessIdentity::encode(pid, pgid, Some(&start), None);
+                record_invocation_started(
+                    registry,
+                    &InvocationProcessRecord {
+                        source: &evidence,
+                        run_id,
+                        process_key: &process_key,
+                        pid,
+                        pgid,
+                        start_identity: &start_identity,
+                        command_json: &command_json,
+                        computed_manifest_hash: manifest_hash,
+                    },
+                    identity.owner,
                 )
-            })?;
-            let start_identity =
-                crate::service::StoredProcessIdentity::encode(pid, pgid, Some(&start), None);
-            record_invocation_started(
-                registry,
-                &InvocationProcessRecord {
-                    source: &evidence,
-                    run_id,
-                    process_key: &process_key,
-                    pid,
-                    pgid,
-                    start_identity: &start_identity,
-                    command_json: &command_json,
-                    computed_manifest_hash: manifest_hash,
-                },
-                identity.owner,
-            )
-        },
-        || {
-            cancellation.check()?;
-            checkpoint()
-        },
-    )?;
-    let terminal = |outcome: &CapturedExecOutcome| match outcome {
-        CapturedExecOutcome::Exited(status) if status.success() => (
-            ExecutionOutcome::Succeeded,
-            status.code(),
-            TaskTerminalStatus::Succeeded,
-        ),
-        CapturedExecOutcome::Exited(status) => (
-            ExecutionOutcome::Failed,
-            status.code(),
-            TaskTerminalStatus::Failed,
-        ),
-        CapturedExecOutcome::Canceled => (
-            ExecutionOutcome::Canceled,
-            None,
-            TaskTerminalStatus::Canceled,
-        ),
-        CapturedExecOutcome::TimedOut => {
-            (ExecutionOutcome::Failed, None, TaskTerminalStatus::TimedOut)
-        }
-    };
+            },
+            || {
+                cancellation.check()?;
+                checkpoint()
+            },
+        )
+        .map_err(|failure| match failure {
+            CapturedReleaseFailure::Unregistered(error) => *error,
+            CapturedReleaseFailure::Registered(failure) => {
+                settle_probe_failure(registry, identity, failure)
+            }
+        })?;
     let outcome = child
         .complete(cancellation, checkpoint, |transition| match transition {
             CapturedExecTransition::Observed(outcome) => {
-                let (outcome, code, _) = terminal(outcome);
+                let (outcome, code, _) = probe_terminal(outcome);
                 record_invocation_observed(registry, identity, outcome, code)
             }
             CapturedExecTransition::Terminating(_) => record_probe_canceling(registry, identity),
         })
-        .map_err(|failure| {
-            let error = *failure.error;
-            if !failure.settled {
-                return match crate::service::registry::record_capture_outcome(
-                    registry,
-                    run_id,
-                    &process_key,
-                    failure.capture,
-                ) {
-                    Ok(()) => error,
-                    Err(recording) => error.with_cause(recording),
-                };
-            }
-            // A settled probe interrupted by its session keeps no obligation.
-            let status = failure
-                .outcome
-                .as_ref()
-                .map_or(TaskTerminalStatus::Canceled, |outcome| terminal(outcome).2);
-            match mark_invocation_finished(registry, identity, status, "{}", Some(failure.capture))
-            {
-                Ok(()) => error,
-                Err(settlement) => error.with_cause(settlement),
-            }
-        })?;
+        .map_err(|failure| settle_probe_failure(registry, identity, failure))?;
     mark_invocation_finished(
         registry,
         identity,
-        terminal(&outcome).2,
+        probe_terminal(&outcome).2,
         "{}",
         Some(crate::redaction::CaptureOutcome::Complete),
     )?;
@@ -271,6 +234,73 @@ pub(crate) fn exec_probe_attempt(
             stderr_path.display(),
         )),
     })
+}
+
+fn probe_terminal(
+    outcome: &CapturedExecOutcome,
+) -> (
+    crate::registry::session::ExecutionOutcome,
+    Option<i32>,
+    crate::service::registry::TaskTerminalStatus,
+) {
+    use crate::registry::session::ExecutionOutcome;
+    use crate::service::registry::TaskTerminalStatus;
+    match outcome {
+        CapturedExecOutcome::Exited(status) if status.success() => (
+            ExecutionOutcome::Succeeded,
+            status.code(),
+            TaskTerminalStatus::Succeeded,
+        ),
+        CapturedExecOutcome::Exited(status) => (
+            ExecutionOutcome::Failed,
+            status.code(),
+            TaskTerminalStatus::Failed,
+        ),
+        CapturedExecOutcome::Canceled => (
+            ExecutionOutcome::Canceled,
+            None,
+            TaskTerminalStatus::Canceled,
+        ),
+        CapturedExecOutcome::TimedOut => {
+            (ExecutionOutcome::Failed, None, TaskTerminalStatus::TimedOut)
+        }
+    }
+}
+
+/// Settle the registered probe row from a failed release or completion. A
+/// settled probe keeps no obligation; an unsettled probe records its capture
+/// outcome for recovery.
+fn settle_probe_failure(
+    registry: &mut crate::registry::Registry,
+    identity: crate::service::registry::InvocationIdentity<'_>,
+    failure: CapturedExecFailure,
+) -> crate::RuntimeError {
+    let error = *failure.error;
+    if !failure.settled {
+        return match crate::service::registry::record_capture_outcome(
+            registry,
+            identity.run_id,
+            identity.process_key,
+            failure.capture,
+        ) {
+            Ok(()) => error,
+            Err(recording) => error.with_cause(recording),
+        };
+    }
+    let status = failure.outcome.as_ref().map_or(
+        crate::service::registry::TaskTerminalStatus::Canceled,
+        |outcome| probe_terminal(outcome).2,
+    );
+    match crate::service::registry::mark_invocation_finished(
+        registry,
+        identity,
+        status,
+        "{}",
+        Some(failure.capture),
+    ) {
+        Ok(()) => error,
+        Err(settlement) => error.with_cause(settlement),
+    }
 }
 
 #[cfg(test)]

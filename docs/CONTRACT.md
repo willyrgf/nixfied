@@ -338,7 +338,7 @@ when the manifest/runtime contract changes.
   further action. Ordinary SIGINT/SIGTERM/SIGHUP remain cancellation inputs.
 - A task's observed execution outcome and exit code commit atomically with its
   observation event before containment and capture settlement. That observation
-  does not grant completed output evidence or replay. A later capture failure
+  does not grant completed output evidence. A later capture failure
   preserves the observed result; if it prevents remaining graph nodes from
   executing, the enclosing session fails. Repeated or mismatched observations
   reject without rewriting the prior result.

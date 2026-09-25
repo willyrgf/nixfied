@@ -15,16 +15,16 @@ use crate::state::placement::{HostPlacement, materialize_state_root};
 /// What [`prepare_slot_state`] did to make the slot usable for this identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UpgradeReport {
-    pub upgraded: bool,
+pub struct PreparationReport {
+    pub provenance_refreshed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_manifest_hash: Option<String>,
 }
 
-impl UpgradeReport {
+impl PreparationReport {
     fn unchanged() -> Self {
         Self {
-            upgraded: false,
+            provenance_refreshed: false,
             from_manifest_hash: None,
         }
     }
@@ -37,7 +37,7 @@ pub fn prepare_slot_state(
     placement: &HostPlacement,
     identity: &StateIdentity,
     registry: &mut Registry,
-) -> RuntimeResult<UpgradeReport> {
+) -> RuntimeResult<PreparationReport> {
     require_settled_slot(registry)?;
     // An unfinished deletion blocks any new generation or provenance rewrite.
     resume_pending_cleanup(&placement.state_base, identity, registry)?;
@@ -46,20 +46,20 @@ pub fn prepare_slot_state(
         MarkerDecision::Fresh => {
             materialize_state_root(placement)?;
             commit_slot_marker(placement, identity)?;
-            UpgradeReport::unchanged()
+            PreparationReport::unchanged()
         }
         MarkerDecision::Adopt(existing) => {
             refuse_deleted_generation(registry, &existing)?;
             materialize_state_root(placement)?;
-            UpgradeReport::unchanged()
+            PreparationReport::unchanged()
         }
-        MarkerDecision::Upgrade { existing } => {
+        MarkerDecision::Refresh { existing } => {
             refuse_deleted_generation(registry, &existing)?;
-            record_upgrade_event(registry, identity, &existing)?;
+            record_provenance_refresh(registry, identity, &existing)?;
             materialize_state_root(placement)?;
             refresh_slot_marker(placement, identity, &existing)?;
-            UpgradeReport {
-                upgraded: true,
+            PreparationReport {
+                provenance_refreshed: true,
                 from_manifest_hash: Some(existing.computed_manifest_hash),
             }
         }
@@ -67,7 +67,7 @@ pub fn prepare_slot_state(
     Ok(report)
 }
 
-fn record_upgrade_event(
+fn record_provenance_refresh(
     registry: &mut Registry,
     identity: &StateIdentity,
     existing: &crate::state::marker::StateMarker,
@@ -79,7 +79,7 @@ fn record_upgrade_event(
         "toManifestPath": identity.manifest_path,
     })
     .to_string();
-    let mut event = EventInsert::new("state.upgraded", &payload);
+    let mut event = EventInsert::new("state.provenance-refreshed", &payload);
     event.computed_manifest_hash = Some(&identity.computed_manifest_hash);
     registry.append_event(event)?;
     Ok(())

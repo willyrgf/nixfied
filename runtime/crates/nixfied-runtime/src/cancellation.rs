@@ -76,7 +76,7 @@ impl ProcessSignalGuard {
                 }
             }
         }
-        // Replay writes must observe EPIPE as a typed projection issue.  The
+        // Command output writes must observe EPIPE as a typed projection issue.  The
         // default disposition would terminate the runtime before the worker can
         // report the broken pipe.  The prior disposition is restored by Drop.
         match install_handler(libc::SIGPIPE, libc::SIG_IGN).map_err(|error| {

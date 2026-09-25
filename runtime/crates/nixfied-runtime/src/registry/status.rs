@@ -77,10 +77,12 @@ macro_rules! db_status {
 
 include!("../generated/status.rs");
 
-/// Port statuses that keep a reservation open.
+/// Endpoint evidence still attributed to a process: registered before
+/// ownership verification (`reserved`) or verified (`active`). Never a socket
+/// reservation against the host.
 pub const PORT_OPEN: &[PortStatus] = &[PortStatus::Reserved, PortStatus::Active];
 
-/// Process statuses that count as still live during reconciliation.
+/// Recorded statuses of a process that has not reached a terminal outcome.
 pub const PROCESS_ACTIVE: &[ProcessStatus] = &[
     ProcessStatus::Starting,
     ProcessStatus::Running,

@@ -13,9 +13,9 @@ use crate::redaction::CaptureOutcome;
 use crate::redaction::{LogFileMode, Redactor};
 use crate::registry::Registry;
 use crate::service::process::{
-    CapturedExec, CapturedExecOutcome, CapturedExecTransition, ExecSubstitution, ReadyService,
-    SlotEndpoints, TerminationReason, get_process_group, platform_start_identity, resolve_exec_cwd,
-    spawn_gated_captured_exec,
+    CapturedExec, CapturedExecFailure, CapturedExecOutcome, CapturedExecTransition,
+    CapturedReleaseFailure, ExecSubstitution, ReadyService, SlotEndpoints, TerminationReason,
+    get_process_group, platform_start_identity, resolve_exec_cwd, spawn_gated_captured_exec,
 };
 use crate::service::registry::{
     InvocationProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready,
@@ -271,7 +271,12 @@ pub fn run_dependent_task_cancellable(
                 check_services_live(dependencies)
             },
         )
-        .map_err(TaskExecutionError::before)?;
+        .map_err(|failure| match failure {
+            CapturedReleaseFailure::Unregistered(error) => TaskExecutionError::before(*error),
+            CapturedReleaseFailure::Registered(failure) => {
+                settle_task_failure(registry, &run_context, task, &process_key, failure)
+            }
+        })?;
     let outcome = child
         .complete(
             cancellation,
@@ -309,48 +314,7 @@ pub fn run_dependent_task_cancellable(
             },
         )
         .map_err(|failure| {
-            let mut error = *failure.error;
-            if failure.settled {
-                // Contained, reaped, and capture-settled: the interrupted task
-                // leaves no process obligation, only its terminal evidence.
-                let status = failure
-                    .outcome
-                    .as_ref()
-                    .map_or(TaskTerminalStatus::Canceled, |outcome| {
-                        task_terminal(task, outcome).1
-                    });
-                let payload = serde_json::json!({
-                    "interrupted": true,
-                    "code": error.code,
-                })
-                .to_string();
-                if let Err(settlement) = mark_task_finished(
-                    registry,
-                    run_context.run_id,
-                    &process_key,
-                    run_context.admission.common().computed_manifest_hash(),
-                    status,
-                    &payload,
-                    Some(failure.capture),
-                ) {
-                    error = error.with_cause(settlement);
-                }
-            } else if let Err(recording) =
-                record_capture_outcome(registry, run_context.run_id, &process_key, failure.capture)
-            {
-                error = error.with_cause(recording);
-            }
-            if let Some(outcome) = failure.outcome {
-                let (_, terminal) = task_terminal(task, &outcome);
-                if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
-                    error = error.with_cause(outcome_error);
-                }
-                return TaskExecutionError::ObservedWithoutEvidence {
-                    error: Box::new(error),
-                    outcome: execution_outcome(terminal),
-                };
-            }
-            TaskExecutionError::before(error)
+            settle_task_failure(registry, &run_context, task, &process_key, failure)
         })?;
     let duration_ms = elapsed_ms(started);
     let (exit_code, terminal_status) = task_terminal(task, &outcome);
@@ -416,6 +380,58 @@ pub fn run_dependent_task_cancellable(
         None => Ok(TaskExecution::Succeeded(evidence)),
         Some(error) => Ok(TaskExecution::Failed { error, evidence }),
     }
+}
+
+/// Settle the registered task row from a failed release or completion. A
+/// settled child leaves only terminal evidence; an unsettled child keeps its
+/// obligation and records the capture outcome for recovery.
+fn settle_task_failure(
+    registry: &mut Registry,
+    run_context: &RunContext<'_>,
+    task: &ExecTask,
+    process_key: &str,
+    failure: CapturedExecFailure,
+) -> TaskExecutionError {
+    let mut error = *failure.error;
+    if failure.settled {
+        let status = failure
+            .outcome
+            .as_ref()
+            .map_or(TaskTerminalStatus::Canceled, |outcome| {
+                task_terminal(task, outcome).1
+            });
+        let payload = serde_json::json!({
+            "interrupted": true,
+            "code": error.code,
+        })
+        .to_string();
+        if let Err(settlement) = mark_task_finished(
+            registry,
+            run_context.run_id,
+            process_key,
+            run_context.admission.common().computed_manifest_hash(),
+            status,
+            &payload,
+            Some(failure.capture),
+        ) {
+            error = error.with_cause(settlement);
+        }
+    } else if let Err(recording) =
+        record_capture_outcome(registry, run_context.run_id, process_key, failure.capture)
+    {
+        error = error.with_cause(recording);
+    }
+    if let Some(outcome) = failure.outcome {
+        let (_, terminal) = task_terminal(task, &outcome);
+        if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {
+            error = error.with_cause(outcome_error);
+        }
+        return TaskExecutionError::ObservedWithoutEvidence {
+            error: Box::new(error),
+            outcome: execution_outcome(terminal),
+        };
+    }
+    TaskExecutionError::before(error)
 }
 
 fn execution_outcome(terminal: TaskTerminalStatus) -> crate::registry::session::ExecutionOutcome {
@@ -626,6 +642,7 @@ mod tests {
         )
         .unwrap()
         .register_and_release(|_| Ok(()), || Ok(()))
+        .map_err(CapturedReleaseFailure::into_error)
         .unwrap();
         let pgid = child.pid() as i32;
         let cancellation = CancellationToken::new();

@@ -37,7 +37,7 @@ let
     bounded-capture = "runtime";
     state-preparation = "runtime";
     finalization = "runtime";
-    escaped-port-reconciliation = "runtime";
+    process-obligation-recovery = "runtime";
     session-cancellation = "runtime";
     internal-presenter = "runtime";
     internal-session-owner = "runtime";

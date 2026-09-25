@@ -703,7 +703,7 @@ non-empty string
 
 
 
-Probe contract used to verify an existing service remains reusable\.
+Probe contract run once after readiness, before the session relies on the service\.
 
 
 

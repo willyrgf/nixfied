@@ -143,7 +143,7 @@ impl StateMarker {
         if provenance_matches {
             MarkerComparison::Match
         } else {
-            MarkerComparison::UpgradeProvenance
+            MarkerComparison::RefreshProvenance
         }
     }
 }
@@ -151,7 +151,7 @@ impl StateMarker {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerComparison {
     Match,
-    UpgradeProvenance,
+    RefreshProvenance,
     RefuseRetention,
     RefuseOwnership,
     RefuseAbi,
@@ -165,7 +165,7 @@ pub enum MarkerDecision {
     /// The marker matches the requested identity exactly.
     Adopt(StateMarker),
     /// Same owner and retention authorization, different recorded provenance.
-    Upgrade { existing: StateMarker },
+    Refresh { existing: StateMarker },
 }
 
 /// Inspect the slot's marker (read-only) and classify what the run must do
@@ -200,7 +200,7 @@ pub fn evaluate_slot_marker(
     let existing = read_marker(&placement.state_root)?;
     match existing.compare(identity) {
         MarkerComparison::Match => Ok(MarkerDecision::Adopt(existing)),
-        MarkerComparison::UpgradeProvenance => Ok(MarkerDecision::Upgrade { existing }),
+        MarkerComparison::RefreshProvenance => Ok(MarkerDecision::Refresh { existing }),
         MarkerComparison::RefuseRetention => Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
             "state preparation cannot weaken existing retention authorization",

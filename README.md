@@ -3,7 +3,7 @@
 Nixfied lets a project describe its services, tasks, and exported workflows
 once in typed Nix. Nix evaluates and builds those declarations into a canonical
 project manifest, `manifest.json`; a generic, Nix-free Rust runtime then owns
-process execution, ports, state, reconciliation, and cleanup.
+process execution, ports, state, recovery, and cleanup.
 
 The manifest has two kinds:
 
@@ -76,7 +76,7 @@ upgrades.
 - **Nix** is the public integration and correctness layer. Typed modules reject
   invalid intent and realise every executable closure.
 - **Rust** is the hidden impure runtime. It admits the compiled manifest, starts and
-  reconciles process groups, verifies endpoint ownership, and safely cleans
+  stops session-owned process groups, recovers interrupted sessions, verifies endpoint ownership, and safely cleans
   runtime-owned state. It never invokes Nix.
 - **`manifest.json`** is the only semantic seam. Its `views/docs.md` file is a
   disposable, manifest-derived human reference.

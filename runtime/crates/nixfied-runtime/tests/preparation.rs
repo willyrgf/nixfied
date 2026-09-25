@@ -33,8 +33,8 @@ fn second_run_same_manifest_adopts_marker() {
         .prepare("run-2", &identity)
         .expect("second run of the same manifest should adopt the slot");
 
-    assert!(!first.upgraded);
-    assert!(!second.upgraded);
+    assert!(!first.provenance_refreshed);
+    assert!(!second.provenance_refreshed);
     assert!(sentinel.exists(), "adopted state root must be preserved");
     assert_eq!(
         fixture.marker().computed_manifest_hash,
@@ -56,7 +56,7 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
         .prepare("run-2", &fixture.identity(true))
         .expect("a changed manifest hash should upgrade, not refuse");
 
-    assert!(report.upgraded);
+    assert!(report.provenance_refreshed);
     assert_eq!(
         report.from_manifest_hash.as_deref(),
         Some(expected_hash(&fixture.manifest, false).as_str())
@@ -140,7 +140,7 @@ fn pre_existing_empty_state_root_is_fresh() {
         .prepare("run-1", &fixture.identity(false))
         .expect("an empty state root has no state to adopt and is a fresh slot");
 
-    assert!(!report.upgraded);
+    assert!(!report.provenance_refreshed);
     assert_eq!(
         fixture.marker().computed_manifest_hash,
         expected_hash(&fixture.manifest, false)
@@ -176,7 +176,7 @@ fn runtime_abi_mismatch_refuses() {
 
     let error = fixture
         .prepare("run-2", &fixture.identity(true))
-        .expect_err("a foreign runtime ABI must be refused, never upgraded");
+        .expect_err("a foreign runtime ABI must be refused, never provenance_refreshed");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
 }
@@ -185,9 +185,9 @@ fn runtime_abi_mismatch_refuses() {
 fn changed_manifest_cannot_weaken_existing_retention() {
     {
         let fixture = UpgradeFixture::new();
-        let mut protected = fixture.identity(false);
-        protected.persistence = PersistencePolicy::Persistent;
-        fixture.prepare("run-1", &protected).unwrap();
+        let mut persistent = fixture.identity(false);
+        persistent.persistence = PersistencePolicy::Persistent;
+        fixture.prepare("run-1", &persistent).unwrap();
         let sentinel = fixture.plant_sentinel();
         let before = fixture.marker();
         let error = fixture
@@ -269,7 +269,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         let report = prepare_slot_state(&placement_b, &identity_b, &mut registry)
             .expect("preparation follows successful recovery");
 
-        assert_eq!(report.upgraded, changed);
+        assert_eq!(report.provenance_refreshed, changed);
         assert!(
             wait_for_group_exit(pgid, 5000),
             "the predecessor process group must be empty after recovery"
@@ -334,7 +334,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .prepare("run-2", &fixture.identity(true))
         .expect("the upgrade must reconcile interrupted leftovers, not trip on them");
 
-    assert!(report.upgraded);
+    assert!(report.provenance_refreshed);
     let process_status: String = fixture
         .registry()
         .connection()
@@ -414,7 +414,7 @@ impl UpgradeFixture {
         &self,
         run_id: &str,
         identity: &StateIdentity,
-    ) -> Result<nixfied_runtime::state::UpgradeReport, nixfied_runtime::RuntimeError> {
+    ) -> Result<nixfied_runtime::state::PreparationReport, nixfied_runtime::RuntimeError> {
         let placement = self.placement(run_id);
         materialize_registry_root(&placement)?;
         let mut registry = open_registry(&placement, &self.manifest);
@@ -457,7 +457,7 @@ impl UpgradeFixture {
         self.registry()
             .connection()
             .query_row(
-                "SELECT count(*) FROM events WHERE event_type = 'state.upgraded'",
+                "SELECT count(*) FROM events WHERE event_type = 'state.provenance-refreshed'",
                 [],
                 |row| row.get(0),
             )
@@ -470,7 +470,7 @@ impl UpgradeFixture {
             .connection()
             .query_row(
                 "SELECT payload_json FROM events
-                 WHERE event_type = 'state.upgraded' ORDER BY rowid DESC LIMIT 1",
+                 WHERE event_type = 'state.provenance-refreshed' ORDER BY rowid DESC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
