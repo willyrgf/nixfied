@@ -8,8 +8,7 @@ use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
     CleanupMode, CleanupOutcome, MARKER_FILE_NAME, MARKER_VERSION, MarkerComparison, StateIdentity,
     StateMarker, clean_marked_state, commit_slot_marker, derive_host_placement,
-    derive_host_placement_for_slot, evaluate_slot_marker, materialize_run_roots,
-    prepare_slot_state,
+    derive_host_placement_for_slot, evaluate_slot_marker, prepare_slot_state,
 };
 use nixfied_runtime::{ErrorCode, RuntimeResult};
 use serde_json::Value;
@@ -112,7 +111,6 @@ fn slot_one_marker_records_selected_identity() {
     let selected = select_slot(&manifest, Some(1)).expect("slot 1 should select");
     let layout = derive_host_placement_for_slot(&manifest, &selected, "run-2", &tmp.path)
         .expect("slot placement should derive");
-    materialize_run_roots(&layout).expect("roots should materialize");
     let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
 
     let registry = slot_registry(&layout, &identity);
@@ -174,9 +172,13 @@ fn placement_preserves_unix_backslashes_as_component_bytes() {
 #[cfg(unix)]
 #[test]
 fn materialization_refuses_symlinked_roots_and_nested_run_paths() {
+    use std::os::unix::fs::DirBuilderExt;
     for target in ["registry", "state", "run", "logs", "artifacts"] {
         let tmp = TempDir::new();
-        let layout = derive_host_placement(&manifest(), "run-1", &tmp.path).unwrap();
+        let manifest = manifest();
+        let admission = fixture_admission(&manifest, &tmp.path);
+        let identity = StateIdentity::from_admission(admission.common());
+        let layout = derive_host_placement(&manifest, "run-1", &tmp.path).unwrap();
         let path = match target {
             "registry" => &layout.registry_dir,
             "state" => &layout.state_root,
@@ -185,17 +187,52 @@ fn materialization_refuses_symlinked_roots_and_nested_run_paths() {
             "artifacts" => &layout.artifacts_dir,
             _ => unreachable!(),
         };
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if target != "registry" {
+            registry_guard(&layout).release().unwrap();
+        }
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path.parent().unwrap())
+            .unwrap();
         let outside = tmp.path.join("outside");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("sentinel"), b"untouched").unwrap();
         std::os::unix::fs::symlink(&outside, path).unwrap();
 
-        let error = materialize_run_roots(&layout).unwrap_err();
-        assert_eq!(error.code, ErrorCode::StateUnwritable, "{target}");
+        let error = (|| {
+            let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
+                &layout,
+                &nixfied_runtime::cancellation::CancellationToken::new(),
+            )?;
+            let registry = slot_registry_with(guard, &identity)?;
+            commit_slot_marker(&registry, &identity)?;
+            registry.authority().claim_run_dir(&layout)?;
+            registry.close()
+        })()
+        .unwrap_err();
+        let expected = if target == "registry" {
+            ErrorCode::StateUnowned
+        } else {
+            ErrorCode::StateUnwritable
+        };
+        assert_eq!(error.code, expected, "{target}");
         assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
     }
+}
+
+#[test]
+fn run_evidence_directories_are_claimed_once() {
+    let fixture = StateFixture::new();
+    let registry = fixture.registry();
+    let error = registry
+        .authority()
+        .claim_run_dir(&fixture.layout)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::StateUnwritable);
+    assert!(fixture.layout.logs_dir.is_dir());
+    registry.close().unwrap();
 }
 
 #[test]
@@ -209,7 +246,6 @@ fn cleanup_never_derives_a_tree_for_a_slot_the_guard_does_not_hold() {
         let selected = select_slot(&manifest, Some(number)).expect("slot should select");
         let layout = derive_host_placement_for_slot(&manifest, &selected, "run-1", &tmp.path)
             .expect("slot placement should derive");
-        materialize_run_roots(&layout).expect("roots should materialize");
         let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
         (layout, identity)
     };
@@ -237,7 +273,7 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
     let manifest = manifest();
     let admission = fixture_admission(&manifest, &tmp.path);
     let layout = derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout derives");
-    materialize_run_roots(&layout).expect("roots should materialize");
+    fs::create_dir_all(&layout.state_root).unwrap();
     let identity = StateIdentity::from_admission(admission.common());
     let leftover = layout
         .state_root
@@ -1010,8 +1046,15 @@ fn slot_registry(
     layout: &nixfied_runtime::state::HostPlacement,
     identity: &StateIdentity,
 ) -> Registry {
+    slot_registry_with(registry_guard(layout), identity).expect("registry should open")
+}
+
+fn slot_registry_with(
+    guard: nixfied_runtime::state::ownership::SlotGuard,
+    identity: &StateIdentity,
+) -> RuntimeResult<Registry> {
     Registry::open_or_create(
-        registry_guard(layout),
+        guard,
         &RegistryIdentity::for_slot(
             &identity.project_id,
             &identity.environment,
@@ -1020,7 +1063,6 @@ fn slot_registry(
             &identity.toolchain_id,
         ),
     )
-    .expect("registry should open")
 }
 
 impl StateFixture {
@@ -1030,9 +1072,9 @@ impl StateFixture {
         let admission = fixture_admission(&manifest, &tmp.path);
         let layout =
             derive_host_placement(&manifest, "run-1", &tmp.path).expect("layout should derive");
-        materialize_run_roots(&layout).expect("roots should materialize");
         let identity = StateIdentity::from_admission(admission.common());
         let registry = slot_registry(&layout, &identity);
+        registry.authority().claim_run_dir(&layout).unwrap();
         commit_slot_marker(&registry, &identity).expect("marker should be written");
         registry.close().expect("registry should close");
         Self {
@@ -1068,7 +1110,6 @@ fn namespace_names_are_ordinary_projects_with_disjoint_data_and_evidence() {
             let mut manifest = manifest();
             manifest.project.project_id = project.into();
             let layout = derive_host_placement(&manifest, "session", &tmp.path).unwrap();
-            materialize_run_roots(&layout).unwrap();
             assert_eq!(
                 layout.state_root,
                 tmp.path.join(format!("data/{project}/dev/0"))

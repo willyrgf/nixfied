@@ -21,7 +21,7 @@ use nixfied_runtime::service::{
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
     CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
-    derive_host_placement_for_slot, materialize_run_roots,
+    derive_host_placement_for_slot,
 };
 use nixfied_runtime::{ErrorCode, RunAdmission, RuntimeError};
 use serde_json::{Value, json};
@@ -614,8 +614,8 @@ fn slot_one_service_uses_slot_placement_port_window() {
     let placement =
         derive_host_placement_for_slot(&manifest, &selected_slot, "run-slot-1", &tmp.path)
             .expect("slot 1 layout should derive");
-    materialize_run_roots(&placement).expect("roots should materialize");
     let mut registry = open_slot_registry(&placement, &manifest, &selected_slot);
+    registry.authority().claim_run_dir(&placement).unwrap();
 
     let service = start_fixture_service(
         &admission,
@@ -3028,7 +3028,6 @@ impl ServiceFixture {
         );
         let placement = derive_host_placement(&manifest, "run-service", &tmp.path)
             .expect("layout should derive");
-        materialize_run_roots(&placement).expect("roots should materialize");
         let registry = Registry::open_or_create(
             registry_guard(&placement),
             &RegistryIdentity::default_slot(
@@ -3038,6 +3037,9 @@ impl ServiceFixture {
             ),
         )
         .expect("registry should open");
+        registry.authority().claim_run_dir(&placement).unwrap();
+        // Workloads address an existing application root, as after preparation.
+        fs::create_dir_all(&placement.state_root).unwrap();
         Self {
             _tmp: tmp,
             admission,
@@ -3066,9 +3068,9 @@ impl<'a> StartedSlot<'a> {
         let selected = select_slot(manifest, Some(slot)).expect("slot should select");
         let placement = derive_host_placement_for_slot(manifest, &selected, run_id, state_base)
             .expect("slot placement should derive");
-        materialize_run_roots(&placement).expect("slot roots should materialize");
         let identity = StateIdentity::from_selected_slot(admission.common(), &selected);
         let mut registry = open_slot_registry(&placement, manifest, &selected);
+        registry.authority().claim_run_dir(&placement).unwrap();
         commit_slot_marker(&registry, &identity).expect("slot marker should be written");
         let service = start_fixture_service(
             admission,

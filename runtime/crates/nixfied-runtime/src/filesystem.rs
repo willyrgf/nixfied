@@ -16,7 +16,10 @@ pub(crate) enum DirectoryMode {
     Private,
 }
 
-pub(crate) struct Directory(OwnedFd);
+/// Public only so a claimed run directory can pass through the binary as an
+/// opaque value; every operation stays crate-private.
+#[derive(Debug)]
+pub struct Directory(OwnedFd);
 pub(crate) struct PrivateFile(OwnedFd);
 
 impl Directory {
@@ -119,13 +122,22 @@ impl Directory {
         Ok(child)
     }
 
+    /// Create or open a private child directory of the effective user.
     pub(crate) fn create_private_child(&self, name: &CStr) -> io::Result<Self> {
+        match self.create_new_private_child(name) {
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+                self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Private)
+            }
+            created => created,
+        }
+    }
+
+    /// Create a private child directory exclusively: an existing entry fails
+    /// with `EEXIST` and is never reused.
+    pub(crate) fn create_new_private_child(&self, name: &CStr) -> io::Result<Self> {
         component(name)?;
         if unsafe { libc::mkdirat(self.0.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EEXIST) {
-                return Err(error);
-            }
+            return Err(io::Error::last_os_error());
         }
         self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Private)
     }

@@ -1,4 +1,3 @@
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Component, Path, PathBuf};
 
 use nixfied_manifest::Manifest;
@@ -113,58 +112,6 @@ pub fn derive_slot_placement(
     })
 }
 
-/// Fixture convenience: application and registry roots plus this run's
-/// evidence directories, without the session's exclusive claim.
-pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
-    materialize_state_root(placement)?;
-    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.run_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)
-}
-
-/// Claim the session's never-reused evidence directory exclusively. An
-/// existing directory is a run identity collision, never reused.
-pub fn claim_run_evidence(placement: &HostPlacement) -> RuntimeResult<()> {
-    let root = canonicalize_materialized("registry directory", &placement.registry_dir)?;
-    let runs = placement.registry_dir.join("runs");
-    materialize_owned_dir(&placement.registry_dir, &root, &runs)?;
-    reject_existing_symlink_components(&placement.registry_dir, &placement.run_dir)?;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&placement.run_dir)
-        .map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::StateUnwritable,
-                format!(
-                    "failed to claim session evidence {}: {error}",
-                    placement.run_dir.display()
-                ),
-            )
-        })?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.logs_dir)?;
-    materialize_owned_dir(&placement.registry_dir, &root, &placement.artifacts_dir)
-}
-
-/// Materialize only the state base and registry dir. The registry must exist
-/// before the slot marker is evaluated: the marker decision may need registry
-/// evidence (stale processes from an older manifest build), and the registry
-/// outlives a slot clean that deletes the state root.
-pub fn materialize_registry_root(placement: &HostPlacement) -> RuntimeResult<()> {
-    create_dir(&placement.state_base)?;
-    let base = canonicalize_materialized("state base", &placement.state_base)?;
-    materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)
-}
-
-/// Materialize the application root and the registry root. Session evidence
-/// is claimed separately by the owner with [`claim_run_evidence`].
-pub fn materialize_state_root(placement: &HostPlacement) -> RuntimeResult<()> {
-    create_dir(&placement.state_base)?;
-    let base = canonicalize_materialized("state base", &placement.state_base)?;
-    materialize_owned_dir(&placement.state_base, &base, &placement.state_root)?;
-    materialize_registry_root(placement)
-}
-
 pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {
     let path = Path::new(value);
     let mut components = path.components();
@@ -177,97 +124,6 @@ pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult
         ));
     }
     Ok(path)
-}
-
-fn materialize_owned_dir(
-    owner_root: &Path,
-    canonical_owner_root: &Path,
-    path: &Path,
-) -> RuntimeResult<()> {
-    if !path.starts_with(owner_root) {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!(
-                "state path {} escapes owner root {}",
-                path.display(),
-                owner_root.display()
-            ),
-        ));
-    }
-    reject_existing_symlink_components(owner_root, path)?;
-    create_dir(path)?;
-    let canonical_path = canonicalize_materialized("state path", path)?;
-    if !canonical_path.starts_with(canonical_owner_root) {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!(
-                "state path {} escapes owner root {}",
-                canonical_path.display(),
-                canonical_owner_root.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn reject_existing_symlink_components(
-    owner_root: &Path,
-    path: &Path,
-) -> RuntimeResult<()> {
-    let relative = path.strip_prefix(owner_root).map_err(|_| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!(
-                "state path {} escapes owner root {}",
-                path.display(),
-                owner_root.display()
-            ),
-        )
-    })?;
-    let mut current = owner_root.to_path_buf();
-    for component in relative.components() {
-        match component {
-            Component::Normal(part) => current.push(part),
-            Component::CurDir => continue,
-            _ => {
-                return Err(RuntimeError::new(
-                    ErrorCode::StateUnwritable,
-                    format!("state path {} contains traversal", path.display()),
-                ));
-            }
-        }
-        if let Ok(metadata) = std::fs::symlink_metadata(&current)
-            && metadata.file_type().is_symlink()
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::StateUnwritable,
-                format!("state path traverses symlink {}", current.display()),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn create_dir(path: &Path) -> RuntimeResult<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .map_err(|error| {
-            RuntimeError::new(
-                ErrorCode::StateUnwritable,
-                format!("failed to create {}: {error}", path.display()),
-            )
-        })
-}
-
-fn canonicalize_materialized(label: &str, path: &Path) -> RuntimeResult<PathBuf> {
-    path.canonicalize().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!("failed to canonicalize {label} {}: {error}", path.display()),
-        )
-    })
 }
 
 /// Application data and coordination/evidence have structurally disjoint roots.

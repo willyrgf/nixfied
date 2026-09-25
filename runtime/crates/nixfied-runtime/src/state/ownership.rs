@@ -144,6 +144,51 @@ impl SlotGuard {
         Ok(())
     }
 
+    /// Claim the session's never-reused evidence directory, with its logs and
+    /// artifacts, from the held registry-directory descriptor. An existing
+    /// session directory is a run identity collision and is never reused.
+    pub fn claim_run_dir(&self, placement: &HostPlacement) -> RuntimeResult<Directory> {
+        self.validate()?;
+        let run_id = placement
+            .run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid("invalid run evidence placement"))?;
+        if placement.registry_path() != self.registry_path
+            || placement.run_dir != placement.registry_dir.join("runs").join(run_id)
+            || placement.logs_dir != placement.run_dir.join("logs")
+            || placement.artifacts_dir != placement.run_dir.join("artifacts")
+        {
+            return Err(invalid(
+                "run evidence placement does not match held slot authority",
+            ));
+        }
+        let run_id = CString::new(
+            super::placement::normal_component("runId", run_id)?
+                .as_os_str()
+                .as_bytes(),
+        )
+        .map_err(|_| invalid("NUL in run identity"))?;
+        let claimed = (|| {
+            let run_dir = self
+                .directory
+                .create_private_child(c"runs")?
+                .create_new_private_child(&run_id)?;
+            run_dir.create_new_private_child(c"logs")?;
+            run_dir.create_new_private_child(c"artifacts")?;
+            Ok(run_dir)
+        })();
+        claimed.map_err(|error: io::Error| {
+            RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                format!(
+                    "failed to claim session evidence {}: {error}",
+                    placement.run_dir.display()
+                ),
+            )
+        })
+    }
+
     pub fn registry_path(&self) -> &std::path::Path {
         &self.registry_path
     }

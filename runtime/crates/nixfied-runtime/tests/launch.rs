@@ -482,7 +482,7 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     use nixfied_runtime::service::{
         RunContext, record_run_created, run_dependent_task_cancellable,
     };
-    use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
+    use nixfied_runtime::state::derive_host_placement;
     let root = TempDir::new();
     let counter = root.path.join("must-not-execute");
     let mut value = test_child_manifest(23180, 23180);
@@ -493,7 +493,6 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     let manifest: nixfied_manifest::Manifest = serde_json::from_value(value).unwrap();
     let admission = fixture_admission(&manifest, &root.path);
     let placement = derive_host_placement(&manifest, "gated-task", &root.path).unwrap();
-    materialize_run_roots(&placement).unwrap();
     let mut registry = Registry::open_or_create(
         registry_guard(&placement),
         &RegistryIdentity::default_slot(
@@ -503,6 +502,7 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
         ),
     )
     .unwrap();
+    registry.authority().claim_run_dir(&placement).unwrap();
     record_run_created(&mut registry, "gated-task", &admission, &placement).unwrap();
     registry.connection().execute_batch("CREATE TRIGGER deny_task_registration BEFORE INSERT ON events WHEN NEW.event_type = 'task.running' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap();
     let error = run_dependent_task_cancellable(

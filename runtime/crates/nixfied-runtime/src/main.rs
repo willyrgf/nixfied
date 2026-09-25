@@ -950,7 +950,7 @@ fn run_placed(
     let preparation = prepare_slot_state(&identity, &mut registry)?;
     // The never-reused evidence directory: an existing one is an identity
     // collision, refused before any session fact is published.
-    nixfied_runtime::state::claim_run_evidence(placement)?;
+    let _run_dir = registry.authority().claim_run_dir(placement)?;
 
     let direct_selected = admission
         .common()
