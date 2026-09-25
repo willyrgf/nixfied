@@ -449,7 +449,7 @@ fn run(args: &[String]) -> Result<(), RuntimeError> {
     let command = args.first().map(String::as_str).unwrap_or(CHECK_COMMAND);
     match command {
         CHECK_COMMAND => check(args.get(1..).unwrap_or(&[])),
-        RUN_COMMAND => run_m0(args.get(1..).unwrap_or(&[])),
+        RUN_COMMAND => run_command(args.get(1..).unwrap_or(&[])),
         PS_COMMAND => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
         DOWN_COMMAND => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
         CLEAN_COMMAND => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
@@ -663,7 +663,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     write_stdout_line(&output)
 }
 
-fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
+fn run_command(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, RUN_HELP) {
         return Ok(());
     }
@@ -772,7 +772,7 @@ fn run_session(
     let manifest_path = admission.common().manifest_path().to_path_buf();
     let computed_manifest_hash = admission.common().computed_manifest_hash().to_owned();
     let mut presenter = None;
-    let result = run_m0_admitted(
+    let result = run_admitted(
         &admission,
         &redactor,
         &options,
@@ -814,7 +814,7 @@ fn run_session(
     Ok(())
 }
 
-fn run_m0_admitted(
+fn run_admitted(
     admission: &RunAdmission,
     redactor: &Redactor,
     options: &RunOptions,
@@ -841,7 +841,7 @@ fn run_m0_admitted(
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
-    run_m0_placed(
+    run_placed(
         admission,
         &plan,
         redactor,
@@ -902,7 +902,7 @@ fn enrich_placed_error(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_m0_placed(
+fn run_placed(
     admission: &RunAdmission,
     plan: &nixfied_runtime::execution::RunPlan<'_>,
     redactor: &Redactor,
@@ -1131,38 +1131,36 @@ fn run_m0_placed(
                 finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
+        // Readiness then health; either failure settles the service it
+        // started and ends the run with that service's evidence.
         let mut checkpoint = observe_started;
-        let mut current_service =
-            match current_service.ready(&mut session.registry, cancellation, &mut checkpoint) {
-                Ok(service) => service,
-                Err(failure) => {
-                    let (service, error) = failure.into_parts();
-                    let failed_service_output = service_output(service.info());
-                    let error = service.finalize_failed_start(
-                        &mut session.registry,
-                        options.timeout_ms,
-                        error,
-                    );
-                    finish_run!(
-                        error.with_detail("failedService", service_name),
-                        vec![failed_service_output]
-                    );
+        let registry = &mut session.registry;
+        let timeout_ms = options.timeout_ms;
+        let healthy = match current_service.ready(registry, cancellation, &mut checkpoint) {
+            Ok(mut service) => {
+                match service.check_health(registry, cancellation, &mut checkpoint) {
+                    Ok(()) => Ok(service),
+                    Err(error) => Err((
+                        service_output(service.info()),
+                        service.finalize_failed_start(registry, timeout_ms, error),
+                    )),
                 }
-            };
-        let startup_result =
-            current_service.check_health(&mut session.registry, cancellation, &mut checkpoint);
-        if let Err(error) = startup_result {
-            let failed_service_output = service_output(current_service.info());
-            let error = current_service.finalize_failed_start(
-                &mut session.registry,
-                options.timeout_ms,
-                error,
-            );
-            finish_run!(
+            }
+            Err(failure) => {
+                let (service, error) = failure.into_parts();
+                Err((
+                    service_output(service.info()),
+                    service.finalize_failed_start(registry, timeout_ms, error),
+                ))
+            }
+        };
+        let current_service = match healthy {
+            Ok(service) => service,
+            Err((failed_service_output, error)) => finish_run!(
                 error.with_detail("failedService", service_name),
                 vec![failed_service_output]
-            );
-        }
+            ),
+        };
         {
             let name = current_service.service_name();
             let message = match current_service.selected_endpoint() {

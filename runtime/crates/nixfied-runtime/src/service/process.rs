@@ -192,7 +192,7 @@ impl StartingService {
     ) -> Result<ReadyService, ReadinessFailure> {
         if let Err(error) =
             self.owned
-                .wait_for_probe_ready_cancellable(registry, cancellation, checkpoint)
+                .run_probe(registry, ProbePhase::Ready, cancellation, checkpoint)
         {
             return Err(ReadinessFailure {
                 service: self,
@@ -243,7 +243,8 @@ impl ReadyService {
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
-        self.owned.check_health(registry, cancellation, checkpoint)
+        self.owned
+            .run_probe(registry, ProbePhase::Health, cancellation, checkpoint)
     }
     pub fn finalize_failed_start(
         mut self,
@@ -294,6 +295,12 @@ impl std::fmt::Debug for ReadyService {
             .field("info", self.info())
             .finish_non_exhaustive()
     }
+}
+
+#[derive(Clone, Copy)]
+enum ProbePhase {
+    Ready,
+    Health,
 }
 
 /// How an owned service's teardown is chosen, recorded, and settled.
@@ -414,42 +421,36 @@ impl OwnedService {
         }
     }
 
-    pub fn wait_for_probe_ready_cancellable(
+    /// Run the readiness or health probe with its lifecycle evidence. Only
+    /// readiness commits endpoint ownership; its ready commit is its success.
+    fn run_probe(
         &mut self,
         registry: &mut Registry,
+        phase: ProbePhase,
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
-        let record = LifecycleRecord::from_meta(&self.service.ready.meta, "ready");
+        let (record, probe) = match phase {
+            ProbePhase::Ready => (
+                LifecycleRecord::from_meta(&self.service.ready.meta, "ready"),
+                self.ready_probe.clone(),
+            ),
+            ProbePhase::Health => (
+                LifecycleRecord::from_meta(&self.service.health.meta, "health"),
+                self.health_probe.clone(),
+            ),
+        };
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
-        let probe = self.ready_probe.clone();
+        let ready_record = matches!(phase, ProbePhase::Ready).then_some(&record);
         match self.wait_probe_with_ownership(
             registry,
             &probe,
             cancellation,
-            Some(&record),
+            ready_record,
             checkpoint,
         ) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let _ = record_lifecycle_failure(registry, &context, &record, &error);
-                Err(error)
-            }
-        }
-    }
-
-    pub fn check_health(
-        &mut self,
-        registry: &mut Registry,
-        cancellation: &CancellationToken,
-        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
-    ) -> RuntimeResult<()> {
-        let record = LifecycleRecord::from_meta(&self.service.health.meta, "health");
-        let context = self.lifecycle_event_context();
-        record_lifecycle_started(registry, &context, &record)?;
-        let probe = self.health_probe.clone();
-        match self.wait_probe_with_ownership(registry, &probe, cancellation, None, checkpoint) {
+            Ok(()) if ready_record.is_some() => Ok(()),
             Ok(()) => record_lifecycle_success(registry, &context, &record),
             Err(error) => {
                 let _ = record_lifecycle_failure(registry, &context, &record, &error);
@@ -509,7 +510,7 @@ impl OwnedService {
                 } => {
                     return Err(port_conflict_error(
                         PortConflictReason::ListenerOccupied,
-                        self.computed_project_id(registry),
+                        &registry.identity().project_id,
                         endpoint,
                         proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?
                             .as_ref(),
@@ -673,7 +674,7 @@ impl OwnedService {
             } => match proven_nixfied_owner(registry, endpoint, &listeners, &self.service) {
                 Ok(owner) => port_conflict_error(
                     PortConflictReason::ListenerOccupied,
-                    self.computed_project_id(registry),
+                    &registry.identity().project_id,
                     endpoint,
                     owner.as_ref(),
                 ),
@@ -737,10 +738,6 @@ impl OwnedService {
                 &record.meta.terminal_success,
             ),
         )
-    }
-
-    fn computed_project_id<'a>(&self, registry: &'a Registry) -> &'a str {
-        registry.identity().project_id.as_str()
     }
 
     fn settle_failed_service(
@@ -1754,14 +1751,6 @@ fn clean_marked_slot_state(
     clean_marked_state(&identity, registry, mode)
 }
 
-fn startup_outcome(error: &RuntimeError) -> ServiceStartOutcome {
-    if error.code == ErrorCode::Canceled {
-        ServiceStartOutcome::Canceled
-    } else {
-        ServiceStartOutcome::Failed
-    }
-}
-
 fn settle_reserved_failure(
     registry: &mut Registry,
     run_id: &str,
@@ -1772,7 +1761,11 @@ fn settle_reserved_failure(
         registry,
         run_id,
         service_instance_id,
-        startup_outcome(&error),
+        if error.code == ErrorCode::Canceled {
+            ServiceStartOutcome::Canceled
+        } else {
+            ServiceStartOutcome::Failed
+        },
     ) {
         Ok(()) => error,
         Err(settlement_error) => settlement_error.with_cause(error),
@@ -2613,10 +2606,6 @@ pub(crate) fn process_is_in_containment(
     }
 }
 
-pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
-    process_group_has_live_member_impl(pgid)
-}
-
 /// The startup grace period: poll cancellation, every started service, and
 /// escape evidence, then require a live, contained leader.
 fn hold_startup_grace(
@@ -3014,7 +3003,7 @@ fn process_is_zombie(pid: u32) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn process_group_has_live_member_impl(pgid: i32) -> RuntimeResult<bool> {
+pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
     let entries = std::fs::read_dir("/proc").map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -3055,7 +3044,7 @@ fn process_is_zombie(pid: u32) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn process_group_has_live_member_impl(pgid: i32) -> RuntimeResult<bool> {
+pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
     let pids = macos_process_ids().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
