@@ -10,8 +10,8 @@ pub use cleanup::{
     resume_pending_cleanup,
 };
 pub use marker::{
-    MARKER_FILE_NAME, MARKER_VERSION, MarkerComparison, MarkerDecision, StateIdentity, StateMarker,
-    commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
+    MARKER_FILE_NAME, MARKER_VERSION, MarkerDecision, StateIdentity, StateMarker,
+    commit_slot_marker, evaluate_slot_marker,
 };
 pub use placement::{HostPlacement, SlotIdentity, derive_slot_placement, state_base_from_env};
 pub use preparation::{PreparationReport, prepare_slot_state};

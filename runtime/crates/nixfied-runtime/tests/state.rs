@@ -6,7 +6,7 @@ use nixfied_manifest::{Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    CleanupMode, CleanupOutcome, MARKER_FILE_NAME, MARKER_VERSION, MarkerComparison, StateIdentity,
+    CleanupMode, CleanupOutcome, MARKER_FILE_NAME, MARKER_VERSION, MarkerDecision, StateIdentity,
     StateMarker, clean_marked_state, commit_slot_marker, evaluate_slot_marker, prepare_slot_state,
 };
 use nixfied_runtime::{ErrorCode, RuntimeResult};
@@ -56,7 +56,10 @@ fn materializes_m0_roots_and_slot_marker() {
     let marker: StateMarker =
         serde_json::from_slice(&fs::read(marker_path).expect("marker should be readable"))
             .expect("marker should parse");
-    assert_eq!(marker.compare(&fixture.identity), MarkerComparison::Match);
+    assert!(matches!(
+        marker.compare(&fixture.identity),
+        Ok(MarkerDecision::Adopt(_))
+    ));
     assert_eq!(marker.marker_version, MARKER_VERSION);
     assert!(marker.data_generation.starts_with("gen-"));
     assert_eq!(marker.project_id, "runtime-test");
@@ -123,7 +126,10 @@ fn slot_one_marker_records_selected_identity() {
 
     assert_eq!(marker.environment, "dev");
     assert_eq!(marker.slot, 1);
-    assert_eq!(marker.compare(&identity), MarkerComparison::Match);
+    assert!(matches!(
+        marker.compare(&identity),
+        Ok(MarkerDecision::Adopt(_))
+    ));
 }
 
 #[test]
@@ -295,7 +301,10 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
     let marker: StateMarker =
         serde_json::from_slice(&fs::read(layout.state_root().join(MARKER_FILE_NAME)).unwrap())
             .unwrap();
-    assert_eq!(marker.compare(&identity), MarkerComparison::Match);
+    assert!(matches!(
+        marker.compare(&identity),
+        Ok(MarkerDecision::Adopt(_))
+    ));
 
     // Any other unmarked content is still refused.
     fs::remove_file(layout.state_root().join(MARKER_FILE_NAME)).unwrap();

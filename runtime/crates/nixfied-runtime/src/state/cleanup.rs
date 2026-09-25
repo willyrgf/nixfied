@@ -97,12 +97,7 @@ pub fn apply_retention(
     let Some(opened) = open_marked(&target, expected)? else {
         return Ok(RetentionOutcome::Absent);
     };
-    if opened.marker.runtime_abi != expected.runtime_abi {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            "existing state marker was written under a different runtime ABI",
-        ));
-    }
+    opened.marker.check_abi(expected)?;
     match opened.marker.persistence {
         PersistencePolicy::Persistent => Ok(RetentionOutcome::Retained),
         PersistencePolicy::RunScoped => {
@@ -162,12 +157,7 @@ fn delete_generation(
     opened: OpenedTree,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
-    if generation_completed(registry, &opened.marker.data_generation)? {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            "a previously deleted data generation reappeared; refusing contradictory history",
-        ));
-    }
+    refuse_deleted_generation(registry, &opened.marker)?;
     let record = CleanupRecord {
         cleanup_id: format!("cleanup-{}", crate::token::random_hex()?),
         target: target.relative.clone(),
@@ -494,25 +484,21 @@ pub(crate) fn refuse_deleted_generation(
     registry: &Registry,
     marker: &StateMarker,
 ) -> RuntimeResult<()> {
-    if generation_completed(registry, &marker.data_generation)? {
+    let deletions = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM cleanups WHERE data_generation = ?1",
+            [&marker.data_generation],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_error)?;
+    if deletions > 0 {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             "a previously deleted data generation reappeared; refusing contradictory history",
         ));
     }
     Ok(())
-}
-
-fn generation_completed(registry: &Registry, generation: &str) -> RuntimeResult<bool> {
-    registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM cleanups WHERE data_generation = ?1",
-            [generation],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|count| count > 0)
-        .map_err(sql_error)
 }
 
 fn payload(record: &CleanupRecord) -> String {

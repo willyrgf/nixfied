@@ -6,9 +6,9 @@ use serde::Serialize;
 use crate::control::require_settled_slot;
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry};
-use crate::state::cleanup::{refuse_deleted_generation, resume_pending_cleanup};
+use crate::state::cleanup::resume_pending_cleanup;
 use crate::state::marker::{
-    MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
+    MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, publish_slot_marker,
 };
 
 /// What [`prepare_slot_state`] did to make the slot usable for this identity.
@@ -46,14 +46,10 @@ pub fn prepare_slot_state(
             commit_slot_marker(registry, identity)?;
             PreparationReport::unchanged()
         }
-        MarkerDecision::Adopt(existing) => {
-            refuse_deleted_generation(registry, &existing)?;
-            PreparationReport::unchanged()
-        }
+        MarkerDecision::Adopt(_) => PreparationReport::unchanged(),
         MarkerDecision::Refresh { existing } => {
-            refuse_deleted_generation(registry, &existing)?;
             record_provenance_refresh(registry, identity, &existing)?;
-            refresh_slot_marker(registry, identity, &existing)?;
+            publish_slot_marker(registry, identity, Some(&existing))?;
             PreparationReport {
                 provenance_refreshed: true,
                 from_manifest_hash: Some(existing.computed_manifest_hash),
