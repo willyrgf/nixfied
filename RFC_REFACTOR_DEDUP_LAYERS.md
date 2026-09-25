@@ -1,6 +1,9 @@
 # RFC: simplify ownership and remove duplicated layers
 
-Status: draft. Session-owned service processes, a single persistence policy for data retention,
+Status: implemented on branch `loc-review` with the limits listed in
+[Implementation status](#implementation-status-2026-09-25). The text below
+keeps the design record as written; where it says "proposed" or "not
+implemented", the status section is authoritative. Session-owned service processes, a single persistence policy for data retention,
 one active session per slot, interrupted-session cleanup followed by a fresh
 start, independent compilation/presentation consumers of native definitions,
 structural type generation limited to shared wire meaning, runtime derivation
@@ -29,35 +32,51 @@ passes on Linux (aarch64). The implementing commits, in order:
 
 | Area | Commits |
 | --- | --- |
-| A, F: executable identity, presentation-independent compilation, wire-only generation, runtime graph derivation, generated-app help | `6331e10`, `48505ae`, `4a1cfcd`, `b6d1909`, `19352d8` |
-| C: exclusive slot ownership, gated registration, session observation, capture checkpoints | `92a0fe2` … `5497909` |
-| S3: `persistence` as the sole policy, data generations, marker-last descriptor-relative deletion, pending-intent recovery matrix | `2d0a890` |
-| Finalization: one settlement writer, automatic run-scoped deletion, recovery settlement | `bb2c5e9` |
-| S10: per-session cancellation FIFO for `down` | `e79405c` |
-| Explicit process ownership obligations, stop intent before signals | `9782f97` |
-| Session observation before every workload release | `a92ebe9` |
-| D: command-owned presenter, source records, capture outcomes, output seal | `12f2fbc`, `c4a46e2` |
-| E: background launch (`run --daemon`) | `eb49bdb` |
-| Review fixes: stop policy, source closure, exclusive run evidence, presenter fairness, launch interruption, FIFO paths, deleted-generation adoption | `b7e08a1`, `1df399c`, `bea1018` |
-| Removal of reuse-era names and paths; settlement of refused releases | `d58b6fe` |
-| Proofs: presenter backpressure, FIFO delivery, background owner death, diamond start, step finalization, readiness kill; teardown observation | `82c5c3d`, `0bd07ef` |
+| A, F: executable identity, presentation-independent compilation, wire-only generation, runtime graph derivation, generated-app help | `cd67d75`, `82a7973`, `2548076`, `d65bebe`, `3e7c641` |
+| C: exclusive slot ownership, gated registration, session observation, capture checkpoints | `37eef29` … `ff09c8d` |
+| S3: `persistence` as the sole policy, data generations, marker-last descriptor-relative deletion, pending-intent recovery matrix | `7737ebb` |
+| Finalization: one settlement writer, automatic run-scoped deletion, recovery settlement | `fe35088` |
+| S10: per-session cancellation FIFO for `down` | `ad8ef54` |
+| Explicit process ownership obligations, stop intent before signals | `19ef002` |
+| Session observation before every workload release | `d0ed092` |
+| D: command-owned presenter, source records, capture outcomes, output seal | `a0e3eb3`, `32c4efc` |
+| E: background launch (`run --daemon`) | `db659cb` |
+| Review fixes: stop policy, source closure, exclusive run evidence, presenter fairness, launch interruption, FIFO paths, deleted-generation adoption | `d37234d`, `266de2c`, `5b289a7` |
+| Removal of reuse-era names and paths; settlement of refused releases | `d93779a` |
+| Proofs: presenter backpressure, FIFO delivery, background owner death, diamond start, step finalization, readiness kill; teardown observation | `8d08903`, `41af965` |
+| Architect review: success checkpoint after task exit, `down` ends when a successor recovers the chosen session, no fallible step between establishment and acknowledgement, undelivered launcher cancellation reported, ancestry checked before provenance events | `81ca6a9`, `4266fba`, `c527caf`, `9e6f98f`, `c277dd3` |
+| Architect review: preparation and cleanup open the application tree only from the guard's held descriptor and only for the held slot; interrupted first marker publication recovers; same-device mount roots and unbounded depth refuse; known network filesystems refuse | `a811188`, `92913e7`, `5414c44`, `12b4e08` |
+| Architect review: idempotent output seal; injected-fault proofs for cleanup intent, cleanup completion, and seal commits; distinct canceled and failed presenter outcomes; contract and document corrections | `8d850f7`, `3e85317`, `9eb5df8`, `ce2e7bd` |
 
 Not done or not proven:
 
-- macOS was not built or tested for these commits; CI macOS coverage is still required.
+- macOS was not built or tested for these commits; CI macOS coverage is still
+  required. The Linux-only `statx` mount-root check has a macOS fallback that
+  relies on the device comparison alone.
 - Host power-loss durability is not claimed. Deletion and marker publication use
   `fsync` ordering, which supports only process-death recovery.
 - The single in-memory supervisor collection (§4, "Proposed session-wide
   supervision") remains a proposal. The accepted requirement is met by
-  checkpoints: every wait, release, and startup grace observes every started
-  service. There is no one owner object for all children.
+  checkpoints: every wait, release, startup grace, and node success observes
+  every started service. There is no one owner object for all children, and the
+  owner does not poll presenter status at checkpoints.
 - Ordered teardown observes every remaining service before each stop signal.
   A service that exits while another service stops is classified as failed from
   its own exit when that sweep or its own stop observes it; no concurrent
   observation runs inside one service's stop wait.
-- Owner-kill proofs cover preparation, registration, readiness, and interrupted
-  deletion (simulated pending intents). Not every boundary listed in §13 has a
-  deterministic barrier.
+- Owner-kill proofs cover preparation, registration, readiness, background owner
+  death, and interrupted deletion (pending intents and injected commit
+  failures). No test kills a process during a real deletion walk or at each
+  handshake boundary of the background launch with a deterministic barrier.
+- The success checkpoint after a task's exit has no deterministic black-box
+  proof: the window between the task loop's last checkpoint and its exit
+  observation cannot be forced from outside the runtime.
+- Unsupported filesystems are refused only when they are known network
+  filesystems. Other filesystems are assumed to provide local `flock`, `rename`,
+  and `fsync` semantics.
+- The registry declares no foreign keys, and `service_instance_id` repeats
+  `run_id` and the service name in three tables.
+- S6 still lets Nix declare Rust visibility and derives for output records.
 
 ## 1. Accepted product direction
 
@@ -427,7 +446,7 @@ periodic application-health scheduling.
 entire runtime session in the background and return the shell:
 
 ```sh
-nix run .#serve -- --daemon  # Proposed; not currently implemented.
+nix run .#serve -- --daemon  # Implemented as `run --daemon`.
 nix run .#down
 ```
 
@@ -485,7 +504,7 @@ the actual launch handoff on Linux and macOS.
 Status: architect review endorses one establishment boundary with an essential
 correction: parent death and a registry commit cannot be atomically ordered.
 Specify observed startup abandonment, not a guarantee that every physical parent
-death before commit prevents execution. This protocol is proposed, not implemented.
+death before commit prevents execution. This protocol is implemented (`db659cb`, `5b289a7`).
 
 **Invariant:** the background owner alone acquires slot authority, recovers,
 registers, executes, and finalizes. The launcher owns no guard or registry writer.
@@ -1973,7 +1992,7 @@ Status: proposed registry specification following an independent architect audit
 of the current schema and its callers, with per-session FIFO cancellation
 explicitly accepted below. The accepted session model motivates these removals;
 the remaining record and mechanism proposals still require review.
-No schema or runtime implementation has been changed by this specification.
+The six-table schema and the FIFO are implemented; see the status section.
 
 ### Ownership and scope
 
@@ -2685,9 +2704,10 @@ before implementation and measurement.
 
 ## 13. Delivery and verification
 
-**Decision status.** Accepted direction fixes architectural boundaries; it does
-not claim implementation or platform validation. Detailed mechanisms remain
-proposals where labeled. They cannot reopen the accepted fundamentals.
+**Decision status.** Accepted direction fixes architectural boundaries. The
+implementation and its remaining platform and proof gaps are recorded in the
+[Implementation status](#implementation-status-2026-09-25) section, which
+supersedes the "remaining" column below where they differ.
 
 | Area | Settled direction | Remaining specification or proof |
 | --- | --- | --- |
@@ -2817,5 +2837,6 @@ execution sequences. The following implementation choices and proofs remain:
   S7's remaining metadata/policy proposals stay with the API behavior audit after
   the main refactor, with their losses and required proofs reviewed separately.
 
-This draft contains design and verification obligations only. None of the proposed
-runtime behavior has been implemented or validated by adding this document.
+The list above was written before implementation. The
+[Implementation status](#implementation-status-2026-09-25) section records which
+items are done and which proofs remain open.
