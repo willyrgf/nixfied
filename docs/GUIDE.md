@@ -392,7 +392,6 @@ port alone is not readiness. A conflicting listener rejects startup.
 Each run owns its services until the entire session finishes, then stops them.
 Tasks in the same graph share services. A later run starts fresh service
 processes; application-data retention is controlled separately by state policy.
-There is no task `serviceLifetime` setting or cross-session service borrowing.
 Only one session may own a slot at a time; use different slots for concurrent runs.
 
 Slots isolate simultaneous copies of a project. Declare the accepted range and

@@ -251,10 +251,9 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `sourceIdentity`, so `dirtyPolicy = reject` is provable for those modes.
   (v1: live checkout state was implicit.)
 - **Service attribution belongs to process evidence.** The declared service label
-  is stored with the session's process. There is no reusable service registry;
-  endpoint attribution requires process evidence and OS ownership proof, not a
-  compatibility comparison with a new service declaration. Service references
-  frame the run ID and declared name; lowered execution carries no reuse hashes.
+  is stored with the session's process. Endpoint attribution requires process
+  evidence and OS ownership proof. A service reference is the run ID plus the
+  declared name.
   Startup requires predecessor process settlement, including endpoint-less
   workloads. Cleanup lifecycle events carry the declaration without an instance.
 - **Placement is split by phase.** Nix bakes only the *logical* placement the
@@ -298,8 +297,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   mode and commits mutations with redacted events through one borrowed event record.
 - **Endpoint evidence belongs to a process.** Startup intent is recorded before
   prepare. Endpoint rows are inserted atomically with the process row, are keyed
-  by that process, and settle with it. There are no ownerless reservations, service leases,
-  owner tokens, heartbeat workers, or expiry sweeps. Unsafe or conflicting
+  by that process, and settle with it. Unsafe or conflicting
   stored process evidence rejects before new startup.
 - **Session completion has one owner.** Workload transitions update local process
   evidence, never aggregate execution outcome. The live session
@@ -308,8 +306,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `SessionProgress` distinguishes execution, finalizing a known outcome, and
   finalized execution; checked decoding and SQL constraints reject completion
   without an outcome. Resource finalization and output sealing are separate facts.
-- **Process lifetime belongs to the session.** Services cannot be borrowed by
-  another session or transferred into a standing state. Starting handles own
+- **Process lifetime belongs to the session.** Starting handles own
   startup guards and child resources; committed readiness consumes a starting
   handle into a ready owner. Failure settlement consumes that ownership, and
   session finalization stops every remaining service and settles its capture.
@@ -367,7 +364,7 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   atomically; macOS coordinates socket flag setup with every workload spawn.
   Coordination poisoning refuses effects. This process-local synchronization
   protects descriptor inheritance.
-- **Application data has no framework compatibility epoch.** Marker version 3
+- **Application data compatibility belongs to the application.** Marker version 3
   records ownership, retention, data generation, and provenance. State preparation has no deletion
   branch and refuses retention downgrades. Application startup owns its format
   checks and migrations; configuration changes grant no reset authority.

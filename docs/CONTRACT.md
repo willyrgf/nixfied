@@ -50,6 +50,9 @@ when the manifest/runtime contract changes.
 - Admission is a global pre-spawn barrier. Invalid manifest origin, ABI, toolchain,
   target, source, closure, state policy, or unsupported host feature fails before
   any child process starts.
+- Manifest records are closed: an undeclared field, including one from a
+  superseded contract, rejects as `MANIFEST_INVALID`. Nix options likewise
+  reject undeclared settings at evaluation.
 
 ## Ownership boundary
 
@@ -79,8 +82,7 @@ when the manifest/runtime contract changes.
 - A session owns every service it starts through final teardown. Tasks in its
   graph share those services; completion of one leaf does not release them.
   Services stop when the session finishes, independently of application-data
-  retention. There is no standing service handoff or cross-session borrowing.
-  `serviceLifetime` is not a manifest field; authored legacy values reject.
+  retention.
 - A writable registry owns the exclusive slot guard. Competing owners reject
   before application-state mutation or child spawn. `ps` reads a coherent
   registry snapshot and observes process liveness without acquiring ownership
@@ -236,9 +238,8 @@ when the manifest/runtime contract changes.
   owns durable shared mutable state and a total per-slot event order. Endpoint
   locks are transient startup coordination, not another registry or semantic
   authority. Liveness is reconciled against OS process identity before it is
-  reported; registry evidence alone is not a liveness oracle. There are no
-  service leases, heartbeat or expiry transitions, owner tokens, or borrower
-  counts. Startup intent is recorded before prepare; endpoint rows are recorded
+  reported; registry evidence alone is not a liveness oracle. Startup intent
+  is recorded before prepare; endpoint rows are recorded
   atomically with their owning process, never as ownerless reservations. An
   endpoint row is immutable evidence keyed by its owning process and endpoint
   id; it has no status of its own and settles exactly when that process does.
@@ -361,14 +362,13 @@ when the manifest/runtime contract changes.
   preserves the observed result; if it prevents remaining graph nodes from
   executing, the enclosing session fails. Repeated or mismatched observations
   reject without rewriting the prior result.
-- Application-data compatibility belongs to the application and user. There is
-  no `stateEpoch` declaration, manifest field, or marker field. Configuration
-  changes update provenance without deleting data; application startup failure
+- Application-data compatibility belongs to the application and user.
+  Configuration changes update provenance without deleting data; application startup failure
   does not authorize deletion. Marker version 3 rejects old marker shapes.
   Existing persistent retention cannot be silently weakened during state
   preparation. Exact framework ABI and schema checks remain mandatory.
-- `nixfied.state.persistence` is the sole application-data retention policy;
-  the removed `cleanupPolicy` option and manifest field reject. The marker
+- `nixfied.state.persistence` is the sole application-data retention policy.
+  The marker
   records the tree's persistence and a runtime-generated `dataGeneration`,
   preserved by provenance refresh. A fresh marker is published atomically
   (durable temporary file, rename, directory sync). An unmarked tree that holds
