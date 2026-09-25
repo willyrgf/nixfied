@@ -951,21 +951,22 @@ fn run_m0_placed(
         &placement.run_dir,
         cancellation,
     )?;
-    // Record the run row before any service starts, so even a service-less
-    // selection (a task tree whose leaves require nothing) leaves durable run
-    // evidence for `ps`/reconcile. Service transitions require this exact row
-    // and never create or repair it themselves.
+    // The diagnostic source exists before the commit that registers it, so no
+    // fallible step separates establishment from its acknowledgement. Runtime
+    // progress is retained evidence from here on; the presenter, not the
+    // session owner, shows it while session duties remain.
+    let mut diagnostics =
+        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
     // Observed abandonment before the commit prevents all new work. After the
     // commit the session is established and independent of its launcher.
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
+    // Record the run row before any service starts, so even a service-less
+    // selection (a task tree whose leaves require nothing) leaves durable run
+    // evidence for `ps` and recovery. Service transitions require this exact
+    // row and never create or repair it themselves.
     record_run_created(&mut registry, run_id, admission, placement)?;
-    // The diagnostic source is registered with the run before its first write.
-    // Runtime progress is retained evidence from here on; the presenter, not
-    // the session owner, shows it while session duties remain.
-    let mut diagnostics =
-        SessionDiagnostics::create(&placement.run_dir, options.output_mode.emit_summary())?;
     if preparation.provenance_refreshed {
         diagnostics.write(format_args!(
             "  updated slot provenance from manifest {} (data retained)",
