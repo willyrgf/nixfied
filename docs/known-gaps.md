@@ -108,22 +108,6 @@ The session-ownership runtime has these open platform and proof limits:
   proof. The window between the task loop's last checkpoint and its exit
   observation cannot be forced from outside the runtime.
 
-## Registry schema redundancy
-
-The registry DDL in
-[schema.rs](../runtime/crates/nixfied-runtime/src/registry/schema.rs) declares
-no foreign keys, and `service_instance_id` repeats `run_id` and the service name
-in three tables. Relations between records are enforced by runtime transactions
-and checked decoding, not by SQLite constraints.
-
-## Generation boundary leftovers
-
-Generation is meant to cover shared wire meaning only; private Rust
-representation belongs to native Rust definitions. Nix still declares Rust
-`visibility` and `derives` for wire vocabularies and manifest types
-([outputs.nix](../nix/meta/outputs.nix), [manifest.nix](../nix/meta/manifest.nix),
-[rust.nix](../nix/meta/rust.nix), [structure.nix](../nix/meta/structure.nix)).
-
 ## Separately scoped review candidates
 
 These are not merge blockers or approved implementation assignments. Each
@@ -158,11 +142,7 @@ the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
   `probe.timeoutMs`.
 - **Unused terminal labels:** lifecycle `terminal.success`/`failure` tokens are
   configurable event labels and do not define outcomes.
-  `lifecycle.clean.terminal.failure` has no consumer. Slot `clean` records each
-  service's clean start and success events before the aggregate slot cleanup
-  runs, so a later refusal or deletion failure never uses the failure label.
-  Options: a fixed runtime outcome vocabulary, or clean events that follow the
-  real cleanup outcome.
+  Option: a fixed runtime outcome vocabulary.
 - **Closure metadata:** closure `kind` (`executable`/`helper`) selects nothing
   at runtime. Closure `effects` other than `network-listener` are attestations
   with no consumer. The `network-listener` attestation may also be redundant
