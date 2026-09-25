@@ -1,5 +1,6 @@
 pub(crate) use crate::registry::records::StoredEndpoint as StoredServiceEndpoint;
 use crate::registry::records::read_open_endpoints;
+use crate::registry::sql_error;
 use crate::registry::sqlite::RegistryContext;
 use nixfied_manifest::ContainmentRequirement;
 use std::collections::BTreeMap;
@@ -1374,13 +1375,6 @@ fn release_service_ports(
         )
         .map_err(sql_error)?;
     Ok(())
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(
-        ErrorCode::RegistryCorrupt,
-        format!("service registry operation failed: {error}"),
-    )
 }
 
 fn json_error(error: serde_json::Error) -> RuntimeError {

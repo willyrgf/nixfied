@@ -1,3 +1,4 @@
+use crate::registry::sql_error;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{Value, json};
 
@@ -342,10 +343,6 @@ fn registry_identity_json(identity: &RegistryIdentity) -> Value {
         runtime_abi: &identity.runtime_abi,
         toolchain_id: &identity.toolchain_id,
     })
-}
-
-fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }
 
 /// Validate an existing registry without repairing, initializing or changing its

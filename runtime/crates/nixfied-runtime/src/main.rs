@@ -1064,11 +1064,7 @@ fn run_placed(
             run_id: run_id.to_owned(),
             run_dir: placement.run_dir().clone(),
             registry_path: placement.registry_path(),
-            project_id: manifest.project.project_id.clone(),
-            environment: selected_slot.environment.to_owned(),
-            slot: i64::from(selected_slot.slot),
-            runtime_abi: manifest.runtime_abi.clone(),
-            toolchain_id: manifest.toolchain_id.clone(),
+            identity: session.registry.identity().clone(),
             mode,
         };
         match CommandPresenter::spawn(session.registry.authority(), &launcher, &init) {
