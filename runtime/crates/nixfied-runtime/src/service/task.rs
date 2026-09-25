@@ -326,6 +326,31 @@ pub fn run_dependent_task_cancellable(
         )
         .map_err(|failure| {
             let mut error = *failure.error;
+            if failure.settled {
+                // Contained, reaped, and capture-settled: the interrupted task
+                // leaves no process obligation, only its terminal evidence.
+                let status = failure
+                    .outcome
+                    .as_ref()
+                    .map_or(TaskTerminalStatus::Canceled, |outcome| {
+                        task_terminal(task, outcome).1
+                    });
+                let payload = serde_json::json!({
+                    "interrupted": true,
+                    "code": error.code,
+                })
+                .to_string();
+                if let Err(settlement) = mark_task_finished(
+                    registry,
+                    run_context.run_id,
+                    &process_key,
+                    run_context.admission.common().computed_manifest_hash(),
+                    status,
+                    &payload,
+                ) {
+                    error = error.with_cause(settlement);
+                }
+            }
             if let Some(outcome) = failure.outcome {
                 let (_, terminal) = task_terminal(task, &outcome);
                 if let Some(outcome_error) = task_outcome_error(task, &outcome, terminal) {

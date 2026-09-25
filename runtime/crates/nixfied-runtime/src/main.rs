@@ -239,7 +239,6 @@ impl<'a> RunSession<'a> {
                 .as_ref()
                 .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
         let had_initial_failure = !failures.is_empty();
-        let mut quiescent = true;
         while let Some(service) = self.started.pop() {
             let result = if canceled {
                 service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
@@ -253,22 +252,16 @@ impl<'a> RunSession<'a> {
                 )
             };
             if let Err(error) = result {
-                quiescent = false;
                 failures.push(error);
             }
         }
-        // Retention follows process quiescence; unknown quiescence retains data.
-        // Completion is claimed only after every obligation settled.
-        let settlement = if quiescent {
+        // Retention requires recorded quiescence: any unresolved process
+        // obligation refuses deletion and retains data. Completion is claimed
+        // only after every obligation settled.
+        let settlement =
             apply_retention(&self.placement.state_base, self.state, &mut self.registry)
                 .map(|_| ())
-                .inspect_err(|error| failures.push(error.clone()))
-        } else {
-            Err(RuntimeError::new(
-                nixfied_runtime::ErrorCode::CleanupRefused,
-                "session processes did not settle; application data retained",
-            ))
-        };
+                .inspect_err(|error| failures.push(error.clone()));
         let manifest_hash = self.admission.common().computed_manifest_hash();
         let recorded = match settlement {
             Ok(()) => record_finalization_complete(&mut self.registry, self.run_id, manifest_hash),

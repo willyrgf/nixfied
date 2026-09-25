@@ -525,21 +525,20 @@ struct CleanupRecord {
 
 fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     registry.authority().validate()?;
-    let active_process_count = registry
+    // Quiescence is the absence of recorded process obligations, independent of
+    // endpoint evidence: leader exit or a terminal status alone settles nothing.
+    let unresolved_process_count = registry
         .connection()
         .query_row(
-            &format!(
-                "SELECT count(*) FROM processes WHERE status IN ({})",
-                status::sql_in_list(status::PROCESS_ACTIVE)
-            ),
+            "SELECT count(*) FROM processes WHERE ownership = 'unresolved'",
             [],
             |row| row.get::<_, i64>(0),
         )
         .map_err(sql_error)?;
-    if active_process_count > 0 {
+    if unresolved_process_count > 0 {
         return Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
-            "cleanup refused because live process references exist",
+            "cleanup refused because unresolved process obligations exist",
         ));
     }
 

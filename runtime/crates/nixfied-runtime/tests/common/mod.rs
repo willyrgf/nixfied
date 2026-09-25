@@ -398,14 +398,24 @@ pub fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
     }
 }
 
+/// Concurrent harness threads fork children that briefly share every open
+/// lock description until exec; a fixture's own slot is otherwise uncontended.
 pub fn registry_guard(
     placement: &nixfied_runtime::state::HostPlacement,
 ) -> nixfied_runtime::state::ownership::SlotGuard {
-    nixfied_runtime::state::ownership::SlotGuard::acquire(
-        placement,
-        &nixfied_runtime::cancellation::CancellationToken::new(),
-    )
-    .expect("fixture slot authority")
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match nixfied_runtime::state::ownership::SlotGuard::try_acquire(
+            placement,
+            &nixfied_runtime::cancellation::CancellationToken::new(),
+        )
+        .expect("fixture slot authority")
+        {
+            Some(guard) => return guard,
+            None if std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            None => panic!("fixture slot authority stayed contended"),
+        }
+    }
 }
 
 pub fn observe_registry(
