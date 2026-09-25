@@ -2371,3 +2371,356 @@ fn interrupted_launcher_leaves_no_live_background_session() {
         }
     }
 }
+
+#[test]
+fn stalled_stderr_does_not_hold_back_stdout_presentation() {
+    use std::io::Read;
+    let stdout_count = 4096;
+    let stderr_count = 8 * 1024 * 1024;
+    let manifest = task_manifest(&[
+        "output".into(),
+        "repeat".into(),
+        "78".into(),
+        stdout_count.to_string(),
+        "01".into(),
+        stderr_count.to_string(),
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    // Never read stderr until stdout has fully arrived.
+    let mut seen = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while seen.len() < stdout_count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stdout was held back by the stalled stderr reader"
+        );
+        let read = stdout.read(&mut chunk).unwrap();
+        assert!(read > 0, "stdout closed before its bytes arrived");
+        seen.extend_from_slice(&chunk[..read]);
+    }
+    assert!(seen.iter().all(|byte| *byte == b'x'));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "stderr is still stalled"
+    );
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert!(rest.is_empty());
+    let stderr = reader.join().unwrap();
+    assert_eq!(
+        task_bytes(&stderr),
+        stderr_count,
+        "a slow stderr reader is never truncated"
+    );
+}
+
+fn wait_for_sealed_settlement(fixture: &RuntimeFixture) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let settled = rusqlite::Connection::open_with_flags(
+            fixture
+                .state_base
+                .join("registry/runtime-test/dev/0/registry.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT finalization = 'complete' AND output = 'sealed' FROM runs",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .ok()
+        })
+        .unwrap_or(false);
+        if settled {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stalled readers must not delay session settlement"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn stalled_stdout_and_stderr_block_neither_settlement_nor_slot_release() {
+    use std::io::Read;
+    let count = 4 * 1024 * 1024;
+    let manifest = task_manifest(&[
+        "output".into(),
+        "repeat".into(),
+        "78".into(),
+        count.to_string(),
+        "01".into(),
+        count.to_string(),
+    ]);
+    let fixture = RuntimeFixture::new(manifest);
+    let mut child = fixture
+        .command("run", &["--task", "smoke", "--output", "task-output"])
+        .spawn()
+        .unwrap();
+    // Hold both caller streams open without reading either.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    wait_for_sealed_settlement(&fixture);
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the command keeps presenting after settlement"
+    );
+    // Another session acquires the released slot while both readers stall.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let successor = loop {
+        let successor = run(&fixture, &["--task", "smoke", "--output", "json"]);
+        if successor.status.success() || std::time::Instant::now() >= deadline {
+            break successor;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        successor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&successor.stderr)
+    );
+    assert!(child.try_wait().unwrap().is_none());
+    // Delivery resumes from the sealed evidence without truncation.
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let mut bytes = Vec::new();
+    stdout.read_to_end(&mut bytes).unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert_eq!(bytes.len(), count);
+    assert!(bytes.iter().all(|byte| *byte == b'x'));
+    let stderr = reader.join().unwrap();
+    assert_eq!(task_bytes(&stderr), count);
+}
+
+/// Count the task's 0x01 bytes on a stream that also carries live runtime
+/// diagnostics, which may land between any two presented chunks.
+fn task_bytes(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|byte| **byte == 0x01).count()
+}
+
+/// A composite whose first step floods the caller's stderr in summary mode and
+/// whose second step blocks with `marker`, so the reader is stalled while the
+/// session is still live.
+fn stalled_live_session(marker: &std::path::Path, service: bool) -> RuntimeFixture {
+    let mut manifest = if service {
+        task_manifest(&[])
+    } else {
+        leaf_task_manifest(&[])
+    };
+    set_task_run_args(
+        &mut manifest,
+        &[
+            "output".into(),
+            "hex-block".into(),
+            "".into(),
+            "".into(),
+            marker.to_string_lossy().into_owned(),
+        ],
+    );
+    manifest["tasks"]["smoke"]["invocation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timeoutMs");
+    let mut flood = manifest["tasks"]["smoke"].clone();
+    flood["operationId"] = json!("task.flood.run");
+    let program = flood["invocation"]["run"][0].clone();
+    flood["invocation"]["run"] = json!([
+        program,
+        "output",
+        "repeat",
+        "78",
+        "0",
+        "01",
+        (4 * 1024 * 1024).to_string()
+    ]);
+    manifest["tasks"]["flood"] = flood;
+    manifest["tasks"]["pipeline"] = json!({
+        "kind": "composite", "defaultOutput": "summary",
+        "steps": {"flood": {"task": "flood", "dependsOn": []}, "block": {"task": "smoke", "dependsOn": ["flood"]}}
+    });
+    RuntimeFixture::new(manifest)
+}
+
+#[test]
+fn cancellation_and_service_failure_settle_while_the_caller_stalls() {
+    for service in [false, true] {
+        let marker = tempfile_marker("stalled-live");
+        let fixture = stalled_live_session(&marker, service);
+        let mut child = fixture
+            .command("run", &["--task", "pipeline", "--output", "summary"])
+            .spawn()
+            .unwrap();
+        // Hold both caller streams without reading; the flood fills stderr.
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        assert!(wait_for_path(&marker, Duration::from_secs(20)));
+        let (run_id, _) = published_session(&fixture);
+        if service {
+            let pid: i32 = registry_connection(&fixture)
+                .query_row(
+                    "SELECT pid FROM processes WHERE role = 'service' AND run_id = ?1",
+                    [&run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        } else {
+            let down = fixture
+                .command("down", &["--timeout-ms", "10000"])
+                .output()
+                .unwrap();
+            assert!(
+                down.status.success(),
+                "{}",
+                String::from_utf8_lossy(&down.stderr)
+            );
+            let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+            assert_eq!(report["canceledRunId"], json!(run_id));
+        }
+        let expected = if service { "failed" } else { "canceled" };
+        assert_eq!(
+            wait_for_settled(&fixture, &run_id).as_deref(),
+            Some(expected),
+            "supervision and teardown proceed while the caller stalls"
+        );
+        let rows: Vec<(String, String)> = registry_connection(&fixture)
+            .prepare("SELECT role, ownership FROM processes WHERE run_id = ?1")
+            .unwrap()
+            .query_map([&run_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            rows.iter().all(|(_, ownership)| ownership == "settled"),
+            "{rows:?}"
+        );
+        // The slot is released while the command still presents.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let clean = loop {
+            let clean = run_control(&fixture, "clean");
+            if clean.status.success() || std::time::Instant::now() >= deadline {
+                break clean;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(
+            clean.status.success(),
+            "{}",
+            String::from_utf8_lossy(&clean.stderr)
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the caller's reader is still stalled"
+        );
+        // The resumed reader receives the whole flood and the command's verdict.
+        let readers = [stdout_reader(stdout), stdout_reader(stderr)];
+        let status = child.wait().unwrap();
+        let [_, stderr] = readers.map(|reader| reader.join().unwrap());
+        let verdict = String::from_utf8_lossy(&stderr[stderr.len().saturating_sub(4096)..]);
+        assert!(!status.success());
+        assert!(
+            verdict.contains(if service {
+                "DEPENDENCY_UNAVAILABLE"
+            } else {
+                "CANCELED"
+            }),
+            "{verdict}"
+        );
+        assert!(task_bytes(&stderr) == 4 * 1024 * 1024);
+        assert_eq!(
+            session_row(&fixture, &run_id).0.as_deref(),
+            Some(expected),
+            "interrupted delivery never rewrites the settled session"
+        );
+    }
+}
+
+#[test]
+fn background_owner_death_after_acknowledgement_recovers_under_the_acknowledged_identity() {
+    let marker = tempfile_marker("daemon-owner-death");
+    let fixture = blocking_session(&marker);
+    let launch = run(&fixture, &["--task", "smoke", "--daemon"]);
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
+    let run_id = acknowledgement["runId"].as_str().unwrap().to_owned();
+    assert!(wait_for_path(&marker, Duration::from_secs(5)));
+    let (published, task_pid) = published_session(&fixture);
+    assert_eq!(published, run_id);
+    let owner: i32 = registry_connection(&fixture)
+        .query_row(
+            "SELECT json_extract(owner_identity, '$.pid') FROM runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(unsafe { libc::kill(owner, libc::SIGKILL) }, 0);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(owner, 0) } == 0 {
+        assert!(std::time::Instant::now() < deadline, "owner was not reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        run_row(&fixture, &run_id),
+        Some((None, "unfinished".into())),
+        "owner death alone never settles the session"
+    );
+    let down = fixture
+        .command("down", &["--timeout-ms", "10000"])
+        .output()
+        .unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert!(report.get("canceledRunId").is_none(), "{report}");
+    assert_eq!(report["stopped"].as_array().unwrap().len(), 1, "{report}");
+    assert_ne!(unsafe { libc::kill(task_pid, 0) }, 0);
+    assert_eq!(
+        run_row(&fixture, &run_id),
+        Some((Some("interrupted".into()), "complete".into())),
+        "recovery settles the acknowledged session under its own identity"
+    );
+    let runs: i64 = registry_connection(&fixture)
+        .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(runs, 1, "recovery invents no replacement session");
+}
+
+fn stdout_reader(
+    mut stream: impl std::io::Read + Send + 'static,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).unwrap();
+        bytes
+    })
+}

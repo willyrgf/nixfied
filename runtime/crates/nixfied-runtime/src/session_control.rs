@@ -425,4 +425,122 @@ mod tests {
         assert!(SessionControl::establish(&link, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn a_full_buffer_already_holds_the_pending_request_and_never_blocks() {
+        let dir = directory();
+        let fifo =
+            std::ffi::CString::new(dir.join(CONTROL_FIFO_NAME).as_os_str().as_encoded_bytes())
+                .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        // A reader that never drains, like a stopped owner.
+        let reader = owned(unsafe {
+            libc::open(
+                fifo.as_ptr(),
+                libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        })
+        .unwrap();
+        let writer = owned(unsafe {
+            libc::open(
+                fifo.as_ptr(),
+                libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        })
+        .unwrap();
+        let chunk = [1_u8; 4096];
+        while unsafe { libc::write(writer.as_raw_fd(), chunk.as_ptr().cast(), chunk.len()) } > 0 {}
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::EAGAIN)
+        );
+        let started = std::time::Instant::now();
+        for _ in 0..16 {
+            assert_eq!(
+                request_cancellation(&dir).unwrap(),
+                CancellationDelivery::Requested
+            );
+        }
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop((reader, writer));
+        std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn many_requests_cancel_once_and_shutdown_stays_bounded() {
+        let dir = directory();
+        let token = CancellationToken::new();
+        let control = SessionControl::establish(&dir, &token).unwrap();
+        // A sender that connects and closes without a byte is not a request:
+        // the keeper writer prevents the receiver from observing EOF.
+        let fifo =
+            std::ffi::CString::new(dir.join(CONTROL_FIFO_NAME).as_os_str().as_encoded_bytes())
+                .unwrap();
+        for _ in 0..8 {
+            drop(
+                owned(unsafe {
+                    libc::open(
+                        fifo.as_ptr(),
+                        libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                    )
+                })
+                .unwrap(),
+            );
+        }
+        std::thread::sleep(RECEIVER_POLL * 3);
+        assert!(!token.is_canceled(), "a closed silent writer never cancels");
+        let senders: Vec<_> = (0..8)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..20_000 {
+                        assert_eq!(
+                            request_cancellation(&dir).unwrap(),
+                            CancellationDelivery::Requested
+                        );
+                    }
+                })
+            })
+            .collect();
+        for sender in senders {
+            sender.join().unwrap();
+        }
+        assert!(wait_for(&token));
+        let started = std::time::Instant::now();
+        control.shutdown().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            request_cancellation(&dir).unwrap(),
+            CancellationDelivery::Unavailable
+        );
+        std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn non_private_or_misplaced_session_directories_are_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = directory();
+        let runs = dir.parent().unwrap().to_path_buf();
+        for target in [&dir, &runs] {
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(SessionControl::establish(&dir, &CancellationToken::new()).is_err());
+            assert!(request_cancellation(&dir).is_err());
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert!(!dir.join(CONTROL_FIFO_NAME).exists());
+        // A session outside `runs/` is not a session endpoint.
+        let stray = runs.parent().unwrap().join("session");
+        std::fs::create_dir(&stray).unwrap();
+        std::fs::set_permissions(&stray, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(SessionControl::establish(&stray, &CancellationToken::new()).is_err());
+        assert!(request_cancellation(&stray).is_err());
+        // A symlinked `runs` component is never followed.
+        let other = runs.parent().unwrap().join("other");
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&runs, other.join("runs")).unwrap();
+        let aliased = other.join("runs").join("session");
+        assert!(SessionControl::establish(&aliased, &CancellationToken::new()).is_err());
+        assert!(request_cancellation(&aliased).is_err());
+        std::fs::remove_dir_all(runs.parent().unwrap()).unwrap();
+    }
 }
