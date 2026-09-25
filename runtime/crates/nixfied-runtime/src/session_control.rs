@@ -5,9 +5,10 @@
 //! grants no cleanup authority. The owner keeps a separate writer open so the
 //! reader never observes idle EOF, and a scoped receiver only sets the existing
 //! cancellation token.
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::filesystem::Directory;
 
 pub const CONTROL_FIFO_NAME: &str = "control";
 const CONTROL_FIFO: &CStr = c"control";
@@ -23,7 +25,7 @@ const RECEIVER_POLL: Duration = Duration::from_millis(50);
 
 /// The owner's endpoint. It must be shut down while the slot is still held.
 pub struct SessionControl {
-    directory: OwnedFd,
+    directory: Directory,
     path: PathBuf,
     keeper: Option<OwnedFd>,
     stop: Arc<AtomicBool>,
@@ -31,9 +33,15 @@ pub struct SessionControl {
 }
 
 impl SessionControl {
-    /// Create the session's FIFO exclusively and start its receiver. A
-    /// pre-existing endpoint is an identity collision, never reused.
-    pub fn establish(run_dir: &Path, cancellation: &CancellationToken) -> RuntimeResult<Self> {
+    /// Create the session's FIFO exclusively in its claimed evidence
+    /// directory and start its receiver. `run_dir` names that directory for
+    /// diagnostics only. A pre-existing endpoint is an identity collision,
+    /// never reused.
+    pub fn establish(
+        directory: Directory,
+        run_dir: &Path,
+        cancellation: &CancellationToken,
+    ) -> RuntimeResult<Self> {
         let path = run_dir.join(CONTROL_FIFO_NAME);
         let error = |operation: &str, error: io::Error| {
             RuntimeError::new(
@@ -44,13 +52,16 @@ impl SessionControl {
                 ),
             )
         };
-        let directory = open_directory(run_dir).map_err(|e| error("open", e))?;
-        if unsafe { libc::mkfifoat(directory.as_raw_fd(), CONTROL_FIFO.as_ptr(), 0o600) } != 0 {
-            return Err(error("create", io::Error::last_os_error()));
-        }
-        let reader = open_fifo(&directory, libc::O_RDONLY).map_err(|e| error("open", e))?;
+        directory
+            .create_fifo(CONTROL_FIFO)
+            .map_err(|e| error("create", e))?;
+        let reader = directory
+            .open_fifo(CONTROL_FIFO, libc::O_RDONLY)
+            .map_err(|e| error("open", e))?;
         // The reader exists, so the nonblocking keeper open cannot fail with ENXIO.
-        let keeper = open_fifo(&directory, libc::O_WRONLY).map_err(|e| error("open", e))?;
+        let keeper = directory
+            .open_fifo(CONTROL_FIFO, libc::O_WRONLY)
+            .map_err(|e| error("open", e))?;
         let stop = Arc::new(AtomicBool::new(false));
         let receiver = {
             let stop = Arc::clone(&stop);
@@ -88,20 +99,18 @@ impl SessionControl {
             None => return Ok(()),
         };
         drop(self.keeper.take());
-        let removed =
-            if unsafe { libc::unlinkat(self.directory.as_raw_fd(), CONTROL_FIFO.as_ptr(), 0) } == 0
-            {
-                Ok(())
-            } else {
-                Err(RuntimeError::new(
+        let removed = self
+            .directory
+            .remove_entry(CONTROL_FIFO, false)
+            .map_err(|error| {
+                RuntimeError::new(
                     ErrorCode::StateUnwritable,
                     format!(
-                        "failed to remove session control endpoint {}: {}",
-                        self.path.display(),
-                        io::Error::last_os_error()
+                        "failed to remove session control endpoint {}: {error}",
+                        self.path.display()
                     ),
-                ))
-            };
+                )
+            });
         crate::error::both(joined, removed)
     }
 }
@@ -191,14 +200,14 @@ pub fn request_cancellation(run_dir: &Path) -> RuntimeResult<CancellationDeliver
             ),
         )
     };
-    let directory = match open_directory(run_dir) {
+    let directory = match open_session(run_dir) {
         Ok(directory) => directory,
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
             return Ok(CancellationDelivery::Unavailable);
         }
         Err(error) => return Err(failure(error)),
     };
-    let writer = match open_fifo(&directory, libc::O_WRONLY) {
+    let writer = match directory.open_fifo(CONTROL_FIFO, libc::O_WRONLY) {
         Ok(writer) => writer,
         Err(error) if matches!(error.raw_os_error(), Some(libc::ENXIO | libc::ENOENT)) => {
             return Ok(CancellationDelivery::Unavailable);
@@ -224,7 +233,7 @@ pub fn request_cancellation(run_dir: &Path) -> RuntimeResult<CancellationDeliver
 /// Open `<registry>/runs/<session>` through held directory descriptors. The
 /// managed `runs` and session components are never followed as symlinks and
 /// must be private directories of the effective user.
-fn open_directory(run_dir: &Path) -> io::Result<OwnedFd> {
+fn open_session(run_dir: &Path) -> io::Result<Directory> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "invalid session path");
     let session = run_dir.file_name().ok_or_else(invalid)?;
     let runs = run_dir.parent().ok_or_else(invalid)?;
@@ -232,89 +241,31 @@ fn open_directory(run_dir: &Path) -> io::Result<OwnedFd> {
         return Err(invalid());
     }
     let anchor = runs.parent().ok_or_else(invalid)?;
-    let anchor = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(anchor.as_os_str()))
-        .map_err(|_| invalid())?;
-    let anchor = owned(unsafe {
-        libc::open(
-            anchor.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    })?;
-    let runs = private_child(&anchor, c"runs")?;
-    let session = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(session))
-        .map_err(|_| invalid())?;
-    private_child(&runs, &session)
-}
-
-fn private_child(parent: &OwnedFd, name: &std::ffi::CStr) -> io::Result<OwnedFd> {
-    let bytes = name.to_bytes();
-    if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&b'/') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid session component",
-        ));
-    }
-    let child = owned(unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    })?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe { libc::fstat(child.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fstat initialized the complete stat on success.
-    let stat = unsafe { stat.assume_init() };
-    if stat.st_uid != unsafe { libc::geteuid() } || stat.st_mode & 0o077 != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "session directory is not private to the effective user",
-        ));
-    }
-    Ok(child)
-}
-
-/// Open the endpoint without following a symlink and verify it is a private
-/// FIFO owned by the effective user before any byte is exchanged.
-fn open_fifo(directory: &OwnedFd, access: libc::c_int) -> io::Result<OwnedFd> {
-    let fd = owned(unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            CONTROL_FIFO.as_ptr(),
-            access | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    })?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fstat initialized the complete stat on success.
-    let stat = unsafe { stat.assume_init() };
-    if stat.st_mode & libc::S_IFMT != libc::S_IFIFO
-        || stat.st_uid != unsafe { libc::geteuid() }
-        || stat.st_mode & 0o077 != 0
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "session control endpoint is not a private FIFO",
-        ));
-    }
-    Ok(fd)
-}
-
-fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a successful open returned a new descriptor owned here.
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    let session = CString::new(session.as_bytes()).map_err(|_| invalid())?;
+    Directory::open_external(anchor)?
+        .open_private_child(c"runs")?
+        .open_private_child(&session)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::FromRawFd;
+
+    fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a successful open returned a new descriptor owned here.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// The claimed session directory, as the slot owner hands it over.
+    fn establish(dir: &Path, token: &CancellationToken) -> RuntimeResult<SessionControl> {
+        let directory = Directory::private_anchor(dir)
+            .map_err(|error| RuntimeError::new(ErrorCode::StateUnwritable, error.to_string()))?;
+        SessionControl::establish(directory, dir, token)
+    }
 
     /// A private `<registry>/runs/<session>` layout, as placement creates it.
     fn directory() -> (crate::test_support::TestDir, PathBuf) {
@@ -346,8 +297,8 @@ mod tests {
         let (_second_root, second_dir) = directory();
         let first = CancellationToken::new();
         let second = CancellationToken::new();
-        let first_control = SessionControl::establish(&first_dir, &first).unwrap();
-        let second_control = SessionControl::establish(&second_dir, &second).unwrap();
+        let first_control = establish(&first_dir, &first).unwrap();
+        let second_control = establish(&second_dir, &second).unwrap();
         // No idle busy loop or spurious cancellation from the keeper writer.
         std::thread::sleep(RECEIVER_POLL * 3);
         assert!(!first.is_canceled() && !second.is_canceled());
@@ -377,9 +328,9 @@ mod tests {
     fn collisions_absent_readers_and_substituted_objects_never_deliver() {
         let (_root, dir) = directory();
         let token = CancellationToken::new();
-        let control = SessionControl::establish(&dir, &token).unwrap();
+        let control = establish(&dir, &token).unwrap();
         assert!(
-            SessionControl::establish(&dir, &CancellationToken::new()).is_err(),
+            establish(&dir, &CancellationToken::new()).is_err(),
             "an existing endpoint is an identity collision"
         );
         drop(control);
@@ -413,7 +364,6 @@ mod tests {
         let link = dir.parent().unwrap().join("linked");
         std::os::unix::fs::symlink(&dir, &link).unwrap();
         assert!(request_cancellation(&link).is_err());
-        assert!(SessionControl::establish(&link, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -461,7 +411,7 @@ mod tests {
     fn many_requests_cancel_once_and_shutdown_stays_bounded() {
         let (_root, dir) = directory();
         let token = CancellationToken::new();
-        let control = SessionControl::establish(&dir, &token).unwrap();
+        let control = establish(&dir, &token).unwrap();
         // A sender that connects and closes without a byte is not a request:
         // the keeper writer prevents the receiver from observing EOF.
         let fifo =
@@ -514,7 +464,6 @@ mod tests {
         let runs = dir.parent().unwrap().to_path_buf();
         for target in [&dir, &runs] {
             std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).unwrap();
-            assert!(SessionControl::establish(&dir, &CancellationToken::new()).is_err());
             assert!(request_cancellation(&dir).is_err());
             std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -523,14 +472,12 @@ mod tests {
         let stray = runs.parent().unwrap().join("session");
         std::fs::create_dir(&stray).unwrap();
         std::fs::set_permissions(&stray, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(SessionControl::establish(&stray, &CancellationToken::new()).is_err());
         assert!(request_cancellation(&stray).is_err());
         // A symlinked `runs` component is never followed.
         let other = runs.parent().unwrap().join("other");
         std::fs::create_dir(&other).unwrap();
         std::os::unix::fs::symlink(&runs, other.join("runs")).unwrap();
         let aliased = other.join("runs").join("session");
-        assert!(SessionControl::establish(&aliased, &CancellationToken::new()).is_err());
         assert!(request_cancellation(&aliased).is_err());
         std::fs::remove_dir_all(runs.parent().unwrap()).unwrap();
     }

@@ -71,7 +71,10 @@ impl Directory {
         }
     }
 
-    fn open_external(path: &Path) -> io::Result<Self> {
+    /// Open a directory by path without following its final component. Its
+    /// owner must be root or the effective user, and it must not be writable by
+    /// others unless it is a root-owned sticky directory.
+    pub(crate) fn open_external(path: &Path) -> io::Result<Self> {
         let path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| invalid("NUL in coordination anchor"))?;
         let fd = owned(unsafe {
@@ -122,11 +125,16 @@ impl Directory {
         Ok(child)
     }
 
+    /// Open an existing private child directory of the effective user.
+    pub(crate) fn open_private_child(&self, name: &CStr) -> io::Result<Self> {
+        self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Private)
+    }
+
     /// Create or open a private child directory of the effective user.
     pub(crate) fn create_private_child(&self, name: &CStr) -> io::Result<Self> {
         match self.create_new_private_child(name) {
             Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
-                self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Private)
+                self.open_private_child(name)
             }
             created => created,
         }
@@ -139,7 +147,31 @@ impl Directory {
         if unsafe { libc::mkdirat(self.0.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Private)
+        self.open_private_child(name)
+    }
+
+    /// Create a private FIFO exclusively: an existing entry fails with `EEXIST`.
+    pub(crate) fn create_fifo(&self, name: &CStr) -> io::Result<()> {
+        component(name)?;
+        if unsafe { libc::mkfifoat(self.0.as_raw_fd(), name.as_ptr(), 0o600) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Open a FIFO without following or blocking, and verify it is a private
+    /// FIFO of the effective user that still names its entry.
+    pub(crate) fn open_fifo(&self, name: &CStr, access: libc::c_int) -> io::Result<OwnedFd> {
+        let fd = open_at(self.0.as_raw_fd(), name, access | libc::O_NONBLOCK, 0)?;
+        let stat = stat_fd(fd.as_raw_fd())?;
+        if stat.st_mode & libc::S_IFMT != libc::S_IFIFO
+            || stat.st_uid != unsafe { libc::geteuid() }
+            || stat.st_mode & 0o077 != 0
+        {
+            return Err(invalid("expected a private FIFO of the effective user"));
+        }
+        self.verify_entry(name, fd.as_raw_fd())?;
+        Ok(fd)
     }
 
     /// Open without truncation or repair. Nonblocking open lets validation reject
