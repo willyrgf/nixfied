@@ -155,8 +155,11 @@ impl CommandPresenter {
     }
 
     /// After slot release: let the helper drain stable evidence with no
-    /// default deadline. A termination signal to this command ends the drain.
+    /// default deadline. A termination signal that arrives during the drain
+    /// ends it; one that already canceled the session does not truncate the
+    /// final output the session retained.
     pub fn finish(mut self) -> DeliveryOutcome {
+        let signals = crate::cancellation::signal_count();
         let _ = write_all_until(
             &mut self.channel,
             &[FINISH],
@@ -168,7 +171,7 @@ impl CommandPresenter {
             };
             match child.try_wait() {
                 Ok(Some(status)) => break Some(status),
-                Ok(None) if crate::cancellation::signal_received() => {
+                Ok(None) if crate::cancellation::signal_count() > signals => {
                     let _ = self.channel.write(&[CANCEL]);
                     self.kill_and_reap();
                     break None;
