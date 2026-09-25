@@ -10,11 +10,10 @@ use crate::registry::session::{record_interrupted_sessions, record_recovered_ses
 use crate::registry::status::{self, DbStatus, PortStatus, ProcessRole, ProcessStatus};
 use crate::registry::{Registry, RegistryIdentity, RegistryReader};
 use crate::service::{
-    ProcessRecord, StopPolicy, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
-    mark_service_stopped, mark_task_finished, process_escape_start_identity,
-    process_group_has_live_member, process_is_live_with_identity,
+    Leader, ProcessRecord, StopPolicy, StoredProcessIdentity, TaskTerminalStatus, contain,
+    mark_process_escape, mark_service_stopped, mark_task_finished, poll_until,
+    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
     process_is_live_with_start_identity, process_present, settle_unresolved_process,
-    terminate_process_group_signal, terminate_process_tree_with_snapshot,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
 use crate::state::HostPlacement;
@@ -247,40 +246,36 @@ pub fn down_owned_process_groups(
             stale.push(row.process_key);
             continue;
         }
+        // Escape evidence snapshots live descendants before any signal.
+        let escape_start_identity = row
+            .service_instance_id
+            .as_ref()
+            .filter(|_| !row.unsettled)
+            .map(|_| {
+                process_escape_start_identity(
+                    row.pid,
+                    row.pgid,
+                    row.start_identity.platform_start.as_deref(),
+                    &row.start_identity.tracked_processes,
+                )
+            });
+        // Terminate with the recorded policy; the command timeout only caps it.
+        let terminated = contain(
+            &Leader::Recorded {
+                pid: row.pid,
+                platform_start: row.start_identity.platform_start.as_deref(),
+            },
+            row.pgid,
+            row.stop.signal,
+            row.stop.timeout_ms.min(timeout_ms),
+            &row.start_identity.tracked_processes,
+        );
         if row.unsettled {
-            terminate_process_tree_with_snapshot(
-                row.pid,
-                row.pgid,
-                row.stop.signal,
-                row.stop.timeout_ms.min(timeout_ms),
-                &row.start_identity.tracked_processes,
-            )?;
+            terminated?;
             settle_down_process(registry, &row)?;
             stopped.push(row.process_key);
             continue;
         }
-        let escape_start_identity = row.service_instance_id.as_ref().map(|_| {
-            process_escape_start_identity(
-                row.pid,
-                row.pgid,
-                row.start_identity.platform_start.as_deref(),
-                &row.start_identity.tracked_processes,
-            )
-        });
-        // Terminate with the recorded policy; the command timeout only caps it.
-        let stop_timeout = row.stop.timeout_ms.min(timeout_ms);
-        let terminated = if row.stop.tree {
-            terminate_process_tree_with_snapshot(
-                row.pid,
-                row.pgid,
-                row.stop.signal,
-                stop_timeout,
-                &row.start_identity.tracked_processes,
-            )
-            .map(|_| ())
-        } else {
-            terminate_process_group_signal(row.pgid, row.stop.signal, stop_timeout).map(|_| ())
-        };
         if let Err(error) = terminated {
             return Err(settle_control_escape(
                 registry,
@@ -291,13 +286,10 @@ pub fn down_owned_process_groups(
         }
         // Group termination cannot reach descendants that left the group. An
         // exiting leader may briefly remain observable, so wait a bounded time.
-        let settle_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        let mut live = row.observed_liveness()?;
-        while live && std::time::Instant::now() < settle_deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            live = row.observed_liveness()?;
-        }
-        if live {
+        let gone = poll_until(std::time::Duration::from_secs(1), || {
+            row.observed_liveness().map(|live| !live)
+        })?;
+        if !gone {
             return Err(settle_control_escape(
                 registry,
                 &row,

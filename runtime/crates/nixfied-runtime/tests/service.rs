@@ -1673,6 +1673,53 @@ fn ready_service_checkpoint_detects_new_escape_before_leader_exit() {
     );
 }
 
+/// Cancellation contains every tracked descendant, not only the group: a
+/// setsid escapee that holds no group membership is still killed before the
+/// row records a settled cancellation.
+#[test]
+fn cancel_kills_a_tracked_setsid_descendant_before_settlement() {
+    let root = TempDir::new();
+    let [request, armed, detached, pid_file] =
+        ["request", "armed", "detached", "escaped.pid"].map(|name| root.path.join(name));
+    let mut fixture = endpoint_less_fixture_from(test_child_service(
+        &[
+            "detached-sleeper",
+            "after-marker",
+            request.to_str().unwrap(),
+            armed.to_str().unwrap(),
+            detached.to_str().unwrap(),
+            pid_file.to_str().unwrap(),
+        ],
+        23180,
+        23180,
+    ));
+    let service = fixture.start_endpoint_less("run-cancel-escape").unwrap();
+    let service = fixture.ready(service).unwrap();
+    assert!(wait_for_path(&armed, Duration::from_secs(3)));
+    fs::write(&request, []).unwrap();
+    let escaped = wait_for_pid_file(&pid_file);
+    assert!(wait_for_path(&detached, Duration::from_secs(3)));
+
+    service
+        .cancel(&mut fixture.registry, 1000, "test cancellation")
+        .expect("cancellation should contain the escapee");
+
+    wait_for_process_exit(escaped);
+    let (status, ownership): (String, String) = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status, ownership FROM processes WHERE role = 'service'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (status.as_str(), ownership.as_str()),
+        ("canceled", "settled")
+    );
+}
+
 #[test]
 fn stop_terminates_delayed_setsid_escape_and_records_failure() {
     let request = temp_marker("nixfied-stop-escape-request");
