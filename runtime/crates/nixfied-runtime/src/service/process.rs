@@ -1750,13 +1750,7 @@ fn clean_marked_slot_state(
     // process) are marked stale instead of tripping the active-refs refusal,
     // sparing the operator a manual ps/down before clean can proceed.
     reconcile_registry(registry)?;
-    clean_marked_state(
-        &placement.state_base,
-        &placement.state_root,
-        &identity,
-        registry,
-        mode,
-    )
+    clean_marked_state(&placement.state_base, &identity, registry, mode)
 }
 
 fn startup_outcome(error: &RuntimeError) -> ServiceStartOutcome {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_manifest::{CleanupPolicy, Manifest, PersistencePolicy};
+use nixfied_manifest::{Manifest, PersistencePolicy};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
@@ -50,6 +50,7 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
         .prepare("run-1", &fixture.identity(false))
         .expect("first run should prepare a fresh slot");
     let sentinel = fixture.plant_sentinel();
+    let generation = fixture.marker().data_generation;
 
     let report = fixture
         .prepare("run-2", &fixture.identity(true))
@@ -69,6 +70,10 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
         marker.computed_manifest_hash,
         expected_hash(&fixture.manifest, true)
     );
+    assert_eq!(
+        marker.data_generation, generation,
+        "provenance refresh preserves the data generation"
+    );
     assert_eq!(fixture.upgrade_event_count(), 1);
     let payload = fixture.last_upgrade_event_payload();
     assert_eq!(
@@ -84,16 +89,16 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
 
 #[test]
 fn obsolete_epoch_and_old_marker_version_reject_without_data_mutation() {
-    for obsolete_epoch in [false, true] {
+    for obsolete in ["epoch", "version", "cleanup-policy"] {
         let fixture = UpgradeFixture::new();
         fixture.prepare("run-1", &fixture.identity(false)).unwrap();
         let sentinel = fixture.plant_sentinel();
         let path = fixture.state_root().join(MARKER_FILE_NAME);
         let mut value = serde_json::to_value(fixture.marker()).unwrap();
-        if obsolete_epoch {
-            value["stateEpoch"] = serde_json::json!("2");
-        } else {
-            value["markerVersion"] = serde_json::json!(1);
+        match obsolete {
+            "epoch" => value["stateEpoch"] = serde_json::json!("2"),
+            "version" => value["markerVersion"] = serde_json::json!(2),
+            _ => value["cleanupPolicy"] = serde_json::json!("delete-on-clean"),
         }
         let bytes = serde_json::to_vec(&value).unwrap();
         fs::write(&path, &bytes).unwrap();
@@ -178,14 +183,10 @@ fn runtime_abi_mismatch_refuses() {
 
 #[test]
 fn changed_manifest_cannot_weaken_existing_retention() {
-    for persistent in [false, true] {
+    {
         let fixture = UpgradeFixture::new();
         let mut protected = fixture.identity(false);
-        if persistent {
-            protected.persistence = PersistencePolicy::Persistent;
-        } else {
-            protected.cleanup_policy = CleanupPolicy::Protected;
-        }
+        protected.persistence = PersistencePolicy::Persistent;
         fixture.prepare("run-1", &protected).unwrap();
         let sentinel = fixture.plant_sentinel();
         let before = fixture.marker();

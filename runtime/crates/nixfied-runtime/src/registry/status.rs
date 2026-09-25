@@ -94,6 +94,3 @@ pub const PROCESS_ACTIVE: &[ProcessStatus] = &[
     ProcessStatus::Running,
     ProcessStatus::Ready,
 ];
-
-/// Cleanup statuses a prior-cleanup lookup considers.
-pub const CLEANUP_PRIOR: &[CleanupStatus] = &[CleanupStatus::Intent, CleanupStatus::Deleted];

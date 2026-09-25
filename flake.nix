@@ -372,7 +372,6 @@
             { ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
-              nixfied.state.cleanupPolicy = "protected";
               nixfied.state.persistence = "persistent";
             }
           );

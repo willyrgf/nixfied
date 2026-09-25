@@ -436,7 +436,11 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     )
     .expect("clean lifecycle should succeed");
 
-    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(matches!(
+        &cleanup,
+        nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
+            if deleted_path.ends_with("runtime-test/dev/0")
+    ));
     assert!(!fixture.placement.state_root.exists());
     assert_eq!(
         lifecycle_events(&fixture.registry),
@@ -512,7 +516,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .expect("cleanup events should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("cleanup events should collect");
-    assert_eq!(cleanup_events, vec!["cleanup.intent", "cleanup.deleted"]);
+    assert_eq!(cleanup_events, vec!["cleanup.intent", "cleanup.completed"]);
     let declaration_only: i64 = fixture.query(
         "SELECT count(*) FROM events
          WHERE event_type IN ('service.lifecycle.started', 'service.lifecycle.terminal')
@@ -748,7 +752,6 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let slot0_identity = StateIdentity::from_selected_slot(admission.common(), &slot0.selected);
     clean_marked_state(
         &slot0.placement.state_base,
-        &slot0.placement.state_root,
         &slot0_identity,
         &mut slot0.registry,
         CleanupMode::Standard,
@@ -760,7 +763,6 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     let slot1_identity = StateIdentity::from_selected_slot(admission.common(), &slot1.selected);
     clean_marked_state(
         &slot1.placement.state_base,
-        &slot1.placement.state_root,
         &slot0_identity,
         &mut slot1.registry,
         CleanupMode::Standard,
@@ -774,7 +776,6 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         .expect("slot 1 service should stop");
     clean_marked_state(
         &slot1.placement.state_base,
-        &slot1.placement.state_root,
         &slot1_identity,
         &mut slot1.registry,
         CleanupMode::Standard,
@@ -2454,7 +2455,6 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup_error = clean_marked_state(
         &fixture.placement.state_base,
-        &fixture.placement.state_root,
         &identity,
         &mut fixture.registry,
         CleanupMode::Standard,
@@ -2710,7 +2710,6 @@ fn owned_process_cleanup_does_not_settle_the_session() {
     );
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
-        &fixture.placement.state_root,
         &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
@@ -2724,7 +2723,11 @@ fn owned_process_cleanup_does_not_settle_the_session() {
     );
     assert_eq!(process_status, "stopped");
     assert_eq!(canceled_events, 1);
-    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(matches!(
+        &cleanup,
+        nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
+            if deleted_path.ends_with("runtime-test/dev/0")
+    ));
     assert!(!fixture.placement.state_root.exists());
 }
 
@@ -2934,7 +2937,6 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     );
     let cleanup = clean_marked_state(
         &fixture.placement.state_base,
-        &fixture.placement.state_root,
         &StateIdentity::from_admission(fixture.admission.common()),
         &mut fixture.registry,
         CleanupMode::Standard,
@@ -2961,7 +2963,11 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         !process_group_has_non_zombie_member(task_pgid),
         "down should empty task process group"
     );
-    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(matches!(
+        &cleanup,
+        nixfied_runtime::state::CleanupOutcome::Deleted { deleted_path, .. }
+            if deleted_path.ends_with("runtime-test/dev/0")
+    ));
     assert!(!fixture.placement.state_root.exists());
 }
 

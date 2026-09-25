@@ -388,15 +388,20 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   which adds a supervision protocol even though persistent services outlive the
   invoking runtime. Nixfied therefore does not claim atomic reservation against
   arbitrary host processes.
-- **State: marker-gated, path-confined cleanup.** Every owned state root carries a
-  `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
-  the selected `data/project/environment/slot` root, target symlinks, traversal
-  escapes, unmarked roots, marker
-  mismatches, active process/endpoint evidence, and policy-protected
-  persistent state; unlinks symlink entries inside the owned tree without
-  following them; and is idempotent and crash-safe. `clean --purge` expresses
-  deliberate destruction of protected/persistent state, but it relaxes only that
-  policy gate.
+- **State: one retention policy and marker-last deletion.** Every owned state
+  root carries a `.nixfied-state.json` marker holding its ownership, its
+  `persistence`, and a runtime-generated data generation. `persistence` is the
+  only retention policy: `run-scoped` data may be deleted by ordinary `clean`,
+  while `persistent` data requires `clean --purge`. Purge overrides retention
+  only. Cleanup derives the target from placement, opens the managed ancestry
+  and target through directory descriptors without following symlinks, commits
+  one pending intent with the marker snapshot before any deletion, deletes
+  payload entries relative to held directories without crossing mounts, keeps
+  the marker until every payload entry is gone, removes the root through its
+  held parent, and commits completion last. A pending intent is resumed with its
+  original identity and authorization before any new generation; contradictory
+  observations refuse instead of guessing. Directory `fsync` orders each step for
+  process-death recovery; no host power-loss guarantee is claimed.
 - **Evidence outlives application data.** `registry/project/environment/slot`
   contains SQLite and `runs/runId` evidence. The parallel `data/` namespace
   contains application state only; cleanup cannot target registry or run

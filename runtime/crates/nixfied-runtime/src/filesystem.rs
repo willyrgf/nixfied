@@ -220,6 +220,218 @@ impl Directory {
     }
 }
 
+impl Directory {
+    /// Open an existing directory by path without following its final
+    /// component. Ancestry is the caller's validated placement.
+    pub(crate) fn open_existing(path: &Path) -> io::Result<Self> {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| invalid("NUL in directory path"))?;
+        let fd = owned(unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })?;
+        let stat = stat_fd(fd.as_raw_fd())?;
+        Self::checked(fd, stat.st_uid, DirectoryMode::Any)
+    }
+
+    /// Open a child directory owned by the effective user without following a
+    /// symlink, and verify the opened object is still the named entry.
+    pub(crate) fn open_owned_child(&self, name: &CStr) -> io::Result<Self> {
+        self.open_child(name, unsafe { libc::geteuid() }, DirectoryMode::Any)
+    }
+
+    pub(crate) fn identity(&self) -> io::Result<FileIdentity> {
+        stat_fd(self.0.as_raw_fd()).map(|stat| FileIdentity::from(&stat))
+    }
+
+    /// Observe one entry without following it. Absence is `None`.
+    pub(crate) fn entry(&self, name: &CStr) -> io::Result<Option<EntryKind>> {
+        component(name)?;
+        let mut entry = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        if unsafe {
+            libc::fstatat(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                entry.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(libc::ENOENT) {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+        // SAFETY: fstatat initialized the complete stat on success.
+        let entry = unsafe { entry.assume_init() };
+        let identity = FileIdentity::from(&entry);
+        Ok(Some(match entry.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => EntryKind::Directory(identity),
+            libc::S_IFREG => EntryKind::File(identity),
+            _ => EntryKind::Other(identity),
+        }))
+    }
+
+    /// All entry names except `.` and `..`, read through a duplicate descriptor.
+    pub(crate) fn entry_names(&self) -> io::Result<Vec<CString>> {
+        let duplicate =
+            owned(unsafe { libc::fcntl(self.0.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) })?;
+        // SAFETY: fdopendir takes ownership of the duplicate on success.
+        let stream = unsafe { libc::fdopendir(duplicate.as_raw_fd()) };
+        if stream.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let _ = duplicate.into_raw_fd();
+        let mut names = Vec::new();
+        let result = loop {
+            // readdir reports errors only through errno with a null result.
+            unsafe { *errno() = 0 };
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                let code = unsafe { *errno() };
+                break if code == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::from_raw_os_error(code))
+                };
+            }
+            // SAFETY: readdir returned a valid entry with a NUL-terminated name.
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if name.to_bytes() != b"." && name.to_bytes() != b".." {
+                names.push(name.to_owned());
+            }
+        };
+        unsafe { libc::closedir(stream) };
+        result.map(|()| names)
+    }
+
+    /// Read a small regular file without following a symlink.
+    pub(crate) fn read_regular_file(&self, name: &CStr, limit: usize) -> io::Result<Vec<u8>> {
+        let fd = open_at(
+            self.0.as_raw_fd(),
+            name,
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            0,
+        )?;
+        let stat = stat_fd(fd.as_raw_fd())?;
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return Err(invalid("expected a regular file"));
+        }
+        self.verify_entry(name, fd.as_raw_fd())?;
+        let mut bytes = Vec::new();
+        let mut reader = std::io::Read::take(std::fs::File::from(fd), limit as u64 + 1);
+        std::io::Read::read_to_end(&mut reader, &mut bytes)?;
+        if bytes.len() > limit {
+            return Err(invalid("file exceeds its size limit"));
+        }
+        Ok(bytes)
+    }
+
+    /// Remove one entry relative to this directory. Unlinking never opens,
+    /// truncates, or follows the entry.
+    pub(crate) fn remove_entry(&self, name: &CStr, directory: bool) -> io::Result<()> {
+        component(name)?;
+        let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Make this directory's entry changes durable to the extent `fsync`
+    /// guarantees on the host filesystem.
+    pub(crate) fn sync(&self) -> io::Result<()> {
+        if unsafe { libc::fsync(self.0.as_raw_fd()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Device and inode of an opened object: corroborating evidence only, never a
+/// permanent identity across inode reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+}
+
+impl From<&libc::stat> for FileIdentity {
+    fn from(stat: &libc::stat) -> Self {
+        #[allow(clippy::unnecessary_cast)]
+        Self {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+        }
+    }
+}
+
+impl std::fmt::Display for FileIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}:{}", self.device, self.inode)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryKind {
+    Directory(FileIdentity),
+    File(FileIdentity),
+    Other(FileIdentity),
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn errno() -> *mut libc::c_int {
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn errno() -> *mut libc::c_int {
+    unsafe { libc::__error() }
+}
+
+/// Write a complete private temporary file, make it durable, atomically replace
+/// `name`, then make the directory entry durable.
+pub(crate) fn publish_file(directory: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let directory = Directory::open_existing(directory)?;
+    let final_name = CString::new(name).map_err(|_| invalid("NUL in file name"))?;
+    let token = crate::token::random_hex().map_err(|error| io::Error::other(error.message))?;
+    let temporary =
+        CString::new(format!(".{name}.{token}.tmp")).map_err(|_| invalid("NUL in file name"))?;
+    let fd = open_at(
+        directory.0.as_raw_fd(),
+        &temporary,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    )?;
+    let mut file = std::fs::File::from(fd);
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let renamed = written.and_then(|()| {
+        if unsafe {
+            libc::renameat(
+                directory.0.as_raw_fd(),
+                temporary.as_ptr(),
+                directory.0.as_raw_fd(),
+                final_name.as_ptr(),
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    });
+    if let Err(error) = renamed {
+        let _ = directory.remove_entry(&temporary, false);
+        return Err(error);
+    }
+    directory.sync()
+}
+
 impl PrivateFile {
     /// Consume ownership before close; an error must never cause a second close
     /// against a potentially reused descriptor number.

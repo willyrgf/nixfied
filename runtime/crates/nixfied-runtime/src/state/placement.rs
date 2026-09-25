@@ -142,15 +142,6 @@ pub fn materialize_state_root(placement: &HostPlacement) -> RuntimeResult<()> {
     Ok(())
 }
 
-pub(crate) fn canonicalize_existing(label: &str, path: &Path) -> RuntimeResult<PathBuf> {
-    path.canonicalize().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("failed to canonicalize {label} {}: {error}", path.display()),
-        )
-    })
-}
-
 pub(crate) fn normal_component<'a>(field: &str, value: &'a str) -> RuntimeResult<&'a Path> {
     let path = Path::new(value);
     let mut components = path.components();

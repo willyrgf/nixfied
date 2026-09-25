@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::{CleanupPolicy, PersistencePolicy};
+use nixfied_manifest::PersistencePolicy;
 use nixfied_runtime::{
     AdmissionContext, ErrorCode, StoreOriginPolicy, load_manifest, read_raw_manifest,
 };
@@ -578,20 +578,20 @@ fn logical_root_escape_is_rejected() {
 }
 
 #[test]
-fn protected_persistent_state_is_valid_manifest_data() {
+fn persistence_is_the_sole_retention_policy_at_the_wire_boundary() {
+    let mut removed = fixture_manifest();
+    removed["state"]["cleanupPolicy"] = json!("protected");
+    let (_tmp, manifest_path, _closure_root) = write_fixture_manifest(removed, true);
+    let error = load_manifest(&manifest_path).expect_err("removed retention field must reject");
+    assert_eq!(error.code, ErrorCode::ManifestInvalid);
+
     let mut manifest = fixture_manifest();
-    manifest["state"]["cleanupPolicy"] = json!("protected");
     manifest["state"]["persistence"] = json!("persistent");
     let (_tmp, manifest_path, closure_root) = write_fixture_manifest(manifest, true);
-    let loaded = load_manifest(&manifest_path).expect("protected persistent state should load");
+    let loaded = load_manifest(&manifest_path).expect("persistent state should load");
     let context = admission_context(&closure_root);
-    nixfied_runtime::admit_run(loaded.path(), &context)
-        .expect("protected persistent state should admit");
+    nixfied_runtime::admit_run(loaded.path(), &context).expect("persistent state should admit");
 
-    assert_eq!(
-        loaded.manifest().state.cleanup_policy,
-        CleanupPolicy::Protected
-    );
     assert_eq!(
         loaded.manifest().state.persistence,
         PersistencePolicy::Persistent

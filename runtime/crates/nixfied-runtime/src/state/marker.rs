@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_manifest::{CleanupPolicy, PersistencePolicy, Target};
+use nixfied_manifest::{PersistencePolicy, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::ControlAdmission;
@@ -17,7 +17,6 @@ pub struct StateIdentity {
     pub project_id: String,
     pub environment: String,
     pub slot: u32,
-    pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
     pub manifest_path: PathBuf,
     pub computed_manifest_hash: String,
@@ -45,7 +44,6 @@ impl StateIdentity {
             project_id: manifest.project.project_id.clone(),
             environment: environment.to_string(),
             slot,
-            cleanup_policy: manifest.state.cleanup_policy.clone(),
             persistence: manifest.state.persistence.clone(),
             manifest_path: admission.manifest_path().to_path_buf(),
             computed_manifest_hash: admission.computed_manifest_hash().to_owned(),
@@ -56,6 +54,11 @@ impl StateIdentity {
     }
 }
 
+pub const MARKER_VERSION: u32 = 3;
+
+/// The ownership and retention authority for one application-data generation.
+/// Its generation distinguishes successive trees in cleanup history; it never
+/// declares application-data compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StateMarker {
@@ -64,10 +67,8 @@ pub struct StateMarker {
     pub project_id: String,
     pub environment: String,
     pub slot: u32,
-    pub state_kind: StateKind,
-    pub service_instance_id: Option<String>,
-    pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
+    pub data_generation: String,
     pub manifest_path: PathBuf,
     pub computed_manifest_hash: String,
     pub runtime_abi: String,
@@ -76,17 +77,28 @@ pub struct StateMarker {
 }
 
 impl StateMarker {
-    pub fn slot(identity: &StateIdentity) -> Self {
+    /// A marker for a newly created application tree with a fresh generation.
+    pub fn slot(identity: &StateIdentity) -> RuntimeResult<Self> {
+        Ok(Self::with_generation(
+            identity,
+            format!("gen-{}", crate::token::random_hex()?),
+        ))
+    }
+
+    /// Refresh provenance for an existing tree while preserving its generation.
+    fn refreshed(identity: &StateIdentity, existing: &Self) -> Self {
+        Self::with_generation(identity, existing.data_generation.clone())
+    }
+
+    fn with_generation(identity: &StateIdentity, data_generation: String) -> Self {
         Self {
-            marker_version: 2,
+            marker_version: MARKER_VERSION,
             marker_identity: identity.marker_identity.clone(),
             project_id: identity.project_id.clone(),
             environment: identity.environment.clone(),
             slot: identity.slot,
-            state_kind: StateKind::Slot,
-            service_instance_id: None,
-            cleanup_policy: identity.cleanup_policy.clone(),
             persistence: identity.persistence.clone(),
+            data_generation,
             manifest_path: identity.manifest_path.clone(),
             computed_manifest_hash: identity.computed_manifest_hash.clone(),
             runtime_abi: identity.runtime_abi.clone(),
@@ -100,13 +112,12 @@ impl StateMarker {
     /// deliberately blind to which manifest build last used the root — a manifest
     /// evolves, its slot does not.
     pub fn matches_ownership(&self, identity: &StateIdentity) -> bool {
-        self.marker_version == 2
+        self.marker_version == MARKER_VERSION
+            && !self.data_generation.is_empty()
             && self.marker_identity == identity.marker_identity
             && self.project_id == identity.project_id
             && self.environment == identity.environment
             && self.slot == identity.slot
-            && self.state_kind == StateKind::Slot
-            && self.service_instance_id.is_none()
     }
 
     /// Ownership, framework ABI, and existing retention authorization gate
@@ -119,10 +130,8 @@ impl StateMarker {
         if self.runtime_abi != identity.runtime_abi {
             return MarkerComparison::RefuseAbi;
         }
-        if (self.persistence == PersistencePolicy::Persistent
-            && identity.persistence != PersistencePolicy::Persistent)
-            || (self.cleanup_policy == CleanupPolicy::Protected
-                && identity.cleanup_policy != CleanupPolicy::Protected)
+        if self.persistence == PersistencePolicy::Persistent
+            && identity.persistence != PersistencePolicy::Persistent
         {
             return MarkerComparison::RefuseRetention;
         }
@@ -130,8 +139,7 @@ impl StateMarker {
             && self.computed_manifest_hash == identity.computed_manifest_hash
             && self.toolchain_id == identity.toolchain_id
             && self.target == identity.target
-            && self.persistence == identity.persistence
-            && self.cleanup_policy == identity.cleanup_policy;
+            && self.persistence == identity.persistence;
         if provenance_matches {
             MarkerComparison::Match
         } else {
@@ -158,12 +166,6 @@ pub enum MarkerDecision {
     Adopt(StateMarker),
     /// Same owner and retention authorization, different recorded provenance.
     Upgrade { existing: StateMarker },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StateKind {
-    Slot,
 }
 
 /// Inspect the slot's marker (read-only) and classify what the run must do
@@ -262,36 +264,48 @@ fn refuse_unmarked_state_root(state_root: &Path) -> RuntimeResult<()> {
     Ok(())
 }
 
-/// Write the slot marker for the requested identity, overwriting any previous
-/// marker. The caller must have processed an [`evaluate_slot_marker`] decision
-/// first — this is the post-decision commit, not a guard.
+/// Publish the marker for a fresh application tree. The caller must have
+/// processed an [`evaluate_slot_marker`] decision first — this is the
+/// post-decision commit, not a guard.
 pub fn commit_slot_marker(
     placement: &HostPlacement,
     identity: &StateIdentity,
 ) -> RuntimeResult<StateMarker> {
-    let marker = StateMarker::slot(identity);
-    let path = marker_path(&placement.state_root);
-    if let Ok(metadata) = std::fs::symlink_metadata(&path)
-        && metadata.file_type().is_symlink()
-    {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnowned,
-            format!("state marker is a symlink at {}", path.display()),
-        ));
-    }
-    let bytes = serde_json::to_vec_pretty(&marker).map_err(|error| {
+    let marker = StateMarker::slot(identity)?;
+    publish_marker(&placement.state_root, &marker)?;
+    Ok(marker)
+}
+
+/// Refresh provenance of an existing tree without changing its generation.
+pub fn refresh_slot_marker(
+    placement: &HostPlacement,
+    identity: &StateIdentity,
+    existing: &StateMarker,
+) -> RuntimeResult<StateMarker> {
+    let marker = StateMarker::refreshed(identity, existing);
+    publish_marker(&placement.state_root, &marker)?;
+    Ok(marker)
+}
+
+/// Write a complete temporary file, make it durable, then atomically replace
+/// the marker entry and make the directory entry durable. Readers never
+/// observe a partially written marker.
+fn publish_marker(root: &Path, marker: &StateMarker) -> RuntimeResult<()> {
+    let bytes = serde_json::to_vec_pretty(marker).map_err(|error| {
         RuntimeError::new(
             ErrorCode::StateUnwritable,
             format!("failed to serialize state marker: {error}"),
         )
     })?;
-    std::fs::write(&path, bytes).map_err(|error| {
+    crate::filesystem::publish_file(root, MARKER_FILE_NAME, &bytes).map_err(|error| {
         RuntimeError::new(
             ErrorCode::StateUnwritable,
-            format!("failed to write state marker {}: {error}", path.display()),
+            format!(
+                "failed to publish state marker {}: {error}",
+                marker_path(root).display()
+            ),
         )
-    })?;
-    Ok(marker)
+    })
 }
 
 pub fn read_marker(target: &Path) -> RuntimeResult<StateMarker> {

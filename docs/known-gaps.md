@@ -88,9 +88,6 @@ merge blockers or approved implementation assignments:
 - **Descriptive refs:** consider removing service `stateRefs`/`logRefs` and task
   `artifactRefs`/`logRefs`/`summaryRefs`. They remain manifest/ABI data despite their
   execution non-effects; removal requires an atomic contract change.
-- **State policies:** review possible consolidation of `cleanupPolicy` and
-  `persistence`. Similar cleanup permissions do not establish equivalent service
-  identity, marker matching, adoption or existing-state behavior.
 - **Placeholder typos:** define reserved grammar and literal child-program syntax
   before considering rejection of unknown `${...}` forms.
 - **Declaration diagnostics:** consider naming offending references and legal

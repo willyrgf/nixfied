@@ -679,14 +679,14 @@
              nixfied-runtime clean --manifest "$PURGE_MINIMAL_MANIFEST/manifest.json" \
              >"''${stateDir}/gate-artifacts/purge-clean-standard.json" \
              2>"''${stateDir}/gate-artifacts/purge-clean-standard.err"; then
-            echo "purge: standard clean accepted protected persistent state" >&2
+            echo "purge: standard clean accepted persistent state" >&2
             exit 1
           fi
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime clean --manifest "$PURGE_MINIMAL_MANIFEST/manifest.json" --purge \
             > "''${stateDir}/gate-artifacts/purge-clean.json"
           deleted=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/purge-clean.json")
-          jq -e '.cleanupId and .deletedPath' \
+          jq -e '.result == "deleted" and .cleanupId and .deletedPath' \
             "''${stateDir}/gate-artifacts/purge-clean.json" >/dev/null
           [ -n "$deleted" ] && [ "$deleted" != "null" ] \
             || { echo "purge: clean output did not report deletedPath" >&2; exit 1; }

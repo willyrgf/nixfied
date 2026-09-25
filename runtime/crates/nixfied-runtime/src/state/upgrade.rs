@@ -6,8 +6,9 @@ use serde::Serialize;
 use crate::control::require_settled_slot;
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry};
+use crate::state::cleanup::resume_pending_cleanup;
 use crate::state::marker::{
-    MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker,
+    MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
 };
 use crate::state::placement::{HostPlacement, materialize_state_root};
 
@@ -38,6 +39,8 @@ pub fn prepare_slot_state(
     registry: &mut Registry,
 ) -> RuntimeResult<UpgradeReport> {
     require_settled_slot(registry)?;
+    // An unfinished deletion blocks any new generation or provenance rewrite.
+    resume_pending_cleanup(&placement.state_base, identity, registry)?;
     let decision = evaluate_slot_marker(placement, identity)?;
     let report = match decision {
         MarkerDecision::Fresh => {
@@ -52,7 +55,7 @@ pub fn prepare_slot_state(
         MarkerDecision::Upgrade { existing } => {
             record_upgrade_event(registry, identity, &existing)?;
             materialize_state_root(placement)?;
-            commit_slot_marker(placement, identity)?;
+            refresh_slot_marker(placement, identity, &existing)?;
             UpgradeReport {
                 upgraded: true,
                 from_manifest_hash: Some(existing.computed_manifest_hash),

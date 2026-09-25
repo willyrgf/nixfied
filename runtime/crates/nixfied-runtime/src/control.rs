@@ -189,12 +189,11 @@ pub fn down_owned_process_groups(
 pub fn clean_reconciled_state(
     registry: &mut Registry,
     state_base: &Path,
-    state_root: &Path,
     identity: &StateIdentity,
     mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     reconcile_registry(registry)?;
-    clean_marked_state(state_base, state_root, identity, registry, mode)
+    clean_marked_state(state_base, identity, registry, mode)
 }
 
 #[derive(Debug)]

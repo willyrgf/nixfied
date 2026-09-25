@@ -12,16 +12,10 @@ in
       description = "Identity written into the slot marker and required before the runtime may adopt or clean its state.";
     };
 
-    cleanupPolicy = mkOption {
-      type = types.enum vocabulary."enum CleanupPolicy".members;
-      default = "delete-on-clean";
-      description = "Whether ordinary `clean` may delete owned state or must require explicit purge.";
-    };
-
     persistence = mkOption {
       type = types.enum vocabulary."enum PersistencePolicy".members;
       default = "run-scoped";
-      description = "Whether slot state is eligible for ordinary cleanup or treated as persistent data requiring explicit purge.";
+      description = "The sole application-data retention policy: `run-scoped` data is deleted after safe session teardown and by ordinary `clean`; `persistent` data survives sessions and ordinary `clean`, and only explicit purge deletes it.";
     };
   };
 }

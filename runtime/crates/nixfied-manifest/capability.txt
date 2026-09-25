@@ -10,7 +10,7 @@ primitive Project: projectId name
 primitive Target: system os arch closureSystem
 primitive Codebase: codebaseId logicalRoot sourceMode sourceIdentity sourcePolicy
 primitive SourcePolicy: dirtyPolicy admissionFingerprintPolicy
-primitive StatePolicy: markerIdentity cleanupPolicy persistence
+primitive StatePolicy: markerIdentity persistence
 primitive SecretDescriptor: secretId source
 primitive SecretSource: kind envVar path
 primitive SlotPolicy: min default max
@@ -105,7 +105,7 @@ probe-settlement: gated-process-registration process-role-probe declared-service
 service-ownership: execution-thread-descendant-observation ready-checkpoint-containment cancellation-aware-startup-grace gated-process-registration supervision-before-permission session-owned guarded-ready-rollback initial-health-failed-start-settlement settlement-error-retains-lifecycle-cause process-owned-service-label no-service-registry
 task-evidence: gated-process-registration verified-launcher-identity-before-permission session-owned-terminal-records monotonic-attempt-occurrence-from-zero gaps-before-terminal exclusive-task-occurrence-logs exclusive-summary-occurrence-json preserve-task-step-path-order prepare-capture-only direct-leaf-replay summary-failure-retains-completed-evidence
 bounded-capture: checkpoint-completed-worker-observation retained-checked-worker-results capture-failure-stops-no-deadline-child always-pipes eof-only shared-shutdown-1000ms poll-10ms read-chunk-8192 control-before-read undecided-tail-discard both-workers-joined no-incomplete-evidence capture-before-task-error containment-before-capture-error stdout-before-stderr fixed-incomplete-secret-leak-blocked-diagnostics task-intent-before-signal terminal-service-shutdown session-owned-capture
-state-preparation: marker-version-2 no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
+state-preparation: marker-version-3 data-generation atomic-marker-publication pending-cleanup-before-materialization no-state-epoch no-configuration-driven-deletion predecessor-settlement-before-marker no-process-signaling no-manifest-filtered-teardown no-retention-downgrade
 finalization: priority-first-primary flattened-causes-before-demoted-root record-once-cancellation
 escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 
@@ -124,7 +124,6 @@ enum SecretSourceKind: env-var file
 enum ContainmentRequirement: process-group process-tree
 enum SourceMode: snapshot flake-input live-workspace
 enum DirtyPolicy: allow warn reject
-enum CleanupPolicy: delete-on-clean protected
 enum PersistencePolicy: run-scoped persistent
 
 # Task execution observations persist before containment/capture settlement; incomplete capture grants no replay.
@@ -134,7 +133,7 @@ status FinalizationStatus: unfinished complete
 status ProcessRole: task service probe
 status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
 status PortStatus: reserved active released stale
-status CleanupStatus: intent deleted failed
+status CleanupStatus: pending completed
 
 # PORT_CONFLICT is constructed only from one of these two proven host facts.
 enum PortConflictReason: startup-lock-contended listener-occupied

@@ -117,7 +117,6 @@ in
   ## State
 
   - marker identity: `${manifest.state.markerIdentity}`
-  - cleanup: `${manifest.state.cleanupPolicy}`
   - persistence: `${manifest.state.persistence}`
 
   ## Tasks

@@ -18,6 +18,7 @@ pub mod slot;
 mod spawn;
 pub mod state;
 mod template;
+mod token;
 
 pub use admission::{
     AdmissionContext, ControlAdmission, RunAdmission, StoreOriginPolicy, admit_control, admit_run,

@@ -4,10 +4,10 @@ pub mod ownership;
 pub mod placement;
 pub mod upgrade;
 
-pub use cleanup::{CleanupMode, CleanupOutcome, clean_marked_state, inspect_cleanup_target};
+pub use cleanup::{CleanupMode, CleanupOutcome, clean_marked_state, resume_pending_cleanup};
 pub use marker::{
-    MARKER_FILE_NAME, MarkerComparison, MarkerDecision, StateIdentity, StateMarker,
-    commit_slot_marker, evaluate_slot_marker,
+    MARKER_FILE_NAME, MARKER_VERSION, MarkerComparison, MarkerDecision, StateIdentity, StateMarker,
+    commit_slot_marker, evaluate_slot_marker, refresh_slot_marker,
 };
 pub use placement::{
     HostPlacement, derive_host_placement, derive_host_placement_for_slot,

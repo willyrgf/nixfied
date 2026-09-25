@@ -14,7 +14,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 const SCHEMA_SQL: &str = "
             CREATE TABLE registry_meta (
@@ -93,14 +93,15 @@ const SCHEMA_SQL: &str = "
 
             CREATE TABLE cleanups (
               cleanup_id TEXT PRIMARY KEY,
-              environment TEXT NOT NULL,
-              slot INTEGER NOT NULL CHECK (slot >= 0),
-              target_path TEXT NOT NULL,
+              target TEXT NOT NULL,
+              data_generation TEXT NOT NULL UNIQUE CHECK (length(data_generation) > 0),
+              marker_json TEXT NOT NULL,
               purge INTEGER NOT NULL CHECK (purge IN (0, 1)),
-              marker_json TEXT,
-              status TEXT NOT NULL,
-              refusal_reason TEXT
+              root_identity TEXT NOT NULL,
+              status TEXT NOT NULL CHECK (status IN ('pending', 'completed'))
             );
+
+            CREATE UNIQUE INDEX cleanups_one_pending ON cleanups (status) WHERE status = 'pending';
             ";
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {

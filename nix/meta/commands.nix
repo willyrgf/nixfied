@@ -148,7 +148,7 @@ in
     state
     slot
     (argument "purge" "--purge" (domain "Flag") (literal false) (
-      visible "Relax only the protected/persistent cleanup policy gate" null
+      visible "Also delete persistent state; ownership and process checks still apply" null
     ))
   ] 19 "local/CleanupOutcome")
   (compact "install" "Create the native Nixfied scaffold with ownership checks." [

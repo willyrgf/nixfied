@@ -65,7 +65,6 @@ pub struct SourcePolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatePolicy {
     pub marker_identity: String,
-    pub cleanup_policy: CleanupPolicy,
     pub persistence: PersistencePolicy,
 }
 
@@ -363,14 +362,6 @@ pub enum DirtyPolicy {
     Warn,
     #[serde(rename = "reject")]
     Reject,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum CleanupPolicy {
-    #[serde(rename = "delete-on-clean")]
-    DeleteOnClean,
-    #[serde(rename = "protected")]
-    Protected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
