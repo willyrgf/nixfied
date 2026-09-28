@@ -87,10 +87,18 @@ pub enum LaunchOutcome {
     },
 }
 
-/// Request cancellation of exactly the acknowledged session and report
-/// whether the request reached its owner.
-fn cancel_established(acknowledgement: Acknowledgement) -> LaunchOutcome {
+/// Apply launcher interruption without losing rejection or delivery evidence.
+fn interrupt(outcome: LaunchOutcome) -> LaunchOutcome {
     use crate::session_control::{CancellationDelivery, request_cancellation};
+    let acknowledgement = match outcome {
+        LaunchOutcome::Established(acknowledgement) => acknowledgement,
+        LaunchOutcome::Rejected(error) => {
+            return LaunchOutcome::Rejected(
+                crate::cancellation::canceled_error().with_cause(error),
+            );
+        }
+        outcome => return outcome,
+    };
     match request_cancellation(&acknowledgement.run_dir) {
         Ok(CancellationDelivery::Requested) => {
             LaunchOutcome::CanceledAfterEstablishment(acknowledgement)
@@ -162,9 +170,6 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
         match reader.step(&mut channel) {
             Ok(Some(body)) => {
                 break match serde_json::from_slice::<Reply>(&body) {
-                    Ok(Reply::Established(acknowledgement)) if interrupted => {
-                        cancel_established(acknowledgement)
-                    }
                     Ok(Reply::Established(acknowledgement)) => {
                         LaunchOutcome::Established(acknowledgement)
                     }
@@ -182,14 +187,6 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
             Ok(None) | Err(_) => break LaunchOutcome::Uncertain,
         }
     };
-    // An interruption that arrives with the acknowledgement still cancels
-    // exactly the acknowledged session.
-    let outcome = match outcome {
-        LaunchOutcome::Established(acknowledgement) if crate::cancellation::signal_received() => {
-            cancel_established(acknowledgement)
-        }
-        outcome => outcome,
-    };
     // A rejected, abandoned, or already-exited owner is reaped here; an
     // established owner continues and is adopted by the host when the
     // launcher exits.
@@ -205,7 +202,12 @@ pub fn launch(runtime: &Path, request: &Request, wait: Duration) -> RuntimeResul
             thread::sleep(Duration::from_millis(5));
         }
     }
-    Ok(outcome)
+    // Include signals observed while reaping a rejected owner.
+    Ok(if interrupted || crate::cancellation::signal_received() {
+        interrupt(outcome)
+    } else {
+        outcome
+    })
 }
 
 /// The owner's end of the channel between request and establishment.
@@ -296,6 +298,14 @@ mod tests {
     #[test]
     fn launcher_cancellation_reports_whether_it_reached_the_owner() {
         use std::os::unix::fs::DirBuilderExt;
+        let LaunchOutcome::Rejected(error) = interrupt(LaunchOutcome::Rejected(RuntimeError::new(
+            ErrorCode::ManifestInvalid,
+            "rejected",
+        ))) else {
+            panic!("interruption lost rejection evidence")
+        };
+        assert_eq!(error.code, ErrorCode::Canceled);
+        assert_eq!(error.causes[0].code, ErrorCode::ManifestInvalid);
         let root = crate::test_support::TestDir::new("launch-cancel");
         let run_dir = root.join("runs/session");
         std::fs::DirBuilder::new()
@@ -309,20 +319,20 @@ mod tests {
             logs_dir: run_dir.join("logs"),
         };
         assert!(matches!(
-            cancel_established(acknowledgement()),
+            interrupt(LaunchOutcome::Established(acknowledgement())),
             LaunchOutcome::CancellationUndelivered { cause, .. }
                 if cause.code == ErrorCode::LifecycleFailed
         ));
 
         let token = crate::cancellation::CancellationToken::new();
-        let control = crate::session_control::SessionControl::establish(
+        let _control = crate::session_control::SessionControl::establish(
             crate::filesystem::Directory::private_anchor(&run_dir).unwrap(),
             &run_dir,
             &token,
         )
         .unwrap();
         assert!(matches!(
-            cancel_established(acknowledgement()),
+            interrupt(LaunchOutcome::Established(acknowledgement())),
             LaunchOutcome::CanceledAfterEstablishment(_)
         ));
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -330,12 +340,12 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(token.is_canceled());
-        drop(control);
     }
 
     #[test]
     fn closed_launcher_is_observed_abandonment_and_rejection_follows_acknowledgement_rules() {
-        let (launcher, owner) = UnixStream::pair().unwrap();
+        let (mut launcher, owner) = UnixStream::pair().unwrap();
+        launcher.set_nonblocking(true).unwrap();
         owner.set_nonblocking(true).unwrap();
         let mut establishment = Establishment {
             channel: owner,
@@ -346,13 +356,6 @@ mod tests {
         let error = establishment.check_abandonment().unwrap_err();
         assert_eq!(error.code, ErrorCode::Canceled);
 
-        let (mut launcher, owner) = UnixStream::pair().unwrap();
-        owner.set_nonblocking(true).unwrap();
-        launcher.set_nonblocking(true).unwrap();
-        let mut establishment = Establishment {
-            channel: owner,
-            acknowledged: false,
-        };
         establishment.acknowledge(Acknowledgement {
             run_id: "run-1".into(),
             run_dir: "/r".into(),

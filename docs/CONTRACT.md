@@ -331,8 +331,8 @@ when the manifest/runtime contract changes.
   timeout, or a malformed reply is `LIFECYCLE_FAILED` with the original `runId`:
   the launch outcome is uncertain. A termination signal to the launcher
   half-closes its channel (abandonment) and waits up to 10 s for a conclusive
-  reply: a rejection is reported, and an establishment that won the race is
-  canceled through that session's own FIFO; both exit `CANCELED`. If that
+  reply: a rejection becomes a cancellation cause; an established session is
+  canceled through its own FIFO. Both exit `CANCELED`. If that
   cancellation request reaches no owner, the launcher reports
   `LIFECYCLE_FAILED` with the acknowledged `runId` and `runDir`. A rejected,
   abandoned, or uncertain owner is reaped within one second when it exits.
