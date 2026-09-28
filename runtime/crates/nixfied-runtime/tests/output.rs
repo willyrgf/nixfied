@@ -1649,12 +1649,9 @@ fn background_launch_acknowledges_establishment_not_task_success() {
     assert!(started.elapsed() < Duration::from_secs(10));
     let acknowledgement: Value = serde_json::from_slice(&launch.stdout).unwrap();
     let run_id = acknowledgement["runId"].as_str().unwrap().to_owned();
-    assert!(
-        acknowledgement["logsDir"]
-            .as_str()
-            .unwrap()
-            .ends_with("/logs")
-    );
+    let run_dir = PathBuf::from(acknowledgement["runDir"].as_str().unwrap());
+    assert!(run_dir.join("diagnostics.log").is_file());
+    assert_eq!(acknowledgement["logsDir"], json!(run_dir.join("logs")));
     assert!(wait_for_path(&marker, Duration::from_secs(5)));
     assert_eq!(
         run_row(&fixture, &run_id),

@@ -301,7 +301,7 @@ when the manifest/runtime contract changes.
   supplied manifest.
 - Each session claims its `runs/<runId>` directory exclusively; an existing
   directory is a run identity collision and refuses before any session fact is
-  published. The diagnostic source is created only after the run record that
+  published. The diagnostic source is created before the run record that
   names it commits. After source registration closes, no process may register
   a new source.
 - Service teardown observes pending exits before recording stop intent; an exit
