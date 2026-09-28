@@ -340,12 +340,15 @@ state, deletion, and containment rules are in
   per-state-root registry reservations are insufficient because TCP endpoints
   are host resources. A fixed per-euid endpoint lock therefore serializes
   service-specific mutation across independent state roots; Linux `SOCK_DIAG`
-  and macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. Complete
-  observation with no exact listener remains pending and ends as
-  `READINESS_TIMEOUT`; incomplete ownership proof is `PORT_UNVERIFIABLE`. Locks
-  end after the atomic ready commit; sockets remain steady-state ownership. The
-  lock is never durable service identity, liveness evidence, or owner
-  attribution.
+  and macOS `net.inet.tcp.pcblist_n` are the kernel listener sources. The macOS
+  observer retries a discrepancy between decoded records and the `xinpgen`
+  inventory counts, then refuses with `PORT_UNVERIFIABLE`. XNU may legitimately
+  skip records during emission; matching counts alone do not prove host-wide
+  visibility. Complete observation with no exact listener remains pending and
+  ends as `READINESS_TIMEOUT`; incomplete ownership proof is
+  `PORT_UNVERIFIABLE`. Locks end after the atomic ready commit; sockets remain
+  steady-state ownership. The lock is never durable service identity, liveness
+  evidence, or owner attribution.
 - **Coordination objects are opened through held directories.** The private
   runtime filesystem boundary owns non-following component access, private
   owner/mode checks, atomic close-on-exec, and opened-object/entry comparison.

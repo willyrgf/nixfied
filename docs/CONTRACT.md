@@ -223,6 +223,9 @@ when the manifest/runtime contract changes.
   `TIME_WAIT` state does not block restart, then independently rejects a stable
   exact or wildcard listener snapshot even when bind succeeds. An open port
   alone is insufficient; a wildcard listener never satisfies an exact endpoint.
+  An incomplete preflight snapshot refuses with `PORT_UNVERIFIABLE` before
+  service prepare; incomplete readiness observation refuses the ready commit
+  with the same error.
 - Endpoint acquisition never signals an existing service to resolve collision or
   ownership mismatch. A conflicting listener rejects startup.
 - An endpoint-less service makes no addressability claim. Placeholders toward it

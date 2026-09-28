@@ -148,12 +148,17 @@ fn native_secret_directory_precedence_reads_the_selected_material() {
             .env("HOME", &home)
             .env("NIXFIED_SECRETS_DIR", temp.path.join("missing")),
     );
-    let bytes = temp.path.join(OsString::from_vec(b"secrets-\xff".to_vec()));
-    fs::create_dir_all(&bytes).unwrap();
-    fs::write(bytes.join("token"), "bytes\r\n").unwrap();
+    // macOS refuses to create a pathname containing invalid UTF-8 bytes.
+    let selected = if cfg!(target_os = "macos") {
+        temp.path.join("secrets-é")
+    } else {
+        temp.path.join(OsString::from_vec(b"secrets-\xff".to_vec()))
+    };
+    fs::create_dir_all(&selected).unwrap();
+    fs::write(selected.join("token"), "bytes\r\n").unwrap();
     succeeds(
         child("secrets", &temp.path)
-            .env("NIXFIED_SECRETS_DIR", bytes)
+            .env("NIXFIED_SECRETS_DIR", selected)
             .env("EXPECTED_SECRET", "bytes"),
     );
 }

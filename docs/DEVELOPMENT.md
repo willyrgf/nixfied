@@ -334,6 +334,11 @@ nix build .#nixfied-cli .#install --no-link
 nix build .#nixfied-runtime --no-link
 ```
 
+The macOS endpoint integration tests require a complete kernel TCP listener
+inventory. If the host returns fewer PCB records than its inventory count, the
+runtime fails closed with `PORT_UNVERIFIABLE` and these tests fail. Do not treat
+that result as a passed endpoint proof.
+
 The local check/gate path uses the debug runtime to keep iteration fast. The
 release package is what install and generated adopter apps ship. Because the
 hosted Linux Cargo step is raw, it currently lacks the realised manifest fixture and

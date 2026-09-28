@@ -34,6 +34,11 @@ const PCBLIST_READ_ATTEMPTS: usize = 3;
 #[derive(Debug)]
 enum ParseFailure {
     GenerationChanged,
+    CountDiscrepancy {
+        header: u32,
+        trailer: u32,
+        decoded: usize,
+    },
     Invalid(String),
 }
 
@@ -50,6 +55,18 @@ pub(super) fn snapshot() -> Result<Vec<ListenerRecord>, String> {
             Err(ParseFailure::GenerationChanged) if attempt + 1 < SNAPSHOT_ATTEMPTS => continue,
             Err(ParseFailure::GenerationChanged) => {
                 return Err("macOS TCP PCB generation changed during every snapshot".to_string());
+            }
+            Err(ParseFailure::CountDiscrepancy { .. }) if attempt + 1 < SNAPSHOT_ATTEMPTS => {
+                continue;
+            }
+            Err(ParseFailure::CountDiscrepancy {
+                header,
+                trailer,
+                decoded,
+            }) => {
+                return Err(format!(
+                    "macOS TCP PCB snapshot count discrepancy after retries: header {header}, trailer {trailer}, decoded {decoded}"
+                ));
             }
             Err(ParseFailure::Invalid(message)) => return Err(message),
         }
@@ -146,6 +163,7 @@ fn parse_pcblist(bytes: &[u8]) -> Result<Vec<ListenerRecord>, ParseFailure> {
     }
 
     let mut records = Vec::new();
+    let mut record_count = 0_usize;
     let mut offset = XINPGEN_LEN;
     while offset < trailer_offset {
         let (inpcb, next) = parse_record(bytes, offset, trailer_offset, XSO_INPCB, XINPCB_MIN_LEN)?;
@@ -161,6 +179,7 @@ fn parse_pcblist(bytes: &[u8]) -> Result<Vec<ListenerRecord>, ParseFailure> {
         offset = stats.1;
         let tcp = parse_record(bytes, offset, trailer_offset, XSO_TCPCB, XTCPCB_MIN_LEN)?;
         offset = tcp.1;
+        record_count += 1;
 
         let tcp_state = read_u32_ne(tcp.0, 36)?;
         if tcp_state != TCPS_LISTEN {
@@ -172,6 +191,15 @@ fn parse_pcblist(bytes: &[u8]) -> Result<Vec<ListenerRecord>, ParseFailure> {
         return Err(ParseFailure::Invalid(
             "macOS PCB records did not end at the xinpgen trailer".to_string(),
         ));
+    }
+    // XNU can skip dead or initializing PCBs while emitting a stable generation.
+    // A count discrepancy makes this stream unusable as absence evidence.
+    if header.0 != trailer.0 || record_count != header.0 as usize {
+        return Err(ParseFailure::CountDiscrepancy {
+            header: header.0,
+            trailer: trailer.0,
+            decoded: record_count,
+        });
     }
     records.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(records)
@@ -190,13 +218,13 @@ fn parse_generation(bytes: &[u8]) -> Result<(u32, u64, u64), ParseFailure> {
     ))
 }
 
-fn parse_record<'a>(
-    bytes: &'a [u8],
+fn parse_record(
+    bytes: &[u8],
     offset: usize,
     limit: usize,
     expected_kind: u32,
     minimum_len: usize,
-) -> Result<(&'a [u8], usize), ParseFailure> {
+) -> Result<(&[u8], usize), ParseFailure> {
     if offset > limit || limit - offset < 8 {
         return Err(ParseFailure::Invalid(format!(
             "truncated macOS PCB record kind {expected_kind}"
@@ -391,7 +419,7 @@ fn list_socket_fds(pid: u32) -> Vec<i32> {
             continue;
         }
         let actual = actual as usize;
-        if actual % entry_size != 0 {
+        if !actual.is_multiple_of(entry_size) {
             return Vec::new();
         }
         return bytes[..actual]
@@ -544,6 +572,22 @@ mod tests {
         assert!(matches!(
             parse_pcblist(&dump),
             Err(ParseFailure::GenerationChanged)
+        ));
+    }
+
+    #[test]
+    fn parser_rejects_pcb_count_discrepancy() {
+        let mut dump = pcb_dump();
+        let trailer = dump.len() - XINPGEN_LEN;
+        dump[4..8].copy_from_slice(&2_u32.to_ne_bytes());
+        dump[trailer + 4..trailer + 8].copy_from_slice(&2_u32.to_ne_bytes());
+        assert!(matches!(
+            parse_pcblist(&dump),
+            Err(ParseFailure::CountDiscrepancy {
+                header: 2,
+                trailer: 2,
+                decoded: 1
+            })
         ));
     }
 

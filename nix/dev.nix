@@ -28,6 +28,9 @@ let
       pkgs.git
     ];
     text = ''
+      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+        export LIBRARY_PATH="${pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
+      ''}
       NIXFIED_TEST_CHILD="${testChild}/bin/nixfied-test-child" \
       NIXFIED_TEST_SLEEP="${pkgs.coreutils}/bin/sleep" \
       NIXFIED_TEST_SHELL="${pkgs.bash}/bin/sh" \
