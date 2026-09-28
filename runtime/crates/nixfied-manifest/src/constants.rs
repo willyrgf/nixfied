@@ -42,6 +42,6 @@ mod tests {
     /// (the gate checks producer/consumer agreement).
     #[test]
     fn runtime_abi_snapshot() {
-        assert_eq!(runtime_abi(), "nixfied-runtime-abi:1-8cb416057acc");
+        assert_eq!(runtime_abi(), "nixfied-runtime-abi:1-6f4f630a2e07");
     }
 }
