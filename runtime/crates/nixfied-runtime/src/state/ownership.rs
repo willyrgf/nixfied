@@ -257,18 +257,7 @@ mod tests {
     // exec. Each authority proof runs alone so only its intended child can hold
     // the descriptor; no retries conceal an actual inheritance failure.
     fn run_isolated_authority_test(name: &str) -> bool {
-        const ISOLATED: &str = "NIXFIED_TEST_ISOLATED_AUTHORITY";
-        let exact = format!("state::ownership::tests::{name}");
-        if std::env::var(ISOLATED).as_deref() == Ok(exact.as_str()) {
-            return false;
-        }
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &exact, "--nocapture"])
-            .env(ISOLATED, &exact)
-            .status()
-            .unwrap();
-        assert!(status.success(), "isolated authority proof failed: {name}");
-        true
+        crate::test_support::isolate(&format!("state::ownership::tests::{name}"))
     }
     struct Fixture {
         root: crate::test_support::TestDir,
