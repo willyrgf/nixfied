@@ -1,7 +1,7 @@
 # Managed-listener and application-probed endpoint readiness
 
-Status: design for review, 29 September 2026. The macOS FD-only and Reth
-protocol-probe feasibility checks passed on this host with the pinned Reth
+Status: implementation handoff design, 29 September 2026. The macOS FD-only
+and Reth protocol-probe feasibility checks passed on this host with the pinned Reth
 package. Production implementation, failure-path proof, and the exact ABI
 cutover remain open. This is not the shipped contract. Until a complete
 cutover is implemented and verified, [`CONTRACT.md`](CONTRACT.md) remains
@@ -84,8 +84,8 @@ It ran without sudo or host PCB reads. `proc_pidinfo(PROC_PIDLISTFDS)` and
 for a child and a reparented member of its process group. The check decoded
 exact IPv4 and IPv6 loopback tuples and TCP `LISTEN` for IPv6 listeners
 configured with either `IPV6_V6ONLY` value. It also checked socket identity
-and generation; it rejected a wildcard listener as an exact one, and rejected
-a bound socket that had not called `listen`. Closing and rebinding the
+and inpcb generation; it rejected a wildcard listener as an exact one, and
+rejected a bound socket that had not called `listen`. Closing and rebinding the
 same IPv4 tuple changed socket identity. `proc_listpgrppids` found the
 reparented member, and its FD was inspectable. Four direct-child runs and three
 reparented-member runs passed. The test uses the installed SDK structures and
@@ -152,9 +152,10 @@ Replace the old `ProbeSpec` and `ProbeKind` wire types with a `ProbePolicy`
 record: `{ timeoutMs: NonZeroU64, retryIntervalMs: NonZeroU64,
 maxAttempts: NonZeroU32 }`. `ReadySpec` and `HealthSpec` each carry their
 existing `operationId` and `terminal`, a **required** `policy: ProbePolicy`,
-and an optional `probe: InvocationSpec`. The scalar `probe` is present exactly
-when the service is endpoint-less. Endpoint-bearing services must omit it and
-provide both invocations on every endpoint. This cross-field alternative is
+and an optional `probe: InvocationSpec`. The scalar `probe` member is **omitted**,
+not serialized as `null`, for endpoint-bearing services. It is required and
+non-null for endpoint-less services. Every endpoint record always has both
+non-null invocation members. This cross-field alternative is
 validated independently by the Nix compiler and raw Rust manifest admission;
 old wire records with `ProbeSpec.kind` reject. Avoid a new manifest version
 merely to alias old bytes: update the authored inventory and runtime ABI digest
@@ -163,8 +164,9 @@ as part of the exact cutover.
 Authoring mirrors the wire shape: `lifecycle.ready.policy` and
 `lifecycle.health.policy` own the per-phase retry budget, while
 `lifecycle.ready.probe` and `lifecycle.health.probe` are only for endpoint-less
-services. The existing numeric policy defaults may be retained at the Nix
-authoring layer, then serialized explicitly. An endpoint-less service still
+services. The Nix authoring defaults are `timeoutMs = 1000`,
+`retryIntervalMs = 100`, and `maxAttempts = 20`; the wire always serializes
+all three positive values. An endpoint-less service still
 requires one invocation for each phase. Its start closure retains the existing
 non-listener attestation rule. No service kind, daemon, or new semantic seam is
 needed.
@@ -216,18 +218,20 @@ at the commit API.
 `timeoutMs` bounds **each invocation attempt**, `maxAttempts` counts complete
 service-wide rounds, and `retryIntervalMs` is the delay between rounds. A
 failed, timed-out, or unstarted probe never carries a success credit into a
-later round. The operation can take roughly `maxAttempts` times the sum of
+later round. Probe invocations require `stdin = "null"` and an absent
+invocation-level `timeoutMs`; Nix compilation and raw Rust admission reject
+other values before effects. The phase policy alone supplies the attempt
+deadline. The operation can take roughly `maxAttempts` times the sum of
 per-endpoint command deadlines plus inter-round delays, with OS, capture, and
-cleanup overhead; it is not a strict wall-clock guarantee. The invocation's
-own `timeoutMs` does not override the phase policy for probe attempts.
+cleanup overhead; it is not a strict wall-clock guarantee.
 
 ## Startup and observer contract
 
 Keep the fixed host startup lock from preflight through ready commit or failed
 startup cleanup. Attempt an exact bind with `SO_REUSEADDR` for each endpoint so
 compatible `TIME_WAIT` restarts remain possible. `EADDRINUSE` means
-preparation-time `PORT_CONFLICT` with a new reason such as
-`bind-unavailable`; it does not identify a foreign listener. Other bind or
+preparation-time `PORT_CONFLICT` with reason `bind-unavailable`; it does not
+identify a foreign listener. Other bind or
 inspection errors retain typed uncertainty. The preflight socket closes
 before the child starts, so an unrelated host process can race. A successful
 bind establishes availability at that moment only; it does not prove host-wide
@@ -268,8 +272,11 @@ prove the exact local IPv4 or IPv6 tuple, `LISTEN` state, and a stable socket
 identity from complete, layout-checked records without relying on the PCB
 body. On Linux, correlate a candidate process FD's socket inode/cookie with
 the kernel's TCP listening socket data (the existing `SOCK_DIAG` route can be
-narrowed to positive matching). Neither platform may make an unrelated host
-FD inventory a condition for success. Treat disappearing PIDs/FDs as ordinary
+narrowed to positive matching). The Linux witness requires a nonzero inode
+and a returned cookie other than the request's all-ones sentinel; a missing
+usable identity is `Unverifiable`, not a comparable witness. Neither platform
+may make an unrelated host FD inventory a condition for success. Treat
+disappearing PIDs/FDs as ordinary
 churn only after a valid process observation; denied, malformed, or unsupported
 inspection remains an error. A listener retained solely by a fileport or
 queued socket right, with no inspectable managed listening FD, is outside the
@@ -362,26 +369,55 @@ identity.
 The current Reth phase policy (`120` attempts, `2000` ms per probe, `500` ms
 between attempts) was sized for one scalar probe. With three serial probes,
 its conservative command-time upper estimate exceeds the runtime gate's
-60-second task timeout. Choose phase budgets and gate timeout together during
-the cutover, then prove cold startup and a bounded failure on both platforms.
-Do not silently keep the old attempt count while multiplying per-round work.
+60-second task timeout. For a phase with `N` endpoints, compute the command
+and retry ceiling as `maxAttempts * N * timeoutMs +
+(maxAttempts - 1) * retryIntervalMs`, then allow for startup, observation,
+capture, settlement, and teardown. Choose the two phase policies and parent
+gate timeout together from measured cold starts and failed-probe runs on both
+platforms. The gate must allow ready and health to finish at their configured
+ceilings with measured overhead; it must also demonstrate a failing
+nonprimary probe settling within the calculated ceiling plus measured
+overhead. These numbers are
+calibration results, not a new lifecycle semantic choice. Do not silently
+keep the old attempt count while multiplying per-round work.
 
 ## Evidence and ABI cutover
 
 Process-bound endpoint rows continue to record planned coordinates and the
-service process association; they are not listener ownership leases. Recommend
-one new event vocabulary, `endpoint.check-succeeded`, emitted once per
-endpoint on a successful ready or health round. Its redaction-safe payload has
-`phase` (`ready` or `health`), `endpointId`, the selected `address` and `port`,
-the positive `listener` witness (`holderPid`, process-start identity, socket
-identity and generation where available), and the successful probe attempt's
-existing process key. This says **which socket was observed** and **which
-command exited successfully**, without asserting they are the same responder.
-Do not put executable arguments, secrets, or captured output in this event.
-The exact platform witness encoding is part of the ABI review: it must be
-stable enough to compare within a run without pretending macOS and Linux have
-the same kernel identifiers. The event is evidence at observation time, not
-durable ownership status.
+service process association; they are not listener ownership leases. Add one
+event type, `endpoint.check-succeeded`, emitted once per endpoint on a
+successful ready or health round. Its exact redaction-safe payload is:
+
+```text
+{
+  "phase": "ready" | "health",
+  "endpointId": string,
+  "address": canonical loopback IP string,
+  "port": u16,
+  "listener": {
+    "holderPid": u32,
+    "holderStartIdentity": string,
+    "socketIdentity":
+      { "platform": "linux", "inode": u32, "cookie": [u32, u32] }
+    | { "platform": "macos", "socketHandle": hex64,
+        "inpcbGeneration": hex64 }
+  },
+  "probeProcessKey": string
+}
+```
+
+`hex64` is `0x` followed by exactly 16 lowercase hexadecimal digits. On
+macOS these fields come from `socket_fdinfo.psi.soi_so` and
+`tcp_sockinfo.tcpsi_ini.insi_gencnt`, respectively; the latter is an inpcb
+generation, not a claimed separate socket generation. Reject an absent or
+zero socket handle. On Linux use the checked nonzero inode and non-sentinel
+socket cookie. The listener fields come from the **final** observation and
+are accepted only if that witness matches the initial observation. The probe
+key refers to the successful invocation process record from the same round.
+This says **which socket was observed** and **which command exited
+successfully**, without asserting they are the same responder. Do not put
+executable arguments, secrets, or captured output in this event. The event is
+evidence at observation time, not durable ownership status.
 
 At ready commit, the registry compares the complete selected endpoint set to
 the immutable rows, then writes all `endpoint.check-succeeded` events, the
@@ -404,12 +440,18 @@ Do not add a listener-state table, runtime cache, or second mutable authority.
 managed-process/socket inspection. An absent exact witness after a complete
 relevant inspection, or failed application probes, ends as a readiness failure
 after the configured attempts. Lock contention and unavailable bind remain
-preparation-time refusals. The existing `PORT_CONFLICT` reason vocabulary
-asserts a listener in cases where the new path may know only that bind failed;
-add `bind-unavailable` and revise output semantics rather than mislabeling that
-fact. Reserve `listener-occupied` for historical events or a future path that
-actually proves that claim; never infer it from `EADDRINUSE` alone.
-Preserve existing cancellation, process escape, capture, and settlement
+preparation-time refusals. The revised `PORT_CONFLICT` reason vocabulary is
+exactly `startup-lock-contended | bind-unavailable`. Remove
+`listener-occupied` from the current enum; historical rows retain their
+literal stored bytes. Map `EADDRINUSE` to `bind-unavailable` in the existing
+`portConflict` detail shape, without inventing an owner. Other bind errors
+produce `PORT_UNVERIFIABLE` with no `portConflict` claim. An exhausted round
+produces `READINESS_TIMEOUT` with a `lastRound` detail containing `phase`,
+`reason = listener-missing | listener-replaced | probe-failed |
+probe-timed-out`, and `endpointId` for an endpoint-bearing failure; omit the
+endpoint ID for endpoint-less services. If several endpoints lack witnesses,
+report the lowest canonical endpoint ID. Preserve existing cancellation,
+process escape, capture, and settlement
 priorities when placing the new observation in the lifecycle.
 
 This is one contract/ABI cutover, not a macOS-only fallback. Revise
@@ -427,6 +469,15 @@ the options source and regenerate `OPTIONS.md`; do not hand-edit generated
 output. Old manifest bytes must reject rather than silently acquire new
 semantics. The proposal does not itself change normative behavior.
 
+The Nix compiler's single `invocationPositions` traversal must include every
+endpoint's ready and health invocation alongside the existing start and
+endpoint-less probes. Use that traversal for reference validation, tool
+closure derivation, and package availability; do not add a parallel probe
+registry. Update the public output vocabulary and raw event readers for the
+new reason and event payload in the same cutover. The existing `ps`
+`ownership` field describes process cleanup ownership, so its meaning does
+not change with endpoint evidence.
+
 ## Implementation proof gates
 
 1. **Production OS observer:** carry the successful macOS FD-only prototype
@@ -441,9 +492,11 @@ semantics. The proposal does not itself change normative behavior.
    policies; this one-host prototype is not release coverage.
 2. **Admission and authoring:** Nix and raw Rust reject omitted or misplaced
    endpoint probes, partial multi-endpoint coverage, the removed TCP-only form,
-   endpoint-less mixes, invalid invocation references, and malformed wire
-   records before child effects. Verify one-endpoint and named-endpoint
-   normalization, attached bare placeholder resolution for a nonprimary
+   endpoint-less mixes, non-null scalar probes on endpoint-bearing services,
+   probe invocations with inherited stdin or invocation-level timeouts,
+   invalid invocation references, and malformed wire records before child
+   effects. Verify one-endpoint and named-endpoint normalization, attached
+   bare placeholder resolution for a nonprimary
    endpoint, positive policy bounds, exact inventory coverage, and generated
    freshness.
 3. **Runtime semantics:** an exact managed listener plus its application probe
@@ -455,7 +508,9 @@ semantics. The proposal does not itself change normative behavior.
    containment during probes and immediately before the atomic ready
    transaction. Exercise whole-round retry counts, endpoint-less behavior,
    health, cancellation, capture failures, recovery, and registry fault
-   injection.
+   injection. Parse raw success event payloads and error details independently
+   of the production serializer; prove the macOS hex and Linux cookie shapes,
+   transaction atomicity, and no success event from a failed round.
 4. **Known limits:** prove `SO_REUSEADDR`/`TIME_WAIT` restart and bind refusal;
    demonstrate wildcard/exact coexistence and an old or shared-socket responder
    without claiming exclusive ownership or response attribution. Cover both
