@@ -114,6 +114,8 @@ let
     };
     endpoint = {
       endpointId = "${name}-tcp";
+      readyProbe = { tools = [ "app" ]; run = taskRun name; };
+      healthProbe = { tools = [ "app" ]; run = taskRun name; };
     };
     inherit connectsTo;
     logRefs = [ "service.${name}" ];

@@ -264,18 +264,41 @@ fn validate_invocations(manifest: &Manifest) -> Result<(), ValidationError> {
         }
     }
     for service in manifest.services.values() {
-        for invocation in lifecycle_invocations(&service.lifecycle) {
+        validate_invocation(&service.lifecycle.start.invocation)?;
+        for invocation in service_probes(service) {
             validate_invocation(invocation)?;
+            if invocation.stdin != StdinPolicy::Null || invocation.timeout_ms.is_some() {
+                return Err(ValidationError::UnsupportedValue {
+                    field: "services.probe",
+                    expected: "null stdin and no invocation-level timeoutMs",
+                    actual: "invalid probe execution policy".to_string(),
+                });
+            }
         }
     }
     Ok(())
 }
 
-/// Every invocation a lifecycle carries, in canonical order.
-fn lifecycle_invocations(lifecycle: &Lifecycle) -> impl Iterator<Item = &InvocationSpec> {
-    std::iter::once(&lifecycle.start.invocation)
-        .chain(lifecycle.ready.probe.invocation.iter())
-        .chain(lifecycle.health.probe.invocation.iter())
+/// Probe attachments share the phase policy, never a second invocation deadline.
+fn service_probes(service: &ServiceSpec) -> impl Iterator<Item = &InvocationSpec> {
+    service
+        .lifecycle
+        .ready
+        .probe
+        .iter()
+        .chain(
+            service
+                .endpoints
+                .values()
+                .map(|endpoint| &endpoint.ready_probe),
+        )
+        .chain(service.lifecycle.health.probe.iter())
+        .chain(
+            service
+                .endpoints
+                .values()
+                .map(|endpoint| &endpoint.health_probe),
+        )
 }
 
 fn validate_invocation(invocation: &InvocationSpec) -> Result<(), ValidationError> {
@@ -356,7 +379,7 @@ fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), V
         return Ok(());
     }
     for (id, endpoint) in &service.endpoints {
-        require_non_empty("services.endpoints.endpointId", &endpoint.endpoint_id)?;
+        require_path_safe_id("services.endpoints.endpointId", &endpoint.endpoint_id)?;
         if endpoint.endpoint_id != *id {
             return Err(ValidationError::UnsupportedValue {
                 field: "services.endpoints",
@@ -390,6 +413,16 @@ fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), V
 /// guaranteed by the types (single endpoint, inline probe timings, loopback
 /// host), so only non-empty value checks on ids/terminals remain.
 fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationError> {
+    let endpointless = service.endpoints.is_empty();
+    if service.lifecycle.ready.probe.is_some() != endpointless
+        || service.lifecycle.health.probe.is_some() != endpointless
+    {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.lifecycle.probe",
+            expected: "scalar probes exactly for endpoint-less services",
+            actual: "incoherent probe attachments".to_string(),
+        });
+    }
     for (operation_id, terminal) in lifecycle_ops(&service.lifecycle) {
         require_non_empty("lifecycle.operationId", operation_id.as_str())?;
         require_non_empty("lifecycle.terminal.success", &terminal.success)?;

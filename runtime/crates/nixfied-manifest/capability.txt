@@ -29,14 +29,14 @@ primitive ServiceSpec: lifecycle endpoints primaryEndpoint connectsTo stateRefs 
 primitive Lifecycle: prepare start ready health stop clean
 primitive PrepareSpec: task
 primitive StartSpec: operationId invocation terminal
-primitive ReadySpec: operationId probe terminal
-primitive HealthSpec: operationId probe terminal
+primitive ReadySpec: operationId policy probe terminal
+primitive HealthSpec: operationId policy probe terminal
 primitive StopSpec: operationId signal timeoutMs terminal
 primitive CleanSpec: operationId terminal
-primitive Endpoint: endpointId host
+primitive Endpoint: endpointId host readyProbe healthProbe
 # TCP and exec-probe waits and retry delays observe current and started services.
 # Each TCP attempt uses one nonblocking connection; observation failure stops work.
-primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
+primitive ProbePolicy: timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
 primitive TaskSpec: kind defaultOutput operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
@@ -95,6 +95,11 @@ output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryS
 output-schema runtime-error-port-conflict: portConflict
 output-schema port-conflict: reason projectId endpoint
 output-schema port-conflict-endpoint: transport family address port endpointId
+output-schema endpoint.check-succeeded: phase endpointId address port listener probeProcessKey
+output-schema listener-witness: holderPid holderStartIdentity socketIdentity
+output-schema linux-socket-identity: platform inode cookie
+output-schema macos-socket-identity: platform socketHandle inpcbGeneration
+output-schema last-round: phase reason endpointId?
 output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
 output-schema run-error-summary-text: error
 output-schema runtime-error: code exitClass message details causes? manifestPath? computedManifestHash?
@@ -125,7 +130,6 @@ signal: TERM INT QUIT HUP
 enum ClosureKind: executable helper
 enum ClosureEffect: process network-listener source-read file-write
 enum StdinPolicy: null inherit
-enum ProbeKind: tcp exec
 enum TaskKind: leaf composite
 enum TaskDefaultOutput: summary task-output
 enum SecretSourceKind: env-var file
@@ -143,7 +147,9 @@ status ProcessStatus: running ready stopped succeeded failed canceled escaped st
 status CleanupStatus: pending completed
 
 # PORT_CONFLICT is constructed only from one of these two proven host facts.
-enum PortConflictReason: startup-lock-contended listener-occupied
+enum PortConflictReason: startup-lock-contended bind-unavailable
+enum ProbePhase: ready health
+enum RoundReason: listener-missing listener-replaced probe-failed probe-timed-out
 
 # The public runtime error contract: the stable error codes and exit classes the
 # runtime emits. These are public API for the current ABI, so a change rotates the

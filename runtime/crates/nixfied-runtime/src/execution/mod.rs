@@ -21,8 +21,20 @@ pub(crate) fn invocations(
     let service_values = manifest.services.values().flat_map(|service| {
         let lifecycle = &service.lifecycle;
         std::iter::once(&lifecycle.start.invocation)
-            .chain(lifecycle.ready.probe.invocation.as_ref())
-            .chain(lifecycle.health.probe.invocation.as_ref())
+            .chain(lifecycle.ready.probe.as_ref())
+            .chain(
+                service
+                    .endpoints
+                    .values()
+                    .map(|endpoint| &endpoint.ready_probe),
+            )
+            .chain(lifecycle.health.probe.as_ref())
+            .chain(
+                service
+                    .endpoints
+                    .values()
+                    .map(|endpoint| &endpoint.health_probe),
+            )
     });
     let task_values = manifest
         .tasks

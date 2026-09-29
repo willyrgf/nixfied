@@ -74,12 +74,6 @@ pub(crate) struct ProcessRecord<'a> {
     pub(crate) command_json: &'a str,
 }
 
-/// A recorded endpoint whose exact listener ownership was verified at ready.
-pub(crate) struct VerifiedEndpoint<'a> {
-    pub(crate) endpoint: EndpointRecord<'a>,
-    pub(crate) ownership_json: &'a str,
-}
-
 pub(crate) struct InvocationProcessRecord<'a> {
     pub(crate) source: &'a EvidenceSource,
     pub(crate) run_id: &'a str,
@@ -252,17 +246,17 @@ pub(crate) fn record_service_start(
     transaction.commit().map_err(sql_error)
 }
 
-/// Commit readiness only when the verified endpoint set is exactly the
-/// evidence recorded with the process. Endpoint rows are never rewritten; the
-/// verification is recorded as `port.owner-verified` events.
-pub(crate) fn activate_service_ready(
+/// Commit the checked whole round, endpoint evidence, and lifecycle terminal in
+/// one transaction. Health adds evidence without changing readiness status.
+pub(crate) fn commit_service_check(
     registry: &mut Registry,
     run_id: &str,
     process_key: &str,
-    endpoints: &[VerifiedEndpoint<'_>],
-    lifecycle: (&str, &str, &str),
+    round: super::readiness::CompletedRound,
+    lifecycle: (&str, &str),
 ) -> RuntimeResult<()> {
-    let (operation_id, operation_class, terminal_success) = lifecycle;
+    use super::readiness::ProbePhase;
+    let (operation_id, terminal_success) = lifecycle;
     let RegistryContext {
         connection,
         redactor,
@@ -271,74 +265,97 @@ pub(crate) fn activate_service_ready(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let stored = recorded_endpoints(&transaction, process_key)?;
-    let expected = endpoints
-        .iter()
-        .map(|verified| {
+    let expected = round
+        .endpoints()
+        .map(|(witness, _)| {
+            let endpoint = witness.endpoint();
             (
-                verified.endpoint.endpoint_id.to_owned(),
-                (verified.endpoint.address.to_owned(), verified.endpoint.port),
+                endpoint.endpoint_id.clone(),
+                (endpoint.host.to_string(), endpoint.port),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    if expected.len() != endpoints.len() || stored != expected {
+    if stored != expected {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            format!(
-                "ready endpoint evidence mismatch for {process_key}: stored {stored:?}, expected {expected:?}"
-            ),
+            "check round does not match immutable endpoint rows",
         ));
     }
-    for verified in endpoints {
+    let status = match round.phase() {
+        ProbePhase::Ready => "running",
+        ProbePhase::Health => "ready",
+    };
+    let service_name: String = transaction.query_row(
+        "SELECT service_name FROM processes WHERE process_key = ?1 AND run_id = ?2 AND role = 'service' AND status = ?3 AND ownership = 'unresolved' AND execution_outcome IS NULL",
+        params![process_key, run_id, status], |row| row.get(0),
+    ).map_err(sql_error)?;
+    for probe in round.probes() {
+        let valid: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM processes WHERE process_key = ?1 AND run_id = ?2 AND service_name = ?3 AND role = 'probe' AND status = 'succeeded' AND ownership = 'settled' AND execution_outcome = 'succeeded' AND exit_code = 0 AND capture = 'complete')",
+            params![probe, run_id, service_name], |row| row.get(0),
+        ).map_err(sql_error)?;
+        if !valid {
+            return Err(RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                "check round probe evidence is not settled success",
+            ));
+        }
+    }
+    for (witness, probe) in round.endpoints() {
+        let endpoint = witness.endpoint();
+        let payload = serde_json::to_string(&EndpointCheckSucceeded {
+            phase: round.phase(),
+            endpoint_id: &endpoint.endpoint_id,
+            address: endpoint.host,
+            port: endpoint.port,
+            listener: witness,
+            probe_process_key: probe,
+        })
+        .map_err(|_| {
+            RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                "cannot encode endpoint check evidence",
+            )
+        })?;
         insert_event(
             &transaction,
             redactor,
             EventInsert {
-                event_type: "port.owner-verified",
+                event_type: "endpoint.check-succeeded",
                 run_id: Some(run_id),
                 process_key: Some(process_key),
-                payload_json: verified.ownership_json,
+                payload_json: &payload,
             },
         )?;
     }
-    let changed_process = transaction
-        .execute(
-            "
-            UPDATE processes
-            SET status = ?4
-            WHERE process_key = ?1 AND run_id = ?2 AND role = 'service' AND status = ?3
-            ",
-            params![
-                process_key,
-                run_id,
-                ProcessStatus::Running.as_str(),
-                ProcessStatus::Ready.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed_process != 1 {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("ready activation changed {changed_process} process rows"),
-        ));
+    if round.phase() == ProbePhase::Ready {
+        let changed = transaction.execute("UPDATE processes SET status = 'ready' WHERE process_key = ?1 AND run_id = ?2 AND status = 'running'", params![process_key, run_id]).map_err(sql_error)?;
+        if changed != 1 {
+            return Err(RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                "ready activation did not change exactly one process",
+            ));
+        }
+        insert_event(
+            &transaction,
+            redactor,
+            EventInsert {
+                event_type: "service.probe-ready",
+                run_id: Some(run_id),
+                process_key: Some(process_key),
+                payload_json: "{}",
+            },
+        )?;
     }
-    insert_event(
-        &transaction,
-        redactor,
-        EventInsert {
-            event_type: "service.probe-ready",
-            run_id: Some(run_id),
-            process_key: Some(process_key),
-            payload_json: "{}",
-        },
-    )?;
-    let lifecycle_payload = serde_json::json!({
-        "operationId": operation_id,
-        "class": operation_class,
-        "terminalResult": terminal_success,
-        "errorCode": serde_json::Value::Null,
-        "message": serde_json::Value::Null,
-    })
-    .to_string();
+    let mut lifecycle_payload = serde_json::json!({
+        "operationId": operation_id, "class": round.phase().as_str(), "terminalResult": terminal_success,
+        "errorCode": serde_json::Value::Null, "message": serde_json::Value::Null,
+    });
+    // Preserve the existing phase-specific lifecycle payloads.
+    if round.phase() == ProbePhase::Health {
+        lifecycle_payload["serviceId"] = serde_json::json!(service_name);
+    }
+    let lifecycle_payload = lifecycle_payload.to_string();
     insert_event(
         &transaction,
         redactor,
@@ -350,6 +367,17 @@ pub(crate) fn activate_service_ready(
         },
     )?;
     transaction.commit().map_err(sql_error)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EndpointCheckSucceeded<'a> {
+    phase: super::readiness::ProbePhase,
+    endpoint_id: &'a str,
+    address: nixfied_manifest::LoopbackHost,
+    port: u16,
+    listener: &'a super::endpoint::ListenerWitness,
+    probe_process_key: &'a str,
 }
 
 /// A service's terminal record; the payload accompanies its event.
@@ -1410,26 +1438,6 @@ mod tests {
             }],
         )
         .unwrap();
-        for address in ["::1", "0:0:0:0:0:0:0:1"] {
-            let result = activate_service_ready(
-                &mut fixture.registry,
-                RUN_ID,
-                PROCESS_KEY,
-                &[VerifiedEndpoint {
-                    endpoint: EndpointRecord {
-                        address,
-                        ..endpoint()
-                    },
-                    ownership_json: "{}",
-                }],
-                ("service.ready", "ready", "ready"),
-            );
-            if address == "::1" {
-                assert_eq!(result.unwrap_err().code, ErrorCode::RegistryCorrupt);
-            } else {
-                result.unwrap();
-            }
-        }
         let stored: String = fixture
             .registry
             .connection()
@@ -1440,6 +1448,11 @@ mod tests {
 
     #[test]
     fn ready_activation_requires_the_exact_recorded_endpoint_set() {
+        if crate::test_support::isolate(
+            "service::registry::tests::ready_activation_requires_the_exact_recorded_endpoint_set",
+        ) {
+            return;
+        }
         for mutation in [
             "UPDATE ports SET endpoint_id = 'other'",
             "UPDATE ports SET address = '0.0.0.0'",
@@ -1450,6 +1463,22 @@ mod tests {
         ] {
             let mut fixture = TestRegistry::new();
             record_started(&mut fixture.registry);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let selected = crate::service::SelectedEndpoint {
+                endpoint_id: endpoint().endpoint_id.into(),
+                host: nixfied_manifest::LoopbackHost::parse("127.0.0.1").unwrap(),
+                port: listener.local_addr().unwrap().port(),
+            };
+            fixture
+                .registry
+                .connection()
+                .execute("UPDATE ports SET port = ?1", [selected.port])
+                .unwrap();
+            let round = super::super::readiness::observed_test_round(
+                &selected,
+                super::super::readiness::ProbePhase::Ready,
+                "test-probe",
+            );
             fixture
                 .registry
                 .connection()
@@ -1464,15 +1493,12 @@ mod tests {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .unwrap();
-            let result = activate_service_ready(
+            let result = commit_service_check(
                 &mut fixture.registry,
                 RUN_ID,
                 PROCESS_KEY,
-                &[VerifiedEndpoint {
-                    endpoint: endpoint(),
-                    ownership_json: "{}",
-                }],
-                ("service.ready", "ready", "ready"),
+                round,
+                ("service.ready", "ready"),
             );
             assert_eq!(
                 result.unwrap_err().code,

@@ -250,7 +250,7 @@ else
       }
     ))
 
-    (reject "a tcp probe on an endpoint-less service" (
+    (reject "missing probes on an endpoint-less service" (
       { ... }:
       {
         imports = [ composite ];
@@ -285,8 +285,6 @@ else
         nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ];
         nixfied.services.synthetic.endpoint = lib.mkForce null;
         nixfied.services.synthetic.lifecycle.ready.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -297,10 +295,7 @@ else
               "1"
             ];
           };
-        };
         nixfied.services.synthetic.lifecycle.health.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -311,7 +306,6 @@ else
               "1"
             ];
           };
-        };
       }
     ))
 
@@ -330,8 +324,6 @@ else
           "1"
         ];
         nixfied.services.synthetic.lifecycle.ready.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -342,10 +334,7 @@ else
               "1"
             ];
           };
-        };
         nixfied.services.synthetic.lifecycle.health.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -356,7 +345,6 @@ else
               "1"
             ];
           };
-        };
         nixfied.tasks.smoke.invocation.run = lib.mkForce [
           "nixfied-synthetic-helper"
           "task"
@@ -382,8 +370,6 @@ else
           "1"
         ];
         nixfied.services.synthetic.lifecycle.ready.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -394,10 +380,7 @@ else
               "1"
             ];
           };
-        };
         nixfied.services.synthetic.lifecycle.health.probe = {
-          kind = "exec";
-          invocation = {
             tools = [ "synthetic-helper" ];
             run = [
               "nixfied-synthetic-helper"
@@ -408,7 +391,6 @@ else
               "1"
             ];
           };
-        };
       }
     ))
 

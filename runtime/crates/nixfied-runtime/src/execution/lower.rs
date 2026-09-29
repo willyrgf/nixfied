@@ -10,9 +10,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use nixfied_manifest::{
-    ClosureSpec, InvocationSpec, Lifecycle, Manifest, OperationId, ProbeKind, ProbeSpec, ServiceId,
-    ServiceSpec, StepSpec, StopSpec, TaskId, TaskKind, TaskSpec, TerminalSemantics,
-    ValidatedManifest,
+    ClosureSpec, InvocationSpec, Lifecycle, Manifest, OperationId, ServiceId, ServiceSpec,
+    StepSpec, StopSpec, TaskId, TaskKind, TaskSpec, TerminalSemantics, ValidatedManifest,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -115,8 +114,6 @@ fn lower_service(
         clean,
     } = lifecycle;
 
-    let endpoints = endpoints.clone();
-
     let owner = || format!("service {name}");
     let endpoint_less = endpoints.is_empty();
     let prepare = prepare.as_ref().map(|spec| spec.task.clone());
@@ -169,13 +166,68 @@ fn lower_service(
         meta: op_meta(&start.operation_id, &start.terminal),
         exec: start_exec,
     };
+    let addressing = if endpoint_less {
+        ServiceAddressing::Endpointless {
+            ready: resolver
+                .resolve(
+                    &owner,
+                    ready.probe.as_ref().expect("validated scalar probe"),
+                    &scope,
+                )?
+                .0
+                .into(),
+            health: resolver
+                .resolve(
+                    &owner,
+                    health.probe.as_ref().expect("validated scalar probe"),
+                    &scope,
+                )?
+                .0
+                .into(),
+        }
+    } else {
+        // Complete the ready phase in canonical order before validating health.
+        let ready_probes = endpoints
+            .values()
+            .map(|endpoint| {
+                resolver
+                    .resolve(&owner, &endpoint.ready_probe, &scope)
+                    .map(|resolved| resolved.0)
+            })
+            .collect::<RuntimeResult<Vec<_>>>()?;
+        let mut entries = BTreeMap::new();
+        for ((id, endpoint), ready) in endpoints.iter().zip(ready_probes) {
+            let nixfied_manifest::Endpoint {
+                endpoint_id: _,
+                host,
+                ready_probe: _,
+                health_probe,
+            } = endpoint;
+            entries.insert(
+                EndpointId::parse(id).expect("validated endpoint id"),
+                EndpointPlan {
+                    host: *host,
+                    ready,
+                    health: resolver.resolve(&owner, health_probe, &scope)?.0,
+                },
+            );
+        }
+        ServiceAddressing::Endpoints(
+            EndpointSet::new(
+                EndpointId::parse(primary_endpoint.as_deref().expect("validated primary"))
+                    .expect("validated endpoint id"),
+                entries,
+            )
+            .expect("validated primary member"),
+        )
+    };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: lower_probe(name, "ready", &ready.probe, &scope, resolver)?,
+        policy: lower_policy("ready", &ready.policy),
     };
     let health = HealthOp {
         meta: op_meta(&health.operation_id, &health.terminal),
-        probe: lower_probe(name, "health", &health.probe, &scope, resolver)?,
+        policy: lower_policy("health", &health.policy),
     };
     let stop = lower_stop(stop);
     let clean = CleanOp {
@@ -190,8 +242,7 @@ fn lower_service(
         health,
         stop,
         clean,
-        endpoints,
-        primary_endpoint: primary_endpoint.clone(),
+        addressing,
         connects_to: connects_to.iter().cloned().collect(),
         containment: *containment,
     })
@@ -256,7 +307,7 @@ fn lower_task(
     let primary_has_endpoint = requires
         .first()
         .and_then(|id| services.get(id))
-        .map(|service| !service.endpoints.is_empty())
+        .map(|service| service.primary_endpoint().is_some())
         .unwrap_or(false);
     // Named endpoint placeholders may only reference declared service
     // requirements (any of them, not just the primary) that actually declare
@@ -266,7 +317,7 @@ fn lower_task(
         .filter(|id| {
             services
                 .get(id.as_str())
-                .map(|service| !service.endpoints.is_empty())
+                .map(|service| service.primary_endpoint().is_some())
                 .unwrap_or(false)
         })
         .map(|id| id.as_str())
@@ -304,70 +355,17 @@ fn lower_composite(task_id: &str, steps: &BTreeMap<String, StepSpec>) -> ExecCom
     }
 }
 
-/// Lower the kind-discriminated wire probe into the executor's closed enum,
-/// proving kind/field coherence: a tcp probe must not carry an invocation, an
-/// exec probe must carry one. The probe's own timing governs every attempt —
-/// the invocation's authored timeout is not an execution deadline here.
-fn lower_probe(
-    service: &str,
-    class: &'static str,
-    probe: &ProbeSpec,
-    scope: &Scope<'_>,
-    resolver: &mut InvocationResolver<'_>,
-) -> RuntimeResult<Probe> {
-    let ProbeSpec {
-        kind,
-        invocation,
+fn lower_policy(label: &str, policy: &nixfied_manifest::ProbePolicy) -> ProbePolicy {
+    let nixfied_manifest::ProbePolicy {
         timeout_ms,
         retry_interval_ms,
         max_attempts,
-    } = probe;
-    let timeout = Duration::from_millis(timeout_ms.get());
-    let retry_interval = Duration::from_millis(retry_interval_ms.get());
-    let max_attempts = *max_attempts;
-    match kind {
-        ProbeKind::Tcp => {
-            if !scope.has_primary {
-                return Err(Rejection::TcpProbeWithoutEndpoint {
-                    service: service.to_string(),
-                    class,
-                }
-                .into());
-            }
-            if invocation.is_some() {
-                return Err(Rejection::ProbeExecOnTcp {
-                    service: service.to_string(),
-                    class,
-                }
-                .into());
-            }
-            Ok(Probe::Tcp(ProbePolicy {
-                label: class.to_string(),
-                timeout,
-                retry_interval,
-                max_attempts,
-            }))
-        }
-        ProbeKind::Exec => {
-            let Some(invocation) = invocation else {
-                return Err(Rejection::ProbeExecMissing {
-                    service: service.to_string(),
-                    class,
-                }
-                .into());
-            };
-            let owner = || format!("service {service} {class} probe");
-            let (exec, _, _) = resolver.resolve(&owner, invocation, scope)?;
-            Ok(Probe::Exec(ExecProbe {
-                exec,
-                policy: ProbePolicy {
-                    label: class.to_string(),
-                    timeout,
-                    retry_interval,
-                    max_attempts,
-                },
-            }))
-        }
+    } = policy;
+    ProbePolicy {
+        label: label.to_string(),
+        timeout: Duration::from_millis(timeout_ms.get()),
+        retry_interval: Duration::from_millis(retry_interval_ms.get()),
+        max_attempts: *max_attempts,
     }
 }
 
@@ -510,14 +508,6 @@ pub enum Rejection {
         owner: String,
         name: &'static str,
     },
-    ProbeExecOnTcp {
-        service: String,
-        class: &'static str,
-    },
-    TcpProbeWithoutEndpoint {
-        service: String,
-        class: &'static str,
-    },
     EffectsIncoherent {
         service: String,
         closure_id: String,
@@ -525,10 +515,6 @@ pub enum Rejection {
     },
     ServiceGraphCycle {
         cycle: String,
-    },
-    ProbeExecMissing {
-        service: String,
-        class: &'static str,
     },
 }
 
@@ -564,14 +550,6 @@ impl Rejection {
             Rejection::ReservedEnvVar { owner, name } => {
                 format!("{owner} declares runtime-owned environment variable {name}")
             }
-            Rejection::ProbeExecOnTcp { service, class } => {
-                format!("service {service} {class} probe is tcp but carries an invocation")
-            }
-            Rejection::TcpProbeWithoutEndpoint { service, class } => {
-                format!(
-                    "service {service} is endpoint-less but its {class} probe is tcp (no target to connect)"
-                )
-            }
             Rejection::EffectsIncoherent {
                 service,
                 closure_id,
@@ -580,9 +558,6 @@ impl Rejection {
             Rejection::ServiceGraphCycle { cycle } => format!(
                 "the combined connectsTo + prepare-requires service graph has a cycle: {cycle}"
             ),
-            Rejection::ProbeExecMissing { service, class } => {
-                format!("service {service} {class} probe is exec but declares no invocation")
-            }
         }
     }
 }
@@ -721,8 +696,7 @@ mod tests {
             "env": {},
             "codebaseId": "main",
             "cwd": ".",
-            "stdin": "null",
-            "timeoutMs": 1000
+            "stdin": "null"
         })
     }
 
@@ -803,12 +777,12 @@ mod tests {
                     "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "serve", "--port", "${port}"])),
                     "terminal": { "success": "spawned", "failure": "failed" }
                 },
-                "ready": { "operationId": "svc.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "svc.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "ready": { "operationId": "svc.ready", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "svc.health", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
                 "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
-            "endpoints": { "svc-tcp": { "endpointId": "svc-tcp", "host": "127.0.0.1" } },
+            "endpoints": { "svc-tcp": { "endpointId": "svc-tcp", "host": "127.0.0.1", "readyProbe": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])), "healthProbe": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])) } },
             "primaryEndpoint": "svc-tcp",
             "connectsTo": [],
             "stateRefs": [], "logRefs": [],
@@ -823,7 +797,9 @@ mod tests {
         service["lifecycle"]["health"]["operationId"] = json!(format!("{name}.health"));
         service["lifecycle"]["stop"]["operationId"] = json!(format!("{name}.stop"));
         service["lifecycle"]["clean"]["operationId"] = json!(format!("{name}.clean"));
-        service["endpoints"] = json!({ format!("{name}-tcp"): { "endpointId": format!("{name}-tcp"), "host": "127.0.0.1" } });
+        let mut endpoint = service["endpoints"]["svc-tcp"].clone();
+        endpoint["endpointId"] = json!(format!("{name}-tcp"));
+        service["endpoints"] = json!({ format!("{name}-tcp"): endpoint });
         service["primaryEndpoint"] = json!(format!("{name}-tcp"));
         service
     }
@@ -845,8 +821,14 @@ mod tests {
     fn lowers_a_valid_manifest() {
         let em = lower(&manifest_from(manifest_value())).expect("valid manifest lowers");
         let svc = em.services().get("svc").expect("service lowered");
-        assert_eq!(svc.endpoints["svc-tcp"].host.to_string(), "127.0.0.1");
-        assert_eq!(svc.primary_endpoint.as_deref(), Some("svc-tcp"));
+        assert_eq!(
+            svc.endpoints().next().unwrap().1.host.to_string(),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            svc.primary_endpoint().map(EndpointId::as_str),
+            Some("svc-tcp")
+        );
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.is_none());
         // Args are run[1..]; run[0] resolved to the closure executable.
@@ -928,7 +910,7 @@ mod tests {
     fn each_service_invocation_finishes_validation_before_the_next_position() {
         let mut value = manifest_value();
         with_exec_ready_probe(&mut value);
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["invocation"]["executable"] =
+        value["services"]["svc"]["endpoints"]["svc-tcp"]["readyProbe"]["executable"] =
             json!("/nix/store/incorrect/bin/svc");
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"]["ADDR"] =
             json!("${port:missing}");
@@ -937,6 +919,10 @@ mod tests {
             error.message,
             "service svc references the endpoint of missing without declaring it in own endpoints or addressable connectsTo"
         );
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"] =
+            value["services"]["svc"]["endpoints"]["svc-tcp"]["readyProbe"].clone();
+        value["services"]["svc"]["lifecycle"]["health"]["probe"] =
+            value["services"]["svc"]["endpoints"]["svc-tcp"]["healthProbe"].clone();
         value["services"]["svc"]["endpoints"] = json!({});
         value["services"]["svc"]
             .as_object_mut()
@@ -948,7 +934,7 @@ mod tests {
         let error = lower(&manifest_from(value)).unwrap_err();
         assert_eq!(
             error.message,
-            "service svc ready probe carries executable /nix/store/incorrect/bin/svc but its tools resolve run[0] to /nix/store/c/bin/svc"
+            "service svc carries executable /nix/store/incorrect/bin/svc but its tools resolve run[0] to /nix/store/c/bin/svc"
         );
     }
 
@@ -1106,8 +1092,7 @@ mod tests {
         let mut value = manifest_value();
         // svc gains a connectsTo dependency `dep`, so the task's derived union
         // closes over it.
-        let mut dep = service_value();
-        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        let mut dep = named_service_value("dep");
         dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
@@ -1137,11 +1122,7 @@ mod tests {
         let mut probe_invocation =
             invocation_value("/nix/store/probe/bin/probe", json!(["probe", "ready"]));
         probe_invocation["tools"] = json!(["probeC"]);
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
-            "kind": "exec",
-            "invocation": probe_invocation,
-            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
-        });
+        value["services"]["svc"]["endpoints"]["svc-tcp"]["readyProbe"] = probe_invocation;
         let execution = lower(&manifest_from(value)).unwrap();
         let ExecutableTask::Leaf(task) = &execution.program.tasks["t"] else {
             panic!("leaf")
@@ -1151,10 +1132,16 @@ mod tests {
             task.exec.tool_roots,
             vec!["/nix/store/ct/bin", "/nix/store/git/bin"]
         );
-        let Probe::Exec(probe) = &execution.services()["svc"].ready.probe else {
-            panic!("exec probe")
-        };
-        assert_eq!(probe.exec.executable, "/nix/store/probe/bin/probe");
+        assert_eq!(
+            execution.services()["svc"]
+                .endpoints()
+                .next()
+                .unwrap()
+                .1
+                .ready
+                .executable,
+            "/nix/store/probe/bin/probe"
+        );
     }
 
     #[test]
@@ -1309,26 +1296,10 @@ mod tests {
     /// Rewrite the fixture's ready probe as an invocation probe bound to
     /// closure `c`.
     fn with_exec_ready_probe(value: &mut Value) {
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
-            "kind": "exec",
-            "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
-            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
-        });
-    }
-
-    #[test]
-    fn exec_probe_lowers_to_exec_variant() {
-        let mut value = manifest_value();
-        with_exec_ready_probe(&mut value);
-        let em = lower(&manifest_from(value)).expect("exec probe lowers");
-        let svc = em.services().get("svc").expect("service lowered");
-        let Probe::Exec(probe) = &svc.ready.probe else {
-            panic!("ready probe should lower to the exec variant");
-        };
-        // Probe args are run[1..]; the probe's per-attempt timeout overrides the
-        // invocation's own timeout.
-        assert_eq!(probe.policy.max_attempts.get(), 5);
-        assert!(matches!(svc.health.probe, Probe::Tcp(_)));
+        value["services"]["svc"]["endpoints"]["svc-tcp"]["readyProbe"] =
+            invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"]));
+        value["services"]["svc"]["lifecycle"]["ready"]["policy"] =
+            json!({"timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5});
     }
 
     #[test]
@@ -1339,10 +1310,7 @@ mod tests {
             "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        let error =
-            lower(&manifest_from(value)).expect_err("tcp probe with invocation must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("tcp but carries an invocation"));
+        assert!(serde_json::from_value::<Manifest>(value).is_err());
     }
 
     #[test]
@@ -1352,17 +1320,14 @@ mod tests {
             "kind": "exec",
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        let error =
-            lower(&manifest_from(value)).expect_err("exec probe without invocation must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("declares no invocation"));
+        assert!(serde_json::from_value::<Manifest>(value).is_err());
     }
 
     #[test]
     fn exec_probe_named_ref_outside_connects_to_is_rejected() {
         let mut value = manifest_value();
         with_exec_ready_probe(&mut value);
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["invocation"]["run"] =
+        value["services"]["svc"]["endpoints"]["svc-tcp"]["readyProbe"]["run"] =
             json!(["svc", "--db", "${port:ghost}"]);
         let error = lower(&manifest_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ManifestAdmission);
@@ -1485,7 +1450,8 @@ mod tests {
             let mut value = manifest_value();
             value["placement"]["slotPlacements"] = placements;
             value["services"]["svc"]["endpoints"]["second"] =
-                json!({"endpointId": "second", "host": "127.0.0.1"});
+                value["services"]["svc"]["endpoints"]["svc-tcp"].clone();
+            value["services"]["svc"]["endpoints"]["second"]["endpointId"] = json!("second");
             let raw: Manifest = serde_json::from_value(value).unwrap();
             match ValidatedManifest::try_from(raw) {
                 Ok(document) => {
@@ -1518,15 +1484,11 @@ mod tests {
                 "env": {},
                 "codebaseId": "main",
                 "cwd": ".",
-                "stdin": "null",
-                "timeoutMs": 1000
+                "stdin": "null"
             })
         };
-        let probe = json!({
-            "kind": "exec",
-            "invocation": worker_invocation(json!(["worker", "ping"])),
-            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
-        });
+        let probe = worker_invocation(json!(["worker", "ping"]));
+        let policy = json!({"timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5});
         value["services"]["worker"] = json!({
             "lifecycle": {
                 "start": {
@@ -1534,8 +1496,8 @@ mod tests {
                     "invocation": worker_invocation(json!(["worker", "consume"])),
                     "terminal": { "success": "spawned", "failure": "failed" }
                 },
-                "ready": { "operationId": "worker.ready", "probe": probe.clone(), "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "worker.health", "probe": probe, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "ready": { "operationId": "worker.ready", "probe": probe.clone(), "policy": policy.clone(), "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "worker.health", "probe": probe, "policy": policy, "terminal": { "success": "healthy", "failure": "unhealthy" } },
                 "stop": { "operationId": "worker.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
                 "clean": { "operationId": "worker.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
@@ -1551,8 +1513,8 @@ mod tests {
         with_endpoint_less_worker(&mut value);
         let em = lower(&manifest_from(value)).expect("endpoint-less service lowers");
         let worker = em.services().get("worker").expect("worker lowered");
-        assert!(worker.endpoints.is_empty());
-        assert!(worker.primary_endpoint.is_none());
+        assert!(worker.endpoints().next().is_none());
+        assert!(worker.primary_endpoint().is_none());
     }
 
     #[test]
@@ -1562,12 +1524,7 @@ mod tests {
         value["services"]["worker"]["lifecycle"]["ready"]["probe"] = json!({
             "kind": "tcp", "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        // The tcp probe carries no invocation, so the closure's derived
-
-        let error =
-            lower(&manifest_from(value)).expect_err("tcp probe without endpoint must reject");
-        assert_eq!(error.code, ErrorCode::ManifestAdmission);
-        assert!(error.message.contains("endpoint-less"), "{}", error.message);
+        assert!(serde_json::from_value::<Manifest>(value).is_err());
     }
 
     #[test]
@@ -1672,8 +1629,7 @@ mod tests {
         // Cross-service prepare: svc's prepare task requires dep, so starting
         // svc pulls dep into every union that contains svc.
         let mut value = manifest_value();
-        let mut dep = service_value();
-        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        let mut dep = named_service_value("dep");
         dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
@@ -1720,8 +1676,7 @@ mod tests {
         // dep -[connectsTo]-> svc: the rejection must render the cycle with
         // each hop's kind, so the operator can tell wiring from preparation.
         let mut value = manifest_value();
-        let mut dep = service_value();
-        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        let mut dep = named_service_value("dep");
         dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
@@ -1855,8 +1810,7 @@ mod tests {
     #[test]
     fn named_ref_inside_connects_to_lowers_with_env() {
         let mut value = manifest_value();
-        let mut dep = service_value();
-        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        let mut dep = named_service_value("dep");
         dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));

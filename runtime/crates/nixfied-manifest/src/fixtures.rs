@@ -138,12 +138,12 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
                     },
                     "ready": {
                         "operationId": "service.synthetic.ready",
-                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "policy": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "ready", "failure": "not-ready" }
                     },
                     "health": {
                         "operationId": "service.synthetic.health",
-                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "policy": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
                     "stop": {
@@ -157,7 +157,11 @@ pub fn synthetic_manifest(options: &SyntheticManifestOptions) -> Value {
                         "terminal": { "success": "cleaned", "failure": "failed" }
                     }
                 },
-                "endpoints": { "synthetic-tcp": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" } },
+                "endpoints": { "synthetic-tcp": {
+                    "endpointId": "synthetic-tcp", "host": "127.0.0.1",
+                    "readyProbe": invocation(&options.executable, task_run.clone()),
+                    "healthProbe": invocation(&options.executable, task_run.clone())
+                } },
                 "primaryEndpoint": "synthetic-tcp",
                 "connectsTo": [],
                 "stateRefs": ["slot"],
@@ -193,8 +197,7 @@ fn invocation(executable: &str, run: Vec<String>) -> Value {
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
-        "stdin": "null",
-        "timeoutMs": 30000
+        "stdin": "null"
     })
 }
 

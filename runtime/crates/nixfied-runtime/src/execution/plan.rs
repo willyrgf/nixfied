@@ -149,7 +149,7 @@ pub(super) fn prove_capacity(program: &Program, facts: GraphFacts) -> RuntimeRes
         .map(|(task, services)| {
             let endpoints: usize = services
                 .iter()
-                .map(|id| program.services[id].endpoints.len())
+                .map(|id| program.services[id].endpoints().count())
                 .sum();
             (task, (endpoints, services.len()))
         })
@@ -233,7 +233,7 @@ fn bind_slot(logical: LogicalPlan<'_>, slot: u32) -> RuntimeResult<RunPlan<'_>> 
     let demand = logical
         .services
         .iter()
-        .map(|(service, _)| service.endpoints.len())
+        .map(|(service, _)| service.endpoints().count())
         .sum();
     capacity(*window, slot, demand, logical.services.len())?;
     // Canonical address allocation is independent of dependency-first startup.
@@ -246,12 +246,11 @@ fn bind_slot(logical: LogicalPlan<'_>, slot: u32) -> RuntimeResult<RunPlan<'_>> 
     let mut cursor = window.start();
     for (id, service) in canonical {
         let endpoints = service
-            .endpoints
-            .keys()
-            .map(|endpoint| {
+            .endpoints()
+            .map(|(endpoint, _)| {
                 let port = cursor;
                 cursor = cursor.saturating_add(1);
-                (endpoint.clone(), port)
+                (endpoint.to_string(), port)
             })
             .collect();
         addresses.insert(id, endpoints);
@@ -418,13 +417,34 @@ mod tests {
         }
     }
 
-    fn tcp_probe() -> ProbePolicy {
+    fn probe_policy() -> ProbePolicy {
         ProbePolicy {
             label: "ready".to_string(),
             timeout: Duration::from_millis(1000),
             retry_interval: Duration::from_millis(100),
             max_attempts: 10.try_into().unwrap(),
         }
+    }
+
+    fn addressing(ids: &[&str]) -> ServiceAddressing {
+        ServiceAddressing::Endpoints(
+            EndpointSet::new(
+                EndpointId::parse(ids[0]).unwrap(),
+                ids.iter()
+                    .map(|id| {
+                        (
+                            EndpointId::parse(id).unwrap(),
+                            EndpointPlan {
+                                host: LoopbackHost::parse("127.0.0.1").unwrap(),
+                                ready: resolved_exec(),
+                                health: resolved_exec(),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        )
     }
 
     fn service(name: &str) -> ExecService {
@@ -437,11 +457,11 @@ mod tests {
             },
             ready: ReadyOp {
                 meta: op_meta("ready"),
-                probe: Probe::Tcp(tcp_probe()),
+                policy: probe_policy(),
             },
             health: HealthOp {
                 meta: op_meta("health"),
-                probe: Probe::Tcp(tcp_probe()),
+                policy: probe_policy(),
             },
             stop: StopOp {
                 meta: op_meta("stop"),
@@ -451,14 +471,7 @@ mod tests {
             clean: CleanOp {
                 meta: op_meta("clean"),
             },
-            endpoints: BTreeMap::from([(
-                "e".to_string(),
-                Endpoint {
-                    endpoint_id: "e".to_string(),
-                    host: LoopbackHost::parse("127.0.0.1").unwrap(),
-                },
-            )]),
-            primary_endpoint: Some("e".to_string()),
+            addressing: addressing(&["e"]),
             connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
         }
@@ -766,17 +779,7 @@ mod tests {
             .services
             .get_mut(&ServiceId::new("multi"))
             .expect("multi exists");
-        for id in ["a", "b", "c"] {
-            multi.endpoints.insert(
-                id.to_string(),
-                Endpoint {
-                    endpoint_id: id.to_string(),
-                    host: LoopbackHost::parse("127.0.0.1").unwrap(),
-                },
-            );
-        }
-        multi.endpoints.remove("e");
-        multi.primary_endpoint = Some("a".to_string());
+        multi.addressing = addressing(&["a", "b", "c"]);
         let plan = plan_program(&em, &TaskId::new("all"), 0).expect("plan exists");
         let multi_ports = &plan
             .services
@@ -805,13 +808,7 @@ mod tests {
     fn rejects_when_window_cannot_host_all_endpoints() {
         // One service with two endpoints must reserve both ports atomically.
         let mut em = manifest(vec!["a"], vec!["a"], vec![(0, 23080, 23080)]);
-        em.services.get_mut("a").unwrap().endpoints.insert(
-            "second".into(),
-            Endpoint {
-                endpoint_id: "second".into(),
-                host: LoopbackHost::parse("127.0.0.1").unwrap(),
-            },
-        );
+        em.services.get_mut("a").unwrap().addressing = addressing(&["e", "second"]);
         assert_eq!(
             plan_program(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")

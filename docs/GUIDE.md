@@ -555,8 +555,8 @@ secret values never enter diagnostics.
 
 On Linux, runtime admission may warn when a declared candidate-port window
 overlaps the observed host ephemeral-port range. This optional advisory neither
-changes the manifest nor reserves a port; endpoint ownership still requires the
-native listener/process proof. A host without that observation produces no
+changes the manifest nor reserves a port; endpoint readiness still requires the
+managed listener witness and its attached application probe. A host without that observation produces no
 such advisory.
 
 

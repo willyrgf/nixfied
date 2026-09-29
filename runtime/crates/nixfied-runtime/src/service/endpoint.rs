@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::net::IpAddr;
 #[cfg(test)]
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 use std::os::fd::AsRawFd;
 #[cfg(test)]
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -22,10 +22,9 @@ use sha2::{Digest, Sha256};
 
 use crate::filesystem::{Directory, DirectoryMode, PrivateFile};
 use crate::service::process::{
-    SelectedEndpoint, process_is_in_containment, process_is_live_with_identity,
+    SelectedEndpoint, managed_listener_candidates, verify_listener_candidate,
 };
 
-use super::TrackedProcessIdentity;
 use super::socket::TcpSocket;
 
 #[cfg(target_os = "linux")]
@@ -34,23 +33,17 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-use linux::{correlate as platform_correlate, snapshot as platform_snapshot};
+use linux::inspect as platform_inspect;
 #[cfg(target_os = "macos")]
-use macos::{correlate as platform_correlate, snapshot as platform_snapshot};
+use macos::inspect as platform_inspect;
 
 const LOCK_SUFFIX: &str = ".lock";
-const STABLE_SNAPSHOT_ATTEMPTS: usize = 3;
+const MAX_DESCRIPTORS: usize = 65536;
 
+#[cfg(target_os = "linux")]
 fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
     let end = offset.checked_add(N)?;
     bytes.get(offset..end)?.try_into().ok()
-}
-
-fn address_family(address: IpAddr) -> &'static str {
-    match address {
-        IpAddr::V4(_) => "ipv4",
-        IpAddr::V6(_) => "ipv6",
-    }
 }
 
 fn address_family_tag(address: IpAddr) -> u8 {
@@ -134,7 +127,7 @@ pub(crate) enum EndpointFailure {
     LockContended {
         endpoint: SelectedEndpoint,
     },
-    ListenerOccupied {
+    BindUnavailable {
         endpoint: SelectedEndpoint,
     },
     Unverifiable {
@@ -282,6 +275,7 @@ fn coordination_error(error: io::Error) -> EndpointFailure {
     )
 }
 
+/// Stable OS identity of one listening socket, not an ownership lease.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(tag = "platform", rename_all = "kebab-case")]
 pub(crate) enum KernelSocketIdentity {
@@ -289,374 +283,170 @@ pub(crate) enum KernelSocketIdentity {
     Linux { inode: u32, cookie: [u32; 2] },
     #[cfg(target_os = "macos")]
     Macos {
-        pcb: u64,
-        pcb_generation: u64,
-        socket: u64,
-        socket_generation: u64,
+        #[serde(rename = "socketHandle", serialize_with = "hex64")]
+        socket_handle: u64,
+        #[serde(rename = "inpcbGeneration", serialize_with = "hex64")]
+        inpcb_generation: u64,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ListenerIdentity {
-    pub(crate) address: IpAddr,
-    pub(crate) port: u16,
-    pub(crate) kernel: KernelSocketIdentity,
-    pub(crate) uid: u32,
-    pub(crate) ipv6_only: Option<bool>,
+#[cfg(target_os = "macos")]
+fn hex64<S: serde::Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format!("0x{value:016x}"))
 }
 
-impl Serialize for ListenerIdentity {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Borrowed<'a> {
-            family: &'static str,
-            address: IpAddr,
-            port: u16,
-            kernel: &'a KernelSocketIdentity,
-            uid: u32,
-            ipv6_only: Option<bool>,
-        }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SocketRecord {
+    address: IpAddr,
+    port: u16,
+    identity: KernelSocketIdentity,
+}
 
-        Borrowed {
-            family: address_family(self.address),
-            address: self.address,
-            port: self.port,
-            kernel: &self.kernel,
-            uid: self.uid,
-            ipv6_only: self.ipv6_only,
-        }
-        .serialize(serializer)
+/// Partial inspection retains positive sightings. Unreadable unrelated FDs do
+/// not defeat them, but must never be interpreted as an empty socket set.
+#[derive(Default)]
+struct SocketScan {
+    records: Vec<SocketRecord>,
+    uncertainty: Option<String>,
+}
+impl SocketScan {
+    fn uncertain(&mut self, reason: impl Into<String>) {
+        self.uncertainty.get_or_insert(reason.into());
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ListenerHolder {
-    pub(crate) pid: u32,
-    pub(crate) pgid: i32,
-    pub(crate) platform_start: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ListenerRecord {
-    pub(crate) identity: ListenerIdentity,
-    pub(crate) holders: Vec<ListenerHolder>,
+pub(crate) struct ListenerWitness {
+    holder_pid: u32,
+    holder_start_identity: String,
+    socket_identity: KernelSocketIdentity,
     #[serde(skip)]
-    pub(crate) pid_hints: Vec<u32>,
+    holder_pgid: i32,
+    #[serde(skip)]
+    endpoint: SelectedEndpoint,
 }
-
-pub(crate) fn conflicts(endpoint: &SelectedEndpoint, observed: &ListenerRecord) -> bool {
-    if endpoint.port != observed.identity.port {
-        return false;
-    }
-    match (endpoint.host.ip(), observed.identity.address) {
-        (IpAddr::V4(planned), IpAddr::V4(observed)) => {
-            observed.is_unspecified() || observed == planned
-        }
-        (IpAddr::V4(planned), IpAddr::V6(observed_address)) => {
-            if observed.identity.ipv6_only != Some(false) {
-                return false;
-            }
-            observed_address.is_unspecified()
-                || observed_address
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| mapped.is_unspecified() || mapped == planned)
-        }
-        (IpAddr::V6(planned), IpAddr::V6(observed)) => {
-            observed.is_unspecified() || observed == planned
-        }
-        (IpAddr::V6(_), IpAddr::V4(_)) => false,
+impl ListenerWitness {
+    pub(crate) fn endpoint(&self) -> &SelectedEndpoint {
+        &self.endpoint
     }
 }
 
-pub(crate) fn satisfies_declared_endpoint(
-    endpoint: &SelectedEndpoint,
-    observed: &ListenerRecord,
-) -> bool {
-    endpoint.port == observed.identity.port && endpoint.host.ip() == observed.identity.address
-}
-
-pub(crate) struct EndpointOwnership<'a> {
-    pub(crate) endpoint: &'a SelectedEndpoint,
-    pub(crate) listeners: Vec<ListenerRecord>,
-}
-
-impl Serialize for EndpointOwnership<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Borrowed<'a> {
-            endpoint_id: &'a str,
-            address: &'a nixfied_manifest::LoopbackHost,
-            port: u16,
-            listeners: &'a [ListenerRecord],
-        }
-
-        Borrowed {
-            endpoint_id: &self.endpoint.endpoint_id,
-            address: &self.endpoint.host,
-            port: self.endpoint.port,
-            listeners: &self.listeners,
-        }
-        .serialize(serializer)
+/// Only an OS observation can construct this exact selected endpoint set.
+#[derive(Debug)]
+pub(crate) struct CompleteWitnessSet(BTreeMap<String, ListenerWitness>);
+impl CompleteWitnessSet {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &ListenerWitness)> {
+        self.0.iter()
+    }
+    pub(crate) fn into_entries(self) -> BTreeMap<String, ListenerWitness> {
+        self.0
+    }
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 
-pub(crate) enum OwnershipObservation<'a> {
-    Complete(Vec<EndpointOwnership<'a>>),
-    Missing(&'a SelectedEndpoint),
-    Outside {
-        endpoint: &'a SelectedEndpoint,
-    },
-    Unverifiable {
-        endpoint: Option<&'a SelectedEndpoint>,
-        message: String,
-    },
-    ContainmentUnconfirmed {
-        message: String,
-    },
+pub(crate) enum ListenerObservation {
+    Complete(CompleteWitnessSet),
+    Pending(String),
+    Unverifiable(String),
 }
 
 pub(crate) struct ExpectedOwner<'a> {
     pub(crate) pid: u32,
     pub(crate) pgid: i32,
-    pub(crate) platform_start: Option<&'a str>,
+    pub(crate) platform_start: &'a str,
     pub(crate) containment: ContainmentRequirement,
-    pub(crate) tracked_processes: &'a [TrackedProcessIdentity],
 }
 
-pub(crate) fn observe_ownership<'a>(
-    endpoints: &'a BTreeMap<String, SelectedEndpoint>,
+/// Process identity/containment failures retain PROC_ESCAPE. `initial` requests
+/// those exact witnesses again; another coexisting listener cannot replace one.
+pub(crate) fn observe_listeners<'a>(
+    endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
     expected: &ExpectedOwner<'_>,
-) -> OwnershipObservation<'a> {
-    let endpoints = endpoints.values().collect::<Vec<_>>();
-    observe_ownership_inner(&endpoints, expected, true)
+    initial: Option<&CompleteWitnessSet>,
+) -> crate::error::RuntimeResult<ListenerObservation> {
+    observe_with(endpoints, expected, initial, platform_inspect)
 }
 
-/// Re-observe after the foreground child is known to have exited. The recorded
-/// PID/PGID/start identity still defines its containment, so a listener held by
-/// a visible process outside that containment can truthfully override the
-/// weaker early-exit error with PORT_CONFLICT. A listener left inside the old
-/// containment does not become an outside conflict; the caller preserves
-/// PROC_ESCAPE and terminates the complete tracked tree.
-pub(crate) fn observe_ownership_after_primary_exit<'a>(
-    endpoints: &'a BTreeMap<String, SelectedEndpoint>,
+fn observe_with<'a>(
+    endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
     expected: &ExpectedOwner<'_>,
-) -> OwnershipObservation<'a> {
-    let endpoints = endpoints.values().collect::<Vec<_>>();
-    observe_ownership_inner(&endpoints, expected, false)
-}
-
-fn observe_ownership_inner<'a>(
-    endpoints: &[&'a SelectedEndpoint],
-    expected: &ExpectedOwner<'_>,
-    require_primary_live: bool,
-) -> OwnershipObservation<'a> {
-    if endpoints.is_empty() {
-        return OwnershipObservation::Complete(Vec::new());
-    }
-    let Some(expected_start) = expected.platform_start else {
-        return OwnershipObservation::ContainmentUnconfirmed {
-            message: format!(
-                "tracked process {} has no live start identity",
-                expected.pid
-            ),
-        };
-    };
-    if require_primary_live {
-        match process_is_live_with_identity(expected.pid, expected.pgid, Some(expected_start)) {
-            Ok(true) => {}
-            Ok(false) => {
-                return OwnershipObservation::ContainmentUnconfirmed {
-                    message: format!(
-                        "tracked process {} no longer matches its recorded containment identity",
-                        expected.pid
-                    ),
-                };
-            }
-            Err(error) => {
-                return OwnershipObservation::ContainmentUnconfirmed {
-                    message: error.message,
-                };
-            }
+    initial: Option<&CompleteWitnessSet>,
+    mut inspect: impl FnMut(u32, &BTreeMap<String, &SelectedEndpoint>) -> SocketScan,
+) -> crate::error::RuntimeResult<ListenerObservation> {
+    let endpoints: BTreeMap<_, _> = endpoints
+        .into_iter()
+        .map(|e| (e.endpoint_id.clone(), e))
+        .collect();
+    let candidates = managed_listener_candidates(expected)?;
+    let mut found = BTreeMap::new();
+    let mut uncertainty = None;
+    for candidate in candidates {
+        if !verify_listener_candidate(expected, &candidate)? {
+            continue;
         }
-    }
-    let listeners = match stable_matching_snapshot(endpoints, true) {
-        Ok(listeners) => listeners,
-        Err(message) => {
-            return OwnershipObservation::Unverifiable {
-                endpoint: None,
-                message,
-            };
+        let scan = inspect(candidate.pid, &endpoints);
+        if !verify_listener_candidate(expected, &candidate)? {
+            continue;
         }
-    };
-    let euid = unsafe { libc::geteuid() } as u32;
-    let mut ownership = Vec::with_capacity(endpoints.len());
-    for endpoint in endpoints.iter().copied() {
-        let matches = listeners
-            .iter()
-            .filter(|listener| conflicts(endpoint, listener))
-            .cloned()
-            .collect::<Vec<_>>();
-        for listener in &matches {
-            if listener.identity.uid != euid {
-                return OwnershipObservation::Outside { endpoint };
-            }
-            if listener.holders.is_empty() {
-                return OwnershipObservation::Unverifiable {
-                    endpoint: Some(endpoint),
-                    message: format!(
-                        "listener record for {}:{} could not be correlated to a live fd holder",
-                        listener.identity.address, listener.identity.port
-                    ),
+        if uncertainty.is_none() {
+            uncertainty = scan.uncertainty;
+        }
+        for record in scan.records {
+            for (id, endpoint) in &endpoints {
+                if found.contains_key(id)
+                    || endpoint.port != record.port
+                    || endpoint.host.ip() != record.address
+                {
+                    continue;
+                }
+                let witness = ListenerWitness {
+                    endpoint: (*endpoint).clone(),
+                    holder_pid: candidate.pid,
+                    holder_pgid: candidate.pgid,
+                    holder_start_identity: candidate.start.clone(),
+                    socket_identity: record.identity.clone(),
                 };
-            }
-            for holder in &listener.holders {
-                if holder.platform_start.is_none() {
-                    return OwnershipObservation::Unverifiable {
-                        endpoint: Some(endpoint),
-                        message: format!(
-                            "listener holder pid {} has no live start identity",
-                            holder.pid
-                        ),
-                    };
-                }
-                if !require_primary_live {
-                    if holder.pid == expected.pid {
-                        if holder.platform_start.as_deref() == Some(expected_start) {
-                            continue;
-                        }
-                        return OwnershipObservation::Outside { endpoint };
-                    }
-                    if let Some(monitored) = expected
-                        .tracked_processes
-                        .iter()
-                        .find(|process| process.pid == holder.pid)
-                    {
-                        let Some(monitored_start) = monitored.platform_start.as_deref() else {
-                            return OwnershipObservation::ContainmentUnconfirmed {
-                                message: format!(
-                                    "tracked descendant {} has no recorded start identity",
-                                    monitored.pid
-                                ),
-                            };
-                        };
-                        if holder.platform_start.as_deref() == Some(monitored_start) {
-                            continue;
-                        }
-                        return OwnershipObservation::Outside { endpoint };
-                    }
-                }
-                match process_is_in_containment(
-                    expected.pid,
-                    expected.pgid,
-                    &expected.containment,
-                    holder.pid,
-                    holder.pgid,
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return OwnershipObservation::Outside { endpoint };
-                    }
-                    Err(error) => {
-                        return OwnershipObservation::ContainmentUnconfirmed {
-                            message: error.message,
-                        };
-                    }
+                if initial.is_none_or(|set| set.0.get(id) == Some(&witness)) {
+                    found.insert(id.clone(), witness);
                 }
             }
         }
-        if !matches
-            .iter()
-            .any(|listener| satisfies_declared_endpoint(endpoint, listener))
-        {
-            return OwnershipObservation::Missing(endpoint);
+        if found.len() == endpoints.len() {
+            break;
         }
-        ownership.push(EndpointOwnership {
-            endpoint,
-            listeners: matches,
-        });
     }
-    OwnershipObservation::Complete(ownership)
+    if found.len() == endpoints.len() {
+        Ok(ListenerObservation::Complete(CompleteWitnessSet(found)))
+    } else if let Some(reason) = uncertainty {
+        Ok(ListenerObservation::Unverifiable(reason))
+    } else {
+        let missing = endpoints
+            .keys()
+            .find(|id| !found.contains_key(*id))
+            .expect("incomplete witness set");
+        Ok(ListenerObservation::Pending(missing.clone()))
+    }
 }
 
 pub(crate) fn preflight<'a>(
     endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
 ) -> Result<(), EndpointFailure> {
-    let endpoints = endpoints.into_iter().collect::<Vec<_>>();
-    if endpoints.is_empty() {
-        return Ok(());
-    }
     for endpoint in endpoints {
-        let bind = bind_exact(endpoint)
-            .map_err(|message| EndpointFailure::unverifiable(Some(endpoint.clone()), message))?;
-        // A reusable exact bind can coexist with a wildcard listener on some
-        // hosts, so the kernel listener view remains the conflict authority.
-        let listeners = stable_matching_snapshot(&[endpoint], false)
-            .map_err(|message| EndpointFailure::unverifiable(Some(endpoint.clone()), message))?;
-        if !listeners.is_empty() {
-            return Err(EndpointFailure::ListenerOccupied {
-                endpoint: endpoint.clone(),
-            });
-        }
-        if matches!(bind, BindResult::AddressInUse) {
-            return Err(EndpointFailure::unverifiable(
-                Some(endpoint.clone()),
-                format!(
-                    "bind reported address in use for {}:{} without an observable listener",
-                    endpoint.host, endpoint.port
-                ),
-            ));
+        match bind_exact(endpoint)
+            .map_err(|message| EndpointFailure::unverifiable(Some(endpoint.clone()), message))?
+        {
+            BindResult::Available => {}
+            BindResult::AddressInUse => {
+                return Err(EndpointFailure::BindUnavailable {
+                    endpoint: endpoint.clone(),
+                });
+            }
         }
     }
     Ok(())
-}
-
-fn stable_matching_snapshot(
-    endpoints: &[&SelectedEndpoint],
-    correlation_required: bool,
-) -> Result<Vec<ListenerRecord>, String> {
-    let mut last_churn = None;
-    for _ in 0..STABLE_SNAPSHOT_ATTEMPTS {
-        let mut before = matching_snapshot(endpoints)?;
-        let correlation = platform_correlate(&mut before);
-        if correlation_required {
-            correlation?;
-        } else if correlation.is_err() {
-            for listener in &mut before {
-                listener.holders.clear();
-            }
-        }
-        let after = matching_snapshot(endpoints)?;
-        let before_ids = before
-            .iter()
-            .map(|record| &record.identity)
-            .collect::<Vec<_>>();
-        let after_ids = after
-            .iter()
-            .map(|record| &record.identity)
-            .collect::<Vec<_>>();
-        if before_ids == after_ids {
-            return Ok(before);
-        }
-        last_churn = Some(format!(
-            "listener snapshot changed during holder correlation ({before_ids:?} -> {after_ids:?})"
-        ));
-    }
-    Err(last_churn.unwrap_or_else(|| "listener snapshot was unstable".to_string()))
-}
-
-fn matching_snapshot(endpoints: &[&SelectedEndpoint]) -> Result<Vec<ListenerRecord>, String> {
-    Ok(platform_snapshot()?
-        .into_iter()
-        .filter(|listener| {
-            endpoints
-                .iter()
-                .any(|endpoint| conflicts(endpoint, listener))
-        })
-        .collect())
 }
 
 enum BindResult {
@@ -741,120 +531,6 @@ mod tests {
         }
     }
 
-    fn listener(address: IpAddr, port: u16, ipv6_only: Option<bool>) -> ListenerRecord {
-        ListenerRecord {
-            identity: ListenerIdentity {
-                address,
-                port,
-                kernel: test_kernel_identity(),
-                uid: unsafe { libc::geteuid() } as u32,
-                ipv6_only,
-            },
-            holders: Vec::new(),
-            pid_hints: Vec::new(),
-        }
-    }
-
-    fn test_kernel_identity() -> KernelSocketIdentity {
-        #[cfg(target_os = "linux")]
-        {
-            KernelSocketIdentity::Linux {
-                inode: 1,
-                cookie: [2, 3],
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            KernelSocketIdentity::Macos {
-                pcb: 1,
-                pcb_generation: 2,
-                socket: 3,
-                socket_generation: 4,
-            }
-        }
-    }
-
-    #[test]
-    fn wildcard_collision_is_not_exact_satisfaction() {
-        let planned = endpoint("127.0.0.1", 23080);
-        let wildcard = listener(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 23080, None);
-        assert!(conflicts(&planned, &wildcard));
-        assert!(!satisfies_declared_endpoint(&planned, &wildcard));
-    }
-
-    #[test]
-    fn exact_and_wildcard_relations_cover_ipv4_ipv6_and_mapped_ipv4() {
-        let v4 = endpoint("127.0.0.1", 23080);
-        let exact_v4 = listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 23080, None);
-        assert!(conflicts(&v4, &exact_v4));
-        assert!(satisfies_declared_endpoint(&v4, &exact_v4));
-
-        let v6 = endpoint("::1", 23080);
-        let exact_v6 = listener(IpAddr::V6(Ipv6Addr::LOCALHOST), 23080, Some(true));
-        let wildcard_v6 = listener(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 23080, Some(true));
-        assert!(conflicts(&v6, &exact_v6));
-        assert!(satisfies_declared_endpoint(&v6, &exact_v6));
-        assert!(conflicts(&v6, &wildcard_v6));
-        assert!(!satisfies_declared_endpoint(&v6, &wildcard_v6));
-
-        let mapped = listener(
-            IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()),
-            23080,
-            Some(false),
-        );
-        assert!(conflicts(&v4, &mapped));
-        assert!(!satisfies_declared_endpoint(&v4, &mapped));
-        let mapped_wildcard = listener(
-            IpAddr::V6(Ipv4Addr::UNSPECIFIED.to_ipv6_mapped()),
-            23080,
-            Some(false),
-        );
-        assert!(conflicts(&v4, &mapped_wildcard));
-        assert!(!satisfies_declared_endpoint(&v4, &mapped_wildcard));
-        let mapped_v6_only = listener(
-            IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()),
-            23080,
-            Some(true),
-        );
-        assert!(!conflicts(&v4, &mapped_v6_only));
-        assert!(!conflicts(
-            &v4,
-            &listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 23081, None)
-        ));
-    }
-
-    #[test]
-    fn co_bound_exact_and_wildcard_records_are_distinct_proof_units() {
-        let planned = endpoint("127.0.0.1", 23080);
-        let records = [
-            listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 23080, None),
-            listener(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 23080, None),
-        ];
-        assert_eq!(
-            records
-                .iter()
-                .filter(|record| conflicts(&planned, record))
-                .count(),
-            2
-        );
-        assert_eq!(
-            records
-                .iter()
-                .filter(|record| satisfies_declared_endpoint(&planned, record))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn ipv6_dual_stack_overlap_is_explicit() {
-        let planned = endpoint("127.0.0.1", 23080);
-        let dual = listener(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 23080, Some(false));
-        let v6_only = listener(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 23080, Some(true));
-        assert!(conflicts(&planned, &dual));
-        assert!(!conflicts(&planned, &v6_only));
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_endpoint_key_uses_the_host_scope() {
@@ -888,20 +564,6 @@ mod tests {
         assert_ne!(key.filename, other.filename);
     }
 
-    #[test]
-    fn ownership_evidence_projects_the_selected_endpoint_as_an_address() {
-        let endpoint = endpoint("127.0.0.1", 23080);
-        let ownership = EndpointOwnership {
-            endpoint: &endpoint,
-            listeners: vec![listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 23080, None)],
-        };
-        let value = serde_json::to_value(ownership).unwrap();
-        assert_eq!(value["endpointId"], "test");
-        assert_eq!(value["address"], "127.0.0.1");
-        assert_eq!(value["port"], 23080);
-        assert_eq!(value["listeners"][0]["identity"]["family"], "ipv4");
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn production_network_scope_comes_from_proc_namespace_stat() {
@@ -931,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn occupied_bind_with_complete_empty_listener_snapshot_is_unverifiable() {
+    fn bound_non_listener_is_bind_unavailable() {
         let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
         assert!(
             raw >= 0,
@@ -975,46 +637,214 @@ mod tests {
 
         assert!(matches!(
             preflight(std::slice::from_ref(&planned)),
-            Err(EndpointFailure::Unverifiable {
-                endpoint: Some(endpoint),
-                ..
-            }) if endpoint == planned
+            Err(EndpointFailure::BindUnavailable { endpoint }) if endpoint == planned
+        ));
+    }
+
+    fn observe_current(
+        endpoint: &SelectedEndpoint,
+        initial: Option<&CompleteWitnessSet>,
+    ) -> ListenerObservation {
+        let pid = std::process::id();
+        let pgid = crate::service::process::process_group(pid)
+            .unwrap()
+            .unwrap();
+        let start = crate::service::process::platform_start_identity(pid).unwrap();
+        observe_listeners(
+            [endpoint],
+            &ExpectedOwner {
+                pid,
+                pgid,
+                platform_start: &start,
+                containment: ContainmentRequirement::ProcessGroup,
+            },
+            initial,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn production_observer_requires_exact_managed_listen_and_stable_identity() {
+        if crate::test_support::isolate(
+            "service::endpoint::tests::production_observer_requires_exact_managed_listen_and_stable_identity",
+        ) {
+            return;
+        }
+        for host in ["127.0.0.1", "::1"] {
+            let held = std::net::TcpListener::bind((host, 0)).unwrap();
+            let planned = endpoint(host, held.local_addr().unwrap().port());
+            let ListenerObservation::Complete(first) = observe_current(&planned, None) else {
+                panic!("missing positive listener");
+            };
+            let ListenerObservation::Complete(second) = observe_current(&planned, Some(&first))
+            else {
+                panic!("unchanged witness missing");
+            };
+            assert!(first.matches(&second));
+            drop(held);
+            let _replacement = std::net::TcpListener::bind((host, planned.port)).unwrap();
+            assert!(matches!(
+                observe_current(&planned, Some(&first)),
+                ListenerObservation::Pending(_)
+            ));
+            assert!(matches!(
+                observe_current(&planned, None),
+                ListenerObservation::Complete(_)
+            ));
+        }
+        let wildcard = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let planned = endpoint("127.0.0.1", wildcard.local_addr().unwrap().port());
+        assert!(matches!(
+            observe_current(&planned, None),
+            ListenerObservation::Pending(_)
         ));
     }
 
     #[test]
-    fn live_listener_correlates_to_the_expected_current_process() {
+    fn exact_ipv6_listeners_with_either_v6only_mode_are_positive_witnesses() {
+        if crate::test_support::isolate(
+            "service::endpoint::tests::exact_ipv6_listeners_with_either_v6only_mode_are_positive_witnesses",
+        ) {
+            return;
+        }
+        for only_v6 in [0_i32, 1] {
+            let address: IpAddr = "::1".parse().unwrap();
+            let held = super::super::socket::TcpSocket::new(address).unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::setsockopt(
+                        held.as_raw_fd(),
+                        libc::IPPROTO_IPV6,
+                        libc::IPV6_V6ONLY,
+                        (&raw const only_v6).cast(),
+                        std::mem::size_of_val(&only_v6) as libc::socklen_t,
+                    )
+                },
+                0
+            );
+            held.bind(address, 0).unwrap();
+            let mut name: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            let mut size = std::mem::size_of_val(&name) as libc::socklen_t;
+            assert_eq!(
+                unsafe { libc::getsockname(held.as_raw_fd(), (&raw mut name).cast(), &mut size) },
+                0
+            );
+            let planned = endpoint("::1", u16::from_be(name.sin6_port));
+            assert!(matches!(
+                observe_current(&planned, None),
+                ListenerObservation::Pending(_)
+            ));
+            assert_eq!(unsafe { libc::listen(held.as_raw_fd(), 8) }, 0);
+            assert!(matches!(
+                observe_current(&planned, None),
+                ListenerObservation::Complete(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_managed_witness_does_not_claim_exclusive_socket_ownership() {
+        if crate::test_support::isolate(
+            "service::endpoint::tests::a_managed_witness_does_not_claim_exclusive_socket_ownership",
+        ) {
+            return;
+        }
+        use std::os::unix::process::CommandExt;
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let planned = endpoint("127.0.0.1", held.local_addr().unwrap().port());
+        let inherited = OwnedFd::from(held.try_clone().unwrap());
+        // A process outside the managed group also holds this very socket.
+        let mut foreign = std::process::Command::new(
+            std::env::var_os("NIXFIED_TEST_CHILD").expect("run with nix develop"),
+        )
+        .arg("accept-inherited")
+        .stdin(inherited)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+        let observed = observe_current(&planned, None);
+        use std::io::Read;
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", planned.port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let mut response = String::new();
+        let read = stream.read_to_string(&mut response);
+        let _ = foreign.kill();
+        foreign.wait().unwrap();
+        read.unwrap();
+        assert_eq!(response, "foreign responder\n");
+        assert!(matches!(observed, ListenerObservation::Complete(_)));
+        assert!(matches!(
+            observe_current(&planned, None),
+            ListenerObservation::Complete(_)
+        ));
+    }
+
+    #[test]
+    fn inspection_faults_never_become_absence_or_erase_complete_positive_evidence() {
+        if crate::test_support::isolate(
+            "service::endpoint::tests::inspection_faults_never_become_absence_or_erase_complete_positive_evidence",
+        ) {
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let planned = endpoint("127.0.0.1", listener.local_addr().unwrap().port());
         let pid = std::process::id();
-        let pgid = crate::service::process::process_group(pid)
-            .unwrap()
-            .expect("test process is live");
-        let start = crate::service::process::platform_start_identity(pid)
-            .expect("test process has a start identity");
-
-        let endpoints = BTreeMap::from([(planned.endpoint_id.clone(), planned.clone())]);
-        let observation = observe_ownership(
-            &endpoints,
-            &ExpectedOwner {
-                pid,
-                pgid,
-                platform_start: Some(&start),
-                containment: ContainmentRequirement::ProcessGroup,
-                tracked_processes: &[],
-            },
-        );
-
-        let OwnershipObservation::Complete(ownership) = observation else {
-            panic!("current-process listener should be complete ownership evidence")
+        let start = crate::service::process::platform_start_identity(pid).unwrap();
+        let owner = ExpectedOwner {
+            pid,
+            pgid: crate::service::process::process_group(pid)
+                .unwrap()
+                .unwrap(),
+            platform_start: &start,
+            containment: ContainmentRequirement::ProcessTree,
         };
-        assert_eq!(ownership.len(), 1);
-        assert!(ownership[0].listeners.iter().all(|record| {
-            record
-                .holders
-                .iter()
-                .any(|holder| holder.pid == std::process::id())
-        }));
+        // Inject at the platform inspector boundary while retaining real
+        // candidate enumeration and identity checks on both sides.
+        for fault in [
+            "permission denied",
+            "unsupported record",
+            "bounded list exhausted",
+        ] {
+            let observation = observe_with([&planned], &owner, None, |_, _| SocketScan {
+                records: vec![],
+                uncertainty: Some(fault.into()),
+            })
+            .unwrap();
+            assert!(matches!(observation, ListenerObservation::Unverifiable(_)));
+            let observation = observe_with([&planned], &owner, None, |pid, endpoints| {
+                let mut scan = platform_inspect(pid, endpoints);
+                scan.uncertain(fault);
+                scan
+            })
+            .unwrap();
+            assert!(matches!(observation, ListenerObservation::Complete(_)));
+        }
+        let observation =
+            observe_with([&planned], &owner, None, |_, _| SocketScan::default()).unwrap();
+        assert!(matches!(observation, ListenerObservation::Pending(_)));
+        let stale_candidate = crate::service::process::ListenerCandidate {
+            pid,
+            pgid: owner.pgid,
+            start: "previous-holder-of-this-pid".into(),
+        };
+        assert_eq!(
+            verify_listener_candidate(&owner, &stale_candidate)
+                .unwrap_err()
+                .code,
+            crate::error::ErrorCode::ProcEscape
+        );
+        let stale = ExpectedOwner {
+            platform_start: "stale-pid-identity",
+            ..owner
+        };
+        let error = observe_with([&planned], &stale, None, |_, _| {
+            panic!("stale leader must reject before FD inspection")
+        })
+        .err()
+        .unwrap();
+        assert_eq!(error.code, crate::error::ErrorCode::ProcEscape);
     }
 
     #[test]

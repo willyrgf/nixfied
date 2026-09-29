@@ -8,11 +8,11 @@ fn invocation() -> Value {
 
 fn lifecycle() -> Value {
     let terminal = json!({"success":"ok","failure":"failed"});
-    let probe = json!({"kind":"tcp","timeoutMs":1,"retryIntervalMs":1,"maxAttempts":1});
+    let policy = json!({"timeoutMs":1,"retryIntervalMs":1,"maxAttempts":1});
     json!({
         "start":{"operationId":"start","invocation":invocation(),"terminal":terminal},
-        "ready":{"operationId":"ready","probe":probe,"terminal":terminal},
-        "health":{"operationId":"health","probe":probe,"terminal":terminal},
+        "ready":{"operationId":"ready","policy":policy,"terminal":terminal},
+        "health":{"operationId":"health","policy":policy,"terminal":terminal},
         "stop":{"operationId":"stop","signal":"TERM","timeoutMs":1,"terminal":terminal},
         "clean":{"operationId":"clean","terminal":terminal}
     })

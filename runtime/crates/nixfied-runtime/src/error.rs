@@ -100,6 +100,7 @@ fn cause_details(details: Value) -> Value {
         "failedNodeId",
         "failedService",
         "foundRegistryIdentity",
+        "lastRound",
         "logsDir",
         "mismatchedFields",
         "portConflict",

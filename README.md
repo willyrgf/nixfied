@@ -76,7 +76,7 @@ upgrades.
 - **Nix** is the public integration and correctness layer. Typed modules reject
   invalid intent and realise every executable closure.
 - **Rust** is the hidden impure runtime. It admits the compiled manifest, starts and
-  stops session-owned process groups, recovers interrupted sessions, verifies endpoint ownership, and safely cleans
+  stops session-owned process groups, recovers interrupted sessions, checks managed listeners and application probes, and safely cleans
   runtime-owned state. It never invokes Nix.
 - **`manifest.json`** is the only semantic seam. Its `views/docs.md` file is a
   disposable, manifest-derived human reference.
@@ -88,7 +88,7 @@ Nixfied owns:
 - task and service execution;
 - process containment and cancellation;
 - service state and lifecycle;
-- declared endpoint placement and ownership verification;
+- declared endpoint placement, managed listener observation and application probes;
 - runtime-owned run evidence;
 - marker-gated, path-confined cleanup of state roots it owns.
 

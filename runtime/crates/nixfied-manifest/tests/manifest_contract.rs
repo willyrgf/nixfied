@@ -83,8 +83,7 @@ fn helper_invocation(run: Value) -> Value {
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
-        "stdin": "null",
-        "timeoutMs": 30000
+        "stdin": "null"
     })
 }
 
@@ -92,12 +91,16 @@ fn synthetic_service() -> Value {
     json!({
         "lifecycle": {
             "start": { "operationId": "service.synthetic.start", "invocation": helper_invocation(json!(["synthetic-helper", "service", "--host", "127.0.0.1", "--port", "${port}"])), "terminal": { "success": "spawned", "failure": "failed" } },
-            "ready": { "operationId": "service.synthetic.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-            "health": { "operationId": "service.synthetic.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+            "ready": { "operationId": "service.synthetic.ready", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+            "health": { "operationId": "service.synthetic.health", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
             "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
-        "endpoints": { "synthetic-tcp": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" } },
+        "endpoints": { "synthetic-tcp": {
+            "endpointId": "synthetic-tcp", "host": "127.0.0.1",
+            "readyProbe": helper_invocation(json!(["synthetic-helper", "task", "${host}", "${port}"])),
+            "healthProbe": helper_invocation(json!(["synthetic-helper", "task", "${host}", "${port}"]))
+        } },
         "primaryEndpoint": "synthetic-tcp",
                 "connectsTo": [],
         "stateRefs": ["slot"],
@@ -130,8 +133,9 @@ fn parse_valid_manifest() -> Manifest {
 /// validation accepts arbitrary service counts.
 fn add_worker_service(value: &mut Value) {
     let mut worker = synthetic_service();
-    worker["endpoints"] =
-        json!({ "worker-tcp": { "endpointId": "worker-tcp", "host": "127.0.0.1" } });
+    let mut endpoint = worker["endpoints"]["synthetic-tcp"].clone();
+    endpoint["endpointId"] = json!("worker-tcp");
+    worker["endpoints"] = json!({ "worker-tcp": endpoint });
     worker["primaryEndpoint"] = json!("worker-tcp");
     for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
         op["operationId"] = json!(format!("service.worker.{class}"));
@@ -322,14 +326,13 @@ fn lifecycle_must_have_full_generic_class_set() {
 }
 
 #[test]
-fn probe_kind_is_required_on_the_wire() {
-    // The emitter always writes the discriminator; a probe without it is an
-    // out-of-contract document, rejected at parse.
+fn removed_tcp_probe_record_rejects_on_the_wire() {
+    // Old bytes cannot acquire the new readiness meaning.
     let mut value = valid_manifest_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
+        "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
     });
-    serde_json::from_value::<Manifest>(value).expect_err("a kind-less probe must not parse");
+    serde_json::from_value::<Manifest>(value).expect_err("removed probe record must not parse");
 }
 
 #[test]
@@ -361,7 +364,7 @@ fn unknown_and_removed_fields_reject_at_the_wire_boundary() {
         ("/tasks/smoke", "serviceLifetime", json!("run-scoped")),
         ("/tasks/smoke/invocation", "cacheEnv", json!({})),
         (
-            "/services/synthetic/lifecycle/ready/probe",
+            "/services/synthetic/endpoints/synthetic-tcp/readyProbe",
             "httpPath",
             json!("/health"),
         ),
@@ -394,5 +397,105 @@ fn unknown_and_removed_fields_reject_at_the_wire_boundary() {
             error.contains(&format!("unknown field `{field}`")),
             "{parent}/{field}: {error}"
         );
+    }
+}
+
+#[test]
+fn endpoint_probe_coverage_is_required_and_non_null_for_every_endpoint() {
+    for field in ["readyProbe", "healthProbe"] {
+        for missing in [true, false] {
+            let mut value = valid_manifest_json();
+            let mut second = value["services"]["synthetic"]["endpoints"]["synthetic-tcp"].clone();
+            second["endpointId"] = json!("second");
+            if missing {
+                second.as_object_mut().unwrap().remove(field);
+            } else {
+                second[field] = Value::Null;
+            }
+            value["services"]["synthetic"]["endpoints"]["second"] = second;
+            assert!(
+                serde_json::from_value::<Manifest>(value).is_err(),
+                "{field}, missing={missing}"
+            );
+        }
+    }
+}
+
+#[test]
+fn scalar_probe_and_endpoint_attachments_are_disjoint() {
+    for phase in ["ready", "health"] {
+        let mut value = valid_manifest_json();
+        value["services"]["synthetic"]["lifecycle"][phase]["probe"] =
+            helper_invocation(json!(["synthetic-helper"]));
+        let manifest: Manifest = serde_json::from_value(value).unwrap();
+        assert!(ValidatedManifest::try_from(manifest).is_err());
+    }
+    let mut endpointless = valid_manifest_json();
+    let service = &mut endpointless["services"]["synthetic"];
+    service.as_object_mut().unwrap().remove("endpoints");
+    service.as_object_mut().unwrap().remove("primaryEndpoint");
+    for phase in ["ready", "health"] {
+        service["lifecycle"][phase]["probe"] = helper_invocation(json!(["synthetic-helper"]));
+    }
+    ValidatedManifest::try_from(serde_json::from_value::<Manifest>(endpointless.clone()).unwrap())
+        .unwrap();
+    for phase in ["ready", "health"] {
+        for missing in [true, false] {
+            let mut value = endpointless.clone();
+            let op = &mut value["services"]["synthetic"]["lifecycle"][phase];
+            if missing {
+                op.as_object_mut().unwrap().remove("probe");
+            } else {
+                op["probe"] = Value::Null;
+            }
+            let manifest: Manifest = serde_json::from_value(value).unwrap();
+            assert!(ValidatedManifest::try_from(manifest).is_err());
+        }
+    }
+}
+
+#[test]
+fn probe_invocations_reject_inherited_stdin_and_a_second_deadline() {
+    for phase in ["readyProbe", "healthProbe"] {
+        for (field, extra) in [("stdin", json!("inherit")), ("timeoutMs", json!(1))] {
+            let mut value = valid_manifest_json();
+            value["services"]["synthetic"]["endpoints"]["synthetic-tcp"][phase][field] = extra;
+            let manifest: Manifest = serde_json::from_value(value).unwrap();
+            assert!(
+                ValidatedManifest::try_from(manifest).is_err(),
+                "{phase}.{field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn phase_policy_is_required_closed_and_positive() {
+    for phase in ["ready", "health"] {
+        let mut absent = valid_manifest_json();
+        absent["services"]["synthetic"]["lifecycle"][phase]
+            .as_object_mut()
+            .unwrap()
+            .remove("policy");
+        assert!(serde_json::from_value::<Manifest>(absent).is_err());
+        for field in ["timeoutMs", "retryIntervalMs", "maxAttempts"] {
+            for invalid in [Value::Null, json!(0), json!(-1), json!(1.5), json!("1")] {
+                let mut value = valid_manifest_json();
+                value["services"]["synthetic"]["lifecycle"][phase]["policy"][field] = invalid;
+                assert!(
+                    serde_json::from_value::<Manifest>(value).is_err(),
+                    "{phase}.{field}"
+                );
+            }
+            let mut absent = valid_manifest_json();
+            absent["services"]["synthetic"]["lifecycle"][phase]["policy"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(serde_json::from_value::<Manifest>(absent).is_err());
+        }
+        let mut value = valid_manifest_json();
+        value["services"]["synthetic"]["lifecycle"][phase]["policy"]["kind"] = json!("tcp");
+        assert!(serde_json::from_value::<Manifest>(value).is_err());
     }
 }

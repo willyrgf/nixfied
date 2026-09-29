@@ -54,6 +54,10 @@ fn executable_selection_is_literal_while_tail_arguments_are_templates() {
         value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0] =
             json!(program);
         value["tasks"]["smoke"]["invocation"]["run"][0] = json!(program);
+        for probe in ["readyProbe", "healthProbe"] {
+            value["services"]["synthetic"]["endpoints"]["synthetic-tcp"][probe]["run"][0] =
+                json!(program);
+        }
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let context = admission_context(&closure_root);
         nixfied_runtime::admit_run(&path, &context)
@@ -806,6 +810,10 @@ fn write_fixture_manifest(
 fn set_invocation_executables(value: &mut Value, executable: Value) {
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["executable"] =
         executable.clone();
+    for probe in ["readyProbe", "healthProbe"] {
+        value["services"]["synthetic"]["endpoints"]["synthetic-tcp"][probe]["executable"] =
+            executable.clone();
+    }
     value["tasks"]["smoke"]["invocation"]["executable"] = executable;
 }
 

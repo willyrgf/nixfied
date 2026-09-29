@@ -243,7 +243,13 @@ assert builtins.length (parentEntries { }) == 4;
 assert
   (lib.findFirst (entry: entry.name == "parent.contextual") null (parentEntries { })).default.text
   == "nativeContext";
-assert builtins.length entries == 124;
+assert builtins.all (path: (find path).default.text == "null") (
+  lib.concatMap (phase: [
+    [ "nixfied" "services" "<name>" "lifecycle" phase "probe" "timeoutMs" ]
+    [ "nixfied" "services" "<name>" "endpoint" (phase + "Probe") "timeoutMs" ]
+    [ "nixfied" "services" "<name>" "endpoints" "<name>" (phase + "Probe") "timeoutMs" ]
+  ]) [ "ready" "health" ]
+);
 assert rejects (mkOption {
   type = lib.types.str;
 });
@@ -328,7 +334,6 @@ assert
     "lifecycle"
     "ready"
     "probe"
-    "invocation"
     "timeoutMs"
   ]).default.text == "null";
 assert rejects

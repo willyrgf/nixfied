@@ -217,17 +217,39 @@ when the manifest/runtime contract changes.
   during admission and execution.
 - **SVC-ID-1:** service process ownership belongs to one session; later sessions
   start fresh processes after interrupted-predecessor cleanup.
-- **PORT-1:** when a service declares endpoints, startup is serialized by a host
-  endpoint lock and readiness requires exact kernel-observed ownership of every
-  endpoint. Exact-bind preflight uses `SO_REUSEADDR` so compatible TCP
-  `TIME_WAIT` state does not block restart, then independently rejects a stable
-  exact or wildcard listener snapshot even when bind succeeds. An open port
-  alone is insufficient; a wildcard listener never satisfies an exact endpoint.
-  An incomplete preflight snapshot refuses with `PORT_UNVERIFIABLE` before
-  service prepare; incomplete readiness observation refuses the ready commit
-  with the same error.
-- Endpoint acquisition never signals an existing service to resolve collision or
-  ownership mismatch. A conflicting listener rejects startup.
+- **PORT-1:** host endpoint locks serialize startup through ready commit.
+  Before prepare, exact-bind preflight with `SO_REUSEADDR` rejects
+  `EADDRINUSE` as `PORT_CONFLICT` with reason `bind-unavailable`; lock
+  contention uses `startup-lock-contended`. Other inspection or bind failures
+  refuse with `PORT_UNVERIFIABLE`. Compatible TCP `TIME_WAIT` permits restart.
+  Preflight does not inspect or claim the absence of host-wide listeners.
+- Every declared endpoint requires attached `readyProbe` and `healthProbe`
+  invocations. Ready and health each carry a required `policy: ProbePolicy`
+  with positive `timeoutMs`, `retryIntervalMs`, and `maxAttempts`. A scalar
+  `probe` is required only for endpoint-less services and is absent otherwise.
+  All probes use null stdin and have no invocation-level timeout; the phase
+  policy owns each attempt's deadline. TCP-only probes are not admitted.
+- A ready or health check retries complete service-wide rounds. A round first
+  observes every exact address, family and port as TCP LISTEN in an FD held by
+  a verified contained process. It runs attached probes in canonical endpoint
+  order, then reobserves the same holder identities and kernel socket identities
+  across the whole set. A replacement cannot inherit earlier probe success.
+  Wildcard-only listeners do not satisfy exact endpoints. A complete successful
+  round and a final live, contained process check are required before commit.
+- Linux correlates managed-process FD inodes with positive `SOCK_DIAG`
+  records carrying nonzero inode and a usable two-word cookie. macOS inspects
+  managed-process socket FDs through the selected SDK's complete
+  `socket_fdinfo` layout, requiring a nonzero socket handle and its inpcb
+  generation. Candidate identities and containment are checked before and
+  after inspection. No macOS PCB inventory is required. Positive sightings
+  survive unrelated inspection failures; uncertainty preventing a complete
+  witness set refuses immediately with `PORT_UNVERIFIABLE`.
+- These observations prove managed listener presence at the observation points.
+  They do not prove exclusive ownership, continuous reservation, host-wide
+  absence, or that the observed process answered an opaque application probe.
+  Authors own meaningful protocol checks against the attached coordinates.
+  Fileport-only listeners without an inspectable managed FD are unsupported.
+  Endpoint acquisition never signals another process to resolve a collision.
 - An endpoint-less service makes no addressability claim. Placeholders toward it
   are invalid in every scope, its probes must be invocations, and its start
   closure must not attest `network-listener`. This is the deliberate scope limit
@@ -244,7 +266,20 @@ when the manifest/runtime contract changes.
   atomically with their owning process, never as ownerless reservations. An
   endpoint row is immutable evidence keyed by its owning process and endpoint
   id; it has no status of its own and settles exactly when that process does.
-  Verified listener ownership is recorded as `port.owner-verified` events. The
+  A completed round atomically appends `endpoint.check-succeeded` for every
+  endpoint and the successful lifecycle terminal. Ready additionally changes
+  the service to ready and appends `service.probe-ready`; health preserves the
+  ready state. Each endpoint event contains `phase`, `endpointId`, `address`,
+  `port`, `listener`, and `probeProcessKey`. The listener contains
+  `holderPid`, `holderStartIdentity`, and `socketIdentity`: Linux emits
+  `{platform: "linux", inode, cookie: [u32, u32]}`; macOS emits
+  `{platform: "macos", socketHandle, inpcbGeneration}` with each identity
+  integer encoded as `0x` followed by sixteen lowercase hexadecimal digits.
+  Probe references must name settled, captured, exit-zero probes of this run
+  and service. The registry verifies the complete immutable endpoint set
+  before any success write. Failed rounds append no endpoint success events.
+  Historical `port.owner-verified` events retain their old meaning and bytes;
+  new writers emit only the new event kind. The
   declared service name belongs to its process record; there is no reusable
   service table or mutable service identity registry. A service-instance
   reference identifies one run and declared service name; it does not hash
@@ -423,20 +458,20 @@ when the manifest/runtime contract changes.
   checkpoints. Ready-service checks include descendant escape detection, and the
   startup grace period polls containment and cancellation. No background process
   scanner owns or updates this evidence.
-- TCP and exec-probe waits and retry delays observe both the current service and all
-  already-started services. Observation failure stops the probe and prevents
-  further work. Checkpoints run between waits of at most 10 ms; this cadence is
-  not a universal teardown bound, since host observation, capture shutdown,
-  registry I/O and OS scheduling also take time.
-- Each TCP probe attempt creates one nonblocking connection and polls that same
-  socket until completion, cancellation, observation failure, or its existing
-  attempt deadline. Polling never reconnects or consumes extra retries. A ready
-  descriptor is checked for its socket error and peer association before success.
-  Readiness still requires the independent endpoint-ownership observation.
-- Readiness and health reobserve service liveness after each completed probe,
-  before accepting readiness or settling probe timeout. A monitored service
-  escape during a probe remains `PROC_ESCAPE`, including on the last attempt;
-  endpoint evidence retains its existing failure precedence.
+- Invocation-probe waits and retry delays observe cancellation, the current
+  service and already-started services. Checkpoints run between waits of at most
+  10 ms; host inspection, capture settlement, registry I/O and scheduling add
+  time. Liveness and containment are rechecked after each probe and immediately
+  before the success transaction. A service escape remains `PROC_ESCAPE`;
+  capture, cancellation, registry, and observation errors retain their own
+  failure classification rather than becoming a probe timeout.
+- Missing or replaced listeners, failed probe exits and attempt timeouts consume
+  a whole round. Earlier successful probes are never reused. Exhaustion emits
+  `READINESS_TIMEOUT` for either phase with `lastRound`: `phase`,
+  `reason` (`listener-missing`, `listener-replaced`, `probe-failed`,
+  `probe-timed-out`), and optional `endpointId` (absent for scalar probes).
+  Inspection uncertainty is terminal, not retry credit. Health runs at its
+  existing lifecycle phase; there is no continuous health daemon.
 - Startup guards remain owned through a failed readiness transition and its
   cleanup. Initial health failure after committed readiness retains failed-service
   output and uses failed-start settlement. A settlement error takes precedence
@@ -606,7 +641,7 @@ Runtime output structs, borrowed views and private storage are authored in Rust;
 shared declarations describe wire fields and vocabularies. Independent literal
 serialization tests preserve those bytes and native failure behavior.
 Native producers place task evidence under `taskRun`, projection issues under
-`projections`, and the contended endpoint under `portConflict`.
+`projections`, and the contended endpoint under `portConflict`, and exhausted check evidence under `lastRound`.
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.

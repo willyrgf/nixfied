@@ -207,6 +207,8 @@ let
         make "Endpoint" {
           endpointId = "web";
           host = "0.0.0.0";
+          readyProbe = make "Invocation" (invocation // { timeoutMs = null; });
+          healthProbe = make "Invocation" (invocation // { timeoutMs = null; });
         }
       );
       expected = true;

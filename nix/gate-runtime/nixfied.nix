@@ -223,10 +223,14 @@
     };
   };
 
+  # Each Reth phase permits 5 * 3 * 2000ms + 4 * 500ms = 32s.
+  # Allow both phases plus startup, task and settlement under the outer deadline.
   nixfied.tasks.example-reth = {
     invocation = {
       tools = [
         pkgs.bash
+        pkgs.sqlite
+        "jq"
         "rt"
         "coreutils"
       ];
@@ -236,9 +240,35 @@
         ''
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-reth-inner"
+          started=$(date +%s)
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
-            nixfied-runtime run --manifest "$RETH_MANIFEST/manifest.json" --task reth-smoke --timeout-ms 60000 --output json \
+            nixfied-runtime run --manifest "$RETH_MANIFEST/manifest.json" --task reth-smoke --timeout-ms 120000 --output json \
             > "''${stateDir}/gate-artifacts/example-reth.json"
+          cold_seconds=$(( $(date +%s) - started ))
+          failed_manifest="''${stateDir}/gate-artifacts/reth-failed.json"
+          failed_error="''${stateDir}/gate-artifacts/reth-failed-error.json"
+          jq '.services.reth.endpoints."reth-ws".readyProbe.run[1] = "invalid-test-mode"' \
+            "$RETH_MANIFEST/manifest.json" > "$failed_manifest"
+          started=$(date +%s)
+          code=0
+          NIXFIED_STATE_DIR="''${stateDir}/example-reth-failed" \
+            nixfied-runtime run --allow-non-store-manifest --manifest "$failed_manifest" \
+              --task reth-smoke --timeout-ms 60000 --output json > /dev/null 2> "$failed_error" || code=$?
+          failed_seconds=$(( $(date +%s) - started ))
+          [ "$code" -eq 26 ]
+          jq -e '.code == "READINESS_TIMEOUT" and .details.lastRound ==
+            {"phase":"ready","reason":"probe-failed","endpointId":"reth-ws"}' "$failed_error" > /dev/null
+          registry=$(jq -r '.details.registryPath' "$failed_error")
+          [ "$(sqlite3 "$registry" "SELECT count(*) FROM events WHERE event_type='endpoint.check-succeeded';")" -eq 0 ]
+          [ "$(sqlite3 "$registry" "SELECT count(*) FROM processes WHERE role='task';")" -eq 0 ]
+          failed_probes=$(sqlite3 "$registry" "SELECT count(*) FROM processes WHERE role='probe' AND exit_code != 0;")
+          # Listener-missing startup rounds consume the same phase budget.
+          [ "$failed_probes" -ge 1 ] && [ "$failed_probes" -le 5 ]
+          # 32s command/retry ceiling plus 10s stop and 3s overhead margin.
+          [ "$failed_seconds" -le 45 ]
+          jq -n --argjson coldSeconds "$cold_seconds" --argjson failedSeconds "$failed_seconds" \
+            '{coldSeconds:$coldSeconds,failedSeconds:$failedSeconds,phaseCeilingMs:32000,parentTimeoutMs:120000}' \
+            | tee "''${stateDir}/gate-artifacts/reth-calibration.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime clean --manifest "$RETH_MANIFEST/manifest.json"
         ''
@@ -720,7 +750,7 @@
           tail -n 1 "$artifacts/endpoint-root-b-conflict.json" \
             | jq -e '
                 .code == "PORT_CONFLICT"
-                and .details.portConflict.reason == "listener-occupied"
+                and .details.portConflict.reason == "bind-unavailable"
                 and .details.portConflict.endpoint.endpointId == "synthetic-tcp"
               ' >/dev/null
           [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 0 ] \

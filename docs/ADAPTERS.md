@@ -54,9 +54,13 @@ rewrite).
   (initdb), wrap it in a `writeShellApplication` closure that detects and
   adopts a complete data dir and rebuilds an incomplete one (see
   `nix/adapters/postgres.nix`).
-- **Protocol probes**: ready/health should be `kind = "exec"` protocol probes
-  (`pg_isready`, a JSON-RPC call via `curl`) rather than tcp connects, so
-  "ready" means the service answers, not that the port is bound.
+- **Protocol probes**: every endpoint declares `readyProbe` and `healthProbe`
+  invocations that use its assigned address and check meaningful protocol
+  behavior. Postgres uses `pg_isready`; Reth checks HTTP JSON-RPC, a complete
+  WebSocket exchange, and JWT-authenticated Engine API JSON-RPC. A listener
+  alone cannot make a service ready. Keep stdin null and omit invocation
+  timeouts; `lifecycle.ready.policy` and `lifecycle.health.policy` own
+  attempt deadlines and whole-round retry limits.
 - **Tool acceleration**: cache/build state is child/tool/project-owned, not an
   adapter or runtime resource. Adapter-provided checks may pass an ordinary
   declared environment value or argument, but Nixfied does not place, create,
@@ -86,7 +90,9 @@ Placeholders in invocation arguments and environment values are scope-specific:
 | Invocation owner | Bare `${port}` / `${host}` | Named `${port:<name>}` / `${host:<name>}` |
 | --- | --- | --- |
 | Leaf task (including a service prepare task) | Primary endpoint of the **first** service in its authored `requires` list | Primary endpoint of a directly declared required **service id**, not an endpoint id |
-| Service start or exec probe | The service's own primary endpoint | An own endpoint id first, then the primary endpoint of a directly declared `connectsTo` service id |
+| Service start | The service's own primary endpoint | An own endpoint id first, then the primary endpoint of a directly declared `connectsTo` service id |
+| Attached endpoint probe | That endpoint, including a nonprimary endpoint | Same directly declared service scope as start |
+| Endpoint-less scalar probe | Invalid | Primary endpoint of a directly declared `connectsTo` service |
 
 Endpoint shorthand declares a single primary endpoint. With an `endpoints` map,
 `primaryEndpoint` must name one of its keys. Task bare references do not select
@@ -119,9 +125,11 @@ A service that binds more than one listener (reth: http/ws/authrpc) declares eac
 as a named `endpoint` and names the primary with `primaryEndpoint` (see
 `nix/adapters/reth.nix`). The planner reserves a contiguous port block — one port
 per endpoint — so every listener is reserved, coordinated across independent
-state roots by host endpoint locks, and kernel-ownership-verified during
-readiness. Wildcard overlap is a conflict but never satisfies an exact declared
-endpoint. The start wrapper
+state roots by host endpoint locks, and checked for an exact managed listener
+plus its application probe in each ready and health round. Attach both probes
+to every endpoint. A wildcard-only listener cannot satisfy an exact declaration;
+successful bind preflight is not a host-wide absence or exclusivity proof.
+The start wrapper
 receives the planned ports as arguments (`${port:reth-http}`, `${port:reth-ws}`, …)
 and derives nothing.
 
@@ -138,7 +146,7 @@ connects OUT — declares **no** endpoint form at all. It keeps the full durable
 contract (owned start, probed readiness, containment, marker-gated clean) with
 the consequences the validators enforce:
 
-- ready/health must be **invocation probes** (a tcp probe has no target);
+- ready/health each declare a scalar **`probe` invocation** and a `policy`;
   readiness means "the probe answers" — a heartbeat file under `${stateDir}`,
   a queue-depth query through the broker it connects to;
 - nothing may address it: `${port:<id>}`/`${host:<id>}` toward it are rejected

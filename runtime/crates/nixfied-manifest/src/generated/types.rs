@@ -182,7 +182,9 @@ pub struct StartSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadySpec {
     pub operation_id: OperationId,
-    pub probe: ProbeSpec,
+    pub policy: ProbePolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<InvocationSpec>,
     pub terminal: TerminalSemantics,
 }
 
@@ -190,7 +192,9 @@ pub struct ReadySpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthSpec {
     pub operation_id: OperationId,
-    pub probe: ProbeSpec,
+    pub policy: ProbePolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<InvocationSpec>,
     pub terminal: TerminalSemantics,
 }
 
@@ -215,14 +219,13 @@ pub struct CleanSpec {
 pub struct Endpoint {
     pub endpoint_id: String,
     pub host: LoopbackHost,
+    pub ready_probe: InvocationSpec,
+    pub health_probe: InvocationSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProbeSpec {
-    pub kind: ProbeKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation: Option<InvocationSpec>,
+pub struct ProbePolicy {
     pub timeout_ms: std::num::NonZeroU64,
     pub retry_interval_ms: std::num::NonZeroU64,
     pub max_attempts: std::num::NonZeroU32,
@@ -302,14 +305,6 @@ pub enum StdinPolicy {
     Null,
     #[serde(rename = "inherit")]
     Inherit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ProbeKind {
-    #[serde(rename = "tcp")]
-    Tcp,
-    #[serde(rename = "exec")]
-    Exec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

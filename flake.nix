@@ -746,6 +746,7 @@
               assert import ./nix/checks/structure.nix { inherit (nixpkgs) lib; };
               assert import ./nix/checks/syntax.nix { inherit (nixpkgs) lib; };
               assert import ./nix/checks/invocation-templates.nix { inherit pkgs system; inherit (nixpkgs) lib; };
+              assert import ./nix/checks/endpoint-readiness.nix { inherit pkgs system; inherit (nixpkgs) lib; };
               assert import ./nix/checks/coverage.nix { inherit (nixpkgs) lib; };
               assert publications.${system}.audit "function" "library" self.lib.${system};
               assert publications.${system}.audit "package" "root" self.packages.${system};

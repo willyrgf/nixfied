@@ -1008,13 +1008,13 @@ fn run_placed(
         .iter()
         .filter_map(|binding| {
             let service = binding.service;
-            let primary_id = service.primary_endpoint.as_ref()?;
-            let primary = service.endpoints.get(primary_id)?;
-            let port = *binding.endpoint_ports.get(primary_id)?;
+            let primary_id = service.primary_endpoint()?;
+            let (_, primary) = service.endpoints().find(|(id, _)| *id == primary_id)?;
+            let port = *binding.endpoint_ports.get(primary_id.as_str())?;
             Some((
                 binding.service.name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
-                    endpoint_id: primary.endpoint_id.clone(),
+                    endpoint_id: primary_id.to_string(),
                     host: primary.host,
                     port,
                 },

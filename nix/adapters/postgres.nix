@@ -89,7 +89,7 @@ let
     run = [
       "pg_isready"
       "-h"
-      "127.0.0.1"
+      "\${host}"
       "-p"
       "\${port}"
       "-U"
@@ -178,18 +178,14 @@ in
         # Protocol readiness: pg_isready completes a real handshake, so "ready"
         # means the postmaster accepts connections, not merely that the port is
         # bound (which postgres does well before recovery finishes).
-        probe = {
-          kind = "exec";
-          invocation = pgReadyInvocation;
+        policy = {
           timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
         };
       };
       health = {
-        probe = {
-          kind = "exec";
-          invocation = pgReadyInvocation;
+        policy = {
           timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
@@ -203,6 +199,8 @@ in
     };
     endpoint = {
       endpointId = "postgres-tcp";
+      readyProbe = pgReadyInvocation;
+      healthProbe = pgReadyInvocation;
     };
     stateRefs = [ "slot" ];
     logRefs = [ "service.postgres" ];

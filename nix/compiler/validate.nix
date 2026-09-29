@@ -189,21 +189,15 @@ let
     in
     !(invocationHasBareRef task.invocation) || primaryHasEndpoint
   ) (builtins.attrNames leafTasks);
-  serviceLifecycleInvocations =
-    service:
-    let
-      lc = service.lifecycle;
-    in
-    [ lc.start.invocation ]
-    ++ lib.optional (
-      lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null
-    ) lc.ready.probe.invocation
-    ++ lib.optional (
-      lc.health.probe.kind == "exec" && lc.health.probe.invocation != null
-    ) lc.health.probe.invocation;
-  allInvocations =
-    (map (task: task.invocation) (builtins.attrValues leafTasks))
-    ++ lib.concatMap serviceLifecycleInvocations (builtins.attrValues services);
+  invocationPositions = import ./invocation-positions.nix { inherit lib config; };
+  serviceLifecycleInvocations = name:
+    map (position: position.invocation)
+      (builtins.filter (position: position.serviceName == name) invocationPositions);
+  allInvocations = map (position: position.invocation) invocationPositions;
+  probesHavePhaseDeadlines = lib.all (position:
+    !(builtins.elem position.phase [ "ready" "health" ])
+    || (position.invocation.stdin == "null" && position.invocation.timeoutMs == null)
+  ) invocationPositions;
   invocationTemplatesWellFormed = lib.all (invocation:
     lib.all (value: lib.all (token: !(token ? malformed)) (tokenize value)) (invocationValues invocation)
   ) allInvocations;
@@ -228,7 +222,7 @@ let
         ++ builtins.filter (
           target: builtins.hasAttr target services && !(endpointLess services.${target})
         ) service.connectsTo;
-      refs = lib.unique (lib.concatMap invocationNamedRefs (serviceLifecycleInvocations service));
+      refs = lib.unique (lib.concatMap invocationNamedRefs (serviceLifecycleInvocations name));
     in
     lib.all (reference: builtins.elem reference allowed) refs
   ) (builtins.attrNames services);
@@ -238,7 +232,7 @@ let
       service = services.${name};
     in
     !(endpointLess service)
-    || lib.all (invocation: !(invocationHasBareRef invocation)) (serviceLifecycleInvocations service)
+    || lib.all (invocation: !(invocationHasBareRef invocation)) (serviceLifecycleInvocations name)
   ) (builtins.attrNames services);
   leafOperationId =
     name: task: if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
@@ -310,6 +304,7 @@ let
     (expect (
       config.nixfied.services != { } || config.nixfied.tasks != { }
     ) "at least one service or task must be declared")
+    (expect (lib.all (service: lib.all (id: builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" id != null) (endpointIds service)) (builtins.attrValues services)) "endpoint ids must be path-safe")
     (expect endpointHostsLoopback "service endpoint.host must be a loopback IP literal (127.x.x.x or ::1)")
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
@@ -319,6 +314,7 @@ let
     (expect secretRefsOnlyInEnv "secret placeholders are only valid in invocation.env values")
     (expect secretRefsWellFormed "secret placeholders must use the \${secret:<id>} grammar")
     (expect secretRefsDeclared "secret placeholders must reference declared nixfied.secrets ids")
+    (expect probesHavePhaseDeadlines "probes require null stdin and no invocation-level timeoutMs")
     (expect invocationTemplatesWellFormed "invocation placeholders must use the supported grammar")
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
     (expect compositesCoherent "a composite task carries only steps and summary defaultOutput (no invocation, operationId, or requires) with step-safe names")

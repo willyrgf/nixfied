@@ -342,10 +342,15 @@ nix build .#nixfied-cli .#install --no-link
 nix build .#nixfied-runtime --no-link
 ```
 
-The macOS endpoint integration tests require a complete kernel TCP listener
-inventory. If the host returns fewer PCB records than its inventory count, the
-runtime fails closed with `PORT_UNVERIFIABLE` and these tests fail. Do not treat
-that result as a passed endpoint proof.
+Endpoint tests require positive managed-process socket FD inspection on both
+platforms. macOS builds a small decoder against the selected SDK and checks
+complete returned record lengths; it does not consume a PCB inventory.
+Denied or unsupported inspection must refuse, never silently pass. The runtime
+unit observer checks exact IPv4/IPv6 and replacement; endpoint integration tests
+check complete rounds, nonprimary failure, replacement during the final probe,
+and TIME_WAIT restart. Service tests parse raw witness events and inject failures
+at every coupled success write. Run these on macOS as well as Linux; a prototype
+or a Linux pass does not establish macOS release coverage.
 
 The local check/gate path uses the debug runtime to keep iteration fast. The
 release package is what install and generated adopter apps ship. Because the

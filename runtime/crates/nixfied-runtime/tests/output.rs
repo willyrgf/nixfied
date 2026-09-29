@@ -271,13 +271,13 @@ fn escaped_idle_and_continuous_writers_cannot_hold_capture_or_publish_evidence()
                     }
                     let connection = fixture.registry();
                     let observed: (String, i32) = connection.query_row(
-                "SELECT execution_outcome, exit_code FROM processes WHERE role != 'service'",
+                "SELECT execution_outcome, exit_code FROM processes WHERE role = 'task'",
                 [], |row| Ok((row.get(0)?, row.get(1)?)),
             ).unwrap();
                     let (capture, sealed): (String, String) = connection
                         .query_row(
                             "SELECT p.capture, r.output FROM processes p JOIN runs r USING (run_id)
-                             WHERE p.role != 'service'",
+                             WHERE p.role = 'task'",
                             [],
                             |row| Ok((row.get(0)?, row.get(1)?)),
                         )
@@ -789,10 +789,9 @@ fn services_with_exec_probes_keep_distinct_capture_files() {
     let mut manifest = task_manifest_at(&["exit", "0"], port);
     manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     let invocation = manifest["tasks"]["smoke"]["invocation"].clone();
-    manifest["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "invocation": invocation,
-        "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 1
-    });
+    manifest["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] = invocation;
+    manifest["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
+        json!({"timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 1});
     add_service_clone(&mut manifest, "later", LISTEN_HOLD, &["synthetic"]);
     manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
     let fixture = RuntimeFixture::new(manifest);
@@ -808,7 +807,7 @@ fn services_with_exec_probes_keep_distinct_capture_files() {
         );
     }
     let probes: i64 = fixture.registry().query_row("SELECT count(*) FROM processes WHERE role='probe' AND status='succeeded' AND execution_outcome='succeeded'", [], |row| row.get(0)).unwrap();
-    assert_eq!(probes, 2);
+    assert_eq!(probes, 4);
 }
 
 #[test]
@@ -831,10 +830,13 @@ fn service_failure_interrupts_another_services_exec_probe() {
                 "",
                 probe_marker.to_string_lossy()
             ]);
-            manifest["services"]["later"]["lifecycle"][phase]["probe"] = json!({
-                "kind": "exec", "invocation": probe_invocation,
-                "timeoutMs": 30000, "retryIntervalMs": 100, "maxAttempts": 1
-            });
+            manifest["services"]["later"]["endpoints"]["later-tcp"][if phase == "ready" {
+                "readyProbe"
+            } else {
+                "healthProbe"
+            }] = probe_invocation;
+            manifest["services"]["later"]["lifecycle"][phase]["policy"] =
+                json!({"timeoutMs": 30000, "retryIntervalMs": 100, "maxAttempts": 1});
             manifest["tasks"]["smoke"]["requires"] = json!(["later"]);
             let fixture = RuntimeFixture::new(manifest);
             let child = fixture
@@ -1791,8 +1793,13 @@ fn recovery_settles_a_dead_owners_service_without_inventing_capture() {
     for (role, ownership, capture) in rows {
         assert_eq!(ownership, "settled", "{role}");
         assert_eq!(
-            capture, "pending",
-            "recovery proves death, never the predecessor's capture ({role})"
+            capture,
+            if role == "probe" {
+                "complete"
+            } else {
+                "pending"
+            },
+            "recovery preserves previously completed probes and never invents capture ({role})"
         );
     }
 }

@@ -14,7 +14,8 @@ use crate::cancellation::{CancellationToken, canceled_error};
 use crate::child::OwnedChild;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{
-    ExecService, OpMeta, Probe, ProbePolicy, RelativeCwd, ResolvedInvocation, StdinPolicy,
+    ExecService, OpMeta, ProbePolicy, RelativeCwd, ResolvedInvocation, ServiceAddressing,
+    StdinPolicy,
 };
 use crate::launch::Refusal;
 use crate::redaction::{
@@ -22,19 +23,21 @@ use crate::redaction::{
 };
 use crate::registry::Registry;
 use crate::service::endpoint::{
-    EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, OwnershipObservation,
-    acquire_startup_locks, observe_ownership, observe_ownership_after_primary_exit, preflight,
+    CompleteWitnessSet, EndpointFailure, EndpointLockGuards, ExpectedOwner, ListenerObservation,
+    acquire_startup_locks, observe_listeners, preflight,
 };
 use crate::service::identity::service_instance_id;
-use crate::service::readiness::{ExecProbe, ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
+use crate::service::readiness::{
+    CheckingRound, ExecProbe, ProbeAttempt, ProbePhase, RoundFailure, RoundReason,
+    exec_probe_attempt,
+};
 use crate::service::registry::{
     EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, Ownership,
     ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, ServiceTerminal,
-    StopPolicy, TaskTerminalStatus, VerifiedEndpoint, activate_service_ready,
-    mark_invocation_finished, mark_process_escape, record_capture_outcome, record_event,
-    record_invocation_canceling, record_invocation_observed, record_invocation_started,
-    record_service_start, record_service_start_intent, settle_service_start,
-    settle_service_terminal,
+    StopPolicy, TaskTerminalStatus, commit_service_check, mark_invocation_finished,
+    mark_process_escape, record_capture_outcome, record_event, record_invocation_canceling,
+    record_invocation_observed, record_invocation_started, record_service_start,
+    record_service_start_intent, settle_service_start, settle_service_terminal,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;
@@ -106,8 +109,7 @@ pub struct ServiceInfo {
     pub platform_start_identity: Option<String>,
     pub computed_manifest_hash: String,
     service_name: String,
-    primary_endpoint: Option<String>,
-    selected_endpoints: BTreeMap<String, SelectedEndpoint>,
+    addressing: SelectedAddressing,
 }
 
 impl ServiceInfo {
@@ -115,9 +117,19 @@ impl ServiceInfo {
         &self.service_name
     }
     pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
-        self.primary_endpoint
-            .as_ref()
-            .and_then(|id| self.selected_endpoints.get(id))
+        match &self.addressing {
+            SelectedAddressing::Endpointless { .. } => None,
+            SelectedAddressing::Endpoints { primary, entries } => Some(&entries[primary].endpoint),
+        }
+    }
+    fn endpoints(&self) -> impl Iterator<Item = &SelectedEndpoint> {
+        match &self.addressing {
+            SelectedAddressing::Endpointless { .. } => None,
+            SelectedAddressing::Endpoints { entries, .. } => Some(entries.values()),
+        }
+        .into_iter()
+        .flatten()
+        .map(|entry| &entry.endpoint)
     }
 }
 
@@ -267,12 +279,6 @@ impl std::fmt::Debug for ReadyService {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ProbePhase {
-    Ready,
-    Health,
-}
-
 /// How an owned service's teardown is chosen, recorded, and settled.
 enum Teardown<'a> {
     /// The declared stop signal after durable stop intent; a clean stop
@@ -308,8 +314,6 @@ struct OwnedService {
     child: OwnedChild,
     descendants: DescendantTracker,
     service: ExecService,
-    ready_probe: PreparedProbe,
-    health_probe: PreparedProbe,
     logs_dir: PathBuf,
     source_root: PathBuf,
     launcher: PathBuf,
@@ -391,8 +395,7 @@ impl OwnedService {
         }
     }
 
-    /// Run the readiness or health probe with its lifecycle evidence. Only
-    /// readiness commits endpoint ownership; its ready commit is its success.
+    /// A phase retries whole service-wide rounds. The commit failure is terminal.
     fn run_probe(
         &mut self,
         registry: &mut Registry,
@@ -400,292 +403,218 @@ impl OwnedService {
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
-        let (record, probe) = match phase {
+        let (record, policy) = match phase {
             ProbePhase::Ready => (
                 LifecycleRecord::from_meta(&self.service.ready.meta, "ready"),
-                self.ready_probe.clone(),
+                self.service.ready.policy.clone(),
             ),
             ProbePhase::Health => (
                 LifecycleRecord::from_meta(&self.service.health.meta, "health"),
-                self.health_probe.clone(),
+                self.service.health.policy.clone(),
             ),
         };
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
-        let ready_record = matches!(phase, ProbePhase::Ready).then_some(&record);
-        match self.wait_probe_with_ownership(
-            registry,
-            &probe,
-            cancellation,
-            ready_record,
-            checkpoint,
-        ) {
-            Ok(()) if ready_record.is_some() => Ok(()),
-            Ok(()) => record_lifecycle_success(registry, &context, &record),
-            Err(error) => {
-                let _ = record_lifecycle_failure(registry, &context, &record, &error);
-                Err(error)
-            }
+        let result =
+            self.wait_check_round(registry, phase, &policy, &record, cancellation, checkpoint);
+        if let Err(error) = &result {
+            let _ = record_lifecycle_failure(registry, &context, &record, error);
         }
+        result
     }
 
-    fn wait_probe_with_ownership(
+    fn wait_check_round(
         &mut self,
         registry: &mut Registry,
-        probe: &PreparedProbe,
+        phase: ProbePhase,
+        policy: &ProbePolicy,
+        record: &LifecycleRecord,
         cancellation: &CancellationToken,
-        ready_record: Option<&LifecycleRecord>,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<()> {
-        let (attempts, retry_interval, label) = probe_policy(probe);
-        let mut last_pending = format!("probe {label} made no attempt");
-        for attempt in 0..attempts {
+        let commands = self.info.addressing.commands(phase);
+        let mut last = RoundFailure {
+            phase,
+            reason: RoundReason::ListenerMissing,
+            endpoint_id: None,
+        };
+        for attempt in 0..policy.max_attempts.get() {
             cancellation.check()?;
-            self.check_probe_liveness(registry, checkpoint)?;
-            let probe_attempt = self.probe_attempt(registry, probe, cancellation, checkpoint);
-            if let Err(error) = self.check_owned_probe_liveness(registry) {
-                return Err(match probe_attempt {
-                    Err(probe_error) => error.with_cause(probe_error),
-                    Ok(_) => error,
-                });
-            }
-            let probe_attempt = probe_attempt?;
             checkpoint()?;
-            cancellation.check()?;
-            let observation = self.observe_endpoint_ownership();
-            match observation {
-                OwnershipObservation::Complete(ownership) => {
-                    if matches!(probe_attempt, ProbeAttempt::Succeeded) {
-                        if let Some(record) = ready_record {
-                            self.commit_ready(registry, &ownership, record)?;
-                        }
-                        return Ok(());
-                    }
-                    if let ProbeAttempt::Failed(message) = probe_attempt {
-                        last_pending = message;
-                    }
-                }
-                OwnershipObservation::Missing(endpoint) => {
-                    last_pending = match &probe_attempt {
-                        ProbeAttempt::Failed(message) => message.clone(),
-                        ProbeAttempt::Succeeded => format!(
-                            "endpoint {} has no exact listener at {}:{}",
-                            endpoint.endpoint_id, endpoint.host, endpoint.port
-                        ),
-                    };
-                }
-                OwnershipObservation::Outside { endpoint } => {
-                    return Err(port_conflict_error(
-                        PortConflictReason::ListenerOccupied,
-                        &registry.identity().project_id,
-                        endpoint,
-                    ));
-                }
-                OwnershipObservation::Unverifiable { endpoint, message } => {
-                    return Err(port_unverifiable_error(endpoint, message));
-                }
-                OwnershipObservation::ContainmentUnconfirmed { message } => {
-                    return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
-                }
+            if let Some(capture) = &self.log_relays {
+                capture.check()?;
             }
-            if attempt + 1 < attempts {
+            self.require_contained(phase.as_str())?;
+            let initial = self.check_witnesses(None)?;
+            let result: Result<(), RoundFailure> = match initial {
+                Err(endpoint) => Err(RoundFailure {
+                    phase,
+                    reason: RoundReason::ListenerMissing,
+                    endpoint_id: Some(endpoint),
+                }),
+                Ok(initial) => {
+                    let mut round = CheckingRound::begin(phase, initial);
+                    let mut failure = None;
+                    for (endpoint_id, command) in &commands {
+                        let outcome =
+                            self.probe_attempt(registry, policy, command, cancellation, checkpoint);
+                        // Capture/settlement errors cannot hide a service departure.
+                        if let Err(error) = self.require_contained(phase.as_str()) {
+                            return Err(match outcome {
+                                Err(probe_error) => error.with_cause(probe_error),
+                                Ok(_) => error,
+                            });
+                        }
+                        match outcome? {
+                            ProbeAttempt::Succeeded(probe) => {
+                                round.record(endpoint_id.clone(), probe)?
+                            }
+                            ProbeAttempt::Failed => {
+                                failure = Some(RoundReason::ProbeFailed);
+                            }
+                            ProbeAttempt::TimedOut => {
+                                failure = Some(RoundReason::ProbeTimedOut);
+                            }
+                        }
+                        if let Some(reason) = failure {
+                            last = RoundFailure {
+                                phase,
+                                reason,
+                                endpoint_id: endpoint_id.clone(),
+                            };
+                            break;
+                        }
+                    }
+                    if failure.is_some() {
+                        Err(last)
+                    } else {
+                        match self.check_witnesses(round.initial())? {
+                            Err(endpoint) => Err(RoundFailure {
+                                phase,
+                                reason: RoundReason::ListenerReplaced,
+                                endpoint_id: Some(endpoint),
+                            }),
+                            Ok(final_set) => {
+                                let completed = round.complete(final_set)?;
+                                cancellation.check()?;
+                                checkpoint()?;
+                                if let Some(capture) = &self.log_relays {
+                                    capture.check()?;
+                                }
+                                self.require_contained(phase.as_str())?;
+                                commit_service_check(
+                                    registry,
+                                    &self.info.run_id,
+                                    &self.info.process_key,
+                                    completed,
+                                    (
+                                        record.meta.operation_id.as_str(),
+                                        &record.meta.terminal_success,
+                                    ),
+                                )?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            };
+            last = result.expect_err("success returns after commit");
+            if attempt + 1 < policy.max_attempts.get() {
                 let waiting = Instant::now();
-                while waiting.elapsed() < retry_interval {
+                while waiting.elapsed() < policy.retry_interval {
                     cancellation.check()?;
-                    self.check_probe_liveness(registry, checkpoint)?;
+                    checkpoint()?;
+                    if let Some(capture) = &self.log_relays {
+                        capture.check()?;
+                    }
+                    self.require_contained(phase.as_str())?;
                     thread::sleep(
-                        retry_interval
+                        policy
+                            .retry_interval
                             .saturating_sub(waiting.elapsed())
                             .min(super::OBSERVATION_INTERVAL),
                     );
                 }
             }
         }
-        let timeout = RuntimeError::new(
+        Err(RuntimeError::new(
             ErrorCode::ReadinessTimeout,
-            format!(
-                "readiness probe {label} did not reach probe-plus-ownership readiness: {last_pending}"
-            ),
-        );
-        Err(self.override_with_endpoint_evidence(registry, timeout))
+            format!("{} service-wide check rounds exhausted", phase.as_str()),
+        )
+        .with_detail("lastRound", last))
     }
 
-    fn check_probe_liveness(
-        &mut self,
-        registry: &Registry,
-        checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
-    ) -> RuntimeResult<()> {
-        checkpoint()?;
-        self.check_owned_probe_liveness(registry)
-    }
-
-    fn check_owned_probe_liveness(&mut self, registry: &Registry) -> RuntimeResult<()> {
-        self.require_contained("readiness").map_err(|error| {
-            self.override_after_primary_exit_with_endpoint_evidence(registry, error)
-        })
+    /// The outer error is fatal inspection/containment failure; the inner error
+    /// names a missing witness, which consumes a retry round.
+    fn check_witnesses(
+        &self,
+        initial: Option<&CompleteWitnessSet>,
+    ) -> RuntimeResult<Result<Option<CompleteWitnessSet>, String>> {
+        if matches!(
+            self.info.addressing,
+            SelectedAddressing::Endpointless { .. }
+        ) {
+            return Ok(Ok(None));
+        }
+        let start = self
+            .info
+            .platform_start_identity
+            .as_deref()
+            .ok_or_else(|| {
+                RuntimeError::new(ErrorCode::ProcEscape, "missing service start identity")
+            })?;
+        match observe_listeners(
+            self.info.endpoints(),
+            &ExpectedOwner {
+                pid: self.info.pid,
+                pgid: self.info.pgid,
+                platform_start: start,
+                containment: self.service.containment,
+            },
+            initial,
+        )? {
+            ListenerObservation::Complete(set) => Ok(Ok(Some(set))),
+            ListenerObservation::Pending(endpoint) => Ok(Err(endpoint)),
+            ListenerObservation::Unverifiable(message) => {
+                Err(port_unverifiable_error(None, message))
+            }
+        }
     }
 
     fn probe_attempt(
         &mut self,
         registry: &mut Registry,
-        probe: &PreparedProbe,
+        policy: &ProbePolicy,
+        command: &RenderedInvocation,
         cancellation: &CancellationToken,
         checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
     ) -> RuntimeResult<ProbeAttempt> {
-        match probe {
-            PreparedProbe::Tcp(probe) => {
-                let endpoint = self.selected_endpoint().ok_or_else(|| {
-                    RuntimeError::new(
-                        ErrorCode::LifecycleFailed,
-                        "tcp probe on a service with no selected endpoint",
-                    )
-                })?;
-                tcp_probe_attempt(
-                    probe,
-                    endpoint.host,
-                    endpoint.port,
-                    cancellation,
-                    &mut || {
-                        checkpoint()?;
-                        self.check_liveness()
-                    },
-                )
-            }
-            PreparedProbe::Exec { policy, command } => {
-                let occurrence = self.next_probe_occurrence;
-                self.next_probe_occurrence = occurrence.checked_add(1).ok_or_else(|| {
-                    RuntimeError::new(
-                        ErrorCode::StateUnwritable,
-                        "probe occurrence sequence exhausted",
-                    )
-                })?;
-                exec_probe_attempt(
-                    policy,
-                    ExecProbe {
-                        command,
-                        source_root: &self.source_root,
-                        logs_dir: &self.logs_dir,
-                        redactor: &self.redactor,
-                        registry,
-                        launcher: &self.launcher,
-                        run_id: &self.info.run_id,
-                        service_name: &self.info.service_name,
-                        manifest_hash: &self.info.computed_manifest_hash,
-                        occurrence,
-                    },
-                    cancellation,
-                    &mut || {
-                        checkpoint()?;
-                        self.check_liveness()
-                    },
-                )
-            }
-        }
-    }
-
-    fn observe_endpoint_ownership(&self) -> OwnershipObservation<'_> {
-        observe_ownership(
-            &self.info.selected_endpoints,
-            &ExpectedOwner {
-                pid: self.info.pid,
-                pgid: self.info.pgid,
-                platform_start: self.info.platform_start_identity.as_deref(),
-                containment: self.service.containment,
-                tracked_processes: &[],
+        let occurrence = self.next_probe_occurrence;
+        self.next_probe_occurrence = occurrence.checked_add(1).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                "probe occurrence sequence exhausted",
+            )
+        })?;
+        exec_probe_attempt(
+            policy,
+            ExecProbe {
+                command,
+                source_root: &self.source_root,
+                logs_dir: &self.logs_dir,
+                redactor: &self.redactor,
+                registry,
+                launcher: &self.launcher,
+                run_id: &self.info.run_id,
+                service_name: &self.info.service_name,
+                manifest_hash: &self.info.computed_manifest_hash,
+                occurrence,
             },
-        )
-    }
-
-    fn override_with_endpoint_evidence(
-        &self,
-        registry: &Registry,
-        fallback: RuntimeError,
-    ) -> RuntimeError {
-        self.override_with_observation(registry, fallback, self.observe_endpoint_ownership())
-    }
-
-    fn override_after_primary_exit_with_endpoint_evidence(
-        &self,
-        registry: &Registry,
-        fallback: RuntimeError,
-    ) -> RuntimeError {
-        let tracked_processes = self.descendants.known_descendants();
-        self.override_with_observation(
-            registry,
-            fallback,
-            observe_ownership_after_primary_exit(
-                &self.info.selected_endpoints,
-                &ExpectedOwner {
-                    pid: self.info.pid,
-                    pgid: self.info.pgid,
-                    platform_start: self.info.platform_start_identity.as_deref(),
-                    containment: self.service.containment,
-                    tracked_processes: &tracked_processes,
-                },
-            ),
-        )
-    }
-
-    fn override_with_observation(
-        &self,
-        registry: &Registry,
-        fallback: RuntimeError,
-        observation: OwnershipObservation<'_>,
-    ) -> RuntimeError {
-        match observation {
-            OwnershipObservation::Outside { endpoint } => port_conflict_error(
-                PortConflictReason::ListenerOccupied,
-                &registry.identity().project_id,
-                endpoint,
-            ),
-            OwnershipObservation::Unverifiable { endpoint, message } => {
-                port_unverifiable_error(endpoint, message)
-            }
-            OwnershipObservation::ContainmentUnconfirmed { message } => {
-                RuntimeError::new(ErrorCode::ProcEscape, message)
-            }
-            OwnershipObservation::Complete(_) | OwnershipObservation::Missing(_) => fallback,
-        }
-    }
-
-    fn commit_ready(
-        &self,
-        registry: &mut Registry,
-        ownership: &[EndpointOwnership<'_>],
-        record: &LifecycleRecord,
-    ) -> RuntimeResult<()> {
-        let payloads = ownership
-            .iter()
-            .map(|ownership| {
-                serde_json::to_string(ownership)
-                    .map(|payload| (ownership.endpoint.host.to_string(), payload))
-                    .map_err(|error| {
-                        RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string())
-                    })
-            })
-            .collect::<RuntimeResult<Vec<_>>>()?;
-        let verified = ownership
-            .iter()
-            .zip(&payloads)
-            .map(|(ownership, (address, payload))| VerifiedEndpoint {
-                endpoint: EndpointRecord {
-                    endpoint_id: &ownership.endpoint.endpoint_id,
-                    address,
-                    port: ownership.endpoint.port,
-                },
-                ownership_json: payload,
-            })
-            .collect::<Vec<_>>();
-        activate_service_ready(
-            registry,
-            &self.info.run_id,
-            &self.info.process_key,
-            &verified,
-            (
-                record.meta.operation_id.as_str(),
-                record.class,
-                &record.meta.terminal_success,
-            ),
+            cancellation,
+            &mut || {
+                checkpoint()?;
+                self.check_liveness()
+            },
         )
     }
 
@@ -997,10 +926,6 @@ impl OwnedService {
         )
     }
 
-    fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
-        self.info.selected_endpoint()
-    }
-
     /// Always attempt reap and capture shutdown, including containment failure.
     /// Keep unresolved process ownership available for escape settlement/Drop.
     fn finish_terminal_capture(
@@ -1042,17 +967,6 @@ impl OwnedService {
             &known,
         )
     }
-}
-
-fn probe_policy(probe: &PreparedProbe) -> (u32, Duration, &str) {
-    let policy = match probe {
-        PreparedProbe::Tcp(policy) | PreparedProbe::Exec { policy, .. } => policy,
-    };
-    (
-        policy.max_attempts.get(),
-        policy.retry_interval,
-        policy.label.as_str(),
-    )
 }
 
 fn port_conflict_error(
@@ -1109,8 +1023,8 @@ fn endpoint_failure_error(registry: &Registry, failure: EndpointFailure) -> Runt
             &registry.identity().project_id,
             &endpoint,
         ),
-        EndpointFailure::ListenerOccupied { endpoint } => port_conflict_error(
-            PortConflictReason::ListenerOccupied,
+        EndpointFailure::BindUnavailable { endpoint } => port_conflict_error(
+            PortConflictReason::BindUnavailable,
             &registry.identity().project_id,
             &endpoint,
         ),
@@ -1210,17 +1124,33 @@ pub fn start_service_for_slot(
     // Bind every modelled endpoint to its planned port. The map is keyed by
     // endpointId, the scope `${port:<endpointId>}` resolves against.
     let mut own_endpoints: BTreeMap<String, SelectedEndpoint> = BTreeMap::new();
-    for (endpoint_id, endpoint) in &service.endpoints {
-        let port = endpoint_ports.get(endpoint_id).copied().ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!("service {service_name} endpoint {endpoint_id} has no planned port"),
-            )
-        })?;
+    if endpoint_ports.len() != service.endpoints().count()
+        || endpoint_ports.values().any(|port| *port == 0)
+        || endpoint_ports
+            .values()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != endpoint_ports.len()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::ManifestAdmission,
+            "incoherent endpoint port plan",
+        ));
+    }
+    for (endpoint_id, endpoint) in service.endpoints() {
+        let port = endpoint_ports
+            .get(endpoint_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::LifecycleFailed,
+                    format!("service {service_name} endpoint {endpoint_id} has no planned port"),
+                )
+            })?;
         own_endpoints.insert(
-            endpoint_id.clone(),
+            endpoint_id.to_string(),
             SelectedEndpoint {
-                endpoint_id: endpoint.endpoint_id.clone(),
+                endpoint_id: endpoint_id.to_string(),
                 host: endpoint.host,
                 port,
             },
@@ -1228,8 +1158,8 @@ pub fn start_service_for_slot(
     }
     // An endpoint-less service has no primary: it makes no addressability
     // claim, so there is no selected endpoint to record or probe over tcp.
-    let selected_endpoint = match &service.primary_endpoint {
-        Some(primary) => Some(own_endpoints.get(primary).ok_or_else(|| {
+    let selected_endpoint = match service.primary_endpoint() {
+        Some(primary) => Some(own_endpoints.get(primary.as_str()).ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::LifecycleFailed,
                 format!("service {service_name} primary endpoint {primary} is missing"),
@@ -1253,8 +1183,7 @@ pub fn start_service_for_slot(
     };
     // Exec probe args/env are substituted once here, with the same scope as the
     // start exec, so probe attempts later need no endpoint context.
-    let ready_probe = prepare_probe(&service.ready.probe, &substitution)?;
-    let health_probe = prepare_probe(&service.health.probe, &substitution)?;
+    let addressing = SelectedAddressing::bind(&service.addressing, &substitution)?;
     // Stable backing storage for process-bound endpoint evidence.
     let addresses: Vec<String> = own_endpoints
         .values()
@@ -1467,16 +1396,13 @@ pub fn start_service_for_slot(
                 pid,
                 pgid,
                 platform_start_identity: platform_start,
-                selected_endpoints: own_endpoints,
+                addressing,
                 computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
                 service_name: service.name.to_string(),
-                primary_endpoint: service.primary_endpoint.clone(),
             },
             child: child.into(),
             descendants,
             service: service.clone(),
-            ready_probe,
-            health_probe,
             logs_dir: placement.logs_dir().clone(),
             source_root: source.observed_root.clone(),
             launcher: selection.launcher.to_owned(),
@@ -1491,13 +1417,6 @@ pub fn start_service_for_slot(
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
     if let Err(error) = hold_startup_grace(&mut started.owned, cancellation, session_checkpoint) {
-        let error = if error.code == ErrorCode::Canceled {
-            error
-        } else {
-            started
-                .owned
-                .override_after_primary_exit_with_endpoint_evidence(registry, error)
-        };
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(started.finalize_failed_start(registry, run_timeout_ms, error));
     }
@@ -1711,25 +1630,78 @@ pub(crate) struct RenderedInvocation {
     pub stdin: StdinPolicy,
 }
 
-#[derive(Clone)]
-enum PreparedProbe {
-    Tcp(ProbePolicy),
-    Exec {
-        policy: ProbePolicy,
-        command: RenderedInvocation,
-    },
+struct SelectedEndpointPlan {
+    endpoint: SelectedEndpoint,
+    ready: RenderedInvocation,
+    health: RenderedInvocation,
 }
 
-fn prepare_probe(
-    probe: &Probe,
-    substitution: &ExecSubstitution<'_>,
-) -> RuntimeResult<PreparedProbe> {
-    match probe {
-        Probe::Tcp(policy) => Ok(PreparedProbe::Tcp(policy.clone())),
-        Probe::Exec(probe) => Ok(PreparedProbe::Exec {
-            policy: probe.policy.clone(),
-            command: substitution.command(&probe.exec)?,
-        }),
+/// The selected address and both rendered commands have one owner. No phase
+/// can choose the primary's probe as a fallback for a different endpoint.
+enum SelectedAddressing {
+    Endpointless {
+        ready: RenderedInvocation,
+        health: RenderedInvocation,
+    },
+    Endpoints {
+        primary: String,
+        entries: BTreeMap<String, SelectedEndpointPlan>,
+    },
+}
+impl std::fmt::Debug for SelectedAddressing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SelectedAddressing") // rendered environments may contain secrets
+    }
+}
+impl SelectedAddressing {
+    fn bind(
+        addressing: &ServiceAddressing,
+        substitution: &ExecSubstitution<'_>,
+    ) -> RuntimeResult<Self> {
+        Ok(match addressing {
+            ServiceAddressing::Endpointless { ready, health } => Self::Endpointless {
+                ready: substitution.command(ready)?,
+                health: substitution.command(health)?,
+            },
+            ServiceAddressing::Endpoints(set) => {
+                let entries = set
+                    .entries()
+                    .iter()
+                    .map(|(id, plan)| {
+                        let endpoint = &substitution.own_endpoints[id.as_str()];
+                        let attached = ExecSubstitution {
+                            own_primary: Some(endpoint),
+                            ..*substitution
+                        };
+                        Ok((
+                            id.to_string(),
+                            SelectedEndpointPlan {
+                                endpoint: endpoint.clone(),
+                                ready: attached.command(&plan.ready)?,
+                                health: attached.command(&plan.health)?,
+                            },
+                        ))
+                    })
+                    .collect::<RuntimeResult<_>>()?;
+                Self::Endpoints {
+                    primary: set.primary().to_string(),
+                    entries,
+                }
+            }
+        })
+    }
+    fn commands(&self, phase: ProbePhase) -> Vec<(Option<String>, RenderedInvocation)> {
+        let select = |ready: &RenderedInvocation, health: &RenderedInvocation| match phase {
+            ProbePhase::Ready => ready.clone(),
+            ProbePhase::Health => health.clone(),
+        };
+        match self {
+            Self::Endpointless { ready, health } => vec![(None, select(ready, health))],
+            Self::Endpoints { entries, .. } => entries
+                .iter()
+                .map(|(id, entry)| (Some(id.clone()), select(&entry.ready, &entry.health)))
+                .collect(),
+        }
     }
 }
 
@@ -2369,22 +2341,148 @@ pub(crate) fn process_is_live_with_start_identity(
     Ok(process_group(pid)?.is_some() && identity_alive(pid, platform_start))
 }
 
-pub(crate) fn process_is_in_containment(
-    root_pid: u32,
-    root_pgid: i32,
-    containment: &ContainmentRequirement,
-    candidate_pid: u32,
-    candidate_pgid: i32,
-) -> RuntimeResult<bool> {
-    match containment {
-        ContainmentRequirement::ProcessGroup => Ok(candidate_pgid == root_pgid),
-        ContainmentRequirement::ProcessTree => {
-            if candidate_pid == root_pid {
-                return Ok(true);
+/// Fresh process facts for a listener candidate; never synthesized from socket
+/// records. The endpoint owner checks these on both sides of FD inspection.
+pub(crate) struct ListenerCandidate {
+    pub(crate) pid: u32,
+    pub(crate) pgid: i32,
+    pub(crate) start: String,
+}
+
+pub(crate) fn managed_listener_candidates(
+    expected: &super::endpoint::ExpectedOwner<'_>,
+) -> RuntimeResult<Vec<ListenerCandidate>> {
+    if !process_is_live_with_identity(expected.pid, expected.pgid, Some(expected.platform_start))? {
+        return Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "service leader identity is no longer live",
+        ));
+    }
+    let mut pids = match expected.containment {
+        ContainmentRequirement::ProcessGroup => listener_group_members(expected.pgid)?,
+        ContainmentRequirement::ProcessTree => descendant_pids(expected.pid)?,
+    };
+    pids.push(expected.pid);
+    pids.sort_unstable();
+    pids.dedup();
+    pids.into_iter()
+        .filter_map(|pid| {
+            let pgid = match process_group(pid) {
+                Ok(Some(pgid)) => pgid,
+                Ok(None) => return None,
+                Err(error) => return Some(Err(error)),
+            };
+            if process_is_zombie(pid) {
+                return None;
             }
-            Ok(descendant_pids(root_pid)?.contains(&candidate_pid))
+            let Some(start) = platform_start_identity(pid) else {
+                return Some(Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    "cannot establish listener candidate start identity",
+                )));
+            };
+            Some(Ok(ListenerCandidate { pid, pgid, start }))
+        })
+        .collect()
+}
+
+pub(crate) fn verify_listener_candidate(
+    expected: &super::endpoint::ExpectedOwner<'_>,
+    candidate: &ListenerCandidate,
+) -> RuntimeResult<bool> {
+    let Some(pgid) = process_group(candidate.pid)? else {
+        return Ok(false);
+    };
+    if process_is_zombie(candidate.pid) {
+        return Ok(false);
+    }
+    let start = platform_start_identity(candidate.pid).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "cannot recheck listener candidate identity",
+        )
+    })?;
+    if start != candidate.start || pgid != candidate.pgid {
+        return Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "listener candidate identity or group changed",
+        ));
+    }
+    let contained = match expected.containment {
+        ContainmentRequirement::ProcessGroup => pgid == expected.pgid,
+        ContainmentRequirement::ProcessTree => {
+            candidate.pid == expected.pid || descendant_pids(expected.pid)?.contains(&candidate.pid)
+        }
+    };
+    if !contained {
+        return Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "listener candidate left required containment",
+        ));
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn listener_group_members(pgid: i32) -> RuntimeResult<Vec<u32>> {
+    let failed = |error: std::io::Error| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("cannot enumerate process group: {error}"),
+        )
+    };
+    let mut members = Vec::new();
+    for (index, entry) in std::fs::read_dir("/proc").map_err(failed)?.enumerate() {
+        if index >= 1_000_000 {
+            return Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                "process list exceeds inspection bound",
+            ));
+        }
+        let entry = entry.map_err(failed)?;
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if process_group(pid)? == Some(pgid) {
+            members.push(pid);
         }
     }
+    Ok(members)
+}
+
+#[cfg(target_os = "macos")]
+fn listener_group_members(pgid: i32) -> RuntimeResult<Vec<u32>> {
+    bounded_macos_members(pgid, libc::proc_listpgrppids)
+}
+
+#[cfg(target_os = "macos")]
+fn bounded_macos_members(
+    id: i32,
+    list: unsafe extern "C" fn(i32, *mut libc::c_void, i32) -> i32,
+) -> RuntimeResult<Vec<u32>> {
+    let failure = |message| RuntimeError::new(ErrorCode::ProcEscape, message);
+    let mut capacity = 64;
+    for _ in 0..10 {
+        let mut pids = vec![0_i32; capacity];
+        unsafe {
+            *libc::__error() = 0;
+        }
+        // libproc group/child wrappers return PID counts, unlike proc_listpids.
+        let count = unsafe { list(id, pids.as_mut_ptr().cast(), (capacity * 4) as i32) };
+        if count < 0 || (count == 0 && std::io::Error::last_os_error().raw_os_error() != Some(0)) {
+            return Err(failure("failed or malformed process membership inspection"));
+        }
+        if count as usize >= capacity {
+            capacity *= 2;
+            continue;
+        }
+        pids.truncate(count as usize);
+        return Ok(pids
+            .into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok().filter(|pid| *pid > 0))
+            .collect());
+    }
+    Err(failure("process membership list kept growing"))
 }
 
 /// The startup grace period: poll cancellation, every started service, and
@@ -2698,48 +2796,55 @@ pub(crate) fn process_escape_start_identity(
 }
 
 fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
-    let mut descendants = Vec::new();
+    let mut descendants = std::collections::BTreeSet::new();
     let mut queue = vec![pid];
     while let Some(parent) = queue.pop() {
         for child in direct_child_pids(parent)? {
-            queue.push(child);
-            descendants.push(child);
+            if child != pid && descendants.insert(child) {
+                queue.push(child);
+            }
+            if descendants.len() > 65536 {
+                return Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    "descendant list exceeds inspection bound",
+                ));
+            }
         }
     }
-    Ok(descendants)
+    Ok(descendants.into_iter().collect())
 }
 
 #[cfg(target_os = "linux")]
 fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
-    let mut children = Vec::new();
-    let entries = std::fs::read_dir("/proc").map_err(|error| {
+    let failed = |error: std::io::Error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!("failed to inspect /proc for process descendants: {error}"),
+            format!("cannot inspect managed descendants: {error}"),
         )
-    })?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| RuntimeError::new(ErrorCode::ProcEscape, error.to_string()))?;
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
+    };
+    let threads = match std::fs::read_dir(format!("/proc/{parent}/task")) {
+        Ok(threads) => threads,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(failed(error)),
+    };
+    let mut children = Vec::new();
+    for (index, entry) in threads.enumerate() {
+        if index >= 65536 {
+            return Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                "managed thread list exceeds bound",
+            ));
+        }
+        let entry = entry.map_err(failed)?;
+        let content = match std::fs::read_to_string(entry.path().join("children")) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(failed(error)),
         };
-        let Ok(pid) = name.parse::<u32>() else {
-            continue;
-        };
-        let status = std::fs::read_to_string(entry.path().join("status"));
-        let Ok(status) = status else {
-            continue;
-        };
-        let Some(ppid) = status
-            .lines()
-            .find_map(|line| line.strip_prefix("PPid:"))
-            .and_then(|value| value.trim().parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if ppid == parent {
-            children.push(pid);
+        for child in content.split_whitespace() {
+            children.push(child.parse().map_err(|_| {
+                RuntimeError::new(ErrorCode::ProcEscape, "malformed managed child PID")
+            })?);
         }
     }
     Ok(children)
@@ -2747,22 +2852,7 @@ fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
 
 #[cfg(target_os = "macos")]
 fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
-    let pids = macos_process_ids().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to list pids while inspecting descendants for pid {parent}: {error}"),
-        )
-    })?;
-    let mut children = Vec::new();
-    for pid in pids {
-        let Some(info) = process_bsd_info(pid) else {
-            continue;
-        };
-        if info.pbi_ppid == parent {
-            children.push(pid);
-        }
-    }
-    Ok(children)
+    bounded_macos_members(parent as i32, libc::proc_listchildpids)
 }
 
 #[cfg(target_os = "linux")]
@@ -3207,15 +3297,15 @@ mod tests {
             host: LoopbackHost::parse("::1").unwrap(),
             port: 23080,
         };
-        let error = port_conflict_error(PortConflictReason::ListenerOccupied, "project", &selected);
+        let error = port_conflict_error(PortConflictReason::BindUnavailable, "project", &selected);
         assert_eq!(
             error.message,
-            "endpoint web is unavailable at ::1:23080 (listener-occupied)"
+            "endpoint web is unavailable at ::1:23080 (bind-unavailable)"
         );
         assert_eq!(
             error.details,
             serde_json::json!({"portConflict":{
-                "reason":"listener-occupied","projectId":"project",
+                "reason":"bind-unavailable","projectId":"project",
                 "endpoint":{"transport":"tcp","family":"ipv6","address":"::1","port":23080,"endpointId":"web"}
             }})
         );
