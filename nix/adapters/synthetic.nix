@@ -46,7 +46,10 @@ let
           with socket.create_connection((args.host, args.port), timeout=5) as conn:
               conn.sendall(b"smoke\n")
               with conn.makefile("rb") as response:
-                  sys.stdout.write(response.read().decode("utf-8", "replace"))
+                  data = response.read()
+                  if data != b"ok\n":
+                      raise SystemExit("invalid synthetic protocol response")
+                  sys.stdout.write(data.decode("ascii"))
 
 
       parser = argparse.ArgumentParser(prog="nixfied-synthetic-helper")
@@ -64,6 +67,10 @@ let
       elif args.command == "task":
           run_task(args)
     '';
+  };
+  probe = {
+    tools = [ "synthetic-helper" ];
+    run = [ "nixfied-synthetic-helper" "task" "--host" "\${host}" "--port" "\${port}" ];
   };
 in
 {
@@ -96,6 +103,8 @@ in
     };
     endpoint = {
       endpointId = "synthetic-tcp";
+      readyProbe = probe;
+      healthProbe = probe;
     };
     stateRefs = [ "slot" ];
     logRefs = [ "service.synthetic" ];

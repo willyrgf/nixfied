@@ -74,8 +74,6 @@ in
       };
       # Readiness means "the probe answers": the heartbeat file exists.
       ready.probe = {
-        kind = "exec";
-        invocation = {
           tools = [ pkgs.bash ];
           run = [
             "bash"
@@ -85,13 +83,8 @@ in
             "\${stateDir}/worker-heartbeat"
           ];
         };
-        timeoutMs = 1000;
-        retryIntervalMs = 200;
-        maxAttempts = 30;
-      };
+      ready.policy = { timeoutMs = 1000; retryIntervalMs = 200; maxAttempts = 30; };
       health.probe = {
-        kind = "exec";
-        invocation = {
           tools = [ pkgs.bash ];
           run = [
             "bash"
@@ -101,10 +94,7 @@ in
             "\${stateDir}/worker-heartbeat"
           ];
         };
-        timeoutMs = 1000;
-        retryIntervalMs = 200;
-        maxAttempts = 30;
-      };
+      health.policy = { timeoutMs = 1000; retryIntervalMs = 200; maxAttempts = 30; };
     };
     connectsTo = [ "postgres" ];
     logRefs = [ "service.worker" ];

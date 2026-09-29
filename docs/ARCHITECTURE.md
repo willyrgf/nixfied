@@ -336,19 +336,18 @@ The normative endpoint rules are in
 state, deletion, and containment rules are in
 [Registry, state, and processes](CONTRACT.md#registry-state-and-processes).
 
-- **Ports: host-coordinated, ownership-verified readiness.** Pure derivation and
-  per-state-root registry reservations are insufficient because TCP endpoints
-  are host resources. A fixed per-euid endpoint lock therefore serializes
-  service-specific mutation across independent state roots; Linux `SOCK_DIAG`
-  and macOS `net.inet.tcp.pcblist_n` are the kernel listener sources. The macOS
-  observer retries a discrepancy between decoded records and the `xinpgen`
-  inventory counts, then refuses with `PORT_UNVERIFIABLE`. XNU may legitimately
-  skip records during emission; matching counts alone do not prove host-wide
-  visibility. Complete observation with no exact listener remains pending and
-  ends as `READINESS_TIMEOUT`; incomplete ownership proof is
-  `PORT_UNVERIFIABLE`. Locks end after the atomic ready commit; sockets remain
-  steady-state ownership. The lock is never durable service identity, liveness
-  evidence, or owner attribution.
+- **Ports: host-coordinated, positively observed readiness.** A per-euid
+  endpoint lock serializes startup mutation across state roots. Exact-bind
+  preflight checks availability. The endpoint owner observes sockets held by
+  freshly enumerated, identity-checked containment members: managed FD inodes
+  plus Linux SOCK_DIAG records, or full SDK-decoded macOS socket FD records.
+  It retains positive evidence even when unrelated inspection is incomplete.
+  It never needs negative host-wide inventory. A complete round owns initial
+  witnesses, successful probe outcomes and matching final witnesses. Only its
+  private completed value reaches the registry's atomic endpoint/ready/lifecycle
+  transaction. Health repeats the same check without rewriting readiness.
+  Missing witnesses retry; unresolvable uncertainty refuses. Locks end after
+  ready commit and are not durable identity, liveness or responder attribution.
 - **Coordination objects are opened through held directories.** The private
   runtime filesystem boundary owns non-following component access, private
   owner/mode checks, atomic close-on-exec, and opened-object/entry comparison.
@@ -357,13 +356,12 @@ state, deletion, and containment rules are in
   locking. These checks detect observed substitution; they do not protect
   managed ancestry against future same-user interference. Endpoint selection
   and lock lifetime remain with the endpoint owner.
-- **TCP probing keeps observation live.** Polling one owned pending connection,
-  instead of blocking in a connect, lets every probe wait observe cancellation
-  and service liveness. The same native socket creation and address encoding
-  serve endpoint preflight. Linux creates nonblocking, close-on-exec sockets
-  atomically; macOS coordinates socket flag setup with every workload spawn.
-  Coordination poisoning refuses effects. This process-local synchronization
-  protects descriptor inheritance.
+- **Probe execution uses the common captured-child owner.** Application
+  invocations retain liveness, cancellation, containment and capture checks
+  while running. Endpoint-less services use the same round boundary with one
+  scalar probe. Native socket creation serves bind preflight; Linux creates
+  close-on-exec sockets atomically and macOS coordinates flag setup with every
+  workload spawn. Coordination poisoning refuses effects.
 - **Application data compatibility belongs to the application.** Only the
   application knows its data format, so a framework compatibility check could
   only delete or refuse data without real evidence. The marker records

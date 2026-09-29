@@ -68,32 +68,22 @@ let
       };
     };
   };
-  probeSpecType = types.submodule {
+  probePolicyType = types.submodule {
     options = {
-      kind = mkOption {
-        type = types.enum vocabulary."enum ProbeKind".members;
-        default = "tcp";
-        description = "Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived invocation (exit 0 = success).";
-      };
-      invocation = mkOption {
-        type = types.nullOr invocationType;
-        default = null;
-        description = "The invocation an `exec` probe runs (e.g. pg_isready); must be null for `tcp`.";
-      };
       timeoutMs = mkOption {
         type = positiveInt;
         default = 1000;
-        description = "Per-attempt probe timeout (the invocation's own timeoutMs does not apply to probe attempts).";
+        description = "Per-invocation timeout; attached probes must omit invocation-level timeoutMs.";
       };
       retryIntervalMs = mkOption {
         type = positiveInt;
         default = 100;
-        description = "Delay in milliseconds between probe attempts.";
+        description = "Delay in milliseconds between whole-service rounds.";
       };
       maxAttempts = mkOption {
         type = positiveInt;
         default = 20;
-        description = "Maximum number of probe attempts before readiness or health fails.";
+        description = "Maximum number of whole-service rounds before readiness or health fails.";
       };
     };
   };
@@ -103,10 +93,15 @@ let
       options = {
         inherit operationId;
         terminal = mkTerminal class;
-        probe = mkOption {
-          type = probeSpecType;
+        policy = mkOption {
+          type = probePolicyType;
           default = { };
-          description = "How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe.";
+          description = "Per-invocation deadline and whole-service round retry budget.";
+        };
+        probe = mkOption {
+          type = types.nullOr invocationType;
+          default = null;
+          description = "Required invocation for an endpoint-less service; endpoint services attach probes to each endpoint instead.";
         };
       };
     };
@@ -166,31 +161,30 @@ let
     };
   };
 
+  endpointOptions = {
+    host = mkOption {
+      type = types.nonEmptyStr;
+      default = "127.0.0.1";
+      description = "Endpoint loopback bind host.";
+    };
+    readyProbe = mkOption {
+      type = invocationType;
+      description = "Required application readiness invocation; bare host and port refer to this endpoint.";
+    };
+    healthProbe = mkOption {
+      type = invocationType;
+      description = "Required application health invocation; bare host and port refer to this endpoint.";
+    };
+  };
   endpointType = types.submodule {
-    options = {
+    options = endpointOptions // {
       endpointId = mkOption {
         type = types.nonEmptyStr;
         description = "Stable logical endpoint identifier.";
       };
-      host = mkOption {
-        type = types.nonEmptyStr;
-        default = "127.0.0.1";
-        description = "Endpoint loopback bind host.";
-      };
     };
   };
-
-  # A multi-endpoint service keys its endpoints by id (the attr name), so the
-  # submodule carries only the bind host.
-  namedEndpointType = types.submodule {
-    options = {
-      host = mkOption {
-        type = types.nonEmptyStr;
-        default = "127.0.0.1";
-        description = "Endpoint loopback bind host.";
-      };
-    };
-  };
+  namedEndpointType = types.submodule { options = endpointOptions; };
 
   serviceType = types.submodule {
     options = {
@@ -224,8 +218,8 @@ let
         type = types.nullOr types.nonEmptyStr;
         default = null;
         description = ''
-          The endpoint bare ''${port}/''${host} resolve to, the tcp readiness/health
-          probe target, and the endpoint a connectsTo dependent reaches by service
+          The endpoint bare ''${port}/''${host} in start resolve to,
+          and the endpoint a connectsTo dependent reaches by service
           id. Required with `endpoints`; must name one of its keys.
         '';
       };

@@ -84,36 +84,7 @@ let
     name: op: declared:
     if declared != null then declared else deriveFacts.serviceOperationId name op;
 
-  # Every invocation position in the manifest, with the (effective) operation id
-  # it executes under: task leaves plus each service's prepare/start and exec
-  # probes.
-  invocationPositions =
-    (mapAttrsToList (name: task: {
-      operationId = leafOperationId name task;
-      invocation = task.invocation;
-    }) (lib.filterAttrs (_id: task: task.kind == "leaf") config.nixfied.tasks))
-    ++ lib.concatLists (
-      mapAttrsToList (
-        name: service:
-        let
-          lc = service.lifecycle;
-        in
-        [
-          {
-            operationId = serviceOperationId name "start" lc.start.operationId;
-            invocation = lc.start.invocation;
-          }
-        ]
-        ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) {
-          operationId = serviceOperationId name "ready" lc.ready.operationId;
-          invocation = lc.ready.probe.invocation;
-        }
-        ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) {
-          operationId = serviceOperationId name "health" lc.health.operationId;
-          invocation = lc.health.probe.invocation;
-        }
-      ) config.nixfied.services
-    );
+  invocationPositions = import ./invocation-positions.nix { inherit lib config; };
 
   toolEntryId = tool: if builtins.isString tool then tool else toolClosureId tool;
   packageTools = lib.concatMap (
@@ -181,22 +152,11 @@ let
       timeoutMs = invocation.timeoutMs;
     };
 
-  # Native lowering selects invocations; shared construction owns omission.
-  probeOf =
-    owner: op:
-    construct "ProbeSpec" {
-      inherit (op.probe)
-        kind
-        timeoutMs
-        retryIntervalMs
-        maxAttempts
-        ;
-      invocation =
-        if op.probe.kind == "exec" && op.probe.invocation != null then
-          resolveInvocation owner op.probe.invocation
-        else
-          null;
-    };
+  probeOf = owner: op:
+    if op.probe == null then null else resolveInvocation owner op.probe;
+  policyOf = op: construct "ProbePolicy" {
+    inherit (op.policy) timeoutMs retryIntervalMs maxAttempts;
+  };
   terminalOf = op: construct "TerminalSemantics" { inherit (op.terminal) success failure; };
   lifecycleSpec =
     name: lc:
@@ -208,11 +168,13 @@ let
       };
       ready = construct "ReadySpec" {
         operationId = serviceOperationId name "ready" lc.ready.operationId;
+        policy = policyOf lc.ready;
         probe = probeOf "service ${name} ready probe" lc.ready;
         terminal = terminalOf lc.ready;
       };
       health = construct "HealthSpec" {
         operationId = serviceOperationId name "health" lc.health.operationId;
+        policy = policyOf lc.health;
         probe = probeOf "service ${name} health probe" lc.health;
         terminal = terminalOf lc.health;
       };
@@ -253,6 +215,8 @@ let
           {
             ${service.endpoint.endpointId} = construct "Endpoint" {
               inherit (service.endpoint) endpointId host;
+              readyProbe = resolveInvocation "service ${name} endpoint ready" service.endpoint.readyProbe;
+              healthProbe = resolveInvocation "service ${name} endpoint health" service.endpoint.healthProbe;
             };
           }
         else
@@ -261,10 +225,11 @@ let
             construct "Endpoint" {
               endpointId = id;
               inherit (ep) host;
+              readyProbe = resolveInvocation "service ${name} endpoint ${id} ready" ep.readyProbe;
+              healthProbe = resolveInvocation "service ${name} endpoint ${id} health" ep.healthProbe;
             }
           ) service.endpoints;
       primaryEndpoint = if singular then service.endpoint.endpointId else service.primaryEndpoint;
-      probeKind = op: service.lifecycle.${op}.probe.kind;
       startClosureEffects =
         let
           inv = service.lifecycle.start.invocation;
@@ -281,13 +246,21 @@ let
       !(singular && multi)
     ) "service ${name}: set at most one of `endpoint` or `endpoints`";
     assert lib.assertMsg (
-      !multi || service.primaryEndpoint != null
-    ) "service ${name}: `endpoints` requires `primaryEndpoint`";
-    # An endpoint-less service has no tcp probe target: readiness means "the
-    # probe answers", so both probes must be invocation probes.
-    assert lib.assertMsg
-      (!endpointLess || (probeKind "ready" == "exec" && probeKind "health" == "exec"))
-      "service ${name}: an endpoint-less service's ready/health probes must be invocation probes (tcp has no target)";
+      !multi || (service.primaryEndpoint != null && endpoints ? ${service.primaryEndpoint})
+    ) "service ${name}: `endpoints` requires a declared `primaryEndpoint`";
+    assert lib.assertMsg (
+      !singular || service.primaryEndpoint == null
+    ) "service ${name}: endpoint shorthand supplies its own primary endpoint";
+    assert lib.assertMsg (
+      lib.all (id: !(builtins.elem id service.connectsTo)) (builtins.attrNames endpoints)
+    ) "service ${name}: endpoint ids must be distinct from connectsTo service ids";
+    assert lib.assertMsg (lib.all (phase:
+      (service.lifecycle.${phase}.probe != null) == endpointLess
+    ) [ "ready" "health" ])
+      "service ${name}: scalar probes are required exactly for endpoint-less services";
+    assert lib.assertMsg (
+      !endpointLess || service.primaryEndpoint == null
+    ) "service ${name}: endpoint-less services cannot have a primary endpoint";
     # Effects coherence, both directions: declared endpoints require a
     # `network-listener` attestation on the start closure; an endpoint-less
     # start closure must not announce a listener the planner cannot reserve.

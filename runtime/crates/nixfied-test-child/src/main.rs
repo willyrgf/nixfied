@@ -36,8 +36,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             Ok(())
         }
+        "accept-inherited" => {
+            if !args.is_empty() {
+                return Err("accept-inherited takes no arguments".into());
+            }
+            // The test explicitly passes a listener as stdin.
+            let listener = unsafe { TcpListener::from_raw_fd(0) };
+            let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+            stream
+                .write_all(b"foreign responder\n")
+                .map_err(|error| error.to_string())
+        }
         "prepare" => prepare(args),
         "listen" => listen(args),
+        "listen-pair" => listen_pair(args),
+        "listen-member" => listen_member(args),
         "connect" => connect(args),
         "output" => output(args),
         "exit" => exit_with(args),
@@ -85,6 +98,50 @@ fn listen(args: &[String]) -> Result<(), String> {
         ),
         _ => Err(format!("invalid listen mode or arguments: {mode:?}")),
     }
+}
+
+fn listen_member(args: &[String]) -> Result<(), String> {
+    let [port, mode, pid_file] = args else {
+        return Err("listen-member expects PORT (child|reparented) PID_FILE".into());
+    };
+    if !matches!(mode.as_str(), "child" | "reparented") {
+        return Err("invalid member mode".into());
+    }
+    let port = parse_port(port)?;
+    let child = fork_process()?;
+    if child == 0 {
+        child_exit((|| {
+            if mode == "reparented" && fork_process()? != 0 {
+                return Ok(());
+            }
+            let listener = reusable_listener(Ipv4Addr::LOCALHOST, port)?;
+            fs::write(pid_file, std::process::id().to_string())
+                .map_err(|error| error.to_string())?;
+            accept_forever(listener, false)
+        })());
+    }
+    if mode == "reparented" {
+        wait_for_child(child)?;
+    }
+    wait_for_path(Path::new(pid_file), MARKER_TIMEOUT)?;
+    park_forever()
+}
+
+/// Two stable exact listeners; one controlled replacement during a probe.
+fn listen_pair(args: &[String]) -> Result<(), String> {
+    let [first_port, second_port, request, replaced] = args else {
+        return Err("listen-pair expects FIRST_PORT SECOND_PORT REQUEST REPLACED".into());
+    };
+    let first_port = parse_port(first_port)?;
+    let second_port = parse_port(second_port)?;
+    let first = TcpListener::bind(("127.0.0.1", first_port)).map_err(|error| error.to_string())?;
+    let _second = TcpListener::bind(("::1", second_port)).map_err(|error| error.to_string())?;
+    wait_for_path(Path::new(request), MARKER_TIMEOUT)?;
+    drop(first);
+    let _replacement =
+        TcpListener::bind(("127.0.0.1", first_port)).map_err(|error| error.to_string())?;
+    touch(Path::new(replaced))?;
+    park_forever()
 }
 
 fn output(args: &[String]) -> Result<(), String> {

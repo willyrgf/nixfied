@@ -262,11 +262,57 @@ in
       ]
     )
     (record (output "port-conflict") "NoDecoder"
-      "Native lock/listener conflict evidence; no ownership or liveness decision is generated."
+      "Native lock/bind conflict evidence; no ownership or liveness decision is generated."
       [
         (required "reason" (enum "enum PortConflictReason") "Native choice of the proven conflict fact.")
         (required "projectId" text "Requesting project identity.")
         (required "endpoint" (ref (output "port-conflict-endpoint")) "The contended endpoint.")
+      ]
+    )
+    (record (output "endpoint.check-succeeded") "NoDecoder"
+      "A complete service-wide round proved this exact listener and its attached probe; no exclusive ownership claim."
+      [
+        (required "phase" (enum "enum ProbePhase") "Ready or health round.")
+        (required "endpointId" text "Attached declared endpoint identity.")
+        (required "address" host "Exact observed loopback address.")
+        (required "port" u16 "Exact observed port.")
+        (required "listener" (ref (output "listener-witness")) "Stable managed-process listener witness.")
+        (required "probeProcessKey" text "Settled successful probe in this round.")
+      ]
+    )
+    (record (output "listener-witness") "NoDecoder"
+      "A verified contained holder and stable kernel socket identity."
+      [
+        (required "holderPid" u32 "Observed managed holder PID.")
+        (required "holderStartIdentity" text "Platform process start identity.")
+        (required "socketIdentity" {
+          kind = "OpenJson";
+          description = "Closed platform-tagged union of linux-socket-identity and macos-socket-identity.";
+        } "Observed stable socket identity.")
+      ]
+    )
+    (record (output "linux-socket-identity") "NoDecoder"
+      "Linux TCP LISTEN socket identity."
+      [
+        (required "platform" text "Exactly linux.")
+        (required "inode" u32 "Nonzero socket inode.")
+        (required "cookie" (list u32) "Exactly two kernel cookie words, excluding the unavailable sentinel pair.")
+      ]
+    )
+    (record (output "macos-socket-identity") "NoDecoder"
+      "macOS SDK-decoded TCP LISTEN socket identity."
+      [
+        (required "platform" text "Exactly macos.")
+        (required "socketHandle" text "Nonzero handle encoded as 0x and sixteen lowercase hex digits.")
+        (required "inpcbGeneration" text "Generation encoded as 0x and sixteen lowercase hex digits.")
+      ]
+    )
+    (record (output "last-round") "NoDecoder"
+      "Final failed whole-set round under the existing phase-specific timeout error."
+      [
+        (required "phase" (enum "enum ProbePhase") "Ready or health round.")
+        (required "reason" (enum "enum RoundReason") "Retryable round failure.")
+        (omitted "endpointId" text "Failed attached endpoint, absent for scalar probes.")
       ]
     )
     (record (local "RegistryIdentityDiagnostic") "NoDecoder"
@@ -281,6 +327,8 @@ in
     )
   ];
   vocabularies = [
+    (vocabulary "enum ProbePhase" "ProbePhase" (owner "readiness") "Service check phase.")
+    (vocabulary "enum RoundReason" "RoundReason" (owner "readiness") "Retryable whole-round failure.")
     (vocabulary "run-output-mode" "RunOutputMode" main
       "Native run output selection; contextual default and parser repetition rules stay native."
     )
@@ -303,8 +351,8 @@ in
           STATE_UNWRITABLE = annotation "Native state or evidence I/O could not complete." "state";
           STATE_UNOWNED = annotation "Required state ownership proof is absent or inconsistent." "state";
           CLEANUP_REFUSED = annotation "Native persistence, ownership, or process checks refused deletion, or a pending deletion remains unresolved." "state";
-          PORT_CONFLICT = annotation "A startup lock or listener proves a conflict at a planned endpoint." "placeholders";
-          PORT_UNVERIFIABLE = annotation "Native endpoint ownership cannot be proved safely." "placeholders";
+          PORT_CONFLICT = annotation "A startup lock or exact bind proves a conflict at a planned endpoint." "placeholders";
+          PORT_UNVERIFIABLE = annotation "A managed endpoint listener cannot be observed safely." "placeholders";
           PROC_ESCAPE = annotation "Required process containment or foreground-process identity could not be maintained or verified." "recovery";
           READINESS_TIMEOUT = annotation "The native service readiness budget expired." "services";
           CANCELED = annotation "Native cancellation interrupted the operation." "recovery";

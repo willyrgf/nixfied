@@ -1,668 +1,195 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use super::{KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord, read_array};
-use crate::service::process::{macos_process_ids, platform_start_identity, process_group};
+use super::{KernelSocketIdentity, MAX_DESCRIPTORS, SelectedEndpoint, SocketRecord, SocketScan};
 
-const XINPGEN_LEN: usize = 24;
-const XINPCB_MIN_LEN: usize = 104;
-const XSOCKET_MIN_LEN: usize = 104;
-const XTCPCB_MIN_LEN: usize = 40;
-const XSO_INPCB: u32 = 0x010;
-const XSO_SOCKET: u32 = 0x001;
-const XSO_RCVBUF: u32 = 0x002;
-const XSO_SNDBUF: u32 = 0x004;
-const XSO_STATS: u32 = 0x008;
-const XSO_TCPCB: u32 = 0x020;
-const INP_IPV4: u8 = 0x1;
-const INP_IPV6: u8 = 0x2;
-const INP_V4MAPPEDV6: u8 = 0x4;
-const IN6P_IPV6_V6ONLY: u32 = 0x0000_8000;
-const IN6P_BINDV6ONLY: u32 = 0x0100_0000;
-const TCPS_LISTEN: u32 = 1;
-const PROC_PIDFDSOCKETINFO: libc::c_int = 3;
-const SOCKINFO_TCP: u32 = 2;
-const SOCKET_FDINFO_SO_OFFSET: usize = 160;
-const SOCKET_FDINFO_PROTOCOL_OFFSET: usize = 180;
-const SOCKET_FDINFO_FAMILY_OFFSET: usize = 184;
-const SOCKET_FDINFO_KIND_OFFSET: usize = 256;
-const SOCKET_FDINFO_MIN_LEN: usize = SOCKET_FDINFO_KIND_OFFSET + 4;
-const SNAPSHOT_ATTEMPTS: usize = 3;
-const PCBLIST_READ_ATTEMPTS: usize = 3;
-
-#[derive(Debug)]
-enum ParseFailure {
-    GenerationChanged,
-    CountDiscrepancy {
-        header: u32,
-        trailer: u32,
-        decoded: usize,
-    },
-    Invalid(String),
+#[repr(C)]
+#[derive(Default)]
+struct SocketInfo {
+    address: [u8; 16],
+    socket_handle: u64,
+    inpcb_generation: u64,
+    family: u32,
+    port: u32,
+}
+const _: () = assert!(std::mem::size_of::<SocketInfo>() == 40);
+unsafe extern "C" {
+    fn nixfied_inspect_socket(pid: i32, fd: i32, out: *mut SocketInfo, size: usize) -> i32;
 }
 
-enum PcblistReadFailure {
-    RetryableEnomem,
-    Fatal(String),
+fn churn(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ESRCH | libc::ENOENT | libc::EBADF)
+    )
 }
 
-pub(super) fn snapshot() -> Result<Vec<ListenerRecord>, String> {
-    for attempt in 0..SNAPSHOT_ATTEMPTS {
-        let bytes = read_pcblist()?;
-        match parse_pcblist(&bytes) {
-            Ok(records) => return Ok(records),
-            Err(ParseFailure::GenerationChanged) if attempt + 1 < SNAPSHOT_ATTEMPTS => continue,
-            Err(ParseFailure::GenerationChanged) => {
-                return Err("macOS TCP PCB generation changed during every snapshot".to_string());
-            }
-            Err(ParseFailure::CountDiscrepancy { .. }) if attempt + 1 < SNAPSHOT_ATTEMPTS => {
-                continue;
-            }
-            Err(ParseFailure::CountDiscrepancy {
-                header,
-                trailer,
-                decoded,
-            }) => {
-                return Err(format!(
-                    "macOS TCP PCB snapshot count discrepancy after retries: header {header}, trailer {trailer}, decoded {decoded}"
-                ));
-            }
-            Err(ParseFailure::Invalid(message)) => return Err(message),
+fn socket_fds(pid: u32) -> io::Result<Vec<i32>> {
+    read_socket_fds(|fds| {
+        // Clear errno because an empty successful list may return zero.
+        unsafe {
+            *libc::__error() = 0;
         }
-    }
-    Err("macOS TCP PCB snapshot retry exhausted".to_string())
-}
-
-fn read_pcblist() -> Result<Vec<u8>, String> {
-    read_pcblist_bounded(read_pcblist_once)
-}
-
-fn read_pcblist_bounded(
-    mut read_once: impl FnMut() -> Result<Vec<u8>, PcblistReadFailure>,
-) -> Result<Vec<u8>, String> {
-    for attempt in 0..PCBLIST_READ_ATTEMPTS {
-        match read_once() {
-            Ok(bytes) => return Ok(bytes),
-            Err(PcblistReadFailure::RetryableEnomem) if attempt + 1 < PCBLIST_READ_ATTEMPTS => {}
-            Err(PcblistReadFailure::RetryableEnomem) => {
-                return Err(format!(
-                    "net.inet.tcp.pcblist_n changed size during all {PCBLIST_READ_ATTEMPTS} read attempts"
-                ));
-            }
-            Err(PcblistReadFailure::Fatal(message)) => return Err(message),
-        }
-    }
-    Err("net.inet.tcp.pcblist_n read retry exhausted".to_string())
-}
-
-fn read_pcblist_once() -> Result<Vec<u8>, PcblistReadFailure> {
-    let name = c"net.inet.tcp.pcblist_n";
-    let mut required = 0_usize;
-    if unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            std::ptr::null_mut(),
-            &mut required,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return Err(PcblistReadFailure::Fatal(format!(
-            "failed to size net.inet.tcp.pcblist_n: {}",
-            io::Error::last_os_error()
-        )));
-    }
-    if required < 2 * XINPGEN_LEN {
-        return Err(PcblistReadFailure::Fatal(format!(
-            "net.inet.tcp.pcblist_n reported invalid size {required}"
-        )));
-    }
-    let mut bytes = vec![0_u8; required];
-    let mut actual = bytes.len();
-    if unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            bytes.as_mut_ptr().cast(),
-            &mut actual,
-            std::ptr::null_mut(),
-            0,
-        )
-    } == 0
-    {
-        if actual > bytes.len() {
-            return Err(PcblistReadFailure::Fatal(
-                "net.inet.tcp.pcblist_n returned an oversized result".to_string(),
-            ));
-        }
-        bytes.truncate(actual);
-        return Ok(bytes);
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ENOMEM) {
-        Err(PcblistReadFailure::RetryableEnomem)
-    } else {
-        Err(PcblistReadFailure::Fatal(format!(
-            "failed to read net.inet.tcp.pcblist_n: {error}"
-        )))
-    }
-}
-
-fn parse_pcblist(bytes: &[u8]) -> Result<Vec<ListenerRecord>, ParseFailure> {
-    if bytes.len() < 2 * XINPGEN_LEN {
-        return Err(ParseFailure::Invalid(
-            "truncated xinpgen envelope".to_string(),
-        ));
-    }
-    let header = parse_generation(&bytes[..XINPGEN_LEN])?;
-    let trailer_offset = bytes.len() - XINPGEN_LEN;
-    let trailer = parse_generation(&bytes[trailer_offset..])?;
-    if header.1 != trailer.1 || header.2 != trailer.2 {
-        return Err(ParseFailure::GenerationChanged);
-    }
-
-    let mut records = Vec::new();
-    let mut record_count = 0_usize;
-    let mut offset = XINPGEN_LEN;
-    while offset < trailer_offset {
-        let (inpcb, next) = parse_record(bytes, offset, trailer_offset, XSO_INPCB, XINPCB_MIN_LEN)?;
-        offset = next;
-        let (socket, next) =
-            parse_record(bytes, offset, trailer_offset, XSO_SOCKET, XSOCKET_MIN_LEN)?;
-        offset = next;
-        let receive = parse_record(bytes, offset, trailer_offset, XSO_RCVBUF, 8)?;
-        offset = receive.1;
-        let send = parse_record(bytes, offset, trailer_offset, XSO_SNDBUF, 8)?;
-        offset = send.1;
-        let stats = parse_record(bytes, offset, trailer_offset, XSO_STATS, 8)?;
-        offset = stats.1;
-        let tcp = parse_record(bytes, offset, trailer_offset, XSO_TCPCB, XTCPCB_MIN_LEN)?;
-        offset = tcp.1;
-        record_count += 1;
-
-        let tcp_state = read_u32_ne(tcp.0, 36)?;
-        if tcp_state != TCPS_LISTEN {
-            continue;
-        }
-        records.push(parse_listener(inpcb, socket)?);
-    }
-    if offset != trailer_offset {
-        return Err(ParseFailure::Invalid(
-            "macOS PCB records did not end at the xinpgen trailer".to_string(),
-        ));
-    }
-    // XNU can skip dead or initializing PCBs while emitting a stable generation.
-    // A count discrepancy makes this stream unusable as absence evidence.
-    if header.0 != trailer.0 || record_count != header.0 as usize {
-        return Err(ParseFailure::CountDiscrepancy {
-            header: header.0,
-            trailer: trailer.0,
-            decoded: record_count,
-        });
-    }
-    records.sort_by(|left, right| left.identity.cmp(&right.identity));
-    Ok(records)
-}
-
-fn parse_generation(bytes: &[u8]) -> Result<(u32, u64, u64), ParseFailure> {
-    if bytes.len() != XINPGEN_LEN || read_u32_ne(bytes, 0)? as usize != XINPGEN_LEN {
-        return Err(ParseFailure::Invalid(
-            "unsupported macOS xinpgen layout".to_string(),
-        ));
-    }
-    Ok((
-        read_u32_ne(bytes, 4)?,
-        read_u64_ne(bytes, 8)?,
-        read_u64_ne(bytes, 16)?,
-    ))
-}
-
-fn parse_record(
-    bytes: &[u8],
-    offset: usize,
-    limit: usize,
-    expected_kind: u32,
-    minimum_len: usize,
-) -> Result<(&[u8], usize), ParseFailure> {
-    if offset > limit || limit - offset < 8 {
-        return Err(ParseFailure::Invalid(format!(
-            "truncated macOS PCB record kind {expected_kind}"
-        )));
-    }
-    let length = read_u32_ne(bytes, offset)? as usize;
-    let kind = read_u32_ne(bytes, offset + 4)?;
-    if kind != expected_kind {
-        return Err(ParseFailure::Invalid(format!(
-            "macOS PCB record kind {kind} appeared where {expected_kind} was required"
-        )));
-    }
-    if length < minimum_len || length > limit - offset {
-        return Err(ParseFailure::Invalid(format!(
-            "invalid macOS PCB record length {length} for kind {kind}"
-        )));
-    }
-    let aligned = align8(length)
-        .ok_or_else(|| ParseFailure::Invalid("macOS PCB record length overflow".to_string()))?;
-    if aligned > limit - offset {
-        return Err(ParseFailure::Invalid(format!(
-            "truncated alignment padding for macOS PCB record kind {kind}"
-        )));
-    }
-    Ok((&bytes[offset..offset + length], offset + aligned))
-}
-
-fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFailure> {
-    let port = read_u16_be(inpcb, 18)?;
-    if port == 0 {
-        return Err(ParseFailure::Invalid(
-            "macOS LISTEN record has local port zero".to_string(),
-        ));
-    }
-    let protocol = read_u32_ne(socket, 36)? as libc::c_int;
-    if protocol != libc::IPPROTO_TCP {
-        return Err(ParseFailure::Invalid(format!(
-            "macOS TCP PCB socket reported protocol {protocol}"
-        )));
-    }
-    let socket_family = read_u32_ne(socket, 40)? as libc::c_int;
-    let vflag = *inpcb
-        .get(44)
-        .ok_or_else(|| ParseFailure::Invalid("truncated macOS inp_vflag".to_string()))?;
-    let local = read_array::<16>(inpcb, 64)
-        .ok_or_else(|| ParseFailure::Invalid("truncated macOS local address".to_string()))?;
-    let flags = read_u32_ne(inpcb, 36)?;
-    let (address, ipv6_only) = match socket_family {
-        libc::AF_INET => {
-            if vflag & INP_IPV4 == 0 || vflag & INP_IPV6 != 0 {
-                return Err(ParseFailure::Invalid(format!(
-                    "macOS IPv4 listener has inconsistent inp_vflag {vflag:#x}"
-                )));
-            }
-            (
-                IpAddr::V4(Ipv4Addr::new(local[12], local[13], local[14], local[15])),
-                None,
+        let bytes = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDLISTFDS,
+                0,
+                fds.as_mut_ptr().cast(),
+                std::mem::size_of_val(fds) as i32,
             )
+        };
+        if bytes < 0 || (bytes == 0 && io::Error::last_os_error().raw_os_error() != Some(0)) {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(bytes as usize)
         }
-        libc::AF_INET6 => {
-            if vflag & INP_IPV6 == 0 {
-                return Err(ParseFailure::Invalid(format!(
-                    "macOS IPv6 listener has inconsistent inp_vflag {vflag:#x}"
-                )));
-            }
-            let address = Ipv6Addr::from(local);
-            if vflag & INP_V4MAPPEDV6 != 0 && address.to_ipv4_mapped().is_none() {
-                return Err(ParseFailure::Invalid(
-                    "macOS listener marks a non-mapped IPv6 address as V4MAPPEDV6".to_string(),
-                ));
-            }
-            (
-                IpAddr::V6(address),
-                Some(flags & (IN6P_IPV6_V6ONLY | IN6P_BINDV6ONLY) != 0),
-            )
-        }
-        other => {
-            return Err(ParseFailure::Invalid(format!(
-                "unsupported macOS TCP listener family {other}"
-            )));
-        }
-    };
-    let pcb = read_u64_ne(inpcb, 8)?;
-    let pcb_generation = read_u64_ne(inpcb, 28)?;
-    let socket_handle = read_u64_ne(socket, 8)?;
-    let socket_generation = read_u64_ne(socket, 76)?;
-    if pcb == 0 || socket_handle == 0 {
-        return Err(ParseFailure::Invalid(
-            "macOS listener omitted its kernel PCB/socket identity".to_string(),
-        ));
-    }
-    let mut pid_hints = [read_u32_ne(socket, 68)?, read_u32_ne(socket, 72)?]
-        .into_iter()
-        .filter(|pid| *pid > 0)
-        .collect::<Vec<_>>();
-    pid_hints.sort_unstable();
-    pid_hints.dedup();
-    Ok(ListenerRecord {
-        identity: ListenerIdentity {
-            address,
-            port,
-            kernel: KernelSocketIdentity::Macos {
-                pcb,
-                pcb_generation,
-                socket: socket_handle,
-                socket_generation,
-            },
-            uid: read_u32_ne(socket, 64)?,
-            ipv6_only,
-        },
-        holders: Vec::new(),
-        pid_hints,
     })
 }
 
-pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
-    let mut indexes = BTreeMap::<u64, Vec<usize>>::new();
-    let mut hints = BTreeSet::new();
-    for (index, record) in records.iter().enumerate() {
-        let KernelSocketIdentity::Macos { socket, .. } = record.identity.kernel;
-        indexes.entry(socket).or_default().push(index);
-        hints.extend(record.pid_hints.iter().copied());
-    }
-    if indexes.is_empty() {
-        return Ok(());
-    }
-    let all = macos_process_ids().map_err(|error| {
-        format!("failed to enumerate macOS processes for endpoint correlation: {error}")
-    })?;
-    let mut ordered = hints.iter().copied().collect::<Vec<_>>();
-    ordered.extend(all.into_iter().filter(|pid| !hints.contains(pid)));
-    for pid in ordered {
-        for descriptor in list_socket_fds(pid) {
-            let Some(handle) = socket_handle(pid, descriptor)? else {
-                continue;
+fn read_socket_fds(
+    mut read: impl FnMut(&mut [libc::proc_fdinfo]) -> io::Result<usize>,
+) -> io::Result<Vec<i32>> {
+    let mut capacity = 64;
+    while capacity <= MAX_DESCRIPTORS {
+        let mut fds = vec![
+            libc::proc_fdinfo {
+                proc_fd: 0,
+                proc_fdtype: 0
             };
-            let Some(record_indexes) = indexes.get(&handle) else {
-                continue;
-            };
-            let Some(pgid) = process_group(pid).map_err(|error| error.message)? else {
-                continue;
-            };
-            let holder = ListenerHolder {
-                pid,
-                pgid,
-                platform_start: platform_start_identity(pid),
-            };
-            for index in record_indexes {
-                records[*index].holders.push(holder.clone());
-            }
+            capacity
+        ];
+        let size = std::mem::size_of_val(fds.as_slice());
+        let bytes = read(&mut fds)?;
+        if !bytes.is_multiple_of(std::mem::size_of::<libc::proc_fdinfo>()) {
+            return Err(io::Error::other("malformed managed FD list"));
         }
+        if bytes >= size {
+            capacity *= 2;
+            continue;
+        }
+        fds.truncate(bytes / std::mem::size_of::<libc::proc_fdinfo>());
+        if fds.iter().any(|fd| fd.proc_fd < 0) {
+            return Err(io::Error::other("invalid managed descriptor"));
+        }
+        return Ok(fds
+            .into_iter()
+            .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_SOCKET as u32)
+            .map(|fd| fd.proc_fd)
+            .collect());
     }
-    for record in records {
-        record.holders.sort_by_key(|holder| holder.pid);
-        record.holders.dedup_by_key(|holder| holder.pid);
-    }
-    Ok(())
+    Err(io::Error::other("managed FD list kept growing"))
 }
 
-fn list_socket_fds(pid: u32) -> Vec<i32> {
-    let required = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDLISTFDS,
-            0,
-            std::ptr::null_mut(),
-            0,
-        )
+pub(super) fn inspect(pid: u32, endpoints: &BTreeMap<String, &SelectedEndpoint>) -> SocketScan {
+    let mut scan = SocketScan::default();
+    let fds = match socket_fds(pid) {
+        Ok(fds) => fds,
+        Err(error) => {
+            if !churn(&error) {
+                scan.uncertain(format!("cannot list managed socket FDs: {error}"));
+            }
+            return scan;
+        }
     };
-    if required <= 0 {
-        return Vec::new();
-    }
-    let mut capacity = required as usize + 8 * std::mem::size_of::<libc::proc_fdinfo>();
-    loop {
-        let entry_size = std::mem::size_of::<libc::proc_fdinfo>();
-        capacity = capacity.div_ceil(entry_size) * entry_size;
-        let mut bytes = vec![0_u8; capacity];
-        let actual = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::c_int,
-                libc::PROC_PIDLISTFDS,
-                0,
-                bytes.as_mut_ptr().cast(),
-                bytes.len() as libc::c_int,
+    for fd in fds {
+        let mut record = SocketInfo::default();
+        let result = unsafe {
+            nixfied_inspect_socket(
+                pid as i32,
+                fd,
+                &mut record,
+                std::mem::size_of::<SocketInfo>(),
             )
         };
-        if actual <= 0 {
-            return Vec::new();
-        }
-        if actual as usize >= bytes.len() {
-            capacity = capacity.saturating_mul(2);
+        if result == 0 {
             continue;
         }
-        let actual = actual as usize;
-        if !actual.is_multiple_of(entry_size) {
-            return Vec::new();
+        if result < 0 {
+            let error = io::Error::from_raw_os_error(-result);
+            if !churn(&error) {
+                scan.uncertain(format!("cannot inspect managed socket FD: {error}"));
+            }
+            continue;
         }
-        return bytes[..actual]
-            .chunks_exact(entry_size)
-            .filter_map(|entry| {
-                let kind = read_u32_ne_raw(entry, 4).ok()?;
-                let descriptor = read_i32_ne_raw(entry, 0).ok()?;
-                (kind == libc::PROX_FDTYPE_SOCKET as u32).then_some(descriptor)
-            })
-            .collect();
-    }
-}
-
-fn socket_handle(pid: u32, descriptor: i32) -> Result<Option<u64>, String> {
-    let mut capacity = 256_usize;
-    loop {
-        let mut bytes = vec![0_u8; capacity];
-        let actual = unsafe {
-            libc::proc_pidfdinfo(
-                pid as libc::c_int,
-                descriptor,
-                PROC_PIDFDSOCKETINFO,
-                bytes.as_mut_ptr().cast(),
-                bytes.len() as libc::c_int,
-            )
-        };
-        if actual <= 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ENOMEM) {
-                capacity = capacity.saturating_mul(2);
+        let address = match record.family {
+            4 => IpAddr::V4(Ipv4Addr::new(
+                record.address[0],
+                record.address[1],
+                record.address[2],
+                record.address[3],
+            )),
+            6 => IpAddr::V6(Ipv6Addr::from(record.address)),
+            _ => {
+                scan.uncertain("unsupported socket address family");
                 continue;
             }
-            return Ok(None);
-        }
-        if actual as usize > bytes.len() {
-            capacity = actual as usize;
+        };
+        let Ok(port) = u16::try_from(record.port) else {
+            scan.uncertain("invalid socket port");
+            continue;
+        };
+        if record.socket_handle == 0 || port == 0 {
+            scan.uncertain("unusable socket identity");
             continue;
         }
-        let bytes = &bytes[..actual as usize];
-        return decode_socket_handle(bytes, pid, descriptor);
+        if endpoints
+            .values()
+            .any(|endpoint| endpoint.host.ip() == address && endpoint.port == port)
+        {
+            scan.records.push(SocketRecord {
+                address,
+                port,
+                identity: KernelSocketIdentity::Macos {
+                    socket_handle: record.socket_handle,
+                    inpcb_generation: record.inpcb_generation,
+                },
+            });
+        }
     }
-}
-
-fn decode_socket_handle(bytes: &[u8], pid: u32, descriptor: i32) -> Result<Option<u64>, String> {
-    if bytes.len() < SOCKET_FDINFO_MIN_LEN {
-        return Err(format!(
-            "macOS socket fd info for pid {pid} fd {descriptor} used an unsupported layout"
-        ));
-    }
-    if read_u32_ne_raw(bytes, SOCKET_FDINFO_KIND_OFFSET)? != SOCKINFO_TCP
-        || read_u32_ne_raw(bytes, SOCKET_FDINFO_PROTOCOL_OFFSET)? != libc::IPPROTO_TCP as u32
-        || !matches!(
-            read_u32_ne_raw(bytes, SOCKET_FDINFO_FAMILY_OFFSET)? as libc::c_int,
-            libc::AF_INET | libc::AF_INET6
-        )
-    {
-        return Ok(None);
-    }
-    let handle = read_u64_ne_raw(bytes, SOCKET_FDINFO_SO_OFFSET)?;
-    Ok((handle != 0).then_some(handle))
-}
-
-fn read_u32_ne(bytes: &[u8], offset: usize) -> Result<u32, ParseFailure> {
-    read_u32_ne_raw(bytes, offset).map_err(ParseFailure::Invalid)
-}
-
-fn read_u16_be(bytes: &[u8], offset: usize) -> Result<u16, ParseFailure> {
-    Ok(u16::from_be_bytes(read_array(bytes, offset).ok_or_else(
-        || ParseFailure::Invalid("truncated macOS PCB u16 field".to_string()),
-    )?))
-}
-
-fn read_u64_ne(bytes: &[u8], offset: usize) -> Result<u64, ParseFailure> {
-    read_u64_ne_raw(bytes, offset).map_err(ParseFailure::Invalid)
-}
-
-fn read_u32_ne_raw(bytes: &[u8], offset: usize) -> Result<u32, String> {
-    Ok(u32::from_ne_bytes(
-        read_array(bytes, offset).ok_or_else(|| "truncated macOS u32 field".to_string())?,
-    ))
-}
-
-fn read_u64_ne_raw(bytes: &[u8], offset: usize) -> Result<u64, String> {
-    Ok(u64::from_ne_bytes(
-        read_array(bytes, offset).ok_or_else(|| "truncated macOS u64 field".to_string())?,
-    ))
-}
-
-fn read_i32_ne_raw(bytes: &[u8], offset: usize) -> Result<i32, String> {
-    Ok(i32::from_ne_bytes(
-        read_array(bytes, offset).ok_or_else(|| "truncated macOS i32 field".to_string())?,
-    ))
-}
-
-fn align8(value: usize) -> Option<usize> {
-    value.checked_add(7).map(|value| value & !7)
+    scan
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn generation(generation: u64, socket_generation: u64) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(XINPGEN_LEN);
-        bytes.extend_from_slice(&(XINPGEN_LEN as u32).to_ne_bytes());
-        bytes.extend_from_slice(&1_u32.to_ne_bytes());
-        bytes.extend_from_slice(&generation.to_ne_bytes());
-        bytes.extend_from_slice(&socket_generation.to_ne_bytes());
-        bytes
-    }
-
-    fn record(kind: u32, length: usize) -> Vec<u8> {
-        let mut bytes = vec![0_u8; align8(length).unwrap()];
-        bytes[..4].copy_from_slice(&(length as u32).to_ne_bytes());
-        bytes[4..8].copy_from_slice(&kind.to_ne_bytes());
-        bytes
-    }
-
-    fn pcb_dump() -> Vec<u8> {
-        let mut dump = generation(7, 11);
-        let mut inpcb = record(XSO_INPCB, XINPCB_MIN_LEN);
-        inpcb[8..16].copy_from_slice(&31_u64.to_ne_bytes());
-        inpcb[18..20].copy_from_slice(&23080_u16.to_be_bytes());
-        inpcb[28..36].copy_from_slice(&37_u64.to_ne_bytes());
-        inpcb[44] = INP_IPV4;
-        inpcb[76..80].copy_from_slice(&Ipv4Addr::LOCALHOST.octets());
-        dump.extend(inpcb);
-        let mut socket = record(XSO_SOCKET, XSOCKET_MIN_LEN);
-        socket[8..16].copy_from_slice(&41_u64.to_ne_bytes());
-        socket[36..40].copy_from_slice(&(libc::IPPROTO_TCP as u32).to_ne_bytes());
-        socket[40..44].copy_from_slice(&(libc::AF_INET as u32).to_ne_bytes());
-        socket[64..68].copy_from_slice(&501_u32.to_ne_bytes());
-        socket[76..84].copy_from_slice(&43_u64.to_ne_bytes());
-        dump.extend(socket);
-        dump.extend(record(XSO_RCVBUF, 32));
-        dump.extend(record(XSO_SNDBUF, 32));
-        dump.extend(record(XSO_STATS, 136));
-        let mut tcp = record(XSO_TCPCB, 196);
-        tcp[36..40].copy_from_slice(&TCPS_LISTEN.to_ne_bytes());
-        dump.extend(tcp);
-        dump.extend(generation(7, 11));
-        dump
-    }
-
     #[test]
-    fn parser_rejects_generation_churn() {
-        let mut dump = pcb_dump();
-        let trailer = dump.len() - XINPGEN_LEN;
-        dump[trailer + 8..trailer + 16].copy_from_slice(&8_u64.to_ne_bytes());
-        assert!(matches!(
-            parse_pcblist(&dump),
-            Err(ParseFailure::GenerationChanged)
-        ));
-    }
-
-    #[test]
-    fn parser_rejects_pcb_count_discrepancy() {
-        let mut dump = pcb_dump();
-        let trailer = dump.len() - XINPGEN_LEN;
-        dump[4..8].copy_from_slice(&2_u32.to_ne_bytes());
-        dump[trailer + 4..trailer + 8].copy_from_slice(&2_u32.to_ne_bytes());
-        assert!(matches!(
-            parse_pcblist(&dump),
-            Err(ParseFailure::CountDiscrepancy {
-                header: 2,
-                trailer: 2,
-                decoded: 1
-            })
-        ));
-    }
-
-    #[test]
-    fn pcblist_enomem_retries_are_bounded() {
-        let mut attempts = 0;
-        let error = read_pcblist_bounded(|| {
-            attempts += 1;
-            Err(PcblistReadFailure::RetryableEnomem)
-        })
-        .expect_err("repeated PCB growth must exhaust instead of looping forever");
-
-        assert_eq!(attempts, PCBLIST_READ_ATTEMPTS);
-        assert!(error.contains("all 3 read attempts"));
-    }
-
-    #[test]
-    fn parser_rejects_record_kind_and_alignment_corruption() {
-        let mut wrong_kind = pcb_dump();
-        wrong_kind[XINPGEN_LEN + 4..XINPGEN_LEN + 8].copy_from_slice(&XSO_SOCKET.to_ne_bytes());
-        assert!(matches!(
-            parse_pcblist(&wrong_kind),
-            Err(ParseFailure::Invalid(_))
-        ));
-
-        let mut wrong_length = pcb_dump();
-        wrong_length[XINPGEN_LEN..XINPGEN_LEN + 4].copy_from_slice(&103_u32.to_ne_bytes());
-        assert!(matches!(
-            parse_pcblist(&wrong_length),
-            Err(ParseFailure::Invalid(_))
-        ));
-    }
-
-    #[test]
-    fn parser_retains_socket_identity_and_address() {
-        let records = parse_pcblist(&pcb_dump()).unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].identity.address, IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_eq!(records[0].identity.port, 23080);
-        assert_eq!(records[0].identity.uid, 501);
-        assert_eq!(
-            records[0].identity.kernel,
-            KernelSocketIdentity::Macos {
-                pcb: 31,
-                pcb_generation: 37,
-                socket: 41,
-                socket_generation: 43,
+    fn fd_list_growth_is_bounded_and_malformed_or_denied_reads_are_not_empty() {
+        let mut reads = 0;
+        let sockets = read_socket_fds(|fds| {
+            reads += 1;
+            if reads == 1 {
+                return Ok(std::mem::size_of_val(fds));
             }
+            fds[0] = libc::proc_fdinfo {
+                proc_fd: 7,
+                proc_fdtype: libc::PROX_FDTYPE_SOCKET as u32,
+            };
+            Ok(std::mem::size_of::<libc::proc_fdinfo>())
+        })
+        .unwrap();
+        assert_eq!(sockets, [7]);
+        assert_eq!(reads, 2);
+        assert!(read_socket_fds(|_| Err(io::Error::from_raw_os_error(libc::EPERM))).is_err());
+        assert!(read_socket_fds(|_| Ok(1)).is_err());
+        assert!(
+            read_socket_fds(|fds| {
+                fds[0].proc_fd = -1;
+                Ok(std::mem::size_of::<libc::proc_fdinfo>())
+            })
+            .is_err()
         );
-    }
-
-    #[test]
-    fn socket_info_handle_requires_tcp_layout() {
-        let mut bytes = vec![0_u8; SOCKET_FDINFO_MIN_LEN];
-        bytes[SOCKET_FDINFO_SO_OFFSET..SOCKET_FDINFO_SO_OFFSET + 8]
-            .copy_from_slice(&47_u64.to_ne_bytes());
-        bytes[SOCKET_FDINFO_PROTOCOL_OFFSET..SOCKET_FDINFO_PROTOCOL_OFFSET + 4]
-            .copy_from_slice(&(libc::IPPROTO_TCP as u32).to_ne_bytes());
-        bytes[SOCKET_FDINFO_FAMILY_OFFSET..SOCKET_FDINFO_FAMILY_OFFSET + 4]
-            .copy_from_slice(&(libc::AF_INET as u32).to_ne_bytes());
-        bytes[SOCKET_FDINFO_KIND_OFFSET..SOCKET_FDINFO_KIND_OFFSET + 4]
-            .copy_from_slice(&SOCKINFO_TCP.to_ne_bytes());
-        assert_eq!(decode_socket_handle(&bytes, 1, 2).unwrap(), Some(47));
-        for offset in [
-            SOCKET_FDINFO_KIND_OFFSET,
-            SOCKET_FDINFO_PROTOCOL_OFFSET,
-            SOCKET_FDINFO_FAMILY_OFFSET,
-        ] {
-            let mut invalid = bytes.clone();
-            invalid[offset..offset + 4].copy_from_slice(&0_u32.to_ne_bytes());
-            assert_eq!(decode_socket_handle(&invalid, 1, 2).unwrap(), None);
-        }
-        assert!(decode_socket_handle(&bytes[..SOCKET_FDINFO_MIN_LEN - 1], 1, 2).is_err());
-        bytes[SOCKET_FDINFO_SO_OFFSET..SOCKET_FDINFO_SO_OFFSET + 8]
-            .copy_from_slice(&0_u64.to_ne_bytes());
-        assert_eq!(decode_socket_handle(&bytes, 1, 2).unwrap(), None);
+        reads = 0;
+        assert!(
+            read_socket_fds(|fds| {
+                reads += 1;
+                Ok(std::mem::size_of_val(fds))
+            })
+            .is_err()
+        );
+        assert_eq!(reads, 11); // capacities 64 through 65536, inclusive
+        assert!(read_socket_fds(|_| Ok(0)).unwrap().is_empty());
     }
 }

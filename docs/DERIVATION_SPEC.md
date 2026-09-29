@@ -34,6 +34,17 @@ Vocabulary follows the task–service algebra: a *task* is a leaf
   collation is a spec violation.
 - **Dedup** is set semantics under byte equality.
 
+Every service invocation participates in the same closure and validation
+traversal: start, ready scalar or attached ready probes in endpoint-id order,
+then health scalar or attached health probes in endpoint-id order. Tasks follow
+in canonical task order. Package-shaped tools used only by endpoint probes
+still contribute closures. Probe attachment is preserved through normalization
+and lowering; bare host/port placeholders resolve to that endpoint rather than
+the primary. Endpoint-bearing services have a nonempty endpoint map and a
+member primary; endpoint-less services have scalar ready/health invocations.
+Both phases require positive ProbePolicy bounds and prohibit invocation-level
+deadlines and inherited stdin.
+
 ### 1.1 `run[0]` resolution and the executable closure
 
 An invocation's `tools` is a list of declared closure ids. Each tool closure

@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::{KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord, read_array};
-use crate::service::process::{platform_start_identity, process_group};
+use super::{KernelSocketIdentity, SocketRecord, SocketScan, read_array};
 
 const NETLINK_SOCK_DIAG: libc::c_int = 4;
 const SOCK_DIAG_BY_FAMILY: u16 = 20;
@@ -19,7 +17,6 @@ const NLMSG_ERROR: u16 = 2;
 const NLMSG_DONE: u16 = 3;
 const NLMSG_OVERRUN: u16 = 4;
 const TCP_LISTEN: u8 = 10;
-const INET_DIAG_SKV6ONLY: u16 = 11;
 const NLMSG_HEADER_LEN: usize = 16;
 const INET_DIAG_MSG_LEN: usize = 72;
 const RECEIVE_BUFFER_LEN: usize = 1024 * 1024;
@@ -58,14 +55,98 @@ struct NetlinkHeader {
     pid: u32,
 }
 
-pub(super) fn snapshot() -> Result<Vec<ListenerRecord>, String> {
-    let mut records = dump_family(libc::AF_INET as u8)?;
-    records.extend(dump_family(libc::AF_INET6 as u8)?);
-    records.sort_by(|left, right| left.identity.cmp(&right.identity));
-    Ok(records)
+/// Only managed PID descriptors are inspected. Kernel TCP records are used as
+/// positive correlations; no unrelated process FD inventory is consulted.
+pub(super) fn inspect(
+    pid: u32,
+    endpoints: &BTreeMap<String, &super::SelectedEndpoint>,
+) -> SocketScan {
+    let mut scan = SocketScan::default();
+    let mut held = BTreeMap::new();
+    let descriptors = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+        Ok(entries) => entries,
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                scan.uncertain(format!("cannot list managed socket FDs: {error}"));
+            }
+            return scan;
+        }
+    };
+    for (index, descriptor) in descriptors.enumerate() {
+        if index >= super::MAX_DESCRIPTORS {
+            scan.uncertain("managed FD list exceeds bound");
+            break;
+        }
+        let descriptor = match descriptor {
+            Ok(fd) => fd,
+            Err(error) => {
+                scan.uncertain(error.to_string());
+                continue;
+            }
+        };
+        match std::fs::read_link(descriptor.path()) {
+            Ok(target) => {
+                let text = target.to_string_lossy();
+                if let Some(raw) = text.strip_prefix("socket:[") {
+                    match raw
+                        .strip_suffix(']')
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .filter(|inode| *inode != 0)
+                    {
+                        Some(inode) => {
+                            held.insert(descriptor.path(), inode);
+                        }
+                        None => scan.uncertain("malformed managed socket inode"),
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => scan.uncertain(format!("cannot inspect managed socket FD: {error}")),
+        }
+    }
+    if held.is_empty() {
+        return scan;
+    }
+    let inodes = held.values().copied().collect::<BTreeSet<_>>();
+    for family in [libc::AF_INET, libc::AF_INET6] {
+        if !endpoints
+            .values()
+            .any(|e| e.host.ip().is_ipv4() == (family == libc::AF_INET))
+        {
+            continue;
+        }
+        if let Err(error) = dump_family(family as u8, &inodes, &mut scan.records) {
+            scan.uncertain(error);
+        }
+    }
+    // An inode in a previous FD table is insufficient: retain only sockets
+    // still held by the same candidate descriptor after kernel observation.
+    let mut still_held = BTreeSet::new();
+    for (path, inode) in held {
+        match std::fs::read_link(path) {
+            Ok(target) if target.to_string_lossy() == format!("socket:[{inode}]") => {
+                still_held.insert(inode);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => scan.uncertain(format!("cannot recheck managed socket FD: {error}")),
+        }
+    }
+    scan.records.retain(|record| {
+        let KernelSocketIdentity::Linux { inode, .. } = record.identity;
+        still_held.contains(&inode)
+            && endpoints
+                .values()
+                .any(|e| e.host.ip() == record.address && e.port == record.port)
+    });
+    scan
 }
 
-fn dump_family(family: u8) -> Result<Vec<ListenerRecord>, String> {
+fn dump_family(
+    family: u8,
+    inodes: &BTreeSet<u32>,
+    records: &mut Vec<SocketRecord>,
+) -> Result<(), String> {
     let raw = unsafe {
         libc::socket(
             libc::AF_NETLINK,
@@ -99,6 +180,22 @@ fn dump_family(family: u8) -> Result<Vec<ListenerRecord>, String> {
         ));
     }
 
+    let timeout = libc::timeval {
+        tv_sec: 1,
+        tv_usec: 0,
+    };
+    if unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&raw const timeout).cast(),
+            std::mem::size_of_val(&timeout) as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err("cannot bound socket observation".to_string());
+    }
     let sequence = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let request = InetDiagRequest {
         family,
@@ -147,9 +244,8 @@ fn dump_family(family: u8) -> Result<Vec<ListenerRecord>, String> {
         ));
     }
 
-    let mut records = Vec::new();
     let mut buffer = vec![0_u8; RECEIVE_BUFFER_LEN];
-    loop {
+    for _ in 0..64 {
         // SAFETY: zero initializes the receive address and message header.
         let mut sender = unsafe { std::mem::zeroed::<libc::sockaddr_nl>() };
         let mut iov = libc::iovec {
@@ -182,12 +278,17 @@ fn dump_family(family: u8) -> Result<Vec<ListenerRecord>, String> {
                 sender.nl_pid
             ));
         }
-        let (parsed, done) = parse_datagram(&buffer[..received as usize], sequence, family)?;
-        records.extend(parsed);
-        if done {
-            return Ok(records);
+        if parse_datagram(
+            &buffer[..received as usize],
+            sequence,
+            family,
+            inodes,
+            records,
+        )? {
+            return Ok(());
         }
     }
+    Err("socket observation exceeded datagram bound".to_string())
 }
 
 fn append_struct_bytes<T>(target: &mut Vec<u8>, value: &T) {
@@ -203,8 +304,9 @@ fn parse_datagram(
     bytes: &[u8],
     sequence: u32,
     family: u8,
-) -> Result<(Vec<ListenerRecord>, bool), String> {
-    let mut records = Vec::new();
+    inodes: &BTreeSet<u32>,
+    records: &mut Vec<SocketRecord>,
+) -> Result<bool, String> {
     let mut done = false;
     let mut offset = 0_usize;
     while offset < bytes.len() {
@@ -257,7 +359,14 @@ fn parse_datagram(
             NLMSG_OVERRUN => {
                 return Err("NETLINK_SOCK_DIAG reported receive overrun".to_string());
             }
-            SOCK_DIAG_BY_FAMILY => records.push(parse_listener(payload, family)?),
+            SOCK_DIAG_BY_FAMILY => {
+                if payload.len() < INET_DIAG_MSG_LEN {
+                    return Err("truncated inet_diag_msg".to_string());
+                }
+                if inodes.contains(&read_u32_ne(payload, 68)?) {
+                    records.push(parse_listener(payload, family)?);
+                }
+            }
             other => {
                 return Err(format!("unexpected NETLINK_SOCK_DIAG message type {other}"));
             }
@@ -272,10 +381,10 @@ fn parse_datagram(
             offset += aligned;
         }
     }
-    Ok((records, done))
+    Ok(done)
 }
 
-fn parse_listener(payload: &[u8], requested_family: u8) -> Result<ListenerRecord, String> {
+fn parse_listener(payload: &[u8], requested_family: u8) -> Result<SocketRecord, String> {
     if payload.len() < INET_DIAG_MSG_LEN {
         return Err("truncated inet_diag_msg".to_string());
     }
@@ -307,144 +416,15 @@ fn parse_listener(payload: &[u8], requested_family: u8) -> Result<ListenerRecord
         other => return Err(format!("unsupported inet_diag_msg family {other}")),
     };
     let cookie = [read_u32_ne(payload, 44)?, read_u32_ne(payload, 48)?];
-    let uid = read_u32_ne(payload, 64)?;
     let inode = read_u32_ne(payload, 68)?;
-    let mut ipv6_only = None;
-    let mut offset = INET_DIAG_MSG_LEN;
-    while offset < payload.len() {
-        if payload.len() - offset < 4 {
-            return Err("truncated inet_diag attribute header".to_string());
-        }
-        let length = read_u16_ne(payload, offset)? as usize;
-        let kind = read_u16_ne(payload, offset + 2)?;
-        if length < 4 || length > payload.len() - offset {
-            return Err(format!("invalid inet_diag attribute length {length}"));
-        }
-        if kind == INET_DIAG_SKV6ONLY {
-            if length != 5 {
-                return Err(format!(
-                    "INET_DIAG_SKV6ONLY has invalid payload length {}",
-                    length - 4
-                ));
-            }
-            ipv6_only = Some(match payload[offset + 4] {
-                0 => false,
-                1 => true,
-                other => {
-                    return Err(format!("INET_DIAG_SKV6ONLY has invalid value {other}"));
-                }
-            });
-        }
-        let aligned = align4(length).ok_or_else(|| "attribute length overflow".to_string())?;
-        if aligned > payload.len() - offset {
-            if length != payload.len() - offset {
-                return Err("truncated inet_diag attribute padding".to_string());
-            }
-            offset = payload.len();
-        } else {
-            offset += aligned;
-        }
+    if inode == 0 || cookie == [u32::MAX; 2] {
+        return Err("listener has no usable kernel socket identity".to_string());
     }
-    if matches!(address, IpAddr::V6(_)) && ipv6_only.is_none() {
-        return Err("IPv6 listener omitted required INET_DIAG_SKV6ONLY".to_string());
-    }
-    Ok(ListenerRecord {
-        identity: ListenerIdentity {
-            address,
-            port,
-            kernel: KernelSocketIdentity::Linux { inode, cookie },
-            uid,
-            ipv6_only,
-        },
-        holders: Vec::new(),
-        pid_hints: Vec::new(),
+    Ok(SocketRecord {
+        address,
+        port,
+        identity: KernelSocketIdentity::Linux { inode, cookie },
     })
-}
-
-pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
-    let euid = unsafe { libc::geteuid() } as u32;
-    let mut indexes_by_inode = BTreeMap::<u32, Vec<usize>>::new();
-    for (index, record) in records.iter().enumerate() {
-        // A different socket UID is already complete proof of an outside holder;
-        // do not let an intentionally inaccessible foreign fd table weaken that
-        // evidence into PORT_UNVERIFIABLE.
-        if record.identity.uid != euid {
-            continue;
-        }
-        let KernelSocketIdentity::Linux { inode, .. } = record.identity.kernel;
-        indexes_by_inode.entry(inode).or_default().push(index);
-    }
-    if indexes_by_inode.is_empty() {
-        return Ok(());
-    }
-    let entries = std::fs::read_dir("/proc")
-        .map_err(|error| format!("failed to inspect /proc for listener holders: {error}"))?;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-            continue;
-        };
-        if pid == 0 {
-            continue;
-        }
-        let process_path = entry.path();
-        let metadata = match std::fs::metadata(&process_path) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        if metadata.uid() != euid {
-            continue;
-        }
-        let descriptors = match std::fs::read_dir(process_path.join("fd")) {
-            Ok(descriptors) => descriptors,
-            Err(_) => continue,
-        };
-        let mut held = BTreeSet::new();
-        for descriptor in descriptors {
-            let descriptor = match descriptor {
-                Ok(descriptor) => descriptor,
-                Err(_) => continue,
-            };
-            let target = match std::fs::read_link(descriptor.path()) {
-                Ok(target) => target,
-                Err(_) => continue,
-            };
-            let target = target.to_string_lossy();
-            let Some(inode) = target
-                .strip_prefix("socket:[")
-                .and_then(|value| value.strip_suffix(']'))
-                .and_then(|value| value.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            if indexes_by_inode.contains_key(&inode) {
-                held.insert(inode);
-            }
-        }
-        if held.is_empty() {
-            continue;
-        }
-        let Some(pgid) = process_group(pid).map_err(|error| error.message)? else {
-            continue;
-        };
-        let holder = ListenerHolder {
-            pid,
-            pgid,
-            platform_start: platform_start_identity(pid),
-        };
-        for inode in held {
-            for index in indexes_by_inode.get(&inode).into_iter().flatten() {
-                records[*index].holders.push(holder.clone());
-            }
-        }
-    }
-    for record in records {
-        record.holders.sort_by_key(|holder| holder.pid);
-        record.holders.dedup_by_key(|holder| holder.pid);
-    }
-    Ok(())
 }
 
 fn read_u16_ne(bytes: &[u8], offset: usize) -> Result<u16, String> {
@@ -479,144 +459,77 @@ fn align4(value: usize) -> Option<usize> {
 mod tests {
     use super::*;
 
-    fn message(message_type: u16, flags: u16, sequence: u32, payload: &[u8]) -> Vec<u8> {
-        let length = NLMSG_HEADER_LEN + payload.len();
-        let mut bytes = Vec::with_capacity(align4(length).unwrap());
-        bytes.extend_from_slice(&(length as u32).to_ne_bytes());
-        bytes.extend_from_slice(&message_type.to_ne_bytes());
-        bytes.extend_from_slice(&flags.to_ne_bytes());
-        bytes.extend_from_slice(&sequence.to_ne_bytes());
-        bytes.extend_from_slice(&0_u32.to_ne_bytes());
-        bytes.extend_from_slice(payload);
-        bytes.resize(align4(length).unwrap(), 0);
-        bytes
-    }
-
-    fn diag_payload(family: u8, address: IpAddr, port: u16, v6only: Option<bool>) -> Vec<u8> {
-        let mut bytes = vec![0_u8; INET_DIAG_MSG_LEN];
+    fn payload(family: u8) -> Vec<u8> {
+        let mut bytes = vec![0; INET_DIAG_MSG_LEN];
         bytes[0] = family;
         bytes[1] = TCP_LISTEN;
-        bytes[4..6].copy_from_slice(&port.to_be_bytes());
-        match address {
-            IpAddr::V4(address) => bytes[8..12].copy_from_slice(&address.octets()),
-            IpAddr::V6(address) => bytes[8..24].copy_from_slice(&address.octets()),
+        bytes[4..6].copy_from_slice(&23080_u16.to_be_bytes());
+        if family == libc::AF_INET as u8 {
+            bytes[8..12].copy_from_slice(&[127, 0, 0, 1]);
+        } else {
+            bytes[23] = 1;
         }
         bytes[44..48].copy_from_slice(&7_u32.to_ne_bytes());
         bytes[48..52].copy_from_slice(&8_u32.to_ne_bytes());
-        bytes[64..68].copy_from_slice(&1000_u32.to_ne_bytes());
         bytes[68..72].copy_from_slice(&42_u32.to_ne_bytes());
-        if let Some(v6only) = v6only {
-            bytes.extend_from_slice(&5_u16.to_ne_bytes());
-            bytes.extend_from_slice(&INET_DIAG_SKV6ONLY.to_ne_bytes());
-            bytes.push(u8::from(v6only));
-            bytes.extend_from_slice(&[0; 3]);
-        }
         bytes
     }
 
     #[test]
-    fn parser_rejects_interrupted_dump() {
-        let bytes = message(NLMSG_DONE, NLM_F_DUMP_INTR, 17, &[]);
-        assert!(
-            parse_datagram(&bytes, 17, libc::AF_INET as u8)
-                .unwrap_err()
-                .contains("interrupted")
-        );
-    }
-
-    #[test]
-    fn parser_requires_ipv6_only_evidence() {
-        let payload = diag_payload(
-            libc::AF_INET6 as u8,
-            IpAddr::V6(Ipv6Addr::LOCALHOST),
-            23080,
-            None,
-        );
-        let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 19, &payload);
-        assert!(
-            parse_datagram(&bytes, 19, libc::AF_INET6 as u8)
-                .unwrap_err()
-                .contains("SKV6ONLY")
-        );
-    }
-
-    #[test]
-    fn ipv4_listener_preserves_optional_kernel_mode_in_diagnostics() {
-        for (mode, expected) in [
-            (None, serde_json::Value::Null),
-            (Some(false), serde_json::json!(false)),
-            (Some(true), serde_json::json!(true)),
-        ] {
-            let payload = diag_payload(
-                libc::AF_INET as u8,
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                23080,
-                mode,
-            );
-            let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 23, &payload);
-            let record = parse_datagram(&bytes, 23, libc::AF_INET as u8)
-                .unwrap()
-                .0
-                .pop()
-                .unwrap();
+    fn positive_decode_needs_exact_family_listen_state_and_usable_identity() {
+        for family in [libc::AF_INET as u8, libc::AF_INET6 as u8] {
+            let good = payload(family);
+            let record = parse_listener(&good, family).unwrap();
+            assert_eq!(record.port, 23080);
             assert_eq!(
-                serde_json::to_value(record.identity).unwrap(),
-                serde_json::json!({
-                    "family": "ipv4", "address": "127.0.0.1", "port": 23080,
-                    "kernel": { "platform": "linux", "inode": 42, "cookie": [7, 8] },
-                    "uid": 1000, "ipv6Only": expected
-                })
+                record.identity,
+                KernelSocketIdentity::Linux {
+                    inode: 42,
+                    cookie: [7, 8]
+                }
             );
+            for mutation in 0..5 {
+                let mut bytes = good.clone();
+                match mutation {
+                    0 => {
+                        bytes.pop();
+                    }
+                    1 => bytes[1] = 6,
+                    2 => bytes[0] = 0,
+                    3 => bytes[68..72].fill(0),
+                    _ => bytes[44..52].fill(255),
+                }
+                assert!(parse_listener(&bytes, family).is_err());
+            }
         }
     }
 
     #[test]
-    fn parser_retains_listener_identity_and_ipv6_mode() {
-        let payload = diag_payload(
-            libc::AF_INET6 as u8,
-            IpAddr::V6(Ipv6Addr::LOCALHOST),
-            23080,
-            Some(false),
-        );
-        let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 23, &payload);
-        let record = parse_datagram(&bytes, 23, libc::AF_INET6 as u8)
-            .unwrap()
-            .0
-            .pop()
-            .unwrap();
-        assert_eq!(record.identity.address, IpAddr::V6(Ipv6Addr::LOCALHOST));
-        assert_eq!(record.identity.port, 23080);
-        assert_eq!(record.identity.uid, 1000);
-        assert_eq!(record.identity.ipv6_only, Some(false));
-        assert_eq!(
-            record.identity.kernel,
-            KernelSocketIdentity::Linux {
-                inode: 42,
-                cookie: [7, 8]
-            }
-        );
-    }
-
-    #[test]
-    fn parser_rejects_time_wait_as_listener_evidence() {
-        let mut payload = diag_payload(
-            libc::AF_INET as u8,
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            23080,
-            None,
-        );
-        payload[1] = 6; // TCP_TIME_WAIT
-        let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 29, &payload);
+    fn partial_stream_preserves_a_positive_sighting_without_certifying_absence() {
+        let payload = payload(libc::AF_INET as u8);
+        let header = NetlinkHeader {
+            length: 88,
+            message_type: SOCK_DIAG_BY_FAMILY,
+            flags: 0,
+            sequence: 17,
+            pid: 0,
+        };
+        let mut bytes = Vec::new();
+        append_struct_bytes(&mut bytes, &header);
+        bytes.extend_from_slice(&payload);
+        bytes.push(0); // a malformed later record cannot erase the observation
+        let mut records = Vec::new();
         assert!(
-            parse_datagram(&bytes, 29, libc::AF_INET as u8)
-                .unwrap_err()
-                .contains("non-listener")
+            parse_datagram(
+                &bytes,
+                17,
+                libc::AF_INET as u8,
+                &BTreeSet::from([42]),
+                &mut records
+            )
+            .is_err()
         );
-    }
-
-    #[test]
-    fn live_snapshot_excludes_non_listeners() {
-        let records = snapshot().unwrap();
-        assert!(records.iter().all(|record| record.identity.port != 0));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 }

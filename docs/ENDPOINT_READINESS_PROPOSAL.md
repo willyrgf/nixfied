@@ -1,11 +1,38 @@
 # Managed-listener and application-probed endpoint readiness
 
-Status: implementation handoff design, 29 September 2026. The macOS FD-only
-and Reth protocol-probe feasibility checks passed on this host with the pinned Reth
-package. Production implementation, failure-path proof, and the exact ABI
-cutover remain open. This is not the shipped contract. Until a complete
-cutover is implemented and verified, [`CONTRACT.md`](CONTRACT.md) remains
-normative and endpoint starts that return `PORT_UNVERIFIABLE` still refuse.
+Status: implemented, 29 September 2026. The exact manifest/runtime ABI cutover,
+managed-FD observers, complete-round commit boundary and attached adapter probes
+are present. [CONTRACT.md](CONTRACT.md) is the shipped normative specification;
+the design below records the decisions and their limits. Linux verification is
+recorded below. Production macOS compilation, execution and calibration remain
+pending the macOS `.#ci` run; the earlier prototype is not release coverage.
+
+## Implementation verification
+
+Linux `.#check`, the fixture-backed `.#test` floor (including Postgres
+recovery), and `.#gate -- --dirty` passed. Release runtime, CLI and installer
+builds also passed. Focused
+observer tests cover exact IPv4/IPv6, both IPv6-only modes, bound nonlisteners,
+wildcards, replacement, shared sockets, inspection uncertainty and stale leader
+identity. Integration tests cover a process-tree descendant, a reparented group
+member, nonprimary probe failure, replacement during the final probe, complete
+round retries, health and endpoint-less services. Raw event assertions check
+holder and socket identity encodings and settled probe references; injected
+failures at each coupled success write prove transactional rollback.
+macOS-only tests compile the production SDK decoder against denied, short and
+incoherent libproc records and exercise bounded FD-list growth.
+
+The Reth runtime gate measures both a cold successful lifecycle and a failing
+nonprimary WebSocket probe. On this aarch64-linux host it measured 2–3 seconds
+for the successful lifecycle and 3 seconds for the failing lifecycle (whole-second
+wall-clock samples). Both policies use five attempts, 2000 ms per endpoint probe,
+and 500 ms between rounds: `5 * 3 * 2000 + 4 * 500 = 32000` ms per phase.
+The successful parent deadline is 120 seconds. The failure gate checks the
+32-second command/retry ceiling plus a 10-second stop budget and a 3-second
+overhead margin, and proves no endpoint success event or dependent task was
+committed. Missing-listener startup rounds consume attempts too, so the gate
+requires one through five failed WebSocket probes rather than assuming every
+round reached its probes. Repeat these measurements on macOS.
 
 ## Decision to develop
 
@@ -110,8 +137,8 @@ and a real WebSocket upgrade and masked JSON-RPC exchange; a JWT-signed
 `engine_exchangeCapabilities` call returned 17 method names. Missing and
 incorrect JWTs both returned HTTP 401 in repeated runs. A nonexistent method
 returned **HTTP 200 with a JSON-RPC error**, which the check rejected. The
-current adapter's `curl -sf` exit alone would accept that last response, so
-the adapter cutover must validate JSON-RPC bodies, not only transport status.
+former adapter's `curl -sf` exit alone accepted that response; the implemented
+helper validates the JSON-RPC body as well as transport status.
 These methods follow
 the [Reth JSON-RPC transport guide](https://reth.rs/jsonrpc/intro/) and the
 [Engine API capabilities](https://github.com/ethereum/execution-apis/blob/main/src/engine/common.md)
@@ -366,7 +393,7 @@ argument. The check does not mutate chain state or require an instance
 challenge. Authenticated Engine API availability is the claim, not response
 identity.
 
-The current Reth phase policy (`120` attempts, `2000` ms per probe, `500` ms
+The former Reth phase policy (`120` attempts, `2000` ms per probe, `500` ms
 between attempts) was sized for one scalar probe. With three serial probes,
 its conservative command-time upper estimate exceeds the runtime gate's
 60-second task timeout. For a phase with `N` endpoints, compute the command

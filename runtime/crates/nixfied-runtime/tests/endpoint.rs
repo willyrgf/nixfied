@@ -30,7 +30,7 @@ fn session_listener_blocks_an_independent_root_before_prepare_then_releases() {
     let first = HeldSession::start(&fixture, &root_a);
     assert!(find_named(&root_a, "endpoint-prepare-sentinel").is_some());
     let blocked = run_command(&fixture, &root_b).output().unwrap();
-    assert_port_conflict(&blocked, "listener-occupied", port);
+    assert_port_conflict(&blocked, "bind-unavailable", port);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
     first.finish();
     let second = HeldSession::start(&fixture, &root_b);
@@ -99,7 +99,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
 }
 
 #[test]
-fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
+fn external_bind_after_preflight_preserves_service_exit_failure() {
     let _serial = serial();
     let port = available_port_window(1);
     let fixture = endpoint_fixture(port, true, false, "hold");
@@ -113,7 +113,8 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
     fs::write(sentinel.with_file_name("endpoint-prepare-ack"), b"continue").unwrap();
 
     let output = wait_for_child_output(runtime, Duration::from_secs(10));
-    let error = assert_port_conflict(&output, "listener-occupied", port);
+    let error = stderr_json(&output.stderr);
+    assert_eq!(error["code"], "PROC_ESCAPE");
     assert_eq!(error["details"]["failedService"], json!("synthetic"));
     assert!(error["details"]["runId"].is_string());
     assert_eq!(error["details"]["environment"], json!("dev"));
@@ -122,7 +123,7 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
 }
 
 #[test]
-fn external_exact_and_wildcard_listeners_fail_before_prepare() {
+fn preflight_obeys_exact_bind_availability_with_external_listeners() {
     let _serial = serial();
     for address in ["127.0.0.1", "0.0.0.0"] {
         let external = TcpListener::bind((address, 0)).unwrap();
@@ -132,8 +133,14 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
         let root = fixture.tmp.path.join("root");
 
         let output = run_command(&fixture, &root).output().unwrap();
-        assert_port_conflict(&output, "listener-occupied", port);
-        assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
+        if cfg!(target_os = "macos") && address == "0.0.0.0" {
+            // Darwin permits wildcard/exact SO_REUSEADDR coexistence.
+            assert_success(&output);
+            assert_eq!(external.local_addr().unwrap().port(), port);
+        } else {
+            assert_port_conflict(&output, "bind-unavailable", port);
+            assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
+        }
     }
 }
 
@@ -228,7 +235,7 @@ fn outside_listener_survives_predecessor_recovery_and_reports_conflict() {
     let external = TcpListener::bind(("127.0.0.1", port)).unwrap();
     predecessor.crash();
     let blocked = run_command(&fixture, &root).output().unwrap();
-    assert_port_conflict(&blocked, "listener-occupied", port);
+    assert_port_conflict(&blocked, "bind-unavailable", port);
     assert_eq!(
         service_evidence(&root, &old_key),
         ("stopped".into(), "settled".into())
@@ -244,10 +251,9 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
     let port = available_port_window(2);
     let mut manifest = endpoint_manifest(port, false, false, "hold");
     manifest["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
-    manifest["services"]["synthetic"]["endpoints"]["admin"] = json!({
-        "endpointId": "admin",
-        "host": "127.0.0.1"
-    });
+    manifest["services"]["synthetic"]["endpoints"]["admin"] =
+        manifest["services"]["synthetic"]["endpoints"]["synthetic-tcp"].clone();
+    manifest["services"]["synthetic"]["endpoints"]["admin"]["endpointId"] = json!("admin");
     let fixture = RuntimeFixture::new(manifest);
     let root = fixture.tmp.path.join("root");
 
@@ -294,6 +300,126 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
 }
 
 /// The same manifest shared by independent state roots under one fixture.
+#[test]
+fn production_observer_accepts_contained_descendants_and_reparented_group_members() {
+    let _serial = serial();
+    for (containment, mode) in [("process-tree", "child"), ("process-group", "reparented")] {
+        let temp = TempDir::new();
+        let holder = temp.path.join("holder");
+        let port = available_port_window(1);
+        let mut value = test_child_service(
+            &["listen-member", "${port}", mode, holder.to_str().unwrap()],
+            port,
+            port,
+        );
+        value["services"]["synthetic"]["containment"] = json!(containment);
+        set_task_run_args(&mut value, &["exit", "0"]);
+        let fixture = RuntimeFixture::new(value);
+        let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+        assert_success(&output);
+        let expected: u32 = fs::read_to_string(holder).unwrap().parse().unwrap();
+        let (leader, observed): (u32, u32) = fixture.registry().query_row(
+            "SELECT p.pid, json_extract(e.payload_json,'$.listener.holderPid') FROM events e JOIN processes p ON p.process_key=e.process_key WHERE e.event_type='endpoint.check-succeeded' LIMIT 1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_ne!(leader, observed);
+        assert_eq!(observed, expected);
+    }
+}
+
+#[test]
+fn whole_round_retries_every_endpoint_and_rejects_replacement_during_last_probe() {
+    let _serial = serial();
+    for replace in [false, true] {
+        let temp = TempDir::new();
+        let request = temp.path.join("replace");
+        let replaced = temp.path.join("replaced");
+        let counter = temp.path.join("primary-count");
+        let task = temp.path.join("task-started");
+        let port = available_port_window(2);
+        let mut value = test_child_service(
+            &[
+                "listen-pair",
+                "${port:a}",
+                "${port:z}",
+                request.to_str().unwrap(),
+                replaced.to_str().unwrap(),
+            ],
+            port,
+            port + 1,
+        );
+        let original = value["services"]["synthetic"]["endpoints"]["synthetic-tcp"].clone();
+        value["services"]["synthetic"]["endpoints"] = json!({"a": original.clone(), "z": original});
+        value["services"]["synthetic"]["primaryEndpoint"] = json!("a");
+        let shell = test_shell();
+        value["closures"]["round-probe"] = json!({
+            "kind": "executable", "storePath": closure_root_for_store_executable(Path::new(&shell)).unwrap(),
+            "executable": shell, "targetSystem": value["target"]["closureSystem"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        for (id, host, selected_port) in [("a", "127.0.0.1", port), ("z", "::1", port + 1)] {
+            let script = if id == "a" {
+                r#"test "$1:$2" = "$3:$4" || exit 9; n=0; if test -e "$5"; then read -r n < "$5"; fi; printf '%s\n' "$((n + 1))" > "$5""#
+            } else if replace {
+                r#"test "$1:$2" = "$3:$4" || exit 9; : > "$6"; while ! test -e "$7"; do :; done"#
+            } else {
+                r#"test "$1:$2" = "$3:$4" || exit 9; exit 7"#
+            };
+            let probe = json!({
+                "tools": ["round-probe"], "executable": shell,
+                "run": ["sh", "-c", script, "probe", "${host}", "${port}", host, selected_port.to_string(), counter, request, replaced],
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null"
+            });
+            let endpoint = &mut value["services"]["synthetic"]["endpoints"][id];
+            endpoint["endpointId"] = json!(id);
+            endpoint["host"] = json!(host);
+            endpoint["readyProbe"] = probe.clone();
+            endpoint["healthProbe"] = probe;
+        }
+        for phase in ["ready", "health"] {
+            value["services"]["synthetic"]["lifecycle"][phase]["policy"] =
+                json!({"timeoutMs": 2000, "retryIntervalMs": 20, "maxAttempts": 3});
+        }
+        set_task_run_args(&mut value, &["prepare", task.to_str().unwrap()]);
+        let fixture = RuntimeFixture::new(value);
+        let output = fixture.output("run", &["--task", "smoke", "--output", "json"]);
+        if replace {
+            assert_success(&output);
+            assert!(task.exists());
+            assert!(replaced.exists());
+        } else {
+            let error = stderr_json(&output.stderr);
+            assert_eq!(error["code"], "READINESS_TIMEOUT", "{error}");
+            assert_eq!(
+                error["details"]["lastRound"],
+                json!({"phase":"ready", "reason":"probe-failed", "endpointId":"z"})
+            );
+            assert!(!task.exists());
+        }
+        // Failed rounds never lend primary probe credit to a later round.
+        assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "3");
+        let connection = fixture.registry();
+        let checks: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_type='endpoint.check-succeeded'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(checks, if replace { 4 } else { 0 });
+        let initial_probes: i64 = connection.query_row(
+            "SELECT count(*) FROM processes WHERE stdout_path LIKE '%.ready.probe.0.stdout.log' OR stdout_path LIKE '%.ready.probe.1.stdout.log'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(initial_probes, 2);
+        let old_credits: i64 = connection.query_row(
+            "SELECT count(*) FROM events e JOIN processes p ON p.process_key=json_extract(e.payload_json,'$.probeProcessKey') WHERE e.event_type='endpoint.check-succeeded' AND (p.stdout_path LIKE '%.ready.probe.0.stdout.log' OR p.stdout_path LIKE '%.ready.probe.1.stdout.log')",
+            [], |row| row.get(0)
+        ).unwrap();
+        assert_eq!(old_credits, 0);
+    }
+}
+
 fn endpoint_fixture(
     port: u16,
     blocking_prepare: bool,

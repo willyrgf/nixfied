@@ -10,7 +10,7 @@ use std::time::Duration;
 
 pub use crate::template::Template;
 use nixfied_manifest::{ContainmentRequirement, OperationId, ServiceId, TaskId};
-pub use nixfied_manifest::{Endpoint, LoopbackHost, StdinPolicy, StopSignal};
+pub use nixfied_manifest::{LoopbackHost, StdinPolicy, StopSignal};
 
 /// A checked executable program. Only lowering constructs it; consumers receive
 /// shared references so graph validity cannot be invalidated after admission.
@@ -123,14 +123,7 @@ pub struct ExecService {
     pub health: HealthOp,
     pub stop: StopOp,
     pub clean: CleanOp,
-    /// The loopback endpoints the service binds, keyed by endpointId. Each is
-    /// assigned a port from the service's contiguous slot block, reserved, and
-    /// ownership-verified.
-    pub endpoints: BTreeMap<String, Endpoint>,
-    /// The endpoint bare `${port}`/`${host}` and the tcp readiness/health probe
-    /// resolve to, and the one a `connectsTo` dependent reaches by service id. A
-    /// key in `endpoints`; `None` for an endpoint-less service.
-    pub primary_endpoint: Option<String>,
+    pub addressing: ServiceAddressing,
     /// Same-slot services this service connects to; gates named endpoint
     /// placeholder resolution and orders service startup.
     pub connects_to: Vec<ServiceId>,
@@ -154,32 +147,98 @@ pub struct StartOp {
 #[derive(Debug, Clone)]
 pub struct ReadyOp {
     pub meta: OpMeta,
-    pub probe: Probe,
+    pub policy: ProbePolicy,
 }
 
 #[derive(Debug, Clone)]
 pub struct HealthOp {
     pub meta: OpMeta,
-    pub probe: Probe,
-}
-
-/// The closed set of probe mechanisms the executor honors. The wire shape is a
-/// kind-discriminated struct; the lowering proves coherence and produces this
-/// enum, so an exec-less exec probe (or a tcp probe carrying an exec) is
-/// unrepresentable past admission.
-#[derive(Debug, Clone)]
-pub enum Probe {
-    Tcp(ProbePolicy),
-    Exec(ExecProbe),
-}
-
-/// A short-lived bound command probe (e.g. `pg_isready`): success is exit 0.
-/// `timeout` is the per-attempt kill-after deadline — the exec spec's own
-/// timeout does not apply to probe attempts.
-#[derive(Debug, Clone)]
-pub struct ExecProbe {
-    pub exec: ResolvedInvocation,
     pub policy: ProbePolicy,
+}
+
+/// Admission constructs exactly one addressing alternative. Probes cannot become
+/// detached from their endpoint, and an endpoint set always has a primary member.
+#[derive(Debug, Clone)]
+pub enum ServiceAddressing {
+    Endpointless {
+        ready: Box<ResolvedInvocation>,
+        health: Box<ResolvedInvocation>,
+    },
+    Endpoints(EndpointSet),
+}
+
+#[derive(Debug, Clone)]
+pub struct EndpointSet {
+    primary: EndpointId,
+    entries: BTreeMap<EndpointId, EndpointPlan>,
+}
+
+impl EndpointSet {
+    pub(super) fn new(
+        primary: EndpointId,
+        entries: BTreeMap<EndpointId, EndpointPlan>,
+    ) -> Option<Self> {
+        entries
+            .contains_key(&primary)
+            .then_some(Self { primary, entries })
+    }
+
+    pub fn primary(&self) -> &EndpointId {
+        &self.primary
+    }
+    pub fn entries(&self) -> &BTreeMap<EndpointId, EndpointPlan> {
+        &self.entries
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EndpointId(String);
+
+impl EndpointId {
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        let mut chars = value.chars();
+        (chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .then(|| Self(value.to_string()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for EndpointId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for EndpointId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EndpointPlan {
+    pub host: LoopbackHost,
+    pub ready: ResolvedInvocation,
+    pub health: ResolvedInvocation,
+}
+
+impl ExecService {
+    pub fn endpoints(&self) -> impl Iterator<Item = (&EndpointId, &EndpointPlan)> {
+        match &self.addressing {
+            ServiceAddressing::Endpointless { .. } => None,
+            ServiceAddressing::Endpoints(set) => Some(set.entries.iter()),
+        }
+        .into_iter()
+        .flatten()
+    }
+    pub fn primary_endpoint(&self) -> Option<&EndpointId> {
+        match &self.addressing {
+            ServiceAddressing::Endpointless { .. } => None,
+            ServiceAddressing::Endpoints(set) => Some(set.primary()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -248,7 +307,7 @@ impl ResolvedInvocation {
     }
 }
 
-/// One probe attempt deadline and retry schedule; the mechanism owns this policy.
+/// Per-invocation deadline and the phase-owned whole-service retry schedule.
 #[derive(Debug, Clone)]
 pub struct ProbePolicy {
     pub label: String,

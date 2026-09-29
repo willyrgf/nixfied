@@ -1,13 +1,9 @@
-use std::net::SocketAddr;
-use std::time::Instant;
-
-use super::socket::{Connection, TcpSocket};
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use nixfied_manifest::LoopbackHost;
-
+use super::endpoint::{CompleteWitnessSet, ListenerWitness};
 use crate::cancellation::{CancellationToken, canceled_error};
-use crate::error::RuntimeResult;
+use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::ProbePolicy;
 use crate::redaction::Redactor;
 use crate::service::process::{
@@ -16,56 +12,137 @@ use crate::service::process::{
 };
 use crate::service::registry::{InvocationOwner, TaskTerminalStatus, mark_invocation_finished};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProbeAttempt {
-    Succeeded,
-    Failed(String),
+include!("../generated/readiness.rs");
+
+impl ProbePhase {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Health => "health",
+        }
+    }
 }
 
-/// Execute one tcp-connect probe attempt. Retry budgeting and endpoint
-/// ownership observation live together in `process.rs`.
-pub(crate) fn tcp_probe_attempt(
-    probe: &ProbePolicy,
-    host: LoopbackHost,
-    port: u16,
-    cancellation: &CancellationToken,
-    checkpoint: &mut dyn FnMut() -> RuntimeResult<()>,
-) -> RuntimeResult<ProbeAttempt> {
-    let socket_addr = SocketAddr::new(host.ip(), port);
-    let failed = |error: std::io::Error| {
-        ProbeAttempt::Failed(format!(
-            "probe {} did not connect to {socket_addr}: {error}",
-            probe.label
-        ))
-    };
-    cancellation.check()?;
-    checkpoint()?;
-    let started = Instant::now();
-    let socket = match TcpSocket::new(host.ip()) {
-        Ok(socket) => socket,
-        Err(error) => return Ok(failed(error)),
-    };
-    let mut state = socket.connect(host.ip(), port);
-    loop {
-        // Never accept a connection or failure without a fresh observation.
-        cancellation.check()?;
-        checkpoint()?;
-        let pending = match state {
-            Ok(Connection::Connected) => return Ok(ProbeAttempt::Succeeded),
-            Err(error) => return Ok(failed(error)),
-            Ok(Connection::Pending(pending)) => pending,
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoundFailure {
+    pub(crate) phase: ProbePhase,
+    pub(crate) reason: RoundReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) endpoint_id: Option<String>,
+}
+
+/// Minted only after exit zero and successful process/capture settlement.
+#[derive(Debug)]
+pub(crate) struct SuccessfulProbe(String);
+pub(crate) enum ProbeAttempt {
+    Succeeded(SuccessfulProbe),
+    Failed,
+    TimedOut,
+}
+
+/// One attempt owns its witnesses and successful invocations. This value is
+/// consumed on completion; retries cannot inherit previous successes.
+pub(crate) struct CheckingRound {
+    phase: ProbePhase,
+    initial: Option<CompleteWitnessSet>,
+    probes: BTreeMap<Option<String>, SuccessfulProbe>,
+}
+impl CheckingRound {
+    pub(crate) fn begin(phase: ProbePhase, initial: Option<CompleteWitnessSet>) -> Self {
+        Self {
+            phase,
+            initial,
+            probes: BTreeMap::new(),
+        }
+    }
+    pub(crate) fn initial(&self) -> Option<&CompleteWitnessSet> {
+        self.initial.as_ref()
+    }
+    pub(crate) fn record(
+        &mut self,
+        endpoint: Option<String>,
+        probe: SuccessfulProbe,
+    ) -> RuntimeResult<()> {
+        if self.probes.insert(endpoint, probe).is_some() {
+            return Err(RuntimeError::new(
+                ErrorCode::LifecycleFailed,
+                "duplicate probe credit in check round",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn complete(
+        self,
+        final_set: Option<CompleteWitnessSet>,
+    ) -> RuntimeResult<CompletedRound> {
+        let evidence = match (self.initial, final_set) {
+            (Some(initial), Some(final_set))
+                if initial.iter().next().is_some()
+                    && initial.matches(&final_set)
+                    && self
+                        .probes
+                        .keys()
+                        .filter_map(Option::as_ref)
+                        .eq(final_set.iter().map(|(id, _)| id))
+                    && !self.probes.contains_key(&None) =>
+            {
+                let mut probes = self.probes;
+                let mut entries = Vec::new();
+                for (id, witness) in final_set.into_entries() {
+                    let probe = probes.remove(&Some(id)).expect("checked probe key set");
+                    entries.push((witness, probe));
+                }
+                RoundEvidence::Endpoints(entries)
+            }
+            (None, None) if self.probes.len() == 1 && self.probes.contains_key(&None) => {
+                RoundEvidence::Endpointless(
+                    self.probes.into_values().next().expect("one scalar probe"),
+                )
+            }
+            _ => {
+                return Err(RuntimeError::new(
+                    ErrorCode::LifecycleFailed,
+                    "incomplete or mismatched check round",
+                ));
+            }
         };
-        let Some(remaining) = probe
-            .timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-        else {
-            return Ok(failed(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "connection attempt timed out",
-            )));
-        };
-        state = pending.poll(remaining);
+        Ok(CompletedRound {
+            phase: self.phase,
+            evidence,
+        })
+    }
+}
+
+enum RoundEvidence {
+    Endpointless(SuccessfulProbe),
+    Endpoints(Vec<(ListenerWitness, SuccessfulProbe)>),
+}
+/// The registry accepts only this private, complete proof, never parallel arrays.
+pub(crate) struct CompletedRound {
+    phase: ProbePhase,
+    evidence: RoundEvidence,
+}
+impl CompletedRound {
+    pub(crate) fn phase(&self) -> ProbePhase {
+        self.phase
+    }
+    pub(crate) fn endpoints(&self) -> impl Iterator<Item = (&ListenerWitness, &str)> {
+        match &self.evidence {
+            RoundEvidence::Endpoints(entries) => Some(entries.iter()),
+            RoundEvidence::Endpointless(_) => None,
+        }
+        .into_iter()
+        .flatten()
+        .map(|(witness, probe)| (witness, probe.0.as_str()))
+    }
+    pub(crate) fn probes(&self) -> Vec<&str> {
+        match &self.evidence {
+            RoundEvidence::Endpointless(probe) => vec![probe.0.as_str()],
+            RoundEvidence::Endpoints(entries) => {
+                entries.iter().map(|(_, probe)| probe.0.as_str()).collect()
+            }
+        }
     }
 }
 
@@ -166,24 +243,11 @@ pub(crate) fn exec_probe_attempt(
     )?;
     Ok(match outcome {
         CapturedExecOutcome::Canceled => return Err(canceled_error()),
-        CapturedExecOutcome::Exited(status) if status.success() => ProbeAttempt::Succeeded,
-        CapturedExecOutcome::Exited(status) => ProbeAttempt::Failed(format!(
-            "probe {} exited with code {} (probe logs: {}, {})",
-            probe.label,
-            status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            stdout_path.display(),
-            stderr_path.display(),
-        )),
-        CapturedExecOutcome::TimedOut => ProbeAttempt::Failed(format!(
-            "probe {} timed out after {}ms (probe logs: {}, {})",
-            probe.label,
-            probe.timeout.as_millis(),
-            stdout_path.display(),
-            stderr_path.display(),
-        )),
+        CapturedExecOutcome::Exited(status) if status.success() => {
+            ProbeAttempt::Succeeded(SuccessfulProbe(process_key))
+        }
+        CapturedExecOutcome::Exited(_) => ProbeAttempt::Failed,
+        CapturedExecOutcome::TimedOut => ProbeAttempt::TimedOut,
     })
 }
 
@@ -198,152 +262,40 @@ fn probe_terminal(outcome: &CapturedExecOutcome) -> (Option<i32>, TaskTerminalSt
     }
 }
 
+// Registry fault tests use real kernel witnesses while inserting probe outcomes
+// directly into their isolated database.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
-    use std::time::Duration;
-
-    fn policy(timeout: Duration) -> ProbePolicy {
-        ProbePolicy {
-            label: "tcp-test".into(),
-            timeout,
-            retry_interval: Duration::from_millis(1),
-            max_attempts: 1.try_into().unwrap(),
-        }
-    }
-
-    #[test]
-    fn tcp_probe_connects_once_and_refuses_a_closed_port() {
-        for ip in [
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            IpAddr::V6(Ipv6Addr::LOCALHOST),
-        ] {
-            let listener = TcpListener::bind(SocketAddr::new(ip, 0)).unwrap();
-            let port = listener.local_addr().unwrap().port();
-            listener.set_nonblocking(true).unwrap();
-            let host = LoopbackHost::parse(&ip.to_string()).unwrap();
-            assert!(matches!(
-                tcp_probe_attempt(
-                    &policy(Duration::from_secs(1)),
-                    host,
-                    port,
-                    &CancellationToken::new(),
-                    &mut || Ok(())
-                )
-                .unwrap(),
-                ProbeAttempt::Succeeded
-            ));
-            drop(listener.accept().unwrap());
-            assert_eq!(
-                listener.accept().unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
-            );
-            drop(listener);
-            assert!(matches!(
-                tcp_probe_attempt(
-                    &policy(Duration::from_secs(1)),
-                    host,
-                    port,
-                    &CancellationToken::new(),
-                    &mut || Ok(())
-                )
-                .unwrap(),
-                ProbeAttempt::Failed(_)
-            ));
-        }
-    }
-
-    // Linux's filled accept queue leaves a loopback connect pending. Keep every
-    // accepted connection open and never accept: no timing-dependent remote host
-    // or packet-filter changes are needed to exercise a real pending attempt.
-    #[cfg(target_os = "linux")]
-    fn saturated_listener() -> (TcpSocket, Vec<std::net::TcpStream>, u16) {
-        use std::os::fd::AsRawFd;
-        let ip = Ipv4Addr::LOCALHOST.into();
-        let listener = TcpSocket::new(ip).unwrap();
-        listener.bind(ip, 0).unwrap();
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
-        let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-        let mut length = std::mem::size_of_val(&address) as libc::socklen_t;
-        assert_eq!(
-            unsafe {
-                libc::getsockname(listener.as_raw_fd(), (&raw mut address).cast(), &mut length)
-            },
-            0
-        );
-        let port = u16::from_be(address.sin_port);
-        let mut clients = Vec::new();
-        for _ in 0..8 {
-            match std::net::TcpStream::connect_timeout(
-                &SocketAddr::new(ip, port),
-                Duration::from_millis(50),
-            ) {
-                Ok(client) => clients.push(client),
-                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                    return (listener, clients, port);
-                }
-                Err(error) => panic!("failed to fill listener queue: {error}"),
-            }
-        }
-        panic!("listener queue did not saturate");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn pending_tcp_attempt_observes_cancellation_failure_and_its_deadline() {
-        use crate::error::{ErrorCode, RuntimeError};
-        let (_listener, _clients, port) = saturated_listener();
-        let host = LoopbackHost::parse("127.0.0.1").unwrap();
-        for cancel in [true, false] {
-            let token = CancellationToken::new();
-            let mut observations = 0;
-            let started = Instant::now();
-            let error = tcp_probe_attempt(
-                &policy(Duration::from_secs(30)),
-                host,
-                port,
-                &token,
-                &mut || {
-                    observations += 1;
-                    if observations < 3 {
-                        return Ok(());
-                    }
-                    if cancel {
-                        token.cancel();
-                        token.check()
-                    } else {
-                        Err(RuntimeError::new(
-                            ErrorCode::DependencyUnavailable,
-                            "fixture service exited",
-                        ))
-                    }
-                },
-            )
-            .unwrap_err();
-            assert_eq!(
-                error.code,
-                if cancel {
-                    ErrorCode::Canceled
-                } else {
-                    ErrorCode::DependencyUnavailable
-                }
-            );
-            assert!(started.elapsed() < Duration::from_secs(2));
-        }
-        let started = Instant::now();
-        assert!(matches!(
-            tcp_probe_attempt(
-                &policy(Duration::from_millis(80)),
-                host,
-                port,
-                &CancellationToken::new(),
-                &mut || Ok(())
-            )
-            .unwrap(),
-            ProbeAttempt::Failed(_)
-        ));
-        assert!(started.elapsed() >= Duration::from_millis(80));
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
+pub(super) fn observed_test_round(
+    endpoint: &crate::service::SelectedEndpoint,
+    phase: ProbePhase,
+    probe_key: &str,
+) -> CompletedRound {
+    use super::endpoint::{ExpectedOwner, ListenerObservation, observe_listeners};
+    let pid = std::process::id();
+    let pgid = super::process::process_group(pid).unwrap().unwrap();
+    let start = super::process::platform_start_identity(pid).unwrap();
+    let owner = ExpectedOwner {
+        pid,
+        pgid,
+        platform_start: &start,
+        containment: nixfied_manifest::ContainmentRequirement::ProcessGroup,
+    };
+    let ListenerObservation::Complete(initial) =
+        observe_listeners([endpoint], &owner, None).unwrap()
+    else {
+        panic!("test listener missing")
+    };
+    let ListenerObservation::Complete(final_set) =
+        observe_listeners([endpoint], &owner, Some(&initial)).unwrap()
+    else {
+        panic!("test listener changed")
+    };
+    let mut round = CheckingRound::begin(phase, Some(initial));
+    round
+        .record(
+            Some(endpoint.endpoint_id.clone()),
+            SuccessfulProbe(probe_key.into()),
+        )
+        .unwrap();
+    round.complete(Some(final_set)).unwrap()
 }

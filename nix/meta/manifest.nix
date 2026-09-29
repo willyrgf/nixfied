@@ -69,7 +69,8 @@ let
       (field "operationId" (id "OperationId") required "RequiredPresent"
         "Globally unique operation identity."
       )
-      (field "probe" (ref "ProbeSpec") required "RequiredPresent" probeDescription)
+      (field "policy" (ref "ProbePolicy") required "RequiredPresent" "Whole-service round retry policy.")
+      (field "probe" (ref "Invocation") omitted "RequiredOmitAbsent" probeDescription)
       (field "terminal" (ref "TerminalSemantics") required "RequiredPresent" "Terminal evidence tokens.")
     ];
 in
@@ -80,9 +81,6 @@ in
       "Attested effect classes; native admission validates their coherence."
     )
     (vocabulary "StdinPolicy" "Closed stdin or inherited runtime-command stdin.")
-    (vocabulary "ProbeKind"
-      "TCP endpoint probe or bounded exec probe; native lowering checks the discriminator."
-    )
     (vocabulary "TaskKind"
       "Leaf invocation or static composite DAG; native lowering checks the discriminator."
     )
@@ -338,20 +336,18 @@ in
         (field "host" host required "RequiredPresent"
           "Loopback bind host with native parse/serde validation."
         )
+        (field "readyProbe" (ref "Invocation") required "RequiredPresent" "Application readiness check attached to this endpoint.")
+        (field "healthProbe" (ref "Invocation") required "RequiredPresent" "Application health check attached to this endpoint.")
       ]
     )
-    (record "ProbeSpec"
-      "Discriminator-plus-record probe shape; native validation rejects incoherent combinations."
+    (record "ProbePolicy"
+      "Per-invocation deadline and whole-service round retry budget."
       [
-        (field "kind" (enum "ProbeKind") required "RequiredPresent" "TCP or exec mechanism.")
-        (field "invocation" (ref "Invocation") omitted "RequiredOmitAbsent"
-          "Bound short-lived invocation for exec probes only."
-        )
         (field "timeoutMs" nz64 required "RequiredPresent"
-          "Per-attempt timeout in milliseconds, independent of invocation.timeoutMs."
+          "Per-invocation timeout in milliseconds; probe invocations cannot declare their own timeout."
         )
         (field "retryIntervalMs" nz64 required "RequiredPresent" "Delay between attempts in milliseconds.")
-        (field "maxAttempts" nz32 required "RequiredPresent" "Positive attempt limit.")
+        (field "maxAttempts" nz32 required "RequiredPresent" "Positive service-wide round limit.")
       ]
     )
     (record "TerminalSemantics" "Native lifecycle evidence result tokens." [

@@ -180,13 +180,29 @@ pub fn synthetic_manifest(
     port_start: u16,
     port_end: u16,
 ) -> Value {
-    fixtures::synthetic_manifest(&SyntheticManifestOptions {
+    let mut value = fixtures::synthetic_manifest(&SyntheticManifestOptions {
         executable: executable.to_string(),
         start_args: start_args.iter().map(|s| s.to_string()).collect(),
         port_start,
         port_end,
         ..SyntheticManifestOptions::default()
-    })
+    });
+    let child = test_child();
+    let executable = child.to_str().unwrap();
+    value["closures"]["fixture-probe"] = json!({
+        "kind": "executable", "storePath": closure_root_for_store_executable(&child).unwrap(),
+        "executable": executable, "targetSystem": value["target"]["closureSystem"],
+        "requiresExecutable": true, "effects": ["process"]
+    });
+    // These fixtures isolate listener/lifecycle behavior. Adapter tests own
+    // meaningful application-protocol assertions.
+    let probe = json!({
+        "tools": ["fixture-probe"], "run": [child.file_name().unwrap().to_str().unwrap(), "exit", "0"],
+        "executable": executable, "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null"
+    });
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] = probe.clone();
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] = probe;
+    value
 }
 
 /// [`synthetic_manifest`] with the default executable and start arguments.
@@ -263,8 +279,9 @@ pub fn add_service_clone(value: &mut Value, name: &str, start_args: &[&str], con
     run.truncate(1);
     run.extend(start_args.iter().map(|arg| json!(arg)));
     let endpoint = format!("{name}-tcp");
-    service["endpoints"] =
-        json!({ endpoint.clone(): { "endpointId": endpoint, "host": "127.0.0.1" } });
+    let mut entry = service["endpoints"]["synthetic-tcp"].clone();
+    entry["endpointId"] = json!(endpoint);
+    service["endpoints"] = json!({ endpoint.clone(): entry });
     service["primaryEndpoint"] = json!(endpoint);
     service["logRefs"] = json!([format!("service.{name}")]);
     service["connectsTo"] = json!(connects_to);

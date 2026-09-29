@@ -145,7 +145,12 @@ in
     select = [
       (entry "record" "primitive/ServiceSpec")
       (entry "record" "primitive/Lifecycle")
-      (entry "record" "primitive/ProbeSpec")
+      (entry "record" "primitive/ProbePolicy")
+      (entry "record" "output-schema/endpoint.check-succeeded")
+      (entry "record" "output-schema/listener-witness")
+      (entry "record" "output-schema/linux-socket-identity")
+      (entry "record" "output-schema/macos-socket-identity")
+      (entry "record" "output-schema/last-round")
       (entry "record" "primitive/Endpoint")
       (option [
         "nixfied"

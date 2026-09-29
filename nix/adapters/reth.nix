@@ -1,17 +1,16 @@
 # Reth (Ethereum dev node) reference adapter.
 #
 # Compiles a dev-mode reth node into the generic manifest primitives. The runtime
-# gains no Ethereum knowledge: start is a wrapper invocation that derives the node's
-# auxiliary ports and dev credentials, readiness and health are JSON-RPC
-# protocol probes (validated `eth_blockNumber` responses), the smoke task is the
-# same probe as a dependent task, and cleanup is the marker-gated runtime
+# gains no Ethereum knowledge: start is a wrapper invocation given the node's
+# planned ports and dev credentials. Readiness and health check HTTP, WebSocket
+# and authenticated Engine API exchanges; the smoke task repeats the HTTP check, and cleanup is the marker-gated runtime
 # primitive that removes the slot state.
 #
 # Reth in `--dev` binds three TCP listeners (http, ws, authrpc) and no p2p socket
 # (the dev chain is peerless, with discovery disabled). All three are modelled
 # endpoints: the planner assigns each a port from the service's contiguous slot
 # block, so every listener is reserved, conflict-checked against other
-# services/slots, and ownership-verified after readiness. The wrapper receives the
+# services/slots, and observed with its attached protocol check in each round. The wrapper receives the
 # three planned ports as arguments and derives nothing.
 #
 # The data directory lives under `${stateDir}/reth`, so marker-gated cleanup
@@ -100,9 +99,10 @@ let
     #!${pkgs.python3}/bin/python3
     ${builtins.readFile ./reth-probe.py}
   '';
-  rpcProbeInvocation = {
+  endpointProbe = mode: {
     tools = [ "reth-rpc-probe" ];
-    run = [ "nixfied-reth-probe" "http" "\${host}" "\${port}" ];
+    run = [ "nixfied-reth-probe" mode "\${host}" "\${port}" ]
+      ++ pkgs.lib.optional (mode == "authrpc") "\${stateDir}";
   };
 in
 {
@@ -142,21 +142,17 @@ in
       ready = {
         # Protocol readiness: an answered eth_blockNumber call, not a bound
         # port — reth listens well before the RPC layer serves requests.
-        probe = {
-          kind = "exec";
-          invocation = rpcProbeInvocation;
+        policy = {
           timeoutMs = 2000;
           retryIntervalMs = 500;
-          maxAttempts = 120;
+          maxAttempts = 5;
         };
       };
       health = {
-        probe = {
-          kind = "exec";
-          invocation = rpcProbeInvocation;
+        policy = {
           timeoutMs = 2000;
           retryIntervalMs = 500;
-          maxAttempts = 120;
+          maxAttempts = 5;
         };
       };
       stop = {
@@ -164,9 +160,9 @@ in
       };
     };
     endpoints = {
-      reth-http = { };
-      reth-ws = { };
-      reth-authrpc = { };
+      reth-http = { readyProbe = endpointProbe "http"; healthProbe = endpointProbe "http"; };
+      reth-ws = { readyProbe = endpointProbe "ws"; healthProbe = endpointProbe "ws"; };
+      reth-authrpc = { readyProbe = endpointProbe "authrpc"; healthProbe = endpointProbe "authrpc"; };
     };
     primaryEndpoint = "reth-http";
     stateRefs = [ "slot" ];
@@ -177,7 +173,7 @@ in
   # The adapter's smoke check is an ordinary named task adopters reference as
   # a step in their own composites.
   nixfied.tasks.reth-smoke = {
-    invocation = rpcProbeInvocation;
+    invocation = endpointProbe "http";
     requires = [ "reth" ];
     logRefs = [ "task.reth-smoke" ];
     summaryRefs = [ "summary" ];

@@ -65,8 +65,8 @@ fn service_registration_event_failure_prevents_workload_effects() {
 fn probe_registration_event_failure_prevents_workload_effects() {
     let port = available_port_window(1);
     let value = exec_probe_fixture_value(
-        &test_sleep(),
-        &["30"],
+        test_child().to_str().unwrap(),
+        LISTEN_HOLD,
         port,
         json!([
             "-c",
@@ -178,11 +178,11 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
     let stopped_process_status: String = fixture.query(
-        "SELECT status FROM processes WHERE run_id = 'run-service'",
+        "SELECT status FROM processes WHERE run_id = 'run-service' AND role='service'",
         [],
     );
     let stored_service_rows: i64 = fixture.query(
-        "SELECT count(*) FROM processes WHERE service_name = 'synthetic'",
+        "SELECT count(*) FROM processes WHERE service_name = 'synthetic' AND role='service'",
         [],
     );
     assert_eq!(stopped_process_status, "stopped");
@@ -223,10 +223,10 @@ fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
 }
 
 #[test]
-fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
+fn readiness_probe_marks_ready_only_after_complete_endpoint_round() {
     let port = available_port_window(1);
     let mut fixture = test_child_listener_fixture(port);
-    let service = fixture.start_ready("run-ready", port);
+    let mut service = fixture.start_ready("run-ready", port);
     let process_status: String = fixture.query(
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
@@ -236,13 +236,114 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         [&service.info().process_key],
     );
     let verified_events: i64 = fixture.query(
-        "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified' AND process_key = ?1",
+        "SELECT count(*) FROM events WHERE event_type = 'endpoint.check-succeeded' AND process_key = ?1",
         [&service.info().process_key],
     );
 
     assert_eq!(process_status, "ready");
     assert_eq!(ports, 1);
     assert_eq!(verified_events, 1);
+    service
+        .check_health(
+            &mut fixture.registry,
+            &CancellationToken::new(),
+            &mut || Ok(()),
+        )
+        .unwrap();
+    let events: Vec<Value> = fixture.registry.connection().prepare(
+        "SELECT payload_json FROM events WHERE event_type='endpoint.check-succeeded' ORDER BY seq"
+    ).unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .map(|row| serde_json::from_str(&row.unwrap()).unwrap()).collect();
+    assert_eq!(events.len(), 2);
+    for (event, phase) in events.iter().zip(["ready", "health"]) {
+        let keys: Vec<_> = event
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "address",
+                "endpointId",
+                "listener",
+                "phase",
+                "port",
+                "probeProcessKey"
+            ]
+        );
+        assert_eq!(event["phase"], phase);
+        assert_eq!(event["endpointId"], "synthetic-tcp");
+        assert_eq!(event["address"], "127.0.0.1");
+        assert_eq!(event["port"], port);
+        assert_eq!(event["listener"]["holderPid"], service.info().pid);
+        assert!(
+            !event["listener"]["holderStartIdentity"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        let socket = &event["listener"]["socketIdentity"];
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(socket["platform"], "linux");
+            assert!(socket["inode"].as_u64().unwrap() > 0);
+            let cookie = socket["cookie"].as_array().unwrap();
+            assert_eq!(cookie.len(), 2);
+            assert!(
+                cookie
+                    .iter()
+                    .all(|word| word.as_u64().unwrap() <= u32::MAX as u64)
+            );
+            assert!(
+                cookie
+                    .iter()
+                    .any(|word| word.as_u64() != Some(u32::MAX as u64))
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(socket["platform"], "macos");
+            for field in ["socketHandle", "inpcbGeneration"] {
+                let hex = socket[field].as_str().unwrap();
+                assert_eq!(hex.len(), 18);
+                assert!(hex.starts_with("0x"));
+                assert!(
+                    hex[2..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                );
+            }
+            assert_ne!(socket["socketHandle"], "0x0000000000000000");
+        }
+        let probes: i64 = fixture.query(
+            "SELECT count(*) FROM processes WHERE process_key=?1 AND role='probe' AND status='succeeded' AND exit_code=0 AND ownership='settled' AND capture='complete'",
+            [event["probeProcessKey"].as_str().unwrap()],
+        );
+        assert_eq!(probes, 1);
+    }
+    let health_service: String = fixture.query(
+        "SELECT json_extract(payload_json,'$.serviceId') FROM events WHERE event_type='service.lifecycle.terminal' AND json_extract(payload_json,'$.class')='health'",
+        [],
+    );
+    assert_eq!(health_service, "synthetic");
+    assert_eq!(events[0]["listener"], events[1]["listener"]);
+    assert_ne!(events[0]["probeProcessKey"], events[1]["probeProcessKey"]);
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type='service.probe-ready'",
+            []
+        ),
+        1
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type='port.owner-verified'",
+            []
+        ),
+        0
+    );
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
@@ -258,6 +359,64 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         )
         .unwrap();
     assert_eq!(settled, (1, "settled".into()));
+}
+
+#[test]
+fn check_success_transaction_rolls_back_every_coupled_write() {
+    for phase in ["ready", "health"] {
+        for rejected in [
+            "endpoint.check-succeeded",
+            "service.probe-ready",
+            "service.lifecycle.terminal",
+        ] {
+            if phase == "health" && rejected == "service.probe-ready" {
+                continue;
+            }
+            let port = available_port_window(1);
+            let mut fixture = test_child_listener_fixture(port);
+            let started = fixture.start("round-rollback", port).unwrap();
+            let mut ready = None;
+            let mut starting = None;
+            if phase == "health" {
+                ready = Some(fixture.ready(started).unwrap());
+            } else {
+                starting = Some(started);
+            }
+            let baseline: i64 = fixture.query("SELECT count(*) FROM events WHERE event_type IN ('endpoint.check-succeeded','service.probe-ready')", []);
+            fixture.registry.connection().execute_batch(&format!(
+                "CREATE TRIGGER reject_check BEFORE INSERT ON events WHEN NEW.event_type='{rejected}' AND (NEW.event_type!='service.lifecycle.terminal' OR json_extract(NEW.payload_json,'$.errorCode') IS NULL) BEGIN SELECT RAISE(ABORT,'injected'); END"
+            )).unwrap();
+            if let Some(started) = starting {
+                let (service, error) = fixture.ready(started).unwrap_err().into_parts();
+                assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+                assert_eq!(
+                    fixture
+                        .query::<String>("SELECT status FROM processes WHERE role='service'", []),
+                    "running"
+                );
+                service.finalize_failed_start(&mut fixture.registry, 1000, error);
+            } else {
+                let mut service = ready.unwrap();
+                let error = service
+                    .check_health(
+                        &mut fixture.registry,
+                        &CancellationToken::new(),
+                        &mut || Ok(()),
+                    )
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+                assert_eq!(
+                    fixture
+                        .query::<String>("SELECT status FROM processes WHERE role='service'", []),
+                    "ready"
+                );
+                service.finalize_failed_start(&mut fixture.registry, 1000, error);
+            }
+            assert_eq!(fixture.query::<i64>("SELECT count(*) FROM events WHERE event_type IN ('endpoint.check-succeeded','service.probe-ready')", []), baseline);
+            let successes: i64 = fixture.query("SELECT count(*) FROM events WHERE event_type='service.lifecycle.terminal' AND json_extract(payload_json,'$.class')=?1 AND json_extract(payload_json,'$.errorCode') IS NULL", [phase]);
+            assert_eq!(successes, 0, "{phase}: {rejected}");
+        }
+    }
 }
 
 #[test]
@@ -294,7 +453,7 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
             "
             SELECT
               (SELECT status FROM processes WHERE process_key = ?1),
-              (SELECT count(*) FROM events WHERE event_type = 'port.owner-verified')
+              (SELECT count(*) FROM events WHERE event_type = 'endpoint.check-succeeded')
             ",
             [&service.info().process_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -726,10 +885,10 @@ fn exec_probe_fixture_value(
     add_probe_shell_closure(&mut value);
     let mut run = vec![json!("sh")];
     run.extend(probe_args.as_array().expect("probe args").iter().cloned());
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "invocation": probe_shell_invocation(Value::Array(run)),
-        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": probe_attempts
-    });
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] =
+        probe_shell_invocation(Value::Array(run));
+    value["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
+        json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": probe_attempts});
     value
 }
 
@@ -754,8 +913,7 @@ fn probe_shell_invocation(run: Value) -> Value {
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
-        "stdin": "null",
-        "timeoutMs": 30000
+        "stdin": "null"
     })
 }
 
@@ -835,7 +993,13 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
 #[test]
 fn exec_ready_probe_failure_times_out_and_records_failed() {
     let port = available_port_window(1);
-    let value = exec_probe_fixture_value(&test_sleep(), &["30"], port, json!(["-c", "exit 7"]), 3);
+    let value = exec_probe_fixture_value(
+        test_child().to_str().unwrap(),
+        LISTEN_HOLD,
+        port,
+        json!(["-c", "exit 7"]),
+        3,
+    );
     let mut fixture = ServiceFixture::from_value(value);
     let service = fixture
         .start("run-exec-probe-fail", port)
@@ -873,10 +1037,9 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         );
     }
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
-    assert!(
-        error.message.contains("exited with code 7"),
-        "failure should carry the last attempt's exit code: {}",
-        error.message
+    assert_eq!(
+        error.details["lastRound"],
+        json!({"phase":"ready","reason":"probe-failed","endpointId":"synthetic-tcp"})
     );
     let process_key = service.info().process_key.clone();
     let error = service.finalize_failed_start(&mut fixture.registry, 1000, error);
@@ -889,7 +1052,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
 }
 
 #[test]
-fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout() {
+fn exec_probe_obeys_its_attempt_deadline() {
     for acknowledge in [true, false] {
         let port = available_port_window(1);
         let child = test_child();
@@ -906,10 +1069,8 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
             ]),
             1,
         );
-        value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["timeoutMs"] =
+        value["services"]["synthetic"]["lifecycle"]["ready"]["policy"]["timeoutMs"] =
             json!(if acknowledge { 2000 } else { 50 });
-        value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["timeoutMs"] =
-            json!(if acknowledge { 1 } else { 30000 });
         let mut fixture = ServiceFixture::from_value(value);
         let service = fixture.start("probe-deadline", port).unwrap();
         let root = fixture.placement.state_root().clone();
@@ -923,18 +1084,13 @@ fn exec_probe_uses_its_attempt_deadline_instead_of_authored_invocation_timeout()
         let result = fixture.ready(service);
         if let Some(acknowledger) = acknowledger {
             acknowledger.join().unwrap();
-            let service =
-                result.expect("the invocation's 1ms timeout must not truncate the probe attempt");
+            let service = result.expect("the probe should complete within its attempt deadline");
             service.stop(&mut fixture.registry, 1000).unwrap();
         } else {
             let (service, error) = result
                 .expect_err("the probe deadline must terminate a blocked attempt")
                 .into_parts();
-            assert!(
-                error.message.contains("timed out after 50ms"),
-                "{}",
-                error.message
-            );
+            assert_eq!(error.details["lastRound"]["reason"], "probe-timed-out");
             service.finalize_failed_start(&mut fixture.registry, 1000, error);
         }
     }
@@ -948,11 +1104,10 @@ fn exec_health_probe_failure_records_failed() {
         // service.failed evidence, not a clean stopped/completed registry state.
         let mut value = test_child_manifest(port, port);
         add_probe_shell_closure(&mut value);
-        value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
-            "kind": "exec",
-            "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
-            "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2
-        });
+        value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] =
+            probe_shell_invocation(json!(["sh", "-c", "exit 7"]));
+        value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
+            json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2});
         let mut fixture = ServiceFixture::from_value(value);
         let mut service = fixture.start_ready("run-exec-health-fail", port);
 
@@ -1111,8 +1266,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String =
-        fixture.query("SELECT status FROM processes WHERE role != 'service'", []);
+    let task_status: String = fixture.query("SELECT status FROM processes WHERE role = 'task'", []);
     let task_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
         [],
@@ -1179,8 +1333,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .iter()
         .filter(|process| process.service_instance_id.is_none())
         .collect::<Vec<_>>();
-    let task_status: String =
-        fixture.query("SELECT status FROM processes WHERE role != 'service'", []);
+    let task_status: String = fixture.query("SELECT status FROM processes WHERE role = 'task'", []);
     let task_events: i64 = fixture.query(
         "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.timed-out')",
         [],
@@ -1370,13 +1523,27 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     let program = invocation["run"][0].clone();
     invocation["run"] = json!([program, "output", "hex-block", "", "", request_arg]);
 
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "invocation": invocation,
-        "timeoutMs": 1000, "retryIntervalMs": 20, "maxAttempts": 1
-    });
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] = invocation;
+    value["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
+        json!({"timeoutMs": 1000, "retryIntervalMs": 20, "maxAttempts": 1});
+    // This fixture probes containment while no listener is declared.
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] =
+        value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"].clone();
+    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] =
+        value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"].clone();
+    value["services"]["synthetic"]
+        .as_object_mut()
+        .unwrap()
+        .remove("endpoints");
+    value["services"]["synthetic"]
+        .as_object_mut()
+        .unwrap()
+        .remove("primaryEndpoint");
+    value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
+    set_task_run_args(&mut value, &["exit", "0"]);
     let mut fixture = ServiceFixture::from_value(value);
     let service = fixture
-        .start("run-readiness-timeout-escape", port)
+        .start_endpoint_less("run-readiness-timeout-escape")
         .expect("service should initially start");
     assert!(
         wait_for_path(&armed, Duration::from_secs(3)),
@@ -2734,16 +2901,16 @@ fn endpoint_less_fixture_from(mut value: Value) -> ServiceFixture {
     value["services"]["synthetic"]["endpoints"] = json!(null);
     value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
     add_probe_shell_closure(&mut value);
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
-        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
-    });
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] =
+        probe_shell_invocation(json!(["sh", "-c", "exit 0"]));
+    value["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
+        json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5});
     // Health stays tcp in the fixture; make it an invocation probe too.
 
-    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
-        "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
-        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
-    });
+    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] =
+        probe_shell_invocation(json!(["sh", "-c", "exit 0"]));
+    value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
+        json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5});
     // The smoke task's bare placeholder has no endpoint to resolve against an
     // endpoint-less primary; the test exercises the service, not the task.
     set_task_run_args(&mut value, &["noop"]);
@@ -3018,8 +3185,18 @@ fn spawn_failure_after_prepare_settles_startup_and_allows_restored_retry() {
     fs::create_dir(executable_dir.path.join("bin")).unwrap();
     restore_executable_fixture(&executable);
     let port = available_port_window(1);
+    let mut value = synthetic_manifest(executable.to_str().unwrap(), &["30"], port, port);
+    value["closures"]
+        .as_object_mut()
+        .unwrap()
+        .remove("fixture-probe");
+    let mut probe = value["services"]["synthetic"]["lifecycle"]["start"]["invocation"].clone();
+    probe["run"] = json!(["sleep", "0"]);
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] = probe.clone();
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] = probe;
+    add_endpoint_prepare(&mut value, &["0"]);
     let mut fixture = ServiceFixture::from_manifest_in_store(
-        service_manifest_with_prepare(executable.to_str().unwrap(), &["30"], port),
+        serde_json::from_value(value).unwrap(),
         &executable_dir.path,
         TempDir::new(),
     );
@@ -3358,7 +3535,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     let conn = fixture.registry();
     let (task_status, pgid): (String, i32) = conn
         .query_row(
-            "SELECT status, pgid FROM processes WHERE role != 'service'",
+            "SELECT status, pgid FROM processes WHERE role = 'task'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -3466,7 +3643,7 @@ fn completed_prepare_evidence_survives_success_and_later_failures() {
             }
         });
         value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({"task": "prep"});
-        value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["maxAttempts"] = json!(2);
+        value["services"]["synthetic"]["lifecycle"]["ready"]["policy"]["maxAttempts"] = json!(2);
 
         let fixture = RuntimeFixture::new(&value);
         let state_base = &fixture.state_base;
@@ -3627,7 +3804,7 @@ fn wait_for_task_process_row(state_base: &Path, timeout: Duration) {
     poll_until(timeout, "a task process row", || {
         try_registry_ro(state_base)?
             .query_row(
-                "SELECT count(*) FROM processes WHERE role != 'service'",
+                "SELECT count(*) FROM processes WHERE role = 'task'",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -3769,11 +3946,10 @@ fn service_failure_before_any_node_writes_failed_summary() {
         let mut value = if fail_health {
             let mut value = test_child_manifest(port, port);
             add_probe_shell_closure(&mut value);
-            value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
-                "kind": "exec",
-                "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
-                "timeoutMs": 1000, "retryIntervalMs": 10, "maxAttempts": 1
-            });
+            value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] =
+                probe_shell_invocation(json!(["sh", "-c", "exit 7"]));
+            value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
+                json!({"timeoutMs": 1000, "retryIntervalMs": 10, "maxAttempts": 1});
             value
         } else {
             test_child_service(&["exit", "1"], port, port)

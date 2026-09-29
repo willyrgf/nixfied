@@ -4,6 +4,6 @@
 pub enum PortConflictReason {
     #[serde(rename = "startup-lock-contended")]
     StartupLockContended,
-    #[serde(rename = "listener-occupied")]
-    ListenerOccupied,
+    #[serde(rename = "bind-unavailable")]
+    BindUnavailable,
 }

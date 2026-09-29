@@ -81,6 +81,8 @@ let
     };
     endpoint = {
       endpointId = "${name}-tcp";
+      readyProbe = { tools = [ name ]; run = [ program ] ++ taskArgs; };
+      healthProbe = { tools = [ name ]; run = [ program ] ++ taskArgs; };
     };
     logRefs = [ "service.${name}" ];
   };

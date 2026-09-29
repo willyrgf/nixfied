@@ -503,6 +503,150 @@ non-empty string
 
 
 
+## nixfied\.services\.\<name>\.endpoint\.healthProbe
+
+
+
+Required application health invocation; bare host and port refer to this endpoint\.
+
+
+
+*Type:*
+submodule
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.codebaseId
+
+
+
+Codebase the invocation observes\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"main"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.cwd
+
+
+
+Confined relative working directory under the codebase\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"."
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.env
+
+
+
+Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned)\.
+
+
+
+*Type:*
+attribute set of string
+
+
+
+*Default:*
+
+```nix
+{ }
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.run
+
+
+
+Argv\. run\[0] must be the executable basename of one tool\.
+
+
+
+*Type:*
+non-empty (list of string)
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.stdin
+
+
+
+Whether the child receives closed stdin (` null `) or the runtime command’s stdin (` inherit `)\.
+
+
+
+*Type:*
+one of “null”, “inherit”
+
+
+
+*Default:*
+
+```nix
+"null"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.timeoutMs
+
+
+
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
+
+
+
+*Type:*
+null or (positive integer, meaning >0)
+
+
+
+*Default:*
+
+```nix
+null
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.healthProbe\.tools
+
+
+
+Tool set: declared closure ids or packages; their bin roots form the child PATH in order\.
+
+
+
+*Type:*
+non-empty (list of (non-empty string or package))
+
+
+
 ## nixfied\.services\.\<name>\.endpoint\.host
 
 
@@ -521,6 +665,150 @@ non-empty string
 ```nix
 "127.0.0.1"
 ```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe
+
+
+
+Required application readiness invocation; bare host and port refer to this endpoint\.
+
+
+
+*Type:*
+submodule
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.codebaseId
+
+
+
+Codebase the invocation observes\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"main"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.cwd
+
+
+
+Confined relative working directory under the codebase\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"."
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.env
+
+
+
+Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned)\.
+
+
+
+*Type:*
+attribute set of string
+
+
+
+*Default:*
+
+```nix
+{ }
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.run
+
+
+
+Argv\. run\[0] must be the executable basename of one tool\.
+
+
+
+*Type:*
+non-empty (list of string)
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.stdin
+
+
+
+Whether the child receives closed stdin (` null `) or the runtime command’s stdin (` inherit `)\.
+
+
+
+*Type:*
+one of “null”, “inherit”
+
+
+
+*Default:*
+
+```nix
+"null"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.timeoutMs
+
+
+
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
+
+
+
+*Type:*
+null or (positive integer, meaning >0)
+
+
+
+*Default:*
+
+```nix
+null
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoint\.readyProbe\.tools
+
+
+
+Tool set: declared closure ids or packages; their bin roots form the child PATH in order\.
+
+
+
+*Type:*
+non-empty (list of (non-empty string or package))
 
 
 
@@ -549,6 +837,150 @@ attribute set of (submodule)
 
 
 
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe
+
+
+
+Required application health invocation; bare host and port refer to this endpoint\.
+
+
+
+*Type:*
+submodule
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.codebaseId
+
+
+
+Codebase the invocation observes\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"main"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.cwd
+
+
+
+Confined relative working directory under the codebase\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"."
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.env
+
+
+
+Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned)\.
+
+
+
+*Type:*
+attribute set of string
+
+
+
+*Default:*
+
+```nix
+{ }
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.run
+
+
+
+Argv\. run\[0] must be the executable basename of one tool\.
+
+
+
+*Type:*
+non-empty (list of string)
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.stdin
+
+
+
+Whether the child receives closed stdin (` null `) or the runtime command’s stdin (` inherit `)\.
+
+
+
+*Type:*
+one of “null”, “inherit”
+
+
+
+*Default:*
+
+```nix
+"null"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.timeoutMs
+
+
+
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
+
+
+
+*Type:*
+null or (positive integer, meaning >0)
+
+
+
+*Default:*
+
+```nix
+null
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.healthProbe\.tools
+
+
+
+Tool set: declared closure ids or packages; their bin roots form the child PATH in order\.
+
+
+
+*Type:*
+non-empty (list of (non-empty string or package))
+
+
+
 ## nixfied\.services\.\<name>\.endpoints\.\<name>\.host
 
 
@@ -567,6 +999,150 @@ non-empty string
 ```nix
 "127.0.0.1"
 ```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe
+
+
+
+Required application readiness invocation; bare host and port refer to this endpoint\.
+
+
+
+*Type:*
+submodule
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.codebaseId
+
+
+
+Codebase the invocation observes\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"main"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.cwd
+
+
+
+Confined relative working directory under the codebase\.
+
+
+
+*Type:*
+non-empty string
+
+
+
+*Default:*
+
+```nix
+"."
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.env
+
+
+
+Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned)\.
+
+
+
+*Type:*
+attribute set of string
+
+
+
+*Default:*
+
+```nix
+{ }
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.run
+
+
+
+Argv\. run\[0] must be the executable basename of one tool\.
+
+
+
+*Type:*
+non-empty (list of string)
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.stdin
+
+
+
+Whether the child receives closed stdin (` null `) or the runtime command’s stdin (` inherit `)\.
+
+
+
+*Type:*
+one of “null”, “inherit”
+
+
+
+*Default:*
+
+```nix
+"null"
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.timeoutMs
+
+
+
+Optional task deadline in milliseconds\. Null means no deadline; cancellation and service liveness still apply\. Probe attempts use their own timeout\.
+
+
+
+*Type:*
+null or (positive integer, meaning >0)
+
+
+
+*Default:*
+
+```nix
+null
+```
+
+
+
+## nixfied\.services\.\<name>\.endpoints\.\<name>\.readyProbe\.tools
+
+
+
+Tool set: declared closure ids or packages; their bin roots form the child PATH in order\.
+
+
+
+*Type:*
+non-empty (list of (non-empty string or package))
 
 
 
@@ -717,11 +1293,11 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe
+## nixfied\.services\.\<name>\.lifecycle\.health\.policy
 
 
 
-How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe\.
+Per-invocation deadline and whole-service round retry budget\.
 
 
 
@@ -738,11 +1314,74 @@ submodule
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation
+## nixfied\.services\.\<name>\.lifecycle\.health\.policy\.maxAttempts
 
 
 
-The invocation an ` exec ` probe runs (e\.g\. pg_isready); must be null for ` tcp `\.
+Maximum number of whole-service rounds before readiness or health fails\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+20
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.health\.policy\.retryIntervalMs
+
+
+
+Delay in milliseconds between whole-service rounds\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+100
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.health\.policy\.timeoutMs
+
+
+
+Per-invocation timeout; attached probes must omit invocation-level timeoutMs\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+1000
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe
+
+
+
+Required invocation for an endpoint-less service; endpoint services attach probes to each endpoint instead\.
 
 
 
@@ -759,7 +1398,7 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.codebaseId
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.codebaseId
 
 
 
@@ -780,7 +1419,7 @@ non-empty string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.cwd
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.cwd
 
 
 
@@ -801,7 +1440,7 @@ non-empty string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.env
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.env
 
 
 
@@ -822,7 +1461,7 @@ attribute set of string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.run
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.run
 
 
 
@@ -835,7 +1474,7 @@ non-empty (list of string)
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.stdin
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.stdin
 
 
 
@@ -856,7 +1495,7 @@ one of “null”, “inherit”
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.timeoutMs
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.timeoutMs
 
 
 
@@ -877,7 +1516,7 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.invocation\.tools
+## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.tools
 
 
 
@@ -887,90 +1526,6 @@ Tool set: declared closure ids or packages; their bin roots form the child PATH 
 
 *Type:*
 non-empty (list of (non-empty string or package))
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.kind
-
-
-
-Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived invocation (exit 0 = success)\.
-
-
-
-*Type:*
-one of “tcp”, “exec”
-
-
-
-*Default:*
-
-```nix
-"tcp"
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.maxAttempts
-
-
-
-Maximum number of probe attempts before readiness or health fails\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-20
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.retryIntervalMs
-
-
-
-Delay in milliseconds between probe attempts\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-100
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.health\.probe\.timeoutMs
-
-
-
-Per-attempt probe timeout (the invocation’s own timeoutMs does not apply to probe attempts)\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-1000
-```
 
 
 
@@ -1108,11 +1663,11 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe
+## nixfied\.services\.\<name>\.lifecycle\.ready\.policy
 
 
 
-How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe\.
+Per-invocation deadline and whole-service round retry budget\.
 
 
 
@@ -1129,11 +1684,74 @@ submodule
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation
+## nixfied\.services\.\<name>\.lifecycle\.ready\.policy\.maxAttempts
 
 
 
-The invocation an ` exec ` probe runs (e\.g\. pg_isready); must be null for ` tcp `\.
+Maximum number of whole-service rounds before readiness or health fails\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+20
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.ready\.policy\.retryIntervalMs
+
+
+
+Delay in milliseconds between whole-service rounds\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+100
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.ready\.policy\.timeoutMs
+
+
+
+Per-invocation timeout; attached probes must omit invocation-level timeoutMs\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+1000
+```
+
+
+
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe
+
+
+
+Required invocation for an endpoint-less service; endpoint services attach probes to each endpoint instead\.
 
 
 
@@ -1150,7 +1768,7 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.codebaseId
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.codebaseId
 
 
 
@@ -1171,7 +1789,7 @@ non-empty string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.cwd
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.cwd
 
 
 
@@ -1192,7 +1810,7 @@ non-empty string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.env
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.env
 
 
 
@@ -1213,7 +1831,7 @@ attribute set of string
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.run
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.run
 
 
 
@@ -1226,7 +1844,7 @@ non-empty (list of string)
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.stdin
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.stdin
 
 
 
@@ -1247,7 +1865,7 @@ one of “null”, “inherit”
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.timeoutMs
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.timeoutMs
 
 
 
@@ -1268,7 +1886,7 @@ null
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.invocation\.tools
+## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.tools
 
 
 
@@ -1281,93 +1899,7 @@ non-empty (list of (non-empty string or package))
 
 
 
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.kind
-
-
-
-Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived invocation (exit 0 = success)\.
-
-
-
-*Type:*
-one of “tcp”, “exec”
-
-
-
-*Default:*
-
-```nix
-"tcp"
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.maxAttempts
-
-
-
-Maximum number of probe attempts before readiness or health fails\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-20
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.retryIntervalMs
-
-
-
-Delay in milliseconds between probe attempts\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-100
-```
-
-
-
-## nixfied\.services\.\<name>\.lifecycle\.ready\.probe\.timeoutMs
-
-
-
-Per-attempt probe timeout (the invocation’s own timeoutMs does not apply to probe attempts)\.
-
-
-
-*Type:*
-positive integer, meaning >0
-
-
-
-*Default:*
-
-```nix
-1000
-```
-
-
-
 ## nixfied\.services\.\<name>\.lifecycle\.ready\.terminal
-
-
 
 Typed terminal result tokens (defaulted per lifecycle class)\.
 
@@ -1802,8 +2334,8 @@ list of string
 
 
 
-The endpoint bare ${port}/${host} resolve to, the tcp readiness/health
-probe target, and the endpoint a connectsTo dependent reaches by service
+The endpoint bare ${port}/${host} in start resolve to,
+and the endpoint a connectsTo dependent reaches by service
 id\. Required with ` endpoints `; must name one of its keys\.
 
 
@@ -1935,6 +2467,8 @@ non-empty string
 
 
 ## nixfied\.state\.persistence
+
+
 
 The sole application-data retention policy: ` run-scoped ` data is deleted after safe session teardown and by ordinary ` clean `; ` persistent ` data survives sessions and ordinary ` clean `, and only explicit purge deletes it\.
 

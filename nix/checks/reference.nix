@@ -240,7 +240,10 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" option nixfied.target.system > system.txt
     grep -Fxq 'system' system.txt
     "$docs" options nixfied.services > options.txt
-    test "$(wc -l < options.txt)" -eq 75
+    grep -Fxq 'nixfied.services.<name>.endpoint.readyProbe.run' options.txt
+    grep -Fxq 'nixfied.services.<name>.endpoints.<name>.healthProbe.run' options.txt
+    grep -Fxq 'nixfied.services.<name>.lifecycle.ready.policy.maxAttempts' options.txt
+    if grep -Fq '.probe.kind' options.txt; then exit 1; fi
     "$docs" options 'nixfied.services.<name>.stateRefs' > exact.txt
     test "$(cat exact.txt)" = 'nixfied.services.<name>.stateRefs'
     "$docs" api function > functions.txt
