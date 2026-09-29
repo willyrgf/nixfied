@@ -78,6 +78,14 @@ and fails loudly rather than skipping coverage. Lifecycle fixtures also receive
 `NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_SHELL` from the same Nix environments, so
 their declared programs are realised store closures.
 
+The same `.#test` floor runs `nix/checks/reth-probe.py` with the pinned Python
+interpreter. Controlled HTTP, WebSocket, and authenticated peers exercise the
+adapter protocol helper, including raw malformed responses and credential-safe
+failure output. These socket tests run outside the build sandbox. The standalone
+`nix/checks/prove-reth-endpoint-probes.py` additionally exercises the helper
+against the pinned Reth binary; it is integration coverage, not a substitute for
+the independent negative wire cases.
+
 Runtime library tests that launch workloads require the sibling runtime binary.
 Before running `cargo test -p nixfied-runtime --lib` alone, run
 `cargo build -p nixfied-runtime` in the same Cargo target directory. The full
