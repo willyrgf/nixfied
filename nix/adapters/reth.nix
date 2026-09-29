@@ -3,7 +3,7 @@
 # Compiles a dev-mode reth node into the generic manifest primitives. The runtime
 # gains no Ethereum knowledge: start is a wrapper invocation that derives the node's
 # auxiliary ports and dev credentials, readiness and health are JSON-RPC
-# protocol probes (`curl` posting `eth_blockNumber`), the smoke task is the
+# protocol probes (validated `eth_blockNumber` responses), the smoke task is the
 # same probe as a dependent task, and cleanup is the marker-gated runtime
 # primitive that removes the slot state.
 #
@@ -96,20 +96,13 @@ let
     '';
   };
 
-  rpcProbeRun = [
-    "curl"
-    "-sf"
-    "-X"
-    "POST"
-    "-H"
-    "Content-Type: application/json"
-    "--data"
-    ''{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}''
-    "http://127.0.0.1:\${port}"
-  ];
+  rpcProbe = pkgs.writeScriptBin "nixfied-reth-probe" ''
+    #!${pkgs.python3}/bin/python3
+    ${builtins.readFile ./reth-probe.py}
+  '';
   rpcProbeInvocation = {
     tools = [ "reth-rpc-probe" ];
-    run = rpcProbeRun;
+    run = [ "nixfied-reth-probe" "http" "\${host}" "\${port}" ];
   };
 in
 {
@@ -123,12 +116,9 @@ in
     ];
   };
   nixfied.closures.reth-rpc-probe = {
-    package = pkgs.curl;
-    executable = "bin/curl";
-    effects = [
-      "process"
-      "network-listener"
-    ];
+    package = rpcProbe;
+    executable = "bin/nixfied-reth-probe";
+    effects = [ "process" ];
   };
 
   nixfied.services.reth = {
