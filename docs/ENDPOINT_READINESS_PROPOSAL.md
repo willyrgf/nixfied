@@ -1,10 +1,11 @@
 # Managed-listener and application-probed endpoint readiness
 
-Status: design for review, 29 September 2026. The product direction is agreed;
-the macOS FD-only feasibility gate and the exact ABI cutover remain open. This
-is not the shipped contract. Until a complete cutover is implemented and
-verified, [`CONTRACT.md`](CONTRACT.md) remains normative and endpoint starts
-that return `PORT_UNVERIFIABLE` still refuse.
+Status: design for review, 29 September 2026. The macOS FD-only and Reth
+protocol-probe feasibility checks passed on this host with the pinned Reth
+package. Production implementation, failure-path proof, and the exact ABI
+cutover remain open. This is not the shipped contract. Until a complete
+cutover is implemented and verified, [`CONTRACT.md`](CONTRACT.md) remains
+normative and endpoint starts that return `PORT_UNVERIFIABLE` still refuse.
 
 ## Decision to develop
 
@@ -69,11 +70,53 @@ carry local address, port, TCP state, and socket identity. The corresponding
 are private and subject to change; unsupported layouts or denied reads must be
 reported as uncertainty, never as an empty socket set.
 
-This evidence supports a candidate design, not an implementation proof. The
-checked-in macOS feasibility probe correlates a known child FD to a PCB socket
-handle. It does not yet prove that an FD-only decoder can establish the exact
-tuple and listen state on a host where the PCB body omits that child. That is
-the first implementation gate below.
+The original diagnostic correlates a known child FD to a PCB socket handle;
+the new controlled FD-only check below closes its main feasibility gap. It is
+still a prototype on one host, not proof that the production observer rejects
+every denied, malformed, or stale observation correctly.
+
+## Feasibility checks completed
+
+On Darwin 27.0.0 arm64, `cc -Wall -Wextra -Werror` built
+[`prove_macos_fd_listener.c`](../runtime/crates/nixfied-runtime/tests/fixtures/prove_macos_fd_listener.c).
+It ran without sudo or host PCB reads. `proc_pidinfo(PROC_PIDLISTFDS)` and
+`proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` supplied full `socket_fdinfo` records
+for a child and a reparented member of its process group. The check decoded
+exact IPv4 and IPv6 loopback tuples and TCP `LISTEN` for IPv6 listeners
+configured with either `IPV6_V6ONLY` value. It also checked socket identity
+and generation; it rejected a wildcard listener as an exact one, and rejected
+a bound socket that had not called `listen`. Closing and rebinding the
+same IPv4 tuple changed socket identity. `proc_listpgrppids` found the
+reparented member, and its FD was inspectable. Four direct-child runs and three
+reparented-member runs passed. The test uses the installed SDK structures and
+requires the complete returned record length, avoiding guessed field offsets.
+
+The same host's existing
+[`prove_observer_feasibility.py`](../tests/macos/prove_observer_feasibility.py)
+then reproduced the negative-inventory defect: five unprivileged samples
+advertised 64–65 PCB records but decoded only one, omitted its known child
+listener, and still read that child's socket FD. The C check's success does
+not depend on a PCB body at all. This establishes the proposed **positive
+FD-only path's feasibility on this host**, including a host context with the
+known PCB omission. The two fixtures used separate controlled children, so
+they do not supply a simultaneous same-socket PCB/FD comparison. They do not
+certify other macOS builds or host policies.
+
+The pinned `reth` package evaluated to version 1.9.3. The standalone
+[`prove-reth-endpoint-probes.py`](../nix/checks/prove-reth-endpoint-probes.py)
+started that binary with the adapter's three loopback listener flags and a
+temporary JWT file. It received a valid `eth_blockNumber` result over HTTP
+and a real WebSocket upgrade and masked JSON-RPC exchange; a JWT-signed
+`engine_exchangeCapabilities` call returned 17 method names. Missing and
+incorrect JWTs both returned HTTP 401 in repeated runs. A nonexistent method
+returned **HTTP 200 with a JSON-RPC error**, which the check rejected. The
+current adapter's `curl -sf` exit alone would accept that last response, so
+the adapter cutover must validate JSON-RPC bodies, not only transport status.
+These methods follow
+the [Reth JSON-RPC transport guide](https://reth.rs/jsonrpc/intro/) and the
+[Engine API capabilities](https://github.com/ethereum/execution-apis/blob/main/src/engine/common.md)
+and [JWT authentication](https://github.com/ethereum/execution-apis/blob/main/src/engine/authentication.md)
+specifications.
 
 ## Owners and rejection boundaries
 
@@ -213,9 +256,9 @@ unsupported or malformed records, or unbounded list growth. The containment
 owner's inability to establish process identity or membership remains a
 separate `PROC_ESCAPE` failure, before a complete witness can be constructed.
 Once a valid positive witness is found, unreadable unrelated candidate FDs
-need not defeat it; there is no
-exclusivity or negative completeness claim. If no witness is found and a
-candidate FD could not be inspected for a reason other than ordinary churn,
+need not defeat it; there is no exclusivity or negative completeness claim.
+If no witness is found and a candidate FD could not be inspected for a reason
+other than ordinary churn,
 the result is `Unverifiable`, not `Pending`. A missing witness must never be
 inferred from an empty result fabricated after an OS inspection error.
 
@@ -232,11 +275,12 @@ inspection remains an error. A listener retained solely by a fileport or
 queued socket right, with no inspectable managed listening FD, is outside the
 initial supported set.
 
-The macOS FD decoder is a release gate for this design. If it cannot establish
-the tuple, listen state, and socket identity under a supported unprivileged
-host policy, do not substitute the application probe or a privileged PCB scan
-as an implicit weaker fallback. Return to design review for a cooperating
-listener handoff, a different positive witness, or an explicit support limit.
+The production macOS FD decoder remains a release gate. It must reproduce
+the prototype's positive result and fail closed under supported host policies.
+If it cannot establish the tuple, listen state, and socket identity, do not
+substitute the application probe or a privileged PCB scan as an implicit
+weaker fallback. Return to design review for a cooperating listener handoff,
+a different positive witness, or an explicit support limit.
 
 ## Whole-service round and commit
 
@@ -285,6 +329,42 @@ requests one atomic operation. The success claim is limited to the observed
 round, the recorded witnesses, and completed invocation exits. No event or
 display should call the listener *exclusively owned* or attribute the probe
 response to the witness holder.
+
+## Reth adapter cutover
+
+Give Reth one adapter-owned, short-lived protocol-check helper with three
+closed modes. Package it as a declared closure and attach a mode-specific
+invocation to each endpoint's `readyProbe` and `healthProbe`. Pass only the
+mode, attached `${host}`, attached `${port}`, and, for authenticated RPC, the
+`${stateDir}` path. The helper must use the planned port supplied by the
+runtime and exit nonzero on transport, JSON parse, JSON-RPC `error`, missing
+`result`, wrong response ID, or wrong result shape. The standalone feasibility
+script demonstrates the required exchanges with Python's standard library;
+the production helper can reuse those routines without putting domain logic
+in Rust.
+
+| Endpoint | Required exchange | Accepted result |
+| --- | --- | --- |
+| `reth-http` | HTTP POST `eth_blockNumber` | JSON-RPC 2.0 response with matching ID and a hex quantity result |
+| `reth-ws` | RFC 6455 upgrade, then a masked text-frame `eth_blockNumber` request | Valid upgrade and JSON-RPC 2.0 response with matching ID and a hex quantity result |
+| `reth-authrpc` | HTTP POST `engine_exchangeCapabilities` with `params: [[]]` and a fresh HS256 JWT | JSON-RPC 2.0 response with matching ID and a nonempty string array of Engine API methods |
+
+Read the existing `${stateDir}/reth/config/jwt.hex` file that the adapter's
+start wrapper supplies to Reth. Generate a short-lived JWT with an `iat` claim
+inside the helper. Keep the secret and token out of the manifest, invocation
+arguments/environment, runtime command JSON, and printed output; only the
+state path crosses the invocation boundary. The helper can make the HTTP
+request directly, so it need not pass the bearer token as a child process
+argument. The check does not mutate chain state or require an instance
+challenge. Authenticated Engine API availability is the claim, not response
+identity.
+
+The current Reth phase policy (`120` attempts, `2000` ms per probe, `500` ms
+between attempts) was sized for one scalar probe. With three serial probes,
+its conservative command-time upper estimate exceeds the runtime gate's
+60-second task timeout. Choose phase budgets and gate timeout together during
+the cutover, then prove cold startup and a bounded failure on both platforms.
+Do not silently keep the old attempt count while multiplying per-round work.
 
 ## Evidence and ABI cutover
 
@@ -347,17 +427,18 @@ the options source and regenerate `OPTIONS.md`; do not hand-edit generated
 output. Old manifest bytes must reject rather than silently acquire new
 semantics. The proposal does not itself change normative behavior.
 
-## Proof gates
+## Implementation proof gates
 
-1. **macOS feasibility:** with no sudo, independently decode `LISTEN`, exact
-   IPv4/IPv6 local tuple, bind mode, and stable socket identity from a known
-   child's FD. Prove the runtime's positive path is independent of a missing
-   or incomplete host PCB stream by injecting that condition. Repeat on a
-   host or context that omits the known child if one is reproducible. Exercise
-   direct child, contained descendant, and a reparented process-group member;
-   FD loss/replacement, process exit, PID reuse, denied inspection,
-   malformed/unsupported layout, and list growth. Establish which OS calls
-   succeed under supported host policies; a header layout alone is not proof.
+1. **Production OS observer:** carry the successful macOS FD-only prototype
+   into the Rust observer without a PCB dependency. Check the decoded record
+   length and SDK layout; reproduce exact IPv4/IPv6, both IPv6-only modes,
+   `LISTEN`, wildcard rejection, replacement detection, and process-group
+   members. Add controlled process-tree descendants and fault injection for
+   FD loss, process exit and PID reuse, denied inspection, malformed or
+   unsupported layout, and bounded list growth. A missing or partial host PCB
+   stream must be irrelevant. Prove the corresponding positive-only Linux
+   path and its inspection-error handling. Repeat on supported macOS host
+   policies; this one-host prototype is not release coverage.
 2. **Admission and authoring:** Nix and raw Rust reject omitted or misplaced
    endpoint probes, partial multi-endpoint coverage, the removed TCP-only form,
    endpoint-less mixes, invalid invocation references, and malformed wire
@@ -381,24 +462,15 @@ semantics. The proposal does not itself change normative behavior.
    IPv6-only modes and exact IPv4/IPv6 address matching. Verify that a partial
    unrelated host inventory does not turn a positive managed witness into a
    false refusal or a negative host claim.
-5. **Cross-layer delivery:** give Postgres its existing protocol check on its
-   endpoint; provide meaningful checks for Reth's HTTP, WebSocket, and
-   authenticated RPC endpoints, including whatever credentials its authenticated
-   probe requires; update synthetic fixtures. Run focused Nix, manifest,
-   runtime, and raw event/output tests, then the cross-layer `.#ci -- --dirty`
-   gate on Linux and macOS. Report release and integration coverage separately.
+5. **Cross-layer delivery:** attach Postgres's existing protocol check to its
+   endpoint and package the three demonstrated Reth checks as declared probe
+   invocations; update synthetic fixtures. Test a JSON-RPC HTTP 200 error,
+   missing and incorrect JWT, incorrect WebSocket upgrade, wrong response ID,
+   and nonprimary probe failure. Reconcile Reth's phase budget with the runtime
+   gate timeout. Run focused Nix, manifest, runtime, and raw event/output
+   tests, then the cross-layer `.#ci -- --dirty` gate on Linux and macOS.
+   Report release and integration coverage separately.
 
-## Questions for the next review
-
-- Does a process-scoped FD witness remain available on a macOS host or context
-  where `pcblist_n` omits that very listener? Direct FD proof and injected
-  stream independence are required first; reproduce the old access behavior
-  where possible and retain fail-closed inspection errors.
-- Is the initial FD-only supported set sufficient for Nixfied's declared
-  services, or is a positively inspectable fileport-held listener required?
-- Can every supported Reth endpoint be probed with a meaningful protocol
-  request using its current closure and secret-delivery rules? Settle that
-  adapter feasibility before freezing the manifest cutover.
-- Do any supported adapters need an instance-specific challenge? If so, define
-  that in the adapter's protocol rather than claiming an opaque exec probe
-  generally proves responder identity.
+Fileport-only listeners remain outside the initial supported set. Responder
+identity remains an explicit limit of opaque application invocations; an
+adapter that needs it must provide an instance-specific challenge and proof.
