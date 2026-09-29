@@ -1,10 +1,10 @@
 # macOS 27 TCP listener inventory and endpoint ownership
 
 Status: investigated locally on macOS 27.0.1 (build 26A434, Darwin 27.0.0),
-Apple Silicon, 29 September 2026. The endpoint integration proof is not passing
-on this host. This is an investigation and design gate, not a change to shipped
-behavior. See also the
-[`privileged observer design review`](docs/PORT_OBSERVER_DESIGN_REVIEW.md).
+Apple Silicon, 29 September 2026. The recorded endpoint integration attempt
+failed on this host. This is an investigation and design gate, not a change to
+shipped behavior. See the follow-up
+[`endpoint readiness proposal`](docs/ENDPOINT_READINESS_PROPOSAL.md).
 
 ## The guarantee at risk
 
@@ -75,6 +75,14 @@ The checked-in
 repeated the baseline. In one five-sample run, the `xinpgen` counts were 50–51,
 one PCB was decoded, the observing process's listener was present, and its
 stable child listener was absent every time.
+
+Later unprivileged runs of the same checked-in probe on the same macOS build
+decoded 67/67 and 64–65/64–65 advertised PCB records and found and correlated
+the child socket FD. A subsequent five-sample run decoded 69/70 and then
+70/71 advertised records while still finding and correlating the child in
+every sample. This does not explain the earlier visibility failure or certify
+a complete negative inventory. It does show that count disagreement can
+coexist with a useful positive observation of the known child.
 
 ## Privileged observations supplied by the user
 
@@ -169,17 +177,20 @@ printed `no_listener_fd_while_queued: true`,
 `git diff --check` passed for the checked-in probes. These experiments do not
 replace the macOS endpoint integration gate.
 
-## Design consequence and proof gate
+## Proof gate for retaining strict PORT-1
 
-The accepted one-shot privileged observer remains a possible packaging and UX
-shape: only a narrow read-only helper needs inspection privilege, while the
-CLI and services stay under the invoking user. Its originally proposed macOS
-data source has failed. A revised observer must take listener discovery from a
-privileged **kernel TCP PCB inventory**, then correlate process FDs and
-fileports for current holder evidence. The runtime must retain one PORT-1
-meaning on Linux and macOS and reject unavailable, malformed, or incomplete
-observations as `PORT_UNVERIFIABLE`. A helper protocol or `sudo -n` rule cannot
-turn a partial data source into complete evidence.
+If the existing host-wide guarantee is retained, a one-shot privileged
+observer remains a possible packaging shape: only a narrow read-only helper
+needs inspection privilege, while the CLI and services stay under the invoking
+user. Its originally proposed macOS data source has failed. Such an observer
+would need listener discovery from a privileged **kernel TCP PCB inventory**,
+then process FD and fileport correlation for holder evidence. The runtime
+would need the same strict PORT-1 meaning on Linux and macOS and would reject
+unavailable, malformed, or incomplete observations as `PORT_UNVERIFIABLE`.
+A helper protocol or `sudo -n` rule cannot turn a partial data source into
+complete evidence. The follow-up
+[`endpoint readiness proposal`](docs/ENDPOINT_READINESS_PROPOSAL.md) instead
+develops a narrower positive managed-listener guarantee.
 
 The unresolved gate is a defensible completeness rule for a negative PCB
 snapshot under the installed kernel's access policy. Root visibility of known
@@ -190,21 +201,22 @@ replacement proof is equally unsound. Process/FD/fileport correlation also
 needs a precise treatment of a kernel-visible listener with no current
 process handle, such as the queued-rights case.
 
-Before a production cutover, establish that PCB rule and then prove exact and
-wildcard IPv4/IPv6 conflicts across UIDs, both IPv6-only modes, shared and
-transferred sockets, listener replacement and PID reuse, process-list growth
-and inspection denial, socket loss, `TIME_WAIT` restart, and missing or
-malformed observer responses. Run the same PORT-1 behavioral cases through
-Linux and macOS endpoint integration. Independently verify helper ownership,
-installation, upgrade, protocol, and authorization boundaries. The proof must
-cover accepted ownership and rejected or unverifiable cases; a successful
-host scan cannot stand in for it.
+Before a strict-observer production cutover, establish that PCB rule. Then
+prove exact and wildcard IPv4/IPv6 conflicts across UIDs, both IPv6-only
+modes, shared and transferred sockets, listener replacement and PID reuse,
+process-list growth and inspection denial, socket loss, `TIME_WAIT` restart,
+and missing or malformed observer responses. Run the same PORT-1 cases
+through Linux and macOS endpoint integration. Independently verify helper
+ownership, installation, upgrade, protocol, and authorization boundaries.
+The proof must cover accepted ownership and rejected or unverifiable cases;
+a successful host scan cannot stand in for it.
 
 Until that gate is met, keep the current fail-closed behavior. Do not remove
 the discrepancy check merely to pass macOS CI, treat a successful bind or
 TCP/UDP probe as ownership, substitute `nettop`, or skip endpoint tests.
-Endpoint-less services make no PORT-1 addressability claim. The failing
-endpoint portion of `nix run .#ci -- --dirty` remains a merge blocker for this
-platform. The related authority and verification routes are
+Endpoint-less services make no PORT-1 addressability claim. The recorded
+endpoint failure in `nix run .#ci -- --dirty` was a merge blocker for that
+attempt; a later full gate has not been run here. The related authority and
+verification routes are
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#ports-state-containment) and
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#local-versus-hosted-ci).
