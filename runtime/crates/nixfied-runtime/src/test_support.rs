@@ -38,3 +38,21 @@ impl Drop for TestDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Run a kernel-resource proof alone in a distinct process group. Parallel
+/// harness forks and setpgid calls must not become members of its fixture.
+pub(crate) fn isolate(exact: &str) -> bool {
+    use std::os::unix::process::CommandExt;
+    const KEY: &str = "NIXFIED_TEST_ISOLATED";
+    if std::env::var(KEY).as_deref() == Ok(exact) {
+        return false;
+    }
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", exact, "--nocapture"])
+        .env(KEY, exact)
+        .process_group(0)
+        .status()
+        .unwrap();
+    assert!(status.success(), "isolated proof failed: {exact}");
+    true
+}
