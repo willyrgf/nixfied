@@ -5,12 +5,13 @@ Run once normally, then from a local terminal with:
   sudo -v
   /usr/bin/python3 tests/macos/prove_observer_feasibility.py --sudo-sysctl
 
-For the separate cross-UID FD test, inspect this file and run:
+For the separate cross-UID FD and fileport test, inspect this file and run:
   sudo /usr/bin/python3 tests/macos/prove_observer_feasibility.py --as-root
 
-The second command elevates only Apple's sysctl binary. The harness and both
-listeners remain unprivileged. It never modifies system configuration and
-binds only ephemeral loopback ports.
+In --sudo-sysctl mode only Apple's sysctl binary is elevated. In --as-root
+mode the parent Python harness is elevated and its children drop to the
+invoking UID. The probe never modifies system configuration and binds only
+ephemeral loopback ports.
 """
 
 import ctypes
@@ -29,6 +30,8 @@ NAME = b"net.inet.tcp.pcblist_n"
 KINDS = (16, 1, 2, 4, 8, 32)
 PROC_PIDLISTFDS = 1
 PROC_PIDFDSOCKETINFO = 3
+PROC_PIDLISTFILEPORTS = 14
+PROC_PIDFILEPORTSOCKETINFO = 3
 PROX_FDTYPE_SOCKET = 2
 
 
@@ -118,6 +121,45 @@ def child_socket_handles(pid):
     raise ValueError("FD list kept growing")
 
 
+def child_fileport_socket_handles(pid):
+    ctypes.set_errno(0)
+    required = LIBC.proc_pidinfo(pid, PROC_PIDLISTFILEPORTS, 0, None, 0)
+    if required == 0 and ctypes.get_errno() == 0:
+        return []
+    if required <= 0:
+        raise OSError(ctypes.get_errno(), f"cannot list fileports of pid {pid}")
+    capacity = required + 1024
+    for _ in range(4):
+        data = ctypes.create_string_buffer(capacity)
+        ctypes.set_errno(0)
+        actual = LIBC.proc_pidinfo(pid, PROC_PIDLISTFILEPORTS, 0, data, capacity)
+        if actual == 0 and ctypes.get_errno() == 0:
+            return []
+        if actual <= 0:
+            raise OSError(ctypes.get_errno(), f"cannot read fileports of pid {pid}")
+        if actual >= capacity:
+            capacity *= 2
+            continue
+        if actual % 8:
+            raise ValueError(f"malformed fileport list for pid {pid}: {actual} bytes")
+        handles = []
+        for offset in range(0, actual, 8):
+            port_name, kind = struct.unpack_from("=II", data.raw, offset)
+            if kind != PROX_FDTYPE_SOCKET:
+                continue
+            detail = ctypes.create_string_buffer(1024)
+            size = LIBC.proc_pidfileportinfo(
+                pid, port_name, PROC_PIDFILEPORTSOCKETINFO, detail, len(detail)
+            )
+            if size <= 0:
+                raise OSError(ctypes.get_errno(), f"cannot read pid {pid} fileport {port_name}")
+            if size < 260:
+                raise ValueError(f"short socket fileport info for pid {pid}: {size}")
+            handles.append(struct.unpack_from("=Q", detail.raw, 160)[0])
+        return handles
+    raise ValueError("fileport list kept growing")
+
+
 def all_pids():
     required = LIBC.proc_listallpids(None, 0)
     if required < 0:
@@ -175,18 +217,24 @@ def run():
         os.setgid(int(os.environ["SUDO_GID"]))
         os.setuid(int(os.environ["SUDO_UID"]))
 
-    child = subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--child"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-        preexec_fn=drop_to_invoking_user if as_root else None,
-    )
+    def start_child(mode):
+        return subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), mode],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            preexec_fn=drop_to_invoking_user if as_root else None,
+        )
+
+    child = start_child("--child")
+    fileport_child = start_child("--child-fileport") if as_root else None
     try:
         child_info = json.loads(child.stdout.readline())
+        fileport_info = json.loads(fileport_child.stdout.readline()) if fileport_child else None
         own_port = own.getsockname()[1]
         child_port = child_info["port"]
-        print(json.dumps({"observer_euid": os.geteuid(), "own_port": own_port, **child_info}))
+        print(json.dumps({"observer_euid": os.geteuid(), "own_port": own_port,
+                          "child": child_info, "fileport_child": fileport_info}), flush=True)
         for attempt in range(5):
             if sys.argv[1:] == ["--sudo-sysctl"]:
                 result = subprocess.run(
@@ -201,6 +249,7 @@ def run():
             observed = snapshot(raw)
             own_record = observed["listeners"].get(own_port)
             child_record = observed["listeners"].get(child_port)
+            fileport_record = observed["listeners"].get(fileport_info["port"]) if fileport_info else None
             result = {
                 "attempt": attempt,
                 "header_count": observed["header"][0],
@@ -211,6 +260,21 @@ def run():
                 "child_seen": child_record is not None,
                 "child_record_uid": None if child_record is None else child_record["uid"],
             }
+            if fileport_info:
+                result["fileport_child_seen"] = fileport_record is not None
+                result["fileport_child_record_uid"] = (
+                    None if fileport_record is None else fileport_record["uid"]
+                )
+                try:
+                    result["fileport_child_fd_count"] = len(child_socket_handles(fileport_info["pid"]))
+                    fileport_handles = child_fileport_socket_handles(fileport_info["pid"])
+                    result["fileport_child_fileport_count"] = len(fileport_handles)
+                    if fileport_record is not None:
+                        result["fileport_child_correlated"] = (
+                            fileport_record["socket_handle"] in fileport_handles
+                        )
+                except (OSError, ValueError) as error:
+                    result["fileport_child_error"] = str(error)
             try:
                 handles = child_socket_handles(child_info["pid"])
                 result["child_socket_fd_count"] = len(handles)
@@ -225,6 +289,9 @@ def run():
     finally:
         child.stdin.close()
         child.wait(timeout=5)
+        if fileport_child:
+            fileport_child.stdin.close()
+            fileport_child.wait(timeout=5)
         own.close()
 
 
@@ -236,5 +303,14 @@ if __name__ == "__main__":
         print(json.dumps({"pid": os.getpid(), "uid": os.getuid(), "port": held.getsockname()[1]}), flush=True)
         sys.stdin.read(1)
         held.close()
+    elif sys.argv[1:] == ["--child-fileport"]:
+        held = listener()
+        port = held.getsockname()[1]
+        fileport = ctypes.c_uint32()
+        if LIBC.fileport_makeport(held.fileno(), ctypes.byref(fileport)):
+            raise OSError(ctypes.get_errno(), "fileport_makeport failed")
+        held.close()
+        print(json.dumps({"pid": os.getpid(), "uid": os.getuid(), "port": port}), flush=True)
+        sys.stdin.read(1)
     else:
         run()
