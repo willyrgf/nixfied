@@ -84,6 +84,19 @@ every sample. This does not explain the earlier visibility failure or certify
 a complete negative inventory. It does show that count disagreement can
 coexist with a useful positive observation of the known child.
 
+A later five-sample unprivileged run again decoded only one PCB from 64–65
+advertised records and omitted its known child listener every time, while
+reading that child's socket FD. In the same host context, the independent
+[`FD-only witness check`](runtime/crates/nixfied-runtime/tests/fixtures/prove_macos_fd_listener.c)
+decoded exact IPv4/IPv6 `LISTEN` tuples and socket identities from managed
+process FDs without reading `pcblist_n` or using sudo. It also checked a
+reparented process-group member and detected replacement of a listener bound
+to the same tuple. See the
+[`proposal's feasibility record`](docs/ENDPOINT_READINESS_PROPOSAL.md#feasibility-checks-completed)
+for the precise scope. This supports a positive managed-process observer on
+this host; it does not repair the host-wide negative inventory required by the
+current contract.
+
 ## Privileged observations supplied by the user
 
 An initial `sudo -n` attempt stopped at `sudo: a password is required`. The
