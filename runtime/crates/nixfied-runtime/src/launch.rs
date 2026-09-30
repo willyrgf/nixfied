@@ -51,7 +51,8 @@ pub fn dispatch(args: &[OsString]) -> Option<i32> {
     };
     let result = receive_and_exec(&mut channel, STARTUP_TIMEOUT);
     let failure = result.expect_err("successful exec never returns");
-    // UnixStream writes suppress SIGPIPE. Reporting is best effort and bounded:
+    // The admitted channel suppresses SIGPIPE on macOS. Reporting is best
+    // effort and bounded:
     // the socket is nonblocking and the fixed failure record is one byte.
     let _ = channel.write(&[failure as u8]);
     Some(crate::channel::FAILURE_EXIT)

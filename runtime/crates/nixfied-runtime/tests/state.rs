@@ -550,7 +550,7 @@ fn cleanup_deletes_matching_inactive_state_and_reports_later_absence() {
     assert_eq!(
         repeated,
         CleanupOutcome::Absent {
-            target_path: fixture.layout.state_root().canonicalize_parent()
+            target_path: fixture.layout.state_root()
         }
     );
     assert_eq!(cleanup_rows(&reopened), 1);
@@ -1025,25 +1025,6 @@ fn cleanup_event_payloads(registry: &Registry, cleanup_id: &str) -> Vec<Value> {
         .expect("cleanup payloads should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("cleanup payloads should collect")
-}
-
-trait CanonicalParent {
-    fn canonicalize_parent(&self) -> PathBuf;
-}
-
-impl CanonicalParent for PathBuf {
-    /// The absent target reported beneath the canonical state base.
-    fn canonicalize_parent(&self) -> PathBuf {
-        let mut path = self.clone();
-        let mut missing = Vec::new();
-        while !path.exists() {
-            missing.push(path.file_name().unwrap().to_owned());
-            path.pop();
-        }
-        let mut canonical = path.canonicalize().unwrap();
-        canonical.extend(missing.into_iter().rev());
-        canonical
-    }
 }
 
 struct PermissionRestore {

@@ -200,11 +200,17 @@ fn startup_wait_is_bounded_without_owner_closure() {
 
 #[test]
 fn workload_keeps_unix_cwd_and_argument_bytes() {
+    #[cfg(target_os = "linux")]
     use std::os::unix::ffi::OsStringExt;
     let root = TempDir::new();
+    #[cfg(target_os = "linux")]
     let raw_dir = root
         .path
         .join(std::ffi::OsString::from_vec(b"cwd-\xff".to_vec()));
+    // macOS filesystems reject this directory name before the launch gate can
+    // exercise it. The argument still checks preservation of arbitrary bytes.
+    #[cfg(target_os = "macos")]
+    let raw_dir = root.path.join("cwd");
     std::fs::create_dir(&raw_dir).unwrap();
     let (child, mut channel) = gate();
     let mut value = request(&raw_dir);
@@ -345,7 +351,7 @@ fn owner_registration_precedes_permission_and_failed_commit_keeps_child_owned() 
             };
             assert_eq!(failure.error.code, ErrorCode::RegistryCorrupt);
             let output = wait_for_child_output(failure.child, Duration::from_secs(3));
-            assert_eq!(output.status.code(), Some(125));
+            assert_eq!(output.status.code(), Some(125), "{}", output.status);
             assert!(!root.path.join("marker").exists());
             assert_eq!(
                 registry
@@ -534,7 +540,9 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     .expect_err("registration must fail");
     assert_eq!(
         error.error().code,
-        nixfied_runtime::ErrorCode::RegistryCorrupt
+        nixfied_runtime::ErrorCode::RegistryCorrupt,
+        "{}",
+        error.error()
     );
     assert!(!counter.exists());
     assert_eq!(

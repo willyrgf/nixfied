@@ -202,6 +202,7 @@ pub(crate) fn pair() -> io::Result<(UnixStream, UnixStream)> {
                 return Err(io::Error::last_os_error());
             }
             channel.set_nonblocking(true)?;
+            no_sigpipe(channel)?;
         }
         Ok(pair)
     })?;
@@ -277,7 +278,29 @@ pub(crate) fn admit(args: &[OsString], command: &str) -> Option<Result<UnixStrea
     if channel.set_nonblocking(true).is_err() {
         return Some(Err(FAILURE_EXIT));
     }
+    #[cfg(target_os = "macos")]
+    if no_sigpipe(&channel).is_err() {
+        return Some(Err(FAILURE_EXIT));
+    }
     Some(Ok(channel))
+}
+
+#[cfg(target_os = "macos")]
+fn no_sigpipe(channel: &UnixStream) -> io::Result<()> {
+    let enabled: libc::c_int = 1;
+    if unsafe {
+        libc::setsockopt(
+            channel.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&raw const enabled).cast(),
+            std::mem::size_of_val(&enabled) as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
