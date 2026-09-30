@@ -1312,10 +1312,11 @@ pub fn start_service_for_slot(
     let mut fail_unrecorded = |registry: &mut Registry,
                                child: &mut OwnedChild,
                                context: &LifecycleEventContext,
-                               pgid,
                                error: RuntimeError| {
         let _ = record_lifecycle_failure(registry, context, &start_record, &error);
-        let containment = terminate_unrecorded_child(child, pgid, service, run_timeout_ms);
+        // No permission bytes reached the gate. It has no workload or
+        // descendants, and its group ID can become stale as soon as it exits.
+        let containment = reap_owned_child(child);
         let contained = containment.is_ok();
         let error = completion_error(
             containment,
@@ -1337,7 +1338,6 @@ pub fn start_service_for_slot(
                 registry,
                 &mut child,
                 &lifecycle_context,
-                None,
                 error,
             ));
         }
@@ -1381,7 +1381,6 @@ pub fn start_service_for_slot(
                 registry,
                 &mut child,
                 &started_context,
-                Some(pgid),
                 *failure.error,
             ));
         }
@@ -1493,25 +1492,6 @@ fn settle_reserved_failure(
         Ok(()) => error,
         Err(settlement_error) => settlement_error.with_cause(error),
     }
-}
-
-fn terminate_unrecorded_child(
-    child: &mut OwnedChild,
-    observed_pgid: Option<i32>,
-    service: &ExecService,
-    run_timeout_ms: u64,
-) -> RuntimeResult<()> {
-    let pid = child.id();
-    let pgid = observed_pgid.unwrap_or(i32::try_from(pid).map_err(|_| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("spawned pid {pid} is outside the process-group id range"),
-        )
-    })?);
-    let timeout_ms =
-        (service.stop.timeout.as_millis().min(u128::from(u64::MAX)) as u64).min(run_timeout_ms);
-    let containment = contain(&Leader::Child(child), pgid, libc::SIGTERM, timeout_ms, &[]);
-    crate::error::both(containment.map(|_| ()), reap_owned_child(child))
 }
 
 /// The slot plan's endpoint map: every service selected for the run, resolved
@@ -2719,15 +2699,21 @@ pub(crate) fn poll_until(
 
 pub(crate) fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> {
     let result = unsafe { libc::kill(-pgid, signal) };
-    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+    if result == 0 {
         Ok(())
     } else {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH)
+            || (error.raw_os_error() == Some(libc::EPERM) && !process_group_has_live_member(pgid)?)
+        {
+            // The group can disappear between the ownership check and this
+            // signal. With no live member, there is nothing left to signal;
+            // the later tree check still verifies descendants and the group.
+            return Ok(());
+        }
         Err(RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!(
-                "failed to signal process group {pgid}: {}",
-                std::io::Error::last_os_error()
-            ),
+            format!("failed to signal process group {pgid}: {error}"),
         ))
     }
 }
@@ -2939,66 +2925,13 @@ fn process_is_zombie(pid: u32) -> bool {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
-    let pids = macos_process_ids().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to list pids while checking process group {pgid}: {error}"),
-        )
-    })?;
-    for pid in pids {
+    for pid in listener_group_members(pgid)? {
+        // Membership may change after the bounded list is returned.
         if process_group(pid)? == Some(pgid) && !process_is_zombie(pid) {
             return Ok(true);
         }
     }
     Ok(false)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn macos_process_ids() -> std::io::Result<Vec<u32>> {
-    let required = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    if required < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut capacity = usize::try_from(required)
-        .map_err(|_| std::io::Error::other("macOS process-list size was negative"))?
-        .checked_add(32)
-        .ok_or_else(|| std::io::Error::other("macOS process-list capacity overflow"))?
-        .max(32);
-
-    loop {
-        let byte_capacity = capacity
-            .checked_mul(std::mem::size_of::<libc::pid_t>())
-            .ok_or_else(|| std::io::Error::other("macOS process-list byte size overflow"))?;
-        let byte_capacity = libc::c_int::try_from(byte_capacity).map_err(|_| {
-            std::io::Error::other("macOS process-list byte size exceeds proc_listallpids limits")
-        })?;
-        let mut pids = Vec::new();
-        pids.try_reserve_exact(capacity).map_err(|error| {
-            std::io::Error::other(format!("failed to allocate macOS process list: {error}"))
-        })?;
-        pids.resize(capacity, 0 as libc::pid_t);
-        let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), byte_capacity) };
-        if count < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let count = usize::try_from(count)
-            .map_err(|_| std::io::Error::other("macOS process count was negative"))?;
-        if count >= pids.len() {
-            capacity = capacity.checked_mul(2).ok_or_else(|| {
-                std::io::Error::other("macOS process-list capacity growth overflow")
-            })?;
-            continue;
-        }
-        pids.truncate(count);
-        let mut result = pids
-            .into_iter()
-            .filter_map(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-            .collect::<Vec<_>>();
-        result.sort_unstable();
-        result.dedup();
-        return Ok(result);
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -3035,6 +2968,13 @@ mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
     use nixfied_manifest::ServiceId;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn group_liveness_checks_only_members_of_the_selected_group() {
+        assert!(process_group_has_live_member(unsafe { libc::getpgrp() }).unwrap());
+        assert!(!process_group_has_live_member(1_234_567).unwrap());
+    }
 
     #[test]
     fn capture_completion_error_goldens_preserve_stream_and_outcome_order() {
