@@ -6,6 +6,18 @@ let
   structure = import ../meta/default.nix { inherit (pkgs) lib; };
   syntax = import ../meta/command-default.nix { inherit (pkgs) lib; };
   projection = import ../meta/syntax-project.nix { inherit (pkgs) lib; inherit structure; } syntax;
+  atomicExchange = pkgs.stdenv.mkDerivation {
+    name = "nixfied-atomic-exchange";
+    src = ./atomic-exchange.c;
+    dontUnpack = true;
+    buildPhase = ''
+      $CC -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -o nixfied-atomic-exchange "$src"
+    '';
+    installPhase = ''
+      mkdir -p "$out/bin"
+      cp nixfied-atomic-exchange "$out/bin/"
+    '';
+  };
 in
 pkgs.writeShellApplication {
   name = "nixfied-upgrade";
@@ -17,6 +29,7 @@ pkgs.writeShellApplication {
     pkgs.jq
     pkgs.nix
     pkgs.python3
+    atomicExchange
   ];
   text = ''
     set -euo pipefail
@@ -263,12 +276,9 @@ pkgs.writeShellApplication {
     # needed exchange primitive under different names.
     atomic_replace() {
       python3 - "$1" "$2" "$3" <<'PY'
-import ctypes
-import ctypes.util
-import errno
 import hashlib
 import os
-import platform
+import subprocess
 import sys
 
 staged, destination, expected = sys.argv[1:]
@@ -285,25 +295,11 @@ def fail(message, code):
     raise SystemExit(code)
 
 def exchange(old_path, new_path):
-    libc_name = ctypes.util.find_library("c")
-    libc = ctypes.CDLL(libc_name or None, use_errno=True)
-    if sys.platform == "darwin":
-        renamex = getattr(libc, "renamex_np", None)
-        if renamex is None:
-            fail("Darwin renamex_np is unavailable", 4)
-        renamex.restype = ctypes.c_int
-        result = renamex(os.fsencode(old_path), os.fsencode(new_path), 2)
-    else:
-        syscall_numbers = {"x86_64": 316, "aarch64": 276, "arm64": 276}
-        number = syscall_numbers.get(platform.machine())
-        if number is None:
-            fail("Linux renameat2 is unavailable on this architecture", 4)
-        syscall = libc.syscall
-        syscall.restype = ctypes.c_long
-        result = syscall(number, -100, os.fsencode(old_path), -100, os.fsencode(new_path), 2)
-    if result != 0:
-        error = ctypes.get_errno()
-        fail("atomic exchange failed: " + errno.errorcode.get(error, str(error)), 4)
+    result = subprocess.run(
+        ["nixfied-atomic-exchange", old_path, new_path], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        fail("atomic exchange failed: " + result.stderr.strip(), 4)
 
 if not os.path.exists(staged):
     fail("staged file is missing", 4)

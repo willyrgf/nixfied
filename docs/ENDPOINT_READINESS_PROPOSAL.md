@@ -3,9 +3,8 @@
 Status: implemented, 29 September 2026. The exact manifest/runtime ABI cutover,
 managed-FD observers, complete-round commit boundary and attached adapter probes
 are present. [CONTRACT.md](CONTRACT.md) is the shipped normative specification;
-the design below records the decisions and their limits. Linux verification is
-recorded below. Production macOS compilation, execution and calibration remain
-pending the macOS `.#ci` run; the earlier prototype is not release coverage.
+the design below records the decisions and their limits. Linux and one
+aarch64-darwin host have completed the cross-layer verification below.
 
 ## Implementation verification
 
@@ -32,7 +31,15 @@ The successful parent deadline is 120 seconds. The failure gate checks the
 overhead margin, and proves no endpoint success event or dependent task was
 committed. Missing-listener startup rounds consume attempts too, so the gate
 requires one through five failed WebSocket probes rather than assuming every
-round reached its probes. Repeat these measurements on macOS.
+round reached its probes.
+
+On 30 September 2026, `.#ci -- --dirty` passed on an aarch64-darwin host,
+including the production macOS FD decoder, endpoint and lifecycle integration
+tests, Postgres recovery, all 21 runtime gate cases and the Nix-layer gate.
+The Reth gate measured a 2–4 second cold lifecycle and a 3–4 second failing
+WebSocket lifecycle across successful macOS runs, within the same configured
+deadlines. This is one-host validation; other macOS builds and host policies
+remain unverified.
 
 ## Decision to develop
 

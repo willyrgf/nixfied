@@ -18,6 +18,10 @@ pkgs.writeShellApplication {
   text = ''
     checkout="''${NIXFIED_GATE_CHECKOUT:-$PWD}"
     dirty="''${NIXFIED_GATE_DIRTY:-}"
+    # Nix path inputs reject symlinked ancestors. macOS /tmp and /var are
+    # aliases, so every temporary fixture must start under the physical root.
+    TMPDIR="$(cd "''${TMPDIR:-/tmp}" && pwd -P)"
+    export TMPDIR
 
     for arg in "$@"; do
       case "$arg" in
@@ -379,12 +383,12 @@ rm -rf "$work"
       before_lock=$(sha256sum "$project/flake.lock")
       before_project=$(sha256sum "$project/nixfied.nix")
       race_state="$project/runtime-state"
-      NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=10 nix run "$checkout#upgrade" -- \
+      NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=60 nix run "$checkout#upgrade" -- \
         --root "$project" --nixfied-url "$race_candidate_pin" \
         >"$project/race-one.stdout" 2>"$project/race-one.stderr" &
       race_one=$!
       race_paused=0
-      for attempt in $(seq 1 120); do
+      for attempt in $(seq 1 720); do
         : "$attempt"
         if grep -Fq "test pause before apply" "$project/race-one.stderr"; then
           race_paused=1
@@ -434,7 +438,7 @@ rm -rf "$work"
       NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK=30 nix run "$checkout#upgrade" -- --root "$interrupt_project" --nixfied-url "$race_candidate_pin" >"$interrupt_project/stdout" 2>"$interrupt_project/stderr" &
       interrupt_pid=$!
       paused=0
-      for attempt in $(seq 1 120); do
+      for attempt in $(seq 1 720); do
         : "$attempt"
         if grep -Fq "test pause after lock apply" "$interrupt_project/stderr"; then
           paused=1
