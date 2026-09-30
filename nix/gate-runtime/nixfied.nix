@@ -282,6 +282,7 @@
         pkgs.bash
         "rt"
         "coreutils"
+        "jq"
       ];
       run = [
         "bash"
@@ -289,9 +290,21 @@
         ''
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-toolchain-inner"
-          NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
+          inner_error="''${stateDir}/gate-artifacts/example-toolchain.error.json"
+          if NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime run --manifest "$TOOLCHAIN_MANIFEST/manifest.json" --task ci --timeout-ms 60000 --output json \
-            > "''${stateDir}/gate-artifacts/example-toolchain.json"
+            > "''${stateDir}/gate-artifacts/example-toolchain.json" 2> "$inner_error"; then
+            :
+          else
+            code=$?
+            cat "$inner_error" >&2
+            logs_dir=$(jq -r '.details.logsDir // empty' "$inner_error") || logs_dir=""
+            if [ -n "$logs_dir" ] && [ -f "$logs_dir/service.postgres.stderr.log" ]; then
+              echo "example-toolchain postgres stderr:" >&2
+              cat "$logs_dir/service.postgres.stderr.log" >&2
+            fi
+            exit "$code"
+          fi
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime clean --manifest "$TOOLCHAIN_MANIFEST/manifest.json"
         ''
