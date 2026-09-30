@@ -437,7 +437,7 @@ pub fn available_port_window(width: u16) -> u16 {
     let mut reservations = PORT_RESERVATIONS
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    for attempt in 0..256 {
+    for _attempt in 0..256 {
         #[cfg(target_os = "linux")]
         let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
         #[cfg(target_os = "linux")]
@@ -449,7 +449,7 @@ pub fn available_port_window(width: u16) -> u16 {
         // releases it, so choose checked fixture ports below that range.
         #[cfg(target_os = "macos")]
         let start = 20_000
-            + ((std::process::id() as usize * 31 + reservations.ports.len() * 43 + attempt * 97)
+            + ((std::process::id() as usize * 31 + reservations.ports.len() * 43 + _attempt * 97)
                 % 20_000) as u16;
         let Some(end) = start.checked_add(width - 1) else {
             continue;
