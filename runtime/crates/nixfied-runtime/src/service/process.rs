@@ -1781,18 +1781,25 @@ impl PendingCapturedChild {
             .take()
             .expect("pending child is owned")
             .register_and_release(register, checkpoint);
-        let mut finish = |failure: crate::launch::LaunchFailure| {
-            let (error, settled, capture) = self.owned(failure.child).finish(Some(*failure.error));
-            let error = Box::new(error.expect("release failure retains its error"));
-            (error, settled, capture)
-        };
         match result {
             Ok(child) => Ok(self.owned(child)),
-            Err(Refusal::Unregistered(failure)) => Err(Refusal::Unregistered(finish(failure).0)),
+            Err(Refusal::Unregistered(failure)) => {
+                // The gate received no request bytes, so it cannot have
+                // started a workload. Reap this inert child directly: after
+                // it exits, its numeric process-group ID is no longer
+                // signaling authority and may name an unrelated group.
+                let (error, _, _) = self
+                    .owned(failure.child)
+                    .finish_unregistered(Some(*failure.error));
+                Err(Refusal::Unregistered(Box::new(
+                    error.expect("registration failure is retained"),
+                )))
+            }
             Err(Refusal::Registered(failure)) => {
-                let (error, settled, capture) = finish(failure);
+                let (error, settled, capture) =
+                    self.owned(failure.child).finish(Some(*failure.error));
                 Err(Refusal::Registered(CapturedExecFailure {
-                    error,
+                    error: Box::new(error.expect("release failure retains its error")),
                     outcome: None,
                     settled,
                     capture,
@@ -1814,8 +1821,8 @@ impl PendingCapturedChild {
 impl Drop for PendingCapturedChild {
     fn drop(&mut self) {
         if let Some(pending) = self.pending.take() {
-            // Unwind fallback uses the same captured-child containment path.
-            drop(self.owned(pending.abort()));
+            // No permission was sent, so only the inert gate needs reaping.
+            let _ = self.owned(pending.abort()).finish_unregistered(None);
         }
     }
 }
@@ -1939,6 +1946,22 @@ impl OwnedCapturedChild {
     ) -> (Option<RuntimeError>, bool, crate::redaction::CaptureOutcome) {
         let pgid = self.pid() as i32;
         let containment = terminate_and_reap(&mut self.child, pgid);
+        self.finish_after_containment(containment, operation)
+    }
+
+    fn finish_unregistered(
+        &mut self,
+        operation: Option<RuntimeError>,
+    ) -> (Option<RuntimeError>, bool, crate::redaction::CaptureOutcome) {
+        let containment = reap_owned_child(&mut self.child);
+        self.finish_after_containment(containment, operation)
+    }
+
+    fn finish_after_containment(
+        &mut self,
+        containment: RuntimeResult<()>,
+        operation: Option<RuntimeError>,
+    ) -> (Option<RuntimeError>, bool, crate::redaction::CaptureOutcome) {
         let (outcome, capture) = self
             .capture
             .take()
