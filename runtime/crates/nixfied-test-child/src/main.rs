@@ -524,6 +524,9 @@ fn close_on_marker(listener: TcpListener, request: &Path, closed: &Path) -> Resu
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .map_err(|error| format!("set accepted connection blocking: {error}"))?;
                 let mut byte = [0_u8; 1];
                 stream
                     .read(&mut byte)

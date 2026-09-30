@@ -3247,7 +3247,7 @@ mod tests {
         let Refusal::Unregistered(error) = error else {
             panic!("a refused registration leaves no process row to settle");
         };
-        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt, "{error}");
         assert_eq!(error.message, "process recording denied");
         assert_eq!(
             unsafe { libc::kill(pid, 0) },

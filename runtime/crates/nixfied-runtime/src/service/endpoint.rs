@@ -579,6 +579,11 @@ mod tests {
 
     #[test]
     fn raw_bind_distinguishes_available_from_listening_address_in_use() {
+        if crate::test_support::isolate(
+            "service::endpoint::tests::raw_bind_distinguishes_available_from_listening_address_in_use",
+        ) {
+            return;
+        }
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let planned = endpoint("127.0.0.1", held.local_addr().unwrap().port());
         assert!(matches!(

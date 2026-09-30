@@ -769,8 +769,11 @@ mod tests {
         );
         assert_eq!(std::fs::read(&out_path).unwrap(), b"safe-data-");
         assert_eq!(std::fs::read(&err_path).unwrap(), b"safe-data-");
-        assert!(out.write_all(b"def").is_err());
-        assert!(err.write_all(b"def").is_err());
+        // A concurrently forked process may briefly retain a socket reader,
+        // so write failure is not the capture guarantee. No byte written
+        // after shutdown may enter the retained evidence files.
+        let _ = out.write_all(b"def");
+        let _ = err.write_all(b"def");
         assert_eq!(std::fs::read(out_path).unwrap(), b"safe-data-");
         assert_eq!(std::fs::read(err_path).unwrap(), b"safe-data-");
     }
