@@ -437,10 +437,20 @@ pub fn available_port_window(width: u16) -> u16 {
     let mut reservations = PORT_RESERVATIONS
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    for _ in 0..256 {
+    for attempt in 0..256 {
+        #[cfg(target_os = "linux")]
         let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+        #[cfg(target_os = "linux")]
         let start = listener.local_addr().expect("local addr").port();
+        #[cfg(target_os = "linux")]
         drop(listener);
+        // macOS assigns port-zero binds from its client ephemeral range. A
+        // later outbound connection can take that port after this helper
+        // releases it, so choose checked fixture ports below that range.
+        #[cfg(target_os = "macos")]
+        let start = 20_000
+            + ((std::process::id() as usize * 31 + reservations.ports.len() * 43 + attempt * 97)
+                % 20_000) as u16;
         let Some(end) = start.checked_add(width - 1) else {
             continue;
         };
