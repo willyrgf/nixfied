@@ -224,9 +224,32 @@ fn service_start_rechecks_cwd_symlink_confinement_after_admission() {
 
 #[test]
 fn readiness_probe_marks_ready_only_after_complete_endpoint_round() {
-    let port = available_port_window(1);
-    let mut fixture = test_child_listener_fixture(port);
-    let mut service = fixture.start_ready("run-ready", port);
+    let mut attempts = 0;
+    let (port, mut fixture, mut service) = loop {
+        attempts += 1;
+        assert!(
+            attempts <= 8,
+            "no uncontended fixture port after eight tries"
+        );
+        let port = available_port_window(1);
+        let mut fixture = test_child_listener_fixture(port);
+        match fixture.start("run-ready", port) {
+            Ok(service) => {
+                let ready = fixture.ready(service).expect("service should become ready");
+                break (port, fixture, ready);
+            }
+            Err(error) if error.code == ErrorCode::PortConflict => {
+                // Another process can bind after the candidate check. Retry
+                // only when an independent bind proves
+                // the address is genuinely occupied at the failure boundary.
+                match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                    Err(bind) if bind.kind() == std::io::ErrorKind::AddrInUse => continue,
+                    result => panic!("false port conflict: {error}; raw bind: {result:?}"),
+                }
+            }
+            Err(error) => panic!("service should start: {error}"),
+        }
+    };
     let process_status: String = fixture.query(
         "SELECT status FROM processes WHERE process_key = ?1",
         [&service.info().process_key],
@@ -378,7 +401,16 @@ fn check_success_transaction_rolls_back_every_coupled_write() {
             let mut ready = None;
             let mut starting = None;
             if phase == "health" {
-                ready = Some(fixture.ready(started).unwrap());
+                ready = Some(fixture.ready(started).unwrap_or_else(|failure| {
+                    let stderr = fs::read_to_string(
+                        fixture
+                            .placement
+                            .logs_dir()
+                            .join("service.synthetic.stderr.log"),
+                    )
+                    .unwrap_or_default();
+                    panic!("health fixture did not become ready: {failure:?}; stderr: {stderr}");
+                }));
             } else {
                 starting = Some(started);
             }
@@ -1090,7 +1122,10 @@ fn exec_probe_obeys_its_attempt_deadline() {
             let (service, error) = result
                 .expect_err("the probe deadline must terminate a blocked attempt")
                 .into_parts();
-            assert_eq!(error.details["lastRound"]["reason"], "probe-timed-out");
+            assert_eq!(
+                error.details["lastRound"]["reason"], "probe-timed-out",
+                "{error:?}"
+            );
             service.finalize_failed_start(&mut fixture.registry, 1000, error);
         }
     }
@@ -1198,7 +1233,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let process_key = service.info().process_key.clone();
     handle.join().expect("canceler should join");
     let settled = service.finalize_failed_start(&mut fixture.registry, 200, error.clone());
-    assert_eq!(settled.code, ErrorCode::Canceled);
+    assert_eq!(settled.code, ErrorCode::Canceled, "{settled:?}");
     thread::sleep(Duration::from_millis(2300));
     let report = observe_registry(&fixture.registry).expect("ps should observe canceled service");
     let observed = report
@@ -1408,7 +1443,13 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
     let output = wait_for_child_output(child, Duration::from_secs(6));
-    assert_eq!(output.status.code(), Some(27));
+    assert_eq!(
+        output.status.code(),
+        Some(27),
+        "stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("CANCELED"));
 
@@ -1588,16 +1629,33 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
 fn daemonizing_service_is_terminated_and_recorded_failed() {
     let child_ready = temp_marker("nixfied-daemon-child-ready");
     let child_ready_arg = child_ready.to_string_lossy().to_string();
-    let port = available_port_window(1);
-    let mut fixture = ServiceFixture::from_value(test_child_service(
-        &["detached-sleeper", "parent-exit", &child_ready_arg],
-        port,
-        port,
-    ));
-
-    let error = fixture.start_refused("run-escape", port, "daemonizing service should be refused");
-
-    assert_eq!(error.code, ErrorCode::ProcEscape);
+    let mut attempts = 0;
+    let (fixture, error) = loop {
+        attempts += 1;
+        assert!(
+            attempts <= 8,
+            "no uncontended fixture port after eight tries"
+        );
+        let port = available_port_window(1);
+        let mut fixture = ServiceFixture::from_value(test_child_service(
+            &["detached-sleeper", "parent-exit", &child_ready_arg],
+            port,
+            port,
+        ));
+        let error =
+            fixture.start_refused("run-escape", port, "daemonizing service should be refused");
+        if error.code == ErrorCode::PortConflict {
+            // This test exercises containment, so retry a genuine host bind
+            // collision before the workload starts.
+            assert!(!child_ready.exists(), "port conflict executed the workload");
+            match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                Err(bind) if bind.kind() == std::io::ErrorKind::AddrInUse => continue,
+                result => panic!("false port conflict: {error}; raw bind: {result:?}"),
+            }
+        }
+        break (fixture, error);
+    };
+    assert_eq!(error.code, ErrorCode::ProcEscape, "{error:?}");
     let failed_processes: i64 =
         fixture.query("SELECT count(*) FROM processes WHERE status = 'failed'", []);
     let open_ports: i64 = fixture.query(
