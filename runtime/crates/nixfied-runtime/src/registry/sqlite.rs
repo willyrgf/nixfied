@@ -131,8 +131,30 @@ impl RegistryReader {
             }
             Ok(_) => {}
         }
+        // SQLite's NOFOLLOW flag rejects a symlink in any path component on
+        // macOS. System aliases such as /tmp and /var are legitimate ancestors
+        // of the private state root; resolve the parent while keeping the
+        // registry filename itself protected by NOFOLLOW.
+        let parent = path.parent().ok_or_else(|| {
+            with_registry_path(
+                RuntimeError::new(ErrorCode::RegistryCorrupt, "registry path has no parent"),
+                path,
+            )
+        })?;
+        let directory = std::fs::canonicalize(parent).map_err(|error| {
+            with_registry_path(
+                RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()),
+                path,
+            )
+        })?;
+        let filename = path.file_name().ok_or_else(|| {
+            with_registry_path(
+                RuntimeError::new(ErrorCode::RegistryCorrupt, "registry path has no filename"),
+                path,
+            )
+        })?;
         let conn = Connection::open_with_flags(
-            path,
+            directory.join(filename),
             OpenFlags::SQLITE_OPEN_READ_ONLY
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
