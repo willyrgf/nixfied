@@ -80,10 +80,10 @@ procedure and verification guidance in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 The session-ownership runtime has these open platform and proof limits:
 
-- **macOS coverage:** the session-ownership commits were built and tested on
-  Linux only; CI macOS coverage is still required. The Linux-only `statx`
-  mount-root check has a macOS fallback that relies on the device comparison
-  alone.
+- **macOS coverage:** full local CI at `366ac48` was reported passing on Linux
+  and macOS. This does not establish coverage of every macOS version or host
+  inspection policy. The Linux-only `statx` mount-root check has a macOS
+  fallback that relies on the device comparison alone.
 - **Power-loss durability:** deletion and marker publication use `fsync`
   ordering, which supports only process-death recovery. Host power-loss
   durability is not claimed.
@@ -119,14 +119,12 @@ the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 - **Flat authoring alternatives:** [primitives.nix](../nix/modules/primitives.nix)
   combines a `kind` discriminator with nullable or defaulted payload fields for
-  tasks, probes, endpoint topology, and secret resolvers. Nix projection
+  tasks, endpoint topology, and secret resolvers. Nix projection
   silently drops some inapplicable values before emission: composite
-  `exitPolicy` and `artifactRefs`/`logRefs`/`summaryRefs`, a `tcp` probe's
-  `invocation`, `primaryEndpoint` beside the singular `endpoint` form, and
-  `primaryEndpoint` on an endpoint-less service. Nix does not check that a
-  multi-endpoint `primaryEndpoint` names a declared endpoint; Rust structural
-  validation still rejects it. Native tagged alternatives (`types.attrTag`) would make
-  these combinations unrepresentable; relational checks stay explicit.
+  `exitPolicy` and `artifactRefs`/`logRefs`/`summaryRefs`. Endpoint topology
+  and probe attachment now have explicit Nix relational checks, with independent
+  Rust validation. Native tagged alternatives (`types.attrTag`) could make
+  more combinations unrepresentable; relational checks stay explicit.
 - **Configured-value barrier:** `resolve.nix` returns a lazy configuration and
   `validate.nix` forces only the values its checks read. An invalid value that
   no check or projection reads is never evaluated.
@@ -137,9 +135,9 @@ the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
   `artifactRefs`/`logRefs`/`summaryRefs` are manifest/ABI data that execution
   lowering discards.
 - **Unused invocation deadlines:** the shared invocation `timeoutMs` is
-  accepted and serialized for service start and exec-probe invocations, but
-  lowering discards it there. Only leaf tasks consume it; probe attempts use
-  `probe.timeoutMs`.
+  accepted and serialized for service start invocations, but lowering discards
+  it there. Only leaf tasks consume it. Probe invocations reject a deadline here;
+  their attempts use the ready or health phase's `policy.timeoutMs`.
 - **Unused terminal labels:** lifecycle `terminal.success`/`failure` tokens are
   configurable event labels and do not define outcomes.
   Option: a fixed runtime outcome vocabulary.
@@ -161,9 +159,10 @@ the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
 ### Adapters and commands
 
 - **Adapter host propagation:** the synthetic and PostgreSQL adapters hardcode
-  `127.0.0.1` in child arguments and probes, and the Reth adapter defaults to it
-  without passing the declared host. A declared endpoint host override changes
-  runtime planning and ownership checks but not these children.
+  `127.0.0.1` in service start arguments, and the Reth start wrapper defaults to
+  it without passing the declared host. Attached probes use the planned host,
+  so an endpoint host override changes planning and probes but not these
+  service listeners.
 - **Adapter catalog:** consider a derived view of adapter defaults, clearly
   distinguished from supported module overrides and native wrapper conventions.
 - **Framework `.#check` arguments:** the root check app ignores all arguments,
