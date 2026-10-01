@@ -941,6 +941,14 @@ FIXTURE
         || fail "upgrade golden: compatible plan omitted apply next step"
       grep -Fq 'the next invocation resolves upstream again' "$success_project/plan.stderr" \
         || fail "upgrade golden: plan implied exact candidate reuse"
+      grep -Fq -- 'remove --plan and add --force to skip only manifest evaluation; transaction safeguards still apply' "$success_project/plan.stderr" \
+        || fail "upgrade golden: plan omitted explicit force choice and its limits"
+      grep -Fxq 'candidate selection: project input unless --nixfied-url is supplied; the supplying flake selects the upgrade tool' "$success_project/plan.stderr" \
+        || fail "upgrade golden: plan confused tool selection with candidate selection"
+      grep -Fq 'redirect stdout to a file' "$success_project/plan.stderr" \
+        || fail "upgrade golden: plan omitted documentation review guidance"
+      grep -Fxq 'validation after apply and any project wiring/declaration repairs:' "$success_project/plan.stderr" \
+        || fail "upgrade golden: plan suggested validating the unchanged project"
       grep -Fq '  nix build ' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted manifest build next step"
       grep -Fq '  nix run ' "$success_project/plan.stderr" \

@@ -514,8 +514,13 @@ when the manifest/runtime contract changes.
   Proposed changes are `would change` in plan, `blocked` on evaluation rejection,
   and `changed` on application; other files report `unchanged`. The report includes
   apply status, declaration preservation, post-upgrade validation explicitly
-  not run, and recommended build and manifest-check commands. Plan explains that
-  another invocation resolves upstream again; checked rejection recommends
+  not run, and recommended build and manifest-check commands labelled for after
+  apply and any project wiring/declaration repairs. Plan presents checked apply
+  and explicit force, explaining that force skips only evaluation and retains
+  transaction safeguards. It explains that another invocation resolves upstream
+  again. Reporting distinguishes the supplying flake's tool selection from the
+  candidate's project input or explicit `--nixfied-url`, and recommends redirecting
+  stdout for review; checked rejection recommends
   repairing and replanning or explicitly forcing a repin and repairing afterward.
   Evaluation success proves only derivation evaluation, not build, admission,
   runtime or application-data compatibility. Resolution and transaction failures

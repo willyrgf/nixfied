@@ -157,8 +157,13 @@ Keep `would change`, `changed`, `unchanged`, `upgrade applied`, and declaration
 preservation reporting. On failed evaluation, report the proposed changes as
 blocked, not applied, and include next steps. Keep post-upgrade validation
 explicitly not run; build and manifest-check remain recommended commands.
+Label those commands for after apply and any project wiring/declaration repairs.
+Distinguish the supplying flake's tool selection from candidate selection by the
+project input or `--nixfied-url`, and recommend redirecting stdout for review.
 
 Plan next steps must say that a subsequent invocation resolves upstream again.
+Present checked apply and explicit `--force` as choices, stating that force
+skips only manifest evaluation while retaining transaction safeguards.
 Do not say that rerunning without plan applies the exact previously inspected
 candidate. Checked rejection should suggest editing declarations and replanning,
 or explicitly forcing a repin and repairing afterward. Force must not be an

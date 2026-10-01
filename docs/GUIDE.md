@@ -646,9 +646,12 @@ Use the supplying framework reference and `--root`; adopter-generated apps do
 not export `upgrade`. Within the framework checkout, `nix run .#upgrade` supplies
 the same command. Read its arguments with `nix run .#docs -- api command upgrade`
 from that checkout. `--root` selects the project, and `--nixfied-url URL` requests
-an explicit input pin; otherwise the current selection is refreshed. All locked
-modes require an identifiable input, the existing `flake.lock` identifying the
-old source, and one resolvable temporary candidate lock. Upgrade owns only the
+an explicit input pin; otherwise the current selection is refreshed. The flake
+reference before `#upgrade` selects the tool independently of that candidate.
+For the same branch to supply the candidate, also pass its flake reference
+through `--nixfied-url`. All locked modes require an identifiable input, the
+existing `flake.lock` identifying the old source, and one resolvable temporary
+candidate lock. Upgrade owns only the
 requested URL assignment and candidate lock; it never edits `nixfied.nix`.
 
 `--plan` resolves and reports without evaluating `manifest.drvPath` or changing
@@ -664,14 +667,18 @@ does not make old registries or application data acceptable to the new runtime.
 Each invocation prints the actual old/candidate source identities (type, original
 source, available revision and NAR hash), and a framed unified diff on stdout for
 `README.md` and regular files under `docs/`. Status, warnings, next steps and Nix
-diagnostics stay on stderr. Documentation failure is advisory: unavailable
-sources have a distinct marker from identical documentation. The diff is source
+diagnostics stay on stderr. Redirect stdout as shown above to review a large
+diff in a file while keeping the status report visible. Documentation failure
+is advisory: unavailable sources have a distinct marker from identical
+documentation. The diff is source
 evidence, not a complete semantic change inventory or compatibility proof.
 
 The common report says `candidate manifest evaluation: not run (--plan)`,
 `passed`, `failed`, or `skipped (--force)`. It shows `would change` for plan,
 `blocked` for rejected proposed changes, and `changed` or `unchanged` for apply,
-along with declaration preservation and next steps. Each later invocation
+along with declaration preservation and next steps. Plan presents both checked
+apply and explicit force. The build/check commands are for after applying and
+repairing project wiring or declarations as needed. Each later invocation
 resolves upstream again and may select a different candidate. Evaluation success
 covers only the values forced by derivation evaluation. Post-upgrade validation
 is explicitly not run: build and manifest-check are still recommended.

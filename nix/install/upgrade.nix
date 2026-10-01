@@ -392,6 +392,7 @@ PY
     fi
 
     echo "Nixfied upgrade candidate" >&2
+    echo "candidate selection: project input unless --nixfied-url is supplied; the supplying flake selects the upgrade tool" >&2
     if ! "''${update_command[@]}" >/dev/null; then
       status_break
       echo "candidate lock resolution failed" >&2
@@ -523,6 +524,7 @@ PY
 
     status_break
     echo "documentation diff: emitted on stdout (README.md and docs/)" >&2
+    echo "review tip: redirect stdout to a file (e.g. > nixfied-upgrade.diff); status stays on stderr" >&2
     status_break
     printf '%s\n' '--- BEGIN NIXFIED DOCUMENTATION DIFF ---'
     if [[ -n "$old_source" && -n "$candidate_source" ]]; then
@@ -591,10 +593,12 @@ PY
       fi
       echo "next:" >&2
       if [[ "$mode" == "plan" ]]; then
-        echo "  rerun upgrade without --plan to attempt checked apply; the next invocation resolves upstream again" >&2
+        echo "  rerun upgrade without --plan using the same supplying flake to attempt checked apply; the next invocation resolves upstream again" >&2
+        echo "  or remove --plan and add --force to skip only manifest evaluation; transaction safeguards still apply" >&2
       elif [[ "$outcome" == rejected ]]; then
         echo "  edit project wiring/declarations and replan, or explicitly repin with --force and repair afterward" >&2
       fi
+      echo "validation after apply and any project wiring/declaration repairs:" >&2
       echo "  nix build $root#manifest" >&2
       echo "  nix run $root#manifest-check" >&2
     }
