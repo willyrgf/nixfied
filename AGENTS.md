@@ -57,9 +57,10 @@ For every non-trivial change, answer:
 
 ## Boundaries
 
-- Use only Nix and Rust for repository code, including adapters, tooling,
-  tests, and embedded code. Thin shell glue is allowed only when embedded
-  and packaged in Nix
+- Use only Nix and Rust as implementation languages, including adapters,
+  tooling, tests, and embedded code. Thin shell glue must be embedded and
+  packaged in Nix; Bounded command expressions (such as `jq`, `sed` and `awk`), 
+  storage/query languages (SQL), and declarative data/configuration are allowed;
 - Nix evaluates, validates, builds, and realises. Rust admits, executes,
   reconciles, and cleans against `manifest.json` and OS reality.
 - `manifest.json` is the only required semantic seam; `views/docs.md` is
