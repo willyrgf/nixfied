@@ -170,6 +170,74 @@ the atomic contract procedure in [DEVELOPMENT.md](DEVELOPMENT.md).
 - **Installer report:** with an existing `nixfied.nix`, `install` preserves the
   module but still prints the requested `projectId` and `name` as if applied.
 
+## Breaking upgrade reporting and handling
+
+**Status:** open; the reporting improvements and preflight bypass below are
+proposals, not implemented command behavior.
+
+### Gap and concrete evidence
+
+The [upgrade command](../nix/install/upgrade.nix) resolves a candidate lock,
+prints the complete source documentation diff, and then evaluates
+`manifest.drvPath`. An incompatible project receives the Nix diagnostic and
+generic preflight-failure status, without a concise explanation of the breaking
+changes or actionable next steps. A large documentation diff can obscure the
+relevant upgrade instructions for both users and agents.
+
+An observed `mfm2` upgrade from `6b3a70b` to `bae31c5` resolved the candidate and
+emitted the diff, then exited 5 because the project still exported `model`
+through `compileModel`, while preflight required `manifest`. Testing the
+`manifest` / `compileManifest` wiring in a temporary project copy exposed
+further incompatible declarations: custom Reth endpoints lacked individual
+ready/health probe commands, and `surface.verbs` used a list rather than the
+current task-description mapping. These are separate blockers; the first
+preflight diagnostic does not establish the complete update scope.
+
+The existing [upgrade and recovery guide](GUIDE.md#upgrade-and-recover) explains
+the manifest rename and deliberate contract transition. Checked plan and apply
+both reject failed preflight before changing project files. `--no-lock` is a
+URL-only mode that also skips candidate resolution and the documentation diff;
+it cannot provide an inspected candidate repin with only preflight skipped.
+
+### Proposed follow-up
+
+- Present a concise report with exact old/candidate identities, preflight
+  outcome, project-file change status, and next steps. Keep the source
+  documentation diff as stdout's only payload and report status on stderr.
+- Surface authored upgrade notes from the compared source revisions before
+  preflight diagnostics. Distinguish potentially applicable breaking changes
+  from the specific incompatibility preflight proved, and retain the original
+  Nix diagnostic. Do not infer migrations from error strings or claim that a
+  successful evaluation proves runtime or application-data compatibility.
+- Consider an explicit `--skip-preflight` option for plan and apply. It would
+  retain candidate resolution and documentation comparison, skip only the
+  manifest evaluation, and clearly report verification as skipped. This would
+  allow a deliberate repin before editing declarations against the new
+  interface; checked preflight would remain the default.
+
+How authored notes are selected for an exact old-to-candidate transition remains
+an open design question. Keep a single owner for those instructions rather than
+adding a duplicate compatibility registry. Notes describe project-owned edits;
+they do not authorize automatic declaration, manifest, state, or history
+migrations.
+
+### Ownership and required proof
+
+Upgrade tooling owns inspection, reporting, preflight, and guarded pin/lock
+application; the adopter owns its wiring and declarations. Any bypass must be
+explicit and must preserve lock-resolution and concurrent-file-change refusals,
+plan's no-mutation guarantee, and apply's existing rollback behavior. Runtime
+admission and state-ownership checks remain independent boundaries.
+
+Extend the existing upgrade cases in [the Nix gate](../nix/gate-nix.nix) and
+[packaged parser checks](../nix/checks/upgrade-syntax.nix) to prove incompatible
+default plan/apply rejection, explicit skipped-verification reporting, candidate
+resolution and diff preservation under the proposed bypass, unchanged files in
+plan and failure cases, concurrency/rollback behavior, and exact stdout/stderr
+separation. Cover applicable and absent upgrade notes, unavailable source
+documentation, and machine-visible nonzero default preflight failure according
+to [the verification guide](DEVELOPMENT.md).
+
 ## PostgreSQL lifecycle test reliability
 
 One integration run timed out after 90 seconds waiting for PostgreSQL startup.
