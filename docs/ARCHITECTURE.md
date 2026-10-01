@@ -371,14 +371,17 @@ state, deletion, and containment rules are in
   cover preflight, service prepare, spawn, and readiness after slot preparation.
 - **Listener loss requires explicit teardown.** A missing listener is an
   observation, not proof of who owns the process, so neither `ps` nor endpoint
-  acquisition signals on it: missing or unprovable ownership is
-  `PORT_UNVERIFIABLE` and an outside listener is `PORT_CONFLICT`. The recorded
-  obligations remain for the next exclusive owner's recovery.
+  acquisition signals on it. A missing witness consumes a check round;
+  inspection uncertainty refuses with `PORT_UNVERIFIABLE`. Bind unavailability
+  or startup-lock contention is `PORT_CONFLICT`, without attributing a foreign
+  listener. Recorded process obligations remain for teardown or the next
+  exclusive owner's recovery.
 - **The coordination boundary is deliberately narrow.** Endpoint locks
   coordinate participating runtimes for the same effective user and relevant
   network scope, not arbitrary external binders. An unrelated process can still
-  race between preflight and the child's bind; a surviving competing listener is
-  observed, while an ambiguous bind failure fails closed. Eliminating that
+  race between preflight and the child's bind. Successful bind preflight and
+  managed-listener observations cannot rule out a competing listener or prove
+  which process answered an application probe. Eliminating that
   window would require socket activation and descriptor handoff, which widens
   the generic invocation and adapter contracts, or a lifetime lock or guardian,
   which adds another supervision protocol. Nixfied therefore does not claim
@@ -398,6 +401,21 @@ state, deletion, and containment rules are in
   process/run/event transaction durably records the escape while retaining open
   ports; registry failure takes precedence. (v1: containment differed by platform
   with no single owner.)
+
+The managed-listener design replaced a host-wide negative inventory after macOS
+experiments showed that an unprivileged PCB stream could omit a controlled
+child listener. Privileged positive sightings and matching record counts did
+not establish completeness. Process FD enumeration could not supply that
+guarantee either: Mach fileports and queued Unix `SCM_RIGHTS` messages kept
+listeners alive without ordinary socket FDs. Exact `SO_REUSEADDR` binds could
+also coexist with wildcard listeners. The runtime therefore proves positive
+managed-FD sightings and application-probe completion, with the limits stated
+in [PORT-1](CONTRACT.md#source-identity-and-endpoints).
+
+The retired investigation, design proposal, and standalone macOS experiments
+are preserved in commit `366ac48`. Production observer, SDK-decoder, endpoint,
+and service tests own the current regression proofs; their verification route
+is in [DEVELOPMENT.md](DEVELOPMENT.md#local-versus-hosted-ci).
 
 ## Secrets
 

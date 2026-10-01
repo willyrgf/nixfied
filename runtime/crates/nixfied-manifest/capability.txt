@@ -34,8 +34,8 @@ primitive HealthSpec: operationId policy probe terminal
 primitive StopSpec: operationId signal timeoutMs terminal
 primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host readyProbe healthProbe
-# TCP and exec-probe waits and retry delays observe current and started services.
-# Each TCP attempt uses one nonblocking connection; observation failure stops work.
+# Application-probe waits and retry delays observe current and started services.
+# The phase policy bounds invocation attempts within complete service-wide rounds.
 primitive ProbePolicy: timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
 primitive TaskSpec: kind defaultOutput operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs
@@ -43,7 +43,8 @@ primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
 
 # The invocation arg/env placeholder grammar the runtime substitutes. Bare forms
-# resolve to the invocation's own primary endpoint (services) or the primary
+# resolve to the attached endpoint (endpoint probes), the primary endpoint
+# (service start), or the primary
 # dependency (tasks). The named form ${port:<name>} resolves <name> first against
 # the owning service's endpoint ids, then against a service declared via
 # connectsTo (services) or requires (tasks) — its primary slot-plan endpoint.
@@ -107,11 +108,11 @@ output-schema runtime-error-cause: code exitClass message details
 output-schema runtime-error-projection: stream operation kind path bytesWritten
 
 # Endpoint locks serialize only service-specific mutation and are released after
-# the atomic ready transition. Kernel listeners remain steady-state ownership.
-# Ownership requires exact listener/process/containment/endpoint proof.
-# Linux observes SOCK_DIAG; macOS observes pcblist_n.
-endpoint-acquisition: fixed-euid-startup-lock reuseaddr-exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
-endpoint-ownership: exact-listener process-identity containment complete-active-endpoint-set guarded-activation immutable-process-owned-evidence settles-with-owner
+# the atomic ready transition. Listener witnesses prove positive managed-FD
+# sightings, not exclusive ownership, continuous reservation, or probe responder identity.
+# Linux correlates managed FDs with SOCK_DIAG; macOS decodes managed socket FDs.
+endpoint-acquisition: fixed-euid-startup-lock reuseaddr-exact-bind-preflight no-host-wide-negative-inventory
+endpoint-ownership: exact-listener process-identity containment linux-managed-fd-sock-diag macos-managed-socket-fd complete-service-wide-round attached-application-probes matching-initial-final-witnesses atomic-endpoint-events-and-lifecycle guarded-activation immutable-process-owned-evidence settles-with-owner no-exclusive-ownership no-responder-attribution
 session-service-reference: length-framed-run-and-declared-name no-configuration-hashes predecessor-settlement-before-start cleanup-declaration-without-instance
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 probe-settlement: gated-process-registration process-role-probe declared-service-attribution immutable-attempt-logs observation-before-capture probe-intent-before-signal independent-terminal-evidence post-attempt-service-liveness monitored-escape-before-timeout endpoint-evidence-precedence

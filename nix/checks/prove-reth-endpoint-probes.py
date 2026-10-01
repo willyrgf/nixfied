@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone Reth endpoint-probe feasibility check, using Python stdlib only.
+"""Standalone Reth endpoint-probe integration check, using Python stdlib only.
 
 Usage: python3 nix/checks/prove-reth-endpoint-probes.py /nix/store/...-reth/bin/reth
 
