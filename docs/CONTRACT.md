@@ -490,23 +490,51 @@ when the manifest/runtime contract changes.
 
 ## Output and failure contract
 
-- **UPGRADE-1:** the Nix-only `upgrade` flake app derives its checked
-  documentation report from the adopter's old and candidate locked Nixfied
-  sources, comparing only `README.md` and regular files under `docs/`. The
-  report is framed on stdout; status, warnings, and Nix diagnostics are on
-  stderr. Checked mode performs candidate manifest preflight before changing
-  project wiring, preserves `nixfied.nix`, and leaves `flake.nix` and
-  `flake.lock` unchanged when lock resolution or manifest preflight fails.
-  `--plan` performs the same inspection without mutation and uses the same
-  candidate preflight and status summary as apply, reporting `would change`
-  where apply reports `changed`. Source identities are reported as readable
-  type, original source, revision, and NAR hash fields rather than raw lock
-  JSON. A successful checked operation reports candidate verification, changed
-  or unchanged project wiring, preserved `nixfied.nix`, and the post-upgrade
-  validation commands; those commands are guidance and are not run by
-  `upgrade`. `--no-lock` is an explicit URL-only mode that reports
-  documentation and candidate verification as skipped. This surface is Nix-only
-  and does not enter `manifest.json`, `runtimeAbi`, or Rust runtime behavior.
+- **UPGRADE-1:** the supplying Nixfied flake's Nix-only `upgrade` app inspects
+  upstream changes and mechanically repins the adopter's Nixfied input. Locked
+  modes require an existing old lock and resolve one temporary candidate lock
+  for identities, documentation, evaluation when required, and application.
+  Source identities report type, original source, available revision and NAR
+  hash. The framed source diff for `README.md` and regular files under `docs/`
+  is the only stdout payload; status, warnings, next steps and Nix diagnostics
+  stay on stderr. Unavailable documentation is advisory and distinct from
+  identical documentation; neither proves compatibility.
+  `--plan` never evaluates the candidate manifest or writes project files.
+  It wins over repeated `--force` flags in either order. Default apply requires
+  successful `manifest.drvPath` evaluation before writes; `--force` explicitly
+  skips that evaluation. Both apply policies share the captured-file conflict
+  checks and guarded pin/lock transaction, including rollback and interruption
+  behavior. Force cannot bypass resolution, ambiguous rewrite, conflict or file
+  operation failures. Upgrade preserves project-owned `nixfied.nix` and owns
+  only a requested Nixfied URL rewrite and the candidate lock update; it performs
+  no runtime admission, recovery or data migration.
+  The complete result report handles plan, checked evaluation rejection and
+  completed apply/no-op, emitting exactly one `candidate manifest evaluation:`
+  status: `not run (--plan)`, `failed`, `passed`, or `skipped (--force)`.
+  Proposed changes are `would change` in plan, `blocked` on evaluation rejection,
+  and `changed` on application; other files report `unchanged`. The report includes
+  apply status, declaration preservation, post-upgrade validation explicitly
+  not run, and recommended build and manifest-check commands labelled for after
+  apply and any project wiring/declaration repairs. Plan presents checked apply
+  and explicit force, explaining that force skips only evaluation and retains
+  transaction safeguards. It explains that another invocation resolves upstream
+  again. Reporting distinguishes the supplying flake's tool selection from the
+  candidate's project input or explicit `--nixfied-url`, and recommends redirecting
+  stdout for review; checked rejection recommends
+  repairing and replanning or explicitly forcing a repin and repairing afterward.
+  Evaluation success proves only derivation evaluation, not build, admission,
+  runtime or application-data compatibility. Resolution and transaction failures
+  retain their own diagnostics and do not emit a completed-result report.
+  Plan/apply success or no-op exits 0; argument errors exit 2; unsupported wiring,
+  ambiguous rewrite or missing old lock exits 3; resolution failure exits 4;
+  checked evaluation failure exits 5; captured-file conflict exits 6; apply failure
+  with the existing restored/unchanged outcome exits 7; rollback failure exits 8;
+  caught apply interruption exits 130. Before-write failures preserve project
+  files; partial-write failures report the actual rollback outcome.
+  `--no-lock` retains its separate mechanical URL-only continuation: no candidate
+  resolution, lock write, documentation comparison or evaluation; it reports
+  both skips, and force has no additional effect. This surface does not enter
+  `manifest.json`, `runtimeAbi`, Rust behavior or the adopter app inventory.
 - `run` resolves its output projection as explicit `--output <mode>`, then the
   selected root task's `defaultOutput`, then `summary`. The canonical mode domain
   is rendered by `nix run .#docs -- api command run`; the older mode-specific
@@ -738,7 +766,8 @@ is missing a root value, while `--root -h` consumes `-h`. Native command
 substitution strips trailing operand newlines. Values use the last occurrence;
 flags are idempotent. The empty initial URL preserves current selection, and
 `--no-lock` updates the native inverse lock state. Source inspection, Nix calls,
-preflight, plan/apply and transaction ownership remain native continuations.
+mode normalization (plan wins over force), evaluation and transaction ownership
+remain native continuations.
 
 These commands do not accept equals-form options, positional operands, short
 clusters or an option terminator. Hidden manifest/state arguments remain documented

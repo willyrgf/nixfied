@@ -286,17 +286,26 @@ constructing ad hoc documentation trees at test time. `manifest.json`
 records the historical source commits, deterministic archive checksums, NAR
 hashes, archive normalization, and the checksum of `expected.diff`. The old
 archive is installed with its historical `#install`. Disposable adopter flakes
-expose that historical compiler output as `manifest` for current preflight; the
+expose that historical compiler output as `manifest` for checked evaluation; the
 archives and recorded documentation remain unchanged. The current checkout's
 `#upgrade` then resolves the new archive and must reproduce `expected.diff`
 byte-for-byte on both `--plan` and apply. The same fixed trees are reused for
 Git and path identity checks, while tarball and unavailable-source cases retain
 separate locked-identity coverage; an unsupported locked scheme is also
-required to fail before emitting a partial report or mutating the project. The
+required to fail in plan and force before emitting a partial report or mutating
+the project. Incompatible declarations and old package/API names must still
+permit nonmutating inspection; checked apply rejects evaluation failures, while
+explicit force repins without editing declarations or creating runtime state.
+A distinguishable throwing-output fixture independently proves that plan and
+force never evaluate outputs, including plan/force order and repetition. Both
+apply policies cover no-op results, concurrent conflicts and interrupted rollback.
+Missing-lock and resolution failures still reject force. The
 checked-in scope patches and `scope.expected.diff` separately prove README
 changes plus documentation additions and deletions.
 
-Refresh these fixtures only for an intentional upgrade-behavior change. Export
+These archives, provenance, patches and stdout goldens remain byte-identical for
+the inspection/force cutover; update current status and exit assertions only.
+Refresh these fixtures only for an intentional source-diff behavior change. Export
 each source revision into an empty directory, then create the archive with
 sorted names, epoch timestamps, numeric zero ownership, and `gzip -n` (the
 normalization is recorded in the manifest). Recompute the archive SHA256 and
@@ -305,7 +314,7 @@ regenerate `scope.expected.diff` if the deterministic scope overlays change,
 and update `scope-old.patch`, `scope-new.patch`, `expectedDiffSha256`, and
 `scopeExpectedDiffSha256` together with the fixture. Verify that the historical
 installer still produces the list-form declaration used by the rejection case,
-that the compatible case still passes manifest preflight, and that plan/apply
+that the compatible case still passes manifest evaluation, and that plan/apply
 stdout remains identical. The fixture freezes source versions and report
 bytes; it does not make the nested Nix dependency closure offline.
 
@@ -370,6 +379,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Live presentation and output sealing | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/build change | CLI/runtime/install builds |
+| Upgrade inspection/apply policy | packaged upgrade build + packaged `upgrade-syntax.nix` parser check, then `.#ci -- --dirty` |
 | Static docs, selectors or reference relationships | focused metadata/reference checks + `.#gate -- --dirty` for downstream/source isolation |
 | Generated manifest docs or public output | affected manifest build + `.#gate` |
 | Adapter or example | build the affected manifest + `.#gate` |
