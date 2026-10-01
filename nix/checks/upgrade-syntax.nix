@@ -29,6 +29,9 @@ pkgs.runCommand "nixfied-upgrade-syntax" { nativeBuildInputs = [ pkgs.diffutils 
   check 0 --help
   check 0 -h
   check 0 --plan --plan --no-lock --no-lock --help
+  check 0 --force --force --help
+  check 0 --force --plan --force --no-lock --help
+  check 0 --plan --force --plan --help
 
   : >expected.stdout
   for flag in --root --nixfied-url; do
@@ -39,7 +42,7 @@ pkgs.runCommand "nixfied-upgrade-syntax" { nativeBuildInputs = [ pkgs.diffutils 
     done
   done
 
-  for token in --root=. positional -- -hh $'\xff'; do
+  for token in --root=. --force=true --skip-preflight positional -- -hh $'\xff'; do
     {
       printf 'unknown upgrade argument: %s\n' "$token"
       cat ${../fixtures/upgrade-help.txt}
@@ -58,6 +61,9 @@ pkgs.runCommand "nixfied-upgrade-syntax" { nativeBuildInputs = [ pkgs.diffutils 
     check 3 "$@"
   }
   missing_flake .
+  missing_flake . --force --force
+  missing_flake . --force --plan --force
+  missing_flake . --plan --force --plan
   missing_flake -h --root -h
   missing_flake second --root first --root second
   missing_flake trimmed --root $'trimmed\n\n'

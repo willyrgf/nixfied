@@ -349,9 +349,30 @@ rm -rf "$work"
     upgrade_new_archive="$upgrade_fixture/nixfied-new.tar.gz"
     upgrade_old_url="file://$upgrade_old_archive"
     upgrade_new_url="file://$upgrade_new_archive"
+    assert_upgrade_unchanged() {
+      local root="$1" expected_flake="$2" expected_lock="$3" expected_project="$4" label="$5"
+      [ "$expected_flake" = "$(sha256sum "$root/flake.nix")" ] \
+        || fail "upgrade: $label changed flake.nix"
+      [ "$expected_lock" = "$(sha256sum "$root/flake.lock")" ] \
+        || fail "upgrade: $label changed flake.lock"
+      [ "$expected_project" = "$(sha256sum "$root/nixfied.nix")" ] \
+        || fail "upgrade: $label changed nixfied.nix"
+    }
+
+    assert_evaluation_status() {
+      local path="$1" expected="$2"
+      [ "$(grep -c '^candidate manifest evaluation:' "$path")" -eq 1 ] \
+        || fail "upgrade: evaluation status missing or repeated"
+      grep -Fxq "candidate manifest evaluation: $expected" "$path" \
+        || fail "upgrade: expected evaluation status $expected"
+      ! grep -Fq 'candidate verification:' "$path" \
+        || fail "upgrade: obsolete verification status"
+    }
+
     upgrade_transaction_tests() {
       local project manifest_project lock_failure_project no_lock_project
-      local before_flake before_lock before_project bad_pin no_lock_url
+      local before_flake before_lock before_project bad_pin no_lock_url policy run_status
+      local apply_args mode_args throwing_project state unrelated_before
 
       echo "  upgrade transaction and mode semantics" >&2
 
@@ -361,30 +382,44 @@ rm -rf "$work"
       [ ! -e "$missing_lock_project/flake.lock" ] || fail "upgrade transaction: missing-lock fixture unexpectedly had a lock"
       before_flake=$(sha256sum "$missing_lock_project/flake.nix")
       before_project=$(sha256sum "$missing_lock_project/nixfied.nix")
-      if nix run "$checkout#upgrade" -- --root "$missing_lock_project" --nixfied-url "$pin" >"$missing_lock_project/stdout" 2>"$missing_lock_project/stderr"; then
-        fail "upgrade transaction: missing lock unexpectedly entered checked mode"
-      fi
-      grep -Fq "flake.lock is required for a checked upgrade" "$missing_lock_project/stderr" \
+      for policy in checked plan forced; do
+      mode_args=()
+      case "$policy" in plan) mode_args=(--plan) ;; forced) mode_args=(--force) ;; esac
+      run_status=0
+      nix run "$checkout#upgrade" -- --root "$missing_lock_project" --nixfied-url "$pin" "''${mode_args[@]}" \
+        >"$missing_lock_project/stdout" 2>"$missing_lock_project/stderr" || run_status=$?
+      [ "$run_status" -eq 3 ] || fail "upgrade transaction: missing lock $policy returned $run_status"
+      grep -Fq "flake.lock is required for a locked upgrade" "$missing_lock_project/stderr" \
         || fail "upgrade transaction: missing lock refusal was not reported"
       [ "$before_flake" = "$(sha256sum "$missing_lock_project/flake.nix")" ] \
         || fail "upgrade transaction: missing lock changed flake.nix"
       [ "$before_project" = "$(sha256sum "$missing_lock_project/nixfied.nix")" ] \
         || fail "upgrade transaction: missing lock changed nixfied.nix"
+      [ ! -e "$missing_lock_project/flake.lock" ] || fail "upgrade transaction: missing lock was created"
+      [ ! -s "$missing_lock_project/stdout" ] || fail "upgrade transaction: missing lock emitted stdout"
+      done
       rm -rf "$missing_lock_project"
 
+      for policy in checked forced; do
+      apply_args=()
+      [[ "$policy" != forced ]] || apply_args=(--force)
       project=$(mktemp -d)
       # A distinct pin of the current source keeps the candidate compatible
       # across uncommitted API cutovers. HEAD may still expose the previous API.
       race_candidate_pin="path:$(nix flake metadata --no-write-lock-file --json "$checkout" | jq -er .path)"
       nix run "$checkout#install" -- --root "$project" --project-id upgrade-race --name upgrade-race --nixfied-url "$pin" >/dev/null \
         || fail "upgrade transaction: race fixture install failed"
+      ${pkgs.gnused}/bin/sed -i \
+        -e '/nixfied.url = /a\    unrelated.url = "path:${pkgs.path}";\n    alias.follows = "unrelated";\n    nixfied.inputs.nixpkgs.follows = "unrelated";' \
+        -e 's/{ self, nixfied }/{ self, nixfied, ... }/' "$project/flake.nix"
       nix flake lock "$project" >/dev/null || fail "upgrade transaction: race fixture lock failed"
+      unrelated_before=$(jq -Sc '.nodes[.nodes[.root].inputs.unrelated].locked' "$project/flake.lock")
       before_flake=$(sha256sum "$project/flake.nix")
       before_lock=$(sha256sum "$project/flake.lock")
       before_project=$(sha256sum "$project/nixfied.nix")
       race_state="$project/runtime-state"
-      NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=60 nix run "$checkout#upgrade" -- \
-        --root "$project" --nixfied-url "$race_candidate_pin" \
+      NIXFIED_STATE_DIR="$race_state" NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=60 nix run "$checkout#upgrade" -- \
+        --root "$project" --nixfied-url "$race_candidate_pin" "''${apply_args[@]}" \
         >"$project/race-one.stdout" 2>"$project/race-one.stderr" &
       race_one=$!
       race_paused=0
@@ -401,7 +436,8 @@ rm -rf "$work"
         kill "$race_one" 2>/dev/null || true
         fail "upgrade transaction: concurrent fixture never reached the guarded pre-apply window"
       fi
-      nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$race_candidate_pin" >"$project/race-two.stdout" 2>"$project/race-two.stderr" &
+      NIXFIED_STATE_DIR="$race_state" nix run "$checkout#upgrade" -- --root "$project" \
+        --nixfied-url "$race_candidate_pin" "''${apply_args[@]}" >"$project/race-two.stdout" 2>"$project/race-two.stderr" &
       race_two=$!
       race_one_status=0
       race_two_status=0
@@ -423,6 +459,16 @@ rm -rf "$work"
         || fail "upgrade transaction: concurrent upgrade applied the wrong flake pin"
       grep -Fq '  type: path' "$project/race-one.stderr" "$project/race-two.stderr" \
         || fail "upgrade transaction: concurrent path candidate identity was not reported"
+      [ "$unrelated_before" = "$(jq -Sc '.nodes[.nodes[.root].inputs.unrelated].locked' "$project/flake.lock")" ] \
+        || fail "upgrade transaction: $policy changed unrelated effective input identity"
+      jq -e '.nodes[.root].inputs.alias == ["unrelated"]
+        and .nodes[.nodes[.root].inputs.nixfied].inputs.nixpkgs == ["unrelated"]' "$project/flake.lock" >/dev/null \
+        || fail "upgrade transaction: $policy changed follows wiring"
+      if [[ "$race_one_status" -eq 6 ]]; then
+        ! grep -q '^candidate manifest evaluation:' "$project/race-one.stderr" || fail "upgrade transaction: conflict reported completion"
+      else
+        ! grep -q '^candidate manifest evaluation:' "$project/race-two.stderr" || fail "upgrade transaction: conflict reported completion"
+      fi
       [ -z "$(find "$project" -maxdepth 1 -type f -name '*nixfied-upgrade*' -print -quit)" ] \
         || fail "upgrade transaction: concurrent upgrade left temporary files"
       [ ! -e "$race_state" ] || fail "upgrade transaction: concurrent upgrade materialized runtime state"
@@ -435,7 +481,10 @@ rm -rf "$work"
       before_flake=$(sha256sum "$interrupt_project/flake.nix")
       before_lock=$(sha256sum "$interrupt_project/flake.lock")
       before_project=$(sha256sum "$interrupt_project/nixfied.nix")
-      NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK=30 nix run "$checkout#upgrade" -- --root "$interrupt_project" --nixfied-url "$race_candidate_pin" >"$interrupt_project/stdout" 2>"$interrupt_project/stderr" &
+      state="$interrupt_project/runtime-state"
+      NIXFIED_STATE_DIR="$state" NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK=30 nix run "$checkout#upgrade" -- \
+        --root "$interrupt_project" --nixfied-url "$race_candidate_pin" "''${apply_args[@]}" \
+        >"$interrupt_project/stdout" 2>"$interrupt_project/stderr" &
       interrupt_pid=$!
       paused=0
       for attempt in $(seq 1 720); do
@@ -451,7 +500,7 @@ rm -rf "$work"
       kill -TERM "$interrupt_pid"
       interrupt_status=0
       wait "$interrupt_pid" || interrupt_status=$?
-      [ "$interrupt_status" -ne 0 ] || fail "upgrade transaction: interrupted apply unexpectedly succeeded"
+      [ "$interrupt_status" -eq 130 ] || fail "upgrade transaction: interrupted $policy returned $interrupt_status"
       grep -Fq "upgrade interrupted; candidate rolled back" "$interrupt_project/stderr" \
         || fail "upgrade transaction: interrupted apply omitted rollback status"
       [ "$before_flake" = "$(sha256sum "$interrupt_project/flake.nix")" ] \
@@ -462,7 +511,11 @@ rm -rf "$work"
         || fail "upgrade transaction: interrupted apply changed nixfied.nix"
       [ -z "$(find "$interrupt_project" -maxdepth 1 -type f -name '*nixfied-upgrade*' -print -quit)" ] \
         || fail "upgrade transaction: interrupted apply left temporary files"
+      [ ! -e "$state" ] || fail "upgrade transaction: interrupted apply materialized runtime state"
+      ! grep -q '^candidate manifest evaluation:' "$interrupt_project/stderr" \
+        || fail "upgrade transaction: interruption emitted a completed result"
       rm -rf "$interrupt_project"
+      done
 
       manifest_project=$(mktemp -d)
       nix run "$checkout#install" -- --root "$manifest_project" --project-id upgrade-manifest-failure --name upgrade-manifest-failure --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: manifest fixture install failed"
@@ -471,16 +524,91 @@ rm -rf "$work"
       before_flake=$(sha256sum "$manifest_project/flake.nix")
       before_lock=$(sha256sum "$manifest_project/flake.lock")
       before_project=$(sha256sum "$manifest_project/nixfied.nix")
-      if nix run "$checkout#upgrade" -- --root "$manifest_project" --nixfied-url "$pin" >"$manifest_project/stdout" 2>"$manifest_project/stderr"; then
-        fail "upgrade transaction: incompatible candidate unexpectedly succeeded"
-      fi
-      grep -Fq "candidate verification: failed (manifest preflight)" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure was not reported"
+      run_status=0
+      nix run "$checkout#upgrade" -- --root "$manifest_project" --nixfied-url "$race_candidate_pin" \
+        >"$manifest_project/stdout" 2>"$manifest_project/stderr" || run_status=$?
+      [ "$run_status" -eq 5 ] || fail "upgrade transaction: incompatible candidate returned $run_status"
+      assert_evaluation_status "$manifest_project/stderr" failed
       grep -Fq "upgrade applied: no" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure omitted apply status"
       grep -Fq "upgrade not applied; no project files were changed" "$manifest_project/stderr" || fail "upgrade transaction: manifest failure omitted no-mutation status"
       [ "$before_flake" = "$(sha256sum "$manifest_project/flake.nix")" ] || fail "upgrade transaction: manifest failure changed flake.nix"
       [ "$before_lock" = "$(sha256sum "$manifest_project/flake.lock")" ] || fail "upgrade transaction: manifest failure changed flake.lock"
       [ "$before_project" = "$(sha256sum "$manifest_project/nixfied.nix")" ] || fail "upgrade transaction: manifest failure changed nixfied.nix"
+      grep -Fq 'blocked: flake.nix' "$manifest_project/stderr" || fail "upgrade transaction: failure omitted blocked change"
+      grep -Fq 'error:' "$manifest_project/stderr" || fail "upgrade transaction: failure lost Nix diagnostic"
+      nix run "$checkout#upgrade" -- --root "$manifest_project" --nixfied-url "$race_candidate_pin" --plan \
+        >"$manifest_project/plan.stdout" 2>"$manifest_project/plan.stderr" || fail "upgrade transaction: incompatible plan failed"
+      assert_evaluation_status "$manifest_project/plan.stderr" 'not run (--plan)'
+      assert_upgrade_unchanged "$manifest_project" "$before_flake" "$before_lock" "$before_project" 'incompatible plan'
+      state="$manifest_project/runtime-state"
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- --root "$manifest_project" --nixfied-url "$race_candidate_pin" --force \
+        >"$manifest_project/force.stdout" 2>"$manifest_project/force.stderr" || fail "upgrade transaction: incompatible force failed"
+      assert_evaluation_status "$manifest_project/force.stderr" 'skipped (--force)'
+      cmp "$manifest_project/plan.stdout" "$manifest_project/force.stdout"
+      [ "$before_project" = "$(sha256sum "$manifest_project/nixfied.nix")" ] || fail "upgrade transaction: force changed declarations"
+      grep -Fq "$race_candidate_pin" "$manifest_project/flake.nix" || fail "upgrade transaction: force did not repin"
+      [ "$before_lock" != "$(sha256sum "$manifest_project/flake.lock")" ] || fail "upgrade transaction: force did not update lock"
+      [ ! -e "$state" ] || fail "upgrade transaction: force materialized runtime state"
       rm -rf "$manifest_project"
+
+      # Input resolution remains valid while every attempt to demand outputs
+      # throws. This proves bypass independently of the reporter's status words.
+      throwing_project=$(mktemp -d)
+      cat >"$throwing_project/flake.nix" <<FIXTURE
+{
+  inputs.nixfied.url = "$pin";
+  outputs = _: throw "NIXFIED_UPGRADE_OUTPUT_EVALUATED";
+}
+FIXTURE
+      printf '%s\n' '# Project-owned declaration sentinel' >"$throwing_project/nixfied.nix"
+      nix flake lock "$throwing_project" >/dev/null || fail "upgrade transaction: throwing fixture lock failed"
+      before_flake=$(sha256sum "$throwing_project/flake.nix")
+      before_lock=$(sha256sum "$throwing_project/flake.lock")
+      before_project=$(sha256sum "$throwing_project/nixfied.nix")
+      state="$throwing_project/runtime-state"
+      for policy in plan force-plan plan-force; do
+        case "$policy" in
+          plan) mode_args=(--plan) ;;
+          force-plan) mode_args=(--force --plan --force) ;;
+          plan-force) mode_args=(--plan --force --plan) ;;
+        esac
+        NIXFIED_STATE_DIR="$state" NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=1 nix run "$checkout#upgrade" -- \
+          --root "$throwing_project" --nixfied-url "$race_candidate_pin" "''${mode_args[@]}" \
+          >"$throwing_project/$policy.stdout" 2>"$throwing_project/$policy.stderr" || fail "upgrade transaction: throwing $policy failed"
+        assert_evaluation_status "$throwing_project/$policy.stderr" 'not run (--plan)'
+        ! grep -Eq 'NIXFIED_UPGRADE_OUTPUT_EVALUATED|test pause before apply' "$throwing_project/$policy.stderr" \
+          || fail "upgrade transaction: plan reached evaluation or apply hooks"
+        assert_upgrade_unchanged "$throwing_project" "$before_flake" "$before_lock" "$before_project" "$policy"
+        cmp "$throwing_project/plan.stdout" "$throwing_project/$policy.stdout"
+        cmp "$throwing_project/plan.stderr" "$throwing_project/$policy.stderr"
+      done
+      run_status=0
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- --root "$throwing_project" --nixfied-url "$race_candidate_pin" \
+        >"$throwing_project/checked.stdout" 2>"$throwing_project/checked.stderr" || run_status=$?
+      [ "$run_status" -eq 5 ] || fail "upgrade transaction: throwing checked apply returned $run_status"
+      grep -Fq 'NIXFIED_UPGRADE_OUTPUT_EVALUATED' "$throwing_project/checked.stderr" || fail "upgrade transaction: checked apply lost throw marker"
+      assert_evaluation_status "$throwing_project/checked.stderr" failed
+      assert_upgrade_unchanged "$throwing_project" "$before_flake" "$before_lock" "$before_project" 'throwing rejection'
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- --root "$throwing_project" --nixfied-url "$race_candidate_pin" --force --force \
+        >"$throwing_project/forced.stdout" 2>"$throwing_project/forced.stderr" || fail "upgrade transaction: throwing force failed"
+      assert_evaluation_status "$throwing_project/forced.stderr" 'skipped (--force)'
+      ! grep -Fq 'NIXFIED_UPGRADE_OUTPUT_EVALUATED' "$throwing_project/forced.stderr" || fail "upgrade transaction: force evaluated outputs"
+      cmp "$throwing_project/plan.stdout" "$throwing_project/forced.stdout"
+      grep -Fq "$race_candidate_pin" "$throwing_project/flake.nix" || fail "upgrade transaction: throwing force did not repin"
+      [ "$before_lock" != "$(sha256sum "$throwing_project/flake.lock")" ] || fail "upgrade transaction: throwing force did not update lock"
+      [ "$before_project" = "$(sha256sum "$throwing_project/nixfied.nix")" ] || fail "upgrade transaction: throwing force edited declarations"
+      before_flake=$(sha256sum "$throwing_project/flake.nix")
+      before_lock=$(sha256sum "$throwing_project/flake.lock")
+      # Even unchanged candidate bytes must still evaluate in checked apply.
+      run_status=0
+      nix run "$checkout#upgrade" -- --root "$throwing_project" --nixfied-url "$race_candidate_pin" \
+        >"$throwing_project/noop.stdout" 2>"$throwing_project/noop.stderr" || run_status=$?
+      [ "$run_status" -eq 5 ] || fail "upgrade transaction: throwing checked no-op returned $run_status"
+      grep -Fq 'NIXFIED_UPGRADE_OUTPUT_EVALUATED' "$throwing_project/noop.stderr" || fail "upgrade transaction: checked no-op skipped evaluation"
+      assert_evaluation_status "$throwing_project/noop.stderr" failed
+      assert_upgrade_unchanged "$throwing_project" "$before_flake" "$before_lock" "$before_project" 'throwing no-op rejection'
+      [ ! -e "$state" ] || fail "upgrade transaction: throwing modes materialized runtime state"
+      rm -rf "$throwing_project"
 
       lock_failure_project=$(mktemp -d)
       nix run "$checkout#install" -- --root "$lock_failure_project" --project-id upgrade-lock-failure --name upgrade-lock-failure --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: lock failure fixture install failed"
@@ -489,13 +617,19 @@ rm -rf "$work"
       before_flake=$(sha256sum "$lock_failure_project/flake.nix")
       before_lock=$(sha256sum "$lock_failure_project/flake.lock")
       before_project=$(sha256sum "$lock_failure_project/nixfied.nix")
-      if nix run "$checkout#upgrade" -- --root "$lock_failure_project" --nixfied-url "$bad_pin" >"$lock_failure_project/stdout" 2>"$lock_failure_project/stderr"; then
-        fail "upgrade transaction: lock failure unexpectedly succeeded"
-      fi
+      for policy in checked plan forced; do
+      mode_args=()
+      case "$policy" in plan) mode_args=(--plan) ;; forced) mode_args=(--force) ;; esac
+      run_status=0
+      nix run "$checkout#upgrade" -- --root "$lock_failure_project" --nixfied-url "$bad_pin" "''${mode_args[@]}" \
+        >"$lock_failure_project/stdout" 2>"$lock_failure_project/stderr" || run_status=$?
+      [ "$run_status" -eq 4 ] || fail "upgrade transaction: lock failure $policy returned $run_status"
       grep -Fq "candidate lock resolution failed" "$lock_failure_project/stderr" || fail "upgrade transaction: lock failure was not reported"
       [ "$before_flake" = "$(sha256sum "$lock_failure_project/flake.nix")" ] || fail "upgrade transaction: lock failure changed flake.nix"
       [ "$before_lock" = "$(sha256sum "$lock_failure_project/flake.lock")" ] || fail "upgrade transaction: lock failure changed flake.lock"
       [ "$before_project" = "$(sha256sum "$lock_failure_project/nixfied.nix")" ] || fail "upgrade transaction: lock failure changed nixfied.nix"
+      [ ! -s "$lock_failure_project/stdout" ] || fail "upgrade transaction: lock failure emitted partial diff"
+      done
       rm -rf "$lock_failure_project"
 
       no_lock_project=$(mktemp -d)
@@ -504,7 +638,7 @@ rm -rf "$work"
       no_lock_url="$pin"
       before_lock=$(sha256sum "$no_lock_project/flake.lock")
       before_project=$(sha256sum "$no_lock_project/nixfied.nix")
-      nix run "$checkout#upgrade" -- --root "$no_lock_project" --nixfied-url "$no_lock_url" --no-lock >"$no_lock_project/stdout" 2>"$no_lock_project/stderr" || fail "upgrade transaction: --no-lock failed"
+      nix run "$checkout#upgrade" -- --root "$no_lock_project" --nixfied-url "$no_lock_url" --no-lock --force >"$no_lock_project/stdout" 2>"$no_lock_project/stderr" || fail "upgrade transaction: --no-lock failed"
       grep -Fq "documentation diff: skipped (--no-lock; no candidate lock was produced)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted documentation skip"
       grep -Fq "candidate verification: skipped (--no-lock)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted verification skip"
       grep -Fq "upgrade applied: no (flake.nix already matched)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted already-matched status"
@@ -527,10 +661,11 @@ rm -rf "$work"
       local scope_old_patch scope_new_patch scope_expected scope_expected_hash
       local before_flake before_lock before_project state run_status expected_empty
       local old_commit new_commit old_archive_hash new_archive_hash expected_diff_hash
+      local policy mode_args expected_status
 
       prepare_historical_project() {
         # These frozen inputs predate the manifest API. Adapt only the throwaway
-        # adopter flake to expose the current preflight package name using the
+        # adopter flake to expose the current evaluation package name using the
         # historical compiler; never rewrite archives or documentation goldens.
         ${pkgs.gnused}/bin/sed -i \
           -e 's/compileManifest/compileModel/g' \
@@ -549,16 +684,6 @@ rm -rf "$work"
           diff -u "$upgrade_expected" "$output" >&2 || true
           fail "upgrade golden: $label differed from expected.diff"
         fi
-      }
-
-      assert_upgrade_unchanged() {
-        local root="$1" expected_flake="$2" expected_lock="$3" expected_project="$4" label="$5"
-        [ "$expected_flake" = "$(sha256sum "$root/flake.nix")" ] \
-          || fail "upgrade golden: $label changed flake.nix"
-        [ "$expected_lock" = "$(sha256sum "$root/flake.lock")" ] \
-          || fail "upgrade golden: $label changed flake.lock"
-        [ "$expected_project" = "$(sha256sum "$root/nixfied.nix")" ] \
-          || fail "upgrade golden: $label changed nixfied.nix"
       }
 
       assert_blank_after() {
@@ -652,7 +777,8 @@ rm -rf "$work"
         || fail "upgrade golden: historical install failed"
       grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$failure_project/nixfied.nix" \
         || fail "upgrade golden: historical installer did not produce the list-form declaration"
-      prepare_historical_project "$failure_project"
+      # First inspect the unmodified historical API/package names. Resolution
+      # must not require adaptation of the adopter's outputs to the current API.
       nix flake lock "$failure_project" >/dev/null \
         || fail "upgrade golden: historical failure fixture lock failed"
       jq -e --arg expected "$upgrade_old_nar_hash" \
@@ -663,12 +789,23 @@ rm -rf "$work"
       before_lock=$(sha256sum "$failure_project/flake.lock")
       before_project=$(sha256sum "$failure_project/nixfied.nix")
       state="$failure_project/runtime-state"
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+        --root "$failure_project" --nixfied-url "$upgrade_new_url" --plan \
+        >"$failure_project/old-api.stdout" 2>"$failure_project/old-api.stderr" \
+        || fail "upgrade golden: old API plan failed"
+      assert_upgrade_golden "$failure_project/old-api.stdout" 'old API plan'
+      assert_evaluation_status "$failure_project/old-api.stderr" 'not run (--plan)'
+      grep -Fq 'would change: flake.lock' "$failure_project/old-api.stderr" || fail "upgrade golden: old API plan omitted changes"
+      grep -Fxq 'next:' "$failure_project/old-api.stderr" || fail "upgrade golden: old API plan omitted next steps"
+      assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" 'old API plan'
+      prepare_historical_project "$failure_project"
+      before_flake=$(sha256sum "$failure_project/flake.nix")
       run_status=0
       ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
           --root "$failure_project" --nixfied-url "$upgrade_new_url" --plan \
           >"$failure_project/plan.stdout" 2>"$failure_project/plan.stderr" ) \
         || run_status=$?
-      [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible plan returned $run_status instead of 5"
+      [ "$run_status" -eq 0 ] || fail "upgrade golden: incompatible plan returned $run_status instead of 0"
       assert_upgrade_golden "$failure_project/plan.stdout" "incompatible plan"
       grep -Fq '  type: tarball' "$failure_project/plan.stderr" \
         || fail "upgrade golden: tarball identity was not reported for the incompatible plan"
@@ -676,12 +813,14 @@ rm -rf "$work"
         || fail "upgrade golden: old tarball NAR hash was not reported"
       grep -Fq "  narHash: $upgrade_new_nar_hash" "$failure_project/plan.stderr" \
         || fail "upgrade golden: candidate tarball NAR hash was not reported"
-      grep -Fq 'candidate verification: failed (manifest preflight)' "$failure_project/plan.stderr" \
-        || fail "upgrade golden: incompatible plan omitted manifest preflight failure"
+      assert_evaluation_status "$failure_project/plan.stderr" 'not run (--plan)'
       grep -Fq 'upgrade applied: no' "$failure_project/plan.stderr" \
         || fail "upgrade golden: incompatible plan omitted apply status"
-      grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/plan.stderr" \
+      grep -Fq 'plan: no project files changed' "$failure_project/plan.stderr" \
         || fail "upgrade golden: incompatible plan omitted no-mutation status"
+      grep -Fq 'would change: flake.nix' "$failure_project/plan.stderr" || fail "upgrade golden: incompatible plan omitted URL change"
+      grep -Fq 'would change: flake.lock' "$failure_project/plan.stderr" || fail "upgrade golden: incompatible plan omitted lock change"
+      grep -Fq 'post-upgrade validation: not run (--plan)' "$failure_project/plan.stderr" || fail "upgrade golden: incompatible plan omitted validation status"
       assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible plan"
       [ ! -e "$state" ] || fail "upgrade golden: incompatible plan materialized runtime state"
 
@@ -692,14 +831,28 @@ rm -rf "$work"
         || run_status=$?
       [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible apply returned $run_status instead of 5"
       assert_upgrade_golden "$failure_project/apply.stdout" "incompatible apply"
-      grep -Fq 'candidate verification: failed (manifest preflight)' "$failure_project/apply.stderr" \
-        || fail "upgrade golden: incompatible apply omitted manifest preflight failure"
+      assert_evaluation_status "$failure_project/apply.stderr" failed
       grep -Fq 'upgrade applied: no' "$failure_project/apply.stderr" \
         || fail "upgrade golden: incompatible apply omitted apply status"
       grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/apply.stderr" \
         || fail "upgrade golden: incompatible apply omitted no-mutation status"
       assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible apply"
       [ ! -e "$state" ] || fail "upgrade golden: incompatible apply materialized runtime state"
+      grep -Fq 'error:' "$failure_project/apply.stderr" || fail "upgrade golden: checked rejection lost Nix diagnostic"
+      grep -Fq 'blocked: flake.lock' "$failure_project/apply.stderr" || fail "upgrade golden: checked rejection omitted blocked changes"
+      grep -Fq -- '--force and repair afterward' "$failure_project/apply.stderr" || fail "upgrade golden: rejection omitted explicit force guidance"
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+        --root "$failure_project" --nixfied-url "$upgrade_new_url" --force \
+        >"$failure_project/force.stdout" 2>"$failure_project/force.stderr" || fail "upgrade golden: incompatible force failed"
+      assert_upgrade_golden "$failure_project/force.stdout" 'incompatible force'
+      assert_evaluation_status "$failure_project/force.stderr" 'skipped (--force)'
+      grep -Fq 'upgrade applied: yes' "$failure_project/force.stderr" || fail "upgrade golden: force omitted apply status"
+      grep -Fq "$upgrade_new_url" "$failure_project/flake.nix" || fail "upgrade golden: force did not apply candidate URL"
+      jq -e --arg expected "$upgrade_new_nar_hash" \
+        '.nodes[.nodes[.root].inputs.nixfied].locked.narHash == $expected' "$failure_project/flake.lock" >/dev/null \
+        || fail "upgrade golden: force did not apply candidate lock"
+      [ "$before_project" = "$(sha256sum "$failure_project/nixfied.nix")" ] || fail "upgrade golden: force edited historical declaration"
+      [ ! -e "$state" ] || fail "upgrade golden: force materialized runtime state"
       rm -rf "$failure_project"
 
       unsupported_project=$(mktemp -d)
@@ -718,9 +871,12 @@ rm -rf "$work"
       before_lock=$(sha256sum "$unsupported_project/flake.lock")
       before_project=$(sha256sum "$unsupported_project/nixfied.nix")
       state="$unsupported_project/runtime-state"
+      for policy in plan forced; do
+      mode_args=(--plan)
+      [[ "$policy" != forced ]] || mode_args=(--force)
       run_status=0
       ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
-          --root "$unsupported_project" --nixfied-url "$upgrade_new_url" --plan \
+          --root "$unsupported_project" --nixfied-url "$upgrade_new_url" "''${mode_args[@]}" \
           >"$unsupported_project/stdout" 2>"$unsupported_project/stderr" ) \
         || run_status=$?
       [ "$run_status" -eq 4 ] \
@@ -737,6 +893,7 @@ rm -rf "$work"
         || fail "upgrade golden: unsupported identity emitted a partial documentation report"
       assert_upgrade_unchanged "$unsupported_project" "$before_flake" "$before_lock" "$before_project" "unsupported identity"
       [ ! -e "$state" ] || fail "upgrade golden: unsupported identity materialized runtime state"
+      done
       rm -rf "$unsupported_project"
 
       success_project=$(mktemp -d)
@@ -763,10 +920,9 @@ rm -rf "$work"
         >"$success_project/plan.stdout" 2>"$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan failed"
       assert_upgrade_golden "$success_project/plan.stdout" "compatible plan"
-      grep -Fq 'candidate verification: passed (manifest preflight)' "$success_project/plan.stderr" \
-        || fail "upgrade golden: compatible plan omitted manifest preflight success"
+      assert_evaluation_status "$success_project/plan.stderr" 'not run (--plan)'
       assert_blank_after "$success_project/plan.stderr" \
-        'candidate verification: passed (manifest preflight)' 'compatible plan'
+        'candidate manifest evaluation: not run (--plan)' 'compatible plan'
       grep -Fq 'upgrade applied: no (--plan)' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted plan apply status"
       grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
@@ -783,6 +939,8 @@ rm -rf "$work"
         || fail "upgrade golden: compatible plan omitted next-step header"
       grep -Fq 'rerun upgrade without --plan' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted apply next step"
+      grep -Fq 'the next invocation resolves upstream again' "$success_project/plan.stderr" \
+        || fail "upgrade golden: plan implied exact candidate reuse"
       grep -Fq '  nix build ' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted manifest build next step"
       grep -Fq '  nix run ' "$success_project/plan.stderr" \
@@ -799,10 +957,9 @@ rm -rf "$work"
         >"$success_project/apply.stdout" 2>"$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply failed"
       assert_upgrade_golden "$success_project/apply.stdout" "compatible apply"
-      grep -Fq 'candidate verification: passed (manifest preflight)' "$success_project/apply.stderr" \
-        || fail "upgrade golden: compatible apply omitted manifest preflight success"
+      assert_evaluation_status "$success_project/apply.stderr" passed
       assert_blank_after "$success_project/apply.stderr" \
-        'candidate verification: passed (manifest preflight)' 'compatible apply'
+        'candidate manifest evaluation: passed' 'compatible apply'
       grep -Fq 'upgrade applied: yes' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted apply status"
       grep -Fq 'changed: flake.nix' "$success_project/apply.stderr" \
@@ -843,16 +1000,26 @@ rm -rf "$work"
       before_flake=$(sha256sum "$success_project/flake.nix")
       before_lock=$(sha256sum "$success_project/flake.lock")
       before_project=$(sha256sum "$success_project/nixfied.nix")
-      nix run "$checkout#upgrade" -- \
-        --root "$success_project" --nixfied-url "$upgrade_new_url" --plan \
+      for policy in plan checked forced; do
+      mode_args=()
+      case "$policy" in
+        plan) mode_args=(--plan); expected_status='not run (--plan)' ;;
+        checked) expected_status=passed ;;
+        forced) mode_args=(--force); expected_status='skipped (--force)' ;;
+      esac
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+        --root "$success_project" --nixfied-url "$upgrade_new_url" "''${mode_args[@]}" \
         >"$success_project/empty.stdout" 2>"$success_project/empty.stderr" \
         || fail "upgrade golden: unchanged source plan failed"
       cmp -s "$expected_empty" "$success_project/empty.stdout" \
         || fail "upgrade golden: unchanged source did not emit the exact empty marker"
-      grep -Fq 'plan: no project files changed' "$success_project/empty.stderr" \
-        || fail "upgrade golden: unchanged source omitted no-mutation status"
-      assert_upgrade_unchanged "$success_project" "$before_flake" "$before_lock" "$before_project" "unchanged source plan"
+      assert_evaluation_status "$success_project/empty.stderr" "$expected_status"
+      grep -Fq 'upgrade applied: no' "$success_project/empty.stderr" || fail "upgrade golden: no-op applied status"
+      grep -Fq 'unchanged: flake.nix' "$success_project/empty.stderr" || fail "upgrade golden: no-op omitted flake status"
+      grep -Fq 'unchanged: flake.lock' "$success_project/empty.stderr" || fail "upgrade golden: no-op omitted lock status"
+      assert_upgrade_unchanged "$success_project" "$before_flake" "$before_lock" "$before_project" "unchanged source $policy"
       [ ! -e "$state" ] || fail "upgrade golden: unchanged source plan materialized runtime state"
+      done
       rm -rf "$success_project"
 
       scope_root=$(mktemp -d)
@@ -889,10 +1056,14 @@ rm -rf "$work"
         || fail "upgrade golden: scope fixture path identity was not reported"
       ! grep -Fq '  rev:' "$scope_project/stderr" \
         || fail "upgrade golden: scope fixture path identity fabricated a revision"
-      grep -Fq 'candidate verification: passed (manifest preflight)' "$scope_project/stderr" \
-        || fail "upgrade golden: documentation scope plan omitted manifest preflight success"
+      assert_evaluation_status "$scope_project/stderr" 'not run (--plan)'
       assert_upgrade_unchanged "$scope_project" "$before_flake" "$before_lock" "$before_project" "documentation scope plan"
       [ ! -e "$state" ] || fail "upgrade golden: documentation scope plan materialized runtime state"
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+        --root "$scope_project" --nixfied-url "path:$scope_new_source" \
+        >"$scope_project/apply.stdout" 2>"$scope_project/apply.stderr" || fail "upgrade golden: documentation scope apply failed"
+      cmp "$scope_expected" "$scope_project/apply.stdout"
+      assert_evaluation_status "$scope_project/apply.stderr" passed
       rm -rf "$scope_project" "$scope_root"
 
       source_root=$(mktemp -d)
@@ -997,8 +1168,27 @@ rm -rf "$work"
         || fail "upgrade golden: unavailable lock fixture could not be prepared"
       mv "$unavailable_project/flake.lock.invalid" "$unavailable_project/flake.lock"
       rm -rf "$unavailable_source"
+      expected_empty="$unavailable_project/unavailable.expected"
+      printf '%s\n' '--- BEGIN NIXFIED DOCUMENTATION DIFF ---' \
+        '--- DOCUMENTATION DIFF UNAVAILABLE ---' '--- END NIXFIED DOCUMENTATION DIFF ---' >"$expected_empty"
+      before_flake=$(sha256sum "$unavailable_project/flake.nix")
+      before_lock=$(sha256sum "$unavailable_project/flake.lock")
+      before_project=$(sha256sum "$unavailable_project/nixfied.nix")
+      # Restore the captured old files between applying policies so each must
+      # handle missing old documentation rather than comparing the new source.
+      cp "$unavailable_project/flake.nix" "$unavailable_project/flake.before"
+      cp "$unavailable_project/flake.lock" "$unavailable_project/lock.before"
+      for policy in plan checked forced; do
+      cp "$unavailable_project/flake.before" "$unavailable_project/flake.nix"
+      cp "$unavailable_project/lock.before" "$unavailable_project/flake.lock"
+      mode_args=()
+      case "$policy" in
+        plan) mode_args=(--plan); expected_status='not run (--plan)' ;;
+        checked) expected_status=passed ;;
+        forced) mode_args=(--force); expected_status='skipped (--force)' ;;
+      esac
       nix run "$checkout#upgrade" -- \
-        --root "$unavailable_project" --nixfied-url "$new_path_pin" \
+        --root "$unavailable_project" --nixfied-url "$new_path_pin" "''${mode_args[@]}" \
         >"$unavailable_project/stdout" 2>"$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable source prevented a valid upgrade"
       grep -Fq 'documentation diff unavailable: old source materialization failed' "$unavailable_project/stderr" \
@@ -1007,10 +1197,14 @@ rm -rf "$work"
         || fail "upgrade golden: unavailable source was not reported"
       ! grep -Fq -- 'NO CHECKED-IN DOCUMENTATION CHANGED' "$unavailable_project/stdout" \
         || fail "upgrade golden: unavailable source was reported as empty"
-      grep -Fq 'candidate verification: passed (manifest preflight)' "$unavailable_project/stderr" \
-        || fail "upgrade golden: unavailable source incorrectly failed candidate preflight"
+      cmp "$expected_empty" "$unavailable_project/stdout"
+      assert_evaluation_status "$unavailable_project/stderr" "$expected_status"
+      if [[ "$policy" == plan ]]; then
+        assert_upgrade_unchanged "$unavailable_project" "$before_flake" "$before_lock" "$before_project" 'unavailable plan'
+      fi
       ! grep -Fq '  rev:' "$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable path identity fabricated a revision"
+      done
       rm -rf "$unavailable_project" "$source_root" "$git_root"
       printf '  upgrade_versioned: ok\n' >&2
     }

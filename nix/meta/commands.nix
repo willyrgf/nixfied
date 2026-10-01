@@ -169,7 +169,7 @@ in
     ))
   ] "authoring")
   (compact "upgrade"
-    "Repin and preflight existing Nixfied wiring while preserving project declarations."
+    "Inspect upstream changes and repin existing Nixfied wiring while preserving project declarations."
     [
       (argument "root" "--root" (domain "Path") (literal ".") (
         visible "Existing project directory." "PATH"
@@ -178,7 +178,10 @@ in
         visible "Requested input pin; empty initial value preserves the current selection." "URL"
       ))
       (argument "plan" "--plan" (domain "Flag") (literal false) (
-        visible "Report the native upgrade plan without applying changes." null
+        visible "Inspect the candidate without manifest evaluation or project writes; takes precedence over --force." null
+      ))
+      (argument "force" "--force" (domain "Flag") (literal false) (
+        visible "Skip candidate manifest evaluation when applying; retain write safeguards." null
       ))
       (argument "noLock" "--no-lock" (domain "Flag") (literal false) (
         visible "Skip the native lock update; the parser retains inverse update_lock state." null
