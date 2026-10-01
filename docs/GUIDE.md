@@ -608,13 +608,15 @@ runtime. Treat an upgrade as a deliberate contract transition.
 
 For projects adopting the manifest terminology change, update the project-owned
 `flake.nix` integration to `compileManifest`, `packages.${system}.manifest`,
-and any default-package references before candidate preflight. Update scripts to
-`manifest-check` and `manifest.json`; the former names have no aliases. The
+and any default-package references before checked candidate evaluation. Update
+scripts to `manifest-check` and `manifest.json`; the former names have no aliases. The
 registry schema also changes: stop and clean incompatible runtime-owned state
 with the previous pin before switching, following the state recovery guidance
 below. Existing registry history is never rewritten into the new schema.
 
-Before repinning, use the old pin to inspect and stop every active slot:
+Before repinning or editing declarations that could prevent old-pin controls
+from evaluating, use the matching old runtime to inspect, stop and recover every
+affected slot, or preserve a working old checkout:
 
 ```sh
 nix run .#ps -- --slot 0
@@ -633,39 +635,64 @@ nix build .#manifest
 nix run .#manifest-check
 ```
 
-`upgrade` refreshes only the `nixfied` input/lock entry. Read its arguments and
-defaults with `nix run .#docs -- api command upgrade`. A checked upgrade requires
-the existing `flake.lock`: it uses that exact locked Nixfied source as the old side of the comparison, resolves a candidate lock in
-a temporary file, and applies it only after the candidate manifest passes
-preflight. It does not edit `nixfied.nix` or translate old manifests or state.
+To explicitly skip candidate manifest evaluation, choose forced apply:
 
-The checked command prints a framed unified diff to stdout for `README.md` and
-the regular files under `docs/`; status, warnings, and Nix diagnostics go to
-stderr. `--plan` performs the same candidate resolution, documentation diff,
-and `manifest.drvPath` preflight without changing project files, so the redirected
-diff is safe to inspect before applying. A lock-resolution or manifest-preflight
-failure is nonzero and leaves `flake.nix`, `flake.lock`, and `nixfied.nix`
-unchanged. If either source cannot be materialized, the report says that the
-documentation diff is unavailable; if the scoped files are identical, it says
-that no checked-in documentation changed. Neither result is a compatibility
-claim—the manifest preflight is the gate.
+```sh
+nix run github:willyrgf/nixfied#upgrade -- --root . --force
+# Repair project wiring and declarations, then build and check the manifest.
+```
 
-The status report presents each locked source as a readable identity block
-with its type, original source, revision when available, and NAR hash when
-available. Plan and apply use the same candidate verification, wiring,
-ownership, and next-step summary: plan says `would change` and includes the
-command to rerun without `--plan`; apply says `changed` when it writes the
-candidate. Both report that post-upgrade validation was not run and print the
-recommended `nix build <root>#manifest` and `nix run <root>#manifest-check` commands.
-The documentation diff itself remains the only stdout payload, so this
-distinction is preserved when redirecting it to a file.
+Use the supplying framework reference and `--root`; adopter-generated apps do
+not export `upgrade`. Within the framework checkout, `nix run .#upgrade` supplies
+the same command. Read its arguments with `nix run .#docs -- api command upgrade`
+from that checkout. `--root` selects the project, and `--nixfied-url URL` requests
+an explicit input pin; otherwise the current selection is refreshed. All locked
+modes require an identifiable input, the existing `flake.lock` identifying the
+old source, and one resolvable temporary candidate lock. Upgrade owns only the
+requested URL assignment and candidate lock; it never edits `nixfied.nix`.
 
-`--no-lock` is an explicit mechanical URL-only mode. It skips the source
-documentation diff and candidate verification and reports both skips; use it
-only when that checked inspection is intentionally unavailable.
+`--plan` resolves and reports without evaluating `manifest.drvPath` or changing
+any project files, even with incompatible project outputs or declarations.
+`--plan` wins over `--force` regardless of order or repetition. Default apply
+evaluates the candidate manifest derivation and rejects before writes on failure.
+Explicit `--force` skips only that evaluation and uses the same guarded write
+path. Resolution, ambiguous rewrite, concurrent-file conflict, file-operation
+and rollback failures still reject. After a forced repin, repair compile wiring,
+declarations and scripts before building and checking the new manifest. Force
+does not make old registries or application data acceptable to the new runtime.
+
+Each invocation prints the actual old/candidate source identities (type, original
+source, available revision and NAR hash), and a framed unified diff on stdout for
+`README.md` and regular files under `docs/`. Status, warnings, next steps and Nix
+diagnostics stay on stderr. Documentation failure is advisory: unavailable
+sources have a distinct marker from identical documentation. The diff is source
+evidence, not a complete semantic change inventory or compatibility proof.
+
+The common report says `candidate manifest evaluation: not run (--plan)`,
+`passed`, `failed`, or `skipped (--force)`. It shows `would change` for plan,
+`blocked` for rejected proposed changes, and `changed` or `unchanged` for apply,
+along with declaration preservation and next steps. Each later invocation
+resolves upstream again and may select a different candidate. Evaluation success
+covers only the values forced by derivation evaluation. Post-upgrade validation
+is explicitly not run: build and manifest-check are still recommended.
+
+Success and no-op exit 0; argument errors exit 2; missing/unsupported wiring,
+ambiguous URL rewrites or missing old lock exit 3; candidate resolution failure
+exits 4; checked evaluation failure exits 5; captured-file conflict exits 6;
+apply failure with restored/unchanged files exits 7; rollback failure requiring
+inspection exits 8; caught apply interruption exits 130. Exit 5 cannot result
+from plan. Before-write failures leave the three captured root files unchanged;
+partial-write failures report rollback's actual outcome. Guards cover these root
+files, not all imports; per-file atomic exchanges do not promise multi-file
+visibility or power-loss durability.
+
+`--no-lock` remains a mechanical URL-only mode: it resolves no candidate lock,
+writes no lock, and skips documentation comparison and evaluation with explicit
+skip explanations. `--force` has no additional effect there.
 
 If the new manifest is rejected, restore the previous input and lock from version
-control and use that pin for recovery. `manifest-check` checks manifest origin and
+control, including working old declarations/wiring if needed, and use its
+matching runtime for recovery. `manifest-check` checks manifest origin and
 shape, ABI and target, closures, secret references, and plan feasibility without
 resolving source or secret material or preparing state. First identify whether
 the failure occurred in that manifest check or later while preparing or executing

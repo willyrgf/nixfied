@@ -49,6 +49,7 @@ pkgs.writeShellApplication {
     nixfied_url="$UPGRADE_NIXFIED_URL_INITIAL"
     update_lock=$((1 - UPGRADE_NO_LOCK_INITIAL))
     plan="$UPGRADE_PLAN_INITIAL"
+    force="$UPGRADE_FORCE_INITIAL"
 
     usage() {
       echo "$UPGRADE_HELP"
@@ -78,6 +79,10 @@ pkgs.writeShellApplication {
           plan=1
           shift
           ;;
+        "$UPGRADE_FORCE")
+          force=1
+          shift
+          ;;
         "$UPGRADE_NO_LOCK")
           update_lock=0
           shift
@@ -93,6 +98,13 @@ pkgs.writeShellApplication {
           ;;
       esac
     done
+
+    mode=checked
+    if [[ "$plan" -eq 1 ]]; then
+      mode=plan
+    elif [[ "$force" -eq 1 ]]; then
+      mode=forced
+    fi
 
     flake="$root/flake.nix"
 
@@ -151,11 +163,8 @@ pkgs.writeShellApplication {
     flake_before="$(file_identity "$flake")"
     lock_before="$(file_identity "$lock")"
     project_before="$(file_identity "$project_file")"
-    lock_before_exists=0
-    [[ -f "$lock" ]] && lock_before_exists=1
-
-    if [[ "$update_lock" -eq 1 && "$lock_before_exists" -eq 0 ]]; then
-      echo "flake.lock is required for a checked upgrade because it identifies the old Nixfied source" >&2
+    if [[ "$update_lock" -eq 1 && "$lock_before" == absent ]]; then
+      echo "flake.lock is required for a locked upgrade because it identifies the old Nixfied source" >&2
       echo "No files were changed. Use --no-lock for the mechanical URL-only mode." >&2
       exit 3
     fi
@@ -269,8 +278,8 @@ pkgs.writeShellApplication {
 
     stage_flake_rewrite
 
-    # Replace a regular file only if the content captured before the Nix
-    # preflight is still present. The exchange is atomic: a concurrent writer
+    # Replace a regular file only if the content captured before candidate
+    # preparation is still present. The exchange is atomic: a concurrent writer
     # is observed after the swap and the original directory entry is restored
     # before this function reports a conflict. Linux and Darwin provide the
     # needed exchange primitive under different names.
@@ -434,13 +443,7 @@ PY
 
     old_source=""
     candidate_source=""
-    old_available=0
-    candidate_available=0
-    if [[ -f "$lock" ]]; then
-      report_identity "old" "$lock" || true
-    else
-      echo "old source: unavailable (flake.lock is missing)" >&2
-    fi
+    report_identity "old" "$lock" || true
     status_break
     report_identity "candidate" "$candidate_lock" || true
 
@@ -470,14 +473,8 @@ PY
       printf '%s' "$source_path"
     }
 
-    if [[ -f "$lock" ]]; then
-      if old_source="$(materialize_source old "$lock")"; then
-        old_available=1
-      fi
-    fi
-    if candidate_source="$(materialize_source candidate "$candidate_lock")"; then
-      candidate_available=1
-    fi
+    old_source="$(materialize_source old "$lock")" || old_source=""
+    candidate_source="$(materialize_source candidate "$candidate_lock")" || candidate_source=""
 
     scope_paths() {
       local source="$1"
@@ -528,7 +525,7 @@ PY
     echo "documentation diff: emitted on stdout (README.md and docs/)" >&2
     status_break
     printf '%s\n' '--- BEGIN NIXFIED DOCUMENTATION DIFF ---'
-    if [[ "$old_available" -eq 1 && "$candidate_available" -eq 1 ]]; then
+    if [[ -n "$old_source" && -n "$candidate_source" ]]; then
       if ! emit_docs_diff "$old_source" "$candidate_source"; then
         echo '--- DOCUMENTATION DIFF UNAVAILABLE ---'
         echo "documentation diff unavailable: source comparison failed" >&2
@@ -539,76 +536,48 @@ PY
     fi
     printf '%s\n' '--- END NIXFIED DOCUMENTATION DIFF ---'
 
-    verify_candidate() {
-      status_break
-      if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
-        "$root#manifest.drvPath" >/dev/null; then
-        echo "candidate verification: failed (manifest preflight)" >&2
-        echo "upgrade applied: no" >&2
-        echo "candidate source is shown above; project declaration remains unchanged" >&2
-        echo "upgrade not applied; no project files were changed" >&2
-        exit 5
-      fi
-      echo "candidate verification: passed (manifest preflight)" >&2
-    }
-
-    verify_candidate
-
-    if [[ -n "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY-}" ]]; then
-      echo "test pause before apply" >&2
-      sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY}"
-    fi
-    assert_unchanged
-
     flake_changed=0
     lock_changed=0
     if [[ -n "$staged_flake" ]] && ! cmp -s "$staged_flake" "$flake"; then
       flake_changed=1
     fi
-    if [[ "$lock_before_exists" -eq 0 ]] || ! cmp -s "$candidate_lock" "$lock"; then
+    if ! cmp -s "$candidate_lock" "$lock"; then
       lock_changed=1
     fi
 
-    report_checked_summary() {
-      local mode="$1"
-      local changed=""
+    report_result() {
+      local outcome="$1" evaluation action index
+      local changes=("$flake_changed" "$lock_changed")
+      local descriptions=("flake.nix" "flake.lock (nixfied input)")
+      [[ "$flake_changed" -eq 0 ]] || descriptions[0]+=" (nixfied.url -> $nixfied_url)"
+      case "$mode:$outcome" in
+        plan:*) evaluation='not run (--plan)'; action='would change' ;;
+        checked:rejected) evaluation=failed; action=blocked ;;
+        checked:completed) evaluation=passed; action=changed ;;
+        forced:completed) evaluation='skipped (--force)'; action=changed ;;
+      esac
       status_break
-      if [[ "$flake_changed" -eq 1 ]]; then
-        changed="flake.nix (nixfied.url -> $nixfied_url)"
-      fi
-      if [[ "$lock_changed" -eq 1 ]]; then
-        changed="''${changed:+$changed; }flake.lock (nixfied input)"
-      fi
-
+      echo "candidate manifest evaluation: $evaluation" >&2
+      status_break
       if [[ "$mode" == "plan" ]]; then
         echo "upgrade applied: no (--plan)" >&2
         echo "plan: no project files changed" >&2
-        if [[ "$flake_changed" -eq 0 ]]; then
-          echo "unchanged: flake.nix" >&2
-        else
-          echo "would change: flake.nix (nixfied.url -> $nixfied_url)" >&2
-        fi
-        if [[ "$lock_changed" -eq 0 ]]; then
-          echo "unchanged: flake.lock (nixfied input)" >&2
-        else
-          echo "would change: flake.lock (nixfied input)" >&2
-        fi
-      elif [[ -z "$changed" ]]; then
+      elif [[ "$outcome" == rejected ]]; then
+        echo "upgrade applied: no (candidate manifest evaluation failed)" >&2
+        echo "upgrade not applied; no project files were changed" >&2
+      elif [[ "$flake_changed" -eq 0 && "$lock_changed" -eq 0 ]]; then
         echo "upgrade applied: no (project already matched candidate)" >&2
       else
         echo "upgrade applied: yes" >&2
         echo "upgraded Nixfied wiring in $root" >&2
-        echo "changed: $changed" >&2
       fi
-
-      if [[ "$mode" != "plan" ]]; then
-        if [[ "$flake_changed" -eq 0 ]]; then
-          echo "unchanged: flake.nix" >&2
+      for index in "''${!changes[@]}"; do
+        if [[ "''${changes[$index]}" -eq 0 ]]; then
+          echo "unchanged: ''${descriptions[$index]}" >&2
+        else
+          echo "$action: ''${descriptions[$index]}" >&2
         fi
-        if [[ "$lock_changed" -eq 0 ]]; then
-          echo "unchanged: flake.lock (nixfied input)" >&2
-        fi
-      fi
+      done
       if [[ -f "$project_file" && "$(file_identity "$project_file")" == "$project_before" ]]; then
         echo "preserved: nixfied.nix (project-owned)" >&2
       elif [[ "$mode" != "plan" ]]; then
@@ -622,16 +591,34 @@ PY
       fi
       echo "next:" >&2
       if [[ "$mode" == "plan" ]]; then
-        echo "  rerun upgrade without --plan to apply the candidate" >&2
+        echo "  rerun upgrade without --plan to attempt checked apply; the next invocation resolves upstream again" >&2
+      elif [[ "$outcome" == rejected ]]; then
+        echo "  edit project wiring/declarations and replan, or explicitly repin with --force and repair afterward" >&2
       fi
       echo "  nix build $root#manifest" >&2
       echo "  nix run $root#manifest-check" >&2
     }
 
-    if [[ "$plan" -eq 1 ]]; then
-      report_checked_summary plan
+    if [[ "$mode" == plan ]]; then
+      assert_unchanged
+      report_result completed
       exit 0
     fi
+
+    if [[ "$mode" == checked ]]; then
+      status_break
+      if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
+        "$root#manifest.drvPath" >/dev/null; then
+        report_result rejected
+        exit 5
+      fi
+    fi
+
+    if [[ -n "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY-}" ]]; then
+      echo "test pause before apply" >&2
+      sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY}"
+    fi
+    assert_unchanged
 
     candidate_lock_identity="$(file_identity "$candidate_lock")"
     candidate_flake_identity=""
@@ -675,18 +662,14 @@ PY
         fi
       fi
       if [[ "$lock_apply_started" -eq 1 ]]; then
-        if [[ "$lock_before_exists" -eq 1 ]]; then
-          rollback_tmp="$lock.nixfied-upgrade.rollback.$$"
-          if ! cp -- "$lock_backup" "$rollback_tmp"; then
-            rollback_failed=1
-          else
-            replace_status=0
-            atomic_replace "$rollback_tmp" "$lock" "$candidate_lock_identity" || replace_status=$?
-            rm -f -- "$rollback_tmp"
-            [[ "$replace_status" -eq 0 ]] || rollback_failed=1
-          fi
-        elif ! rm -f -- "$lock"; then
+        rollback_tmp="$lock.nixfied-upgrade.rollback.$$"
+        if ! cp -- "$lock_backup" "$rollback_tmp"; then
           rollback_failed=1
+        else
+          replace_status=0
+          atomic_replace "$rollback_tmp" "$lock" "$candidate_lock_identity" || replace_status=$?
+          rm -f -- "$rollback_tmp"
+          [[ "$replace_status" -eq 0 ]] || rollback_failed=1
         fi
       fi
       return "$rollback_failed"
@@ -704,7 +687,7 @@ PY
     }
     trap on_interrupt INT TERM HUP
 
-    if [[ "$lock_changed" -eq 1 && "$lock_before_exists" -eq 1 ]]; then
+    if [[ "$lock_changed" -eq 1 ]]; then
       if ! cp -- "$lock" "$lock_backup"; then
         echo "failed to prepare flake.lock backup; no project files were changed" >&2
         exit 7
@@ -799,6 +782,6 @@ PY
     fi
     apply_in_progress=0
     trap - INT TERM HUP
-    report_checked_summary apply
+    report_result completed
   '';
 }

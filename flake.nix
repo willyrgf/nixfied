@@ -666,7 +666,7 @@
             (program "install")
           )
           (app "upgrade" "Repin the Nixfied flake input without touching project-owned declarations"
-            "Inspects pinned sources and reports documentation changes; checked apply updates project wiring after manifest preflight."
+            "Plan inspects locked sources without manifest evaluation; checked apply evaluates the candidate manifest; force skips evaluation while retaining guarded pin/lock writes."
             { command = "upgrade"; }
             (program "upgrade")
           )

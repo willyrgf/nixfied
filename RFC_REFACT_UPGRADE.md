@@ -1,9 +1,9 @@
 # Refactor upgrade around inspection and guarded repinning
 
-Status: implementation-ready proposal, reviewed with the upgrade architect.
-This RFC specifies the intended cutover; it does not describe already shipped
-behavior. [CONTRACT.md](docs/CONTRACT.md#output-and-failure-contract) remains
-normative until implementation updates UPGRADE-1 and its coupled surfaces.
+Status: implemented by the inspection and guarded-repinning cutover.
+This RFC records the decision and required proofs, reviewed with the upgrade
+architect. [CONTRACT.md](docs/CONTRACT.md#output-and-failure-contract) is normative
+for the delivered UPGRADE-1 behavior and its coupled surfaces.
 
 ## Decision
 
