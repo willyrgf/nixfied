@@ -86,6 +86,15 @@ failure output. These socket tests run outside the build sandbox. The standalone
 against the pinned Reth binary; it is integration coverage, not a substitute for
 the independent negative wire cases.
 
+The same floor runs the Rust socket suite in `nix/checks/reth-peer-probe.rs`.
+Independent HTTP responses and a native-command witness prove that the peer
+mode rejects malformed identities before invoking Reth, ignores advertised
+addresses, targets planned IPv4/IPv6 listeners, and preserves safe diagnostics.
+The suite also starts the pinned Reth binary and proves repeated native
+handshakes succeed while an unrelated TCP acceptor cannot satisfy the probe.
+`nix/checks/reth-peer-probe.nix` packages both the fixtures and the actual adapter
+probe; the source gate checks formatting and compilation without binding ports.
+
 Runtime library tests that launch workloads require the sibling runtime binary.
 Before running `cargo test -p nixfied-runtime --lib` alone, run
 `cargo build -p nixfied-runtime` in the same Cargo target directory. The full

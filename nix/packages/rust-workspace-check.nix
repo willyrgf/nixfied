@@ -27,6 +27,7 @@ pkgs.stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
     test -e ${referenceCheck}
+    test -x ${import ../checks/reth-peer-probe.nix { inherit pkgs; }}/bin/nixfied-reth-peer-tests
     test -e ${import ../checks/upgrade-syntax.nix { inherit pkgs; }}
     test -e ${import ../checks/syntax-projection.nix { inherit pkgs; }}
     test -e ${import ../checks/maintenance.nix { inherit pkgs; }}

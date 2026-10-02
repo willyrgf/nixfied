@@ -95,10 +95,7 @@ let
     '';
   };
 
-  rpcProbe = pkgs.writeScriptBin "nixfied-reth-probe" ''
-    #!${pkgs.python3}/bin/python3
-    ${builtins.readFile ./reth-probe.py}
-  '';
+  rpcProbe = import ./reth-probe.nix { inherit pkgs; };
   endpointProbe = mode: {
     tools = [ "reth-rpc-probe" ];
     run = [ "nixfied-reth-probe" mode "\${host}" "\${port}" ]

@@ -24,7 +24,7 @@
     name = "reth";
     description = "Reth service with explicitly owned HTTP, WebSocket and authenticated RPC endpoints.";
     usage = "imports = [ adapters.reth ];";
-    contributes = "The reth service, packaged tools and reth-smoke task. Listener configuration stays in the native adapter.";
+    contributes = "The reth service, packaged HTTP/WebSocket/Engine API/peer probes and reth-smoke task. Listener configuration stays in the native adapter.";
     binding = import ./reth.nix;
   }
 ]

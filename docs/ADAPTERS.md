@@ -57,7 +57,8 @@ rewrite).
 - **Protocol probes**: every endpoint declares `readyProbe` and `healthProbe`
   invocations that use its assigned address and check meaningful protocol
   behavior. Postgres uses `pg_isready`; Reth checks HTTP JSON-RPC, a complete
-  WebSocket exchange, and JWT-authenticated Engine API JSON-RPC. A listener
+  WebSocket exchange, JWT-authenticated Engine API JSON-RPC, and native RLPx
+  handshakes when an adopter enables a peer listener. A listener
   alone cannot make a service ready. Keep stdin null and omit invocation
   timeouts; `lifecycle.ready.policy` and `lifecycle.health.policy` own
   attempt deadlines and whole-round retry limits.
@@ -121,7 +122,8 @@ throughout `run`, including the executable position.
 
 ## Multiple listeners: declare every endpoint
 
-A service that binds more than one listener (reth: http/ws/authrpc) declares each
+A service that binds more than one listener (reth: http/ws/authrpc, plus peers
+when enabled) declares each
 as a named `endpoint` and names the primary with `primaryEndpoint` (see
 `nix/adapters/reth.nix`). The planner reserves a contiguous port block — one port
 per endpoint — so every listener is reserved, coordinated across independent
@@ -138,6 +140,46 @@ is outside the plan, so it is neither reserved nor isolated across slots. Declar
 as an endpoint instead. A listener the adapter cannot represent (no fixed offset, or an
 out-of-band socket) must be disabled rather than left unreserved — see reth's
 `--ipcdisable`.
+
+### Reth peer listeners
+
+The default Reth adapter runs a peerless `--dev` node with three endpoints.
+Adopters that enable peering must declare the peer TCP endpoint as well. The
+adapter's existing `reth-rpc-probe` closure supplies
+`nixfied-reth-probe peer HOST PEER_PORT HTTP_PORT`: it reads `admin_nodeInfo`
+from the supplied HTTP port and asks `reth p2p rlpx ping` to perform ECIES
+authentication and the devp2p Hello exchange against the supplied peer port.
+Only the public key is taken from the returned enode; its advertised address
+and ports never choose the connection target. Failed HTTP, malformed identity,
+or failed handshake exits nonzero with a fixed diagnostic and no response text.
+
+Attach the same invocation to readiness and health on the peer endpoint:
+
+```nix
+let
+  peerProbe = {
+    tools = [ "reth-rpc-probe" ];
+    run = [
+      "nixfied-reth-probe" "peer" "\${host}" "\${port}"
+      "\${port:reth-http}"
+    ];
+  };
+in {
+  nixfied.services.reth.endpoints.reth-p2p = {
+    readyProbe = peerProbe;
+    healthProbe = peerProbe;
+  };
+}
+```
+
+This accompanies an adopter-owned start invocation that binds `--addr` to
+`${host:reth-p2p}` and `--port` to `${port:reth-p2p}`, enables `admin` on HTTP
+(`--http.api eth,admin`), and allows at least one inbound peer. The HTTP and peer
+listeners must use the same loopback host for this probe. Disable discovery
+(`--disable-discovery`) so it adds no unreserved UDP listener, and disable any
+other listeners the custom service does not declare. Keep the ordinary HTTP
+probe attached to its HTTP endpoint; the peer handshake checks a separate
+listener. Lifecycle policies own probe deadlines and retries.
 
 ## Endpoint-less services: durable is not listening
 

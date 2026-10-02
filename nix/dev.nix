@@ -28,6 +28,7 @@ let
       pkgs.git
     ];
     text = ''
+      ${import ./checks/reth-peer-probe.nix { inherit pkgs; }}/bin/nixfied-reth-peer-tests
       ${pkgs.python3}/bin/python3 ${./checks/reth-probe.py} ${./adapters/reth-probe.py}
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
         export LIBRARY_PATH="${pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
