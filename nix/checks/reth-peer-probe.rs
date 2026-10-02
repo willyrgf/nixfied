@@ -465,10 +465,17 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port().to_string();
         for content in [
-            "not hex".to_owned(),
-            "00".repeat(31),
-            "00".repeat(33),
-            format!("{}\n\n\n", "00".repeat(32)),
+            b"not hex".to_vec(),
+            "00".repeat(31).into_bytes(),
+            "00".repeat(33).into_bytes(),
+            format!("{}\n\n\n", "00".repeat(32)).into_bytes(),
+            // Shell variables cannot represent NUL; reject the actual bytes
+            // before a command substitution could silently discard them.
+            ["00".repeat(32).as_bytes(), &[0]].concat(),
+            [&[0], "00".repeat(32).as_bytes()].concat(),
+            ["00".repeat(16).as_bytes(), &[0], "00".repeat(16).as_bytes()].concat(),
+            ["00".repeat(32).as_bytes(), &[0xff]].concat(),
+            ["00".repeat(31).as_bytes(), &[0xff, 0xfe]].concat(),
         ] {
             fs::write(&path, content).unwrap();
             assert_result(

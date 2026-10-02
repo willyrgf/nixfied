@@ -70,19 +70,18 @@ pkgs.writeShellApplication {
 
     token=""
     if [[ "$mode" == authrpc ]]; then
-      # Validate before decoding: xxd deliberately tolerates invalid input.
-      # Read at most 67 bytes, allowing the authored 64 hex digits and newline.
-      if ! secret_hex="$(head -c 67 "$4/reth/config/jwt.hex" 2>/dev/null && printf .)"; then
+      # Encode bounded file bytes before shell capture, which discards NUL.
+      # The hex view must describe exactly 64 ASCII hex digits and an optional
+      # newline. Validate before decoding: xxd tolerates other malformed input.
+      if ! encoded_secret="$(head -c 67 "$4/reth/config/jwt.hex" 2>/dev/null |
+        xxd -p -c 67 2>/dev/null)" ||
+        [[ ! "$encoded_secret" =~ ^(3[0-9]|[46][1-6]){64}(0a)?$ ]]; then
         fail
       fi
-      secret_hex="''${secret_hex%.}"
-      secret_hex="''${secret_hex%$'\n'}"
-      if [[ ! "$secret_hex" =~ ^[0-9a-fA-F]{64}$ ]]; then
-        fail
-      fi
-      # The signer reads raw bytes through a descriptor, never a secret argv.
+      # Decode the validated file view and then its hex key. The signer reads
+      # raw key bytes through a descriptor, never a secret argv or temp file.
       if ! token="$(jwt encode --alg HS256 \
-        --secret @<(printf '%s' "$secret_hex" | xxd -r -p) '{}' 2>/dev/null)"; then
+        --secret @<(printf '%s' "$encoded_secret" | xxd -r -p | xxd -r -p) '{}' 2>/dev/null)"; then
         fail
       fi
       request='{"jsonrpc":"2.0","id":1,"method":"engine_exchangeCapabilities","params":[[]]}'
