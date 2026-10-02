@@ -163,6 +163,7 @@ let
   };
 in
 assert import ./docs-navigation.nix { inherit lib; };
+assert import ./reference-content.nix { inherit lib; index = builtins.fromJSON docs.serialized; };
 # These literal results are the independent fence-boundary expectations.
 assert lib.all (
   vector: docs.extractSection vector.document "## Selected" == vector.expected
@@ -272,183 +273,14 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     if grep -Eq '^## (The problem|Shared contracts|Verification boundary)' runtime-topic.txt; then
       echo 'runtime topic leaked unrelated sections' >&2; exit 1
     fi
-    # Source-composition integration check; literal vectors above prove fence boundaries.
-    ${pkgs.python3}/bin/python3 - "$docs" ${docs}/share/nixfied/reference/index.json <<'PYTHON'
-  import json, re, subprocess, sys
-  with open(sys.argv[2]) as source:
-      index = json.load(source)
-  for name, topic in index['topics'].items():
-      expected = []
-      for fragment in topic['fragments']:
-          heading = fragment['heading']
-          lines = index['documents'][fragment['document']].splitlines()
-          start = lines.index(heading)
-          level = len(heading.split(' ', 1)[0])
-          end = start + 1
-          fence = None
-          while end < len(lines):
-              line = lines[end]
-              marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)$', line)
-              if marker:
-                  token, tail = marker.groups()
-                  if fence is None:
-                      if token[0] == '~' or '`' not in tail:
-                          fence = token
-                  elif token.startswith(fence) and re.fullmatch(r'[ \t]*', tail):
-                      fence = None
-              elif fence is None and re.match(r'#{1,' + str(level) + r'} ', line):
-                  break
-              end += 1
-          expected.append('\n'.join(lines[start:end]).rstrip())
-      output = subprocess.check_output([sys.argv[1], 'topic', name], text=True)
-      assert topic['prose'].strip() == '\n\n'.join(expected), name
-      assert output.startswith('Topic: ' + name + '\n\n' + topic['prose']), name
-      for related in topic['related']:
-          assert related['kind'] == 'topic'
-          assert related['id'] in index['topics']
-          assert 'docs topic ' + related['id'] in output
-  # Hand-authored topic expectations are independent of the selector renderer.
-  cases = {
-      'adapters': ('module', 'adapter/postgres'),
-      'authoring': ('argument', 'module-argument/pkgs'),
-      'commands': ('command', 'install'),
-      'context': ('option', 'nixfied.codebases.main.sourceMode'),
-      'derivation': ('function', 'library/seq'),
-      'development': ('app', 'root/regenerate'),
-      'discovery': ('app', 'project/docs'),
-      'errors': ('error', 'SECRET_UNAVAILABLE'),
-      'manifest': ('function', 'library/compileManifest'),
-      'outputs': ('record', 'output-schema/run-summary-json'),
-      'placeholders': ('error', 'PORT_CONFLICT'),
-      'recovery': ('command', 'upgrade'),
-      'runtime': ('command', 'run'),
-      'secrets': ('option', 'nixfied.secrets.<name>.source.kind'),
-      'services': ('record', 'primitive/Lifecycle'),
-      'state': ('option', 'nixfied.state.persistence'),
-      'tasks': ('option', 'nixfied.tasks.<name>.requires'),
-  }
-  assert set(cases) == set(index['topics'])
-  for name, required in cases.items():
-      topic = index['topics'][name]
-      members = {(entry['kind'], entry['id']) for entry in topic['members']}
-      assert required in members, (name, required)
-      # Development tooling must not enter other topics; runtime APIs must not
-      # enter development simply because it links to the manifest topic.
-      excluded = ('command', 'run') if name == 'development' else ('app', 'root/regenerate')
-      assert excluded not in members, (name, excluded)
-      output = subprocess.check_output([sys.argv[1], 'topic', name], text=True)
-      required_text = ('docs api error ' + required[1] if required[0] == 'error'
-                       else '### ' + required[0] + ' ' + required[1])
-      assert required_text in output, name
-      assert '### ' + excluded[0] + ' ' + excluded[1] not in output, name
-  # Reader journeys need an explanation of ownership and actions, not only
-  # structurally valid membership. Normalize wrapping without hiding omissions.
-  prose = {name: ' '.join(topic['prose'].split())
-           for name, topic in index['topics'].items()}
-  journeys = {
-      'state': [
-          'Run `down` first.',
-          'Purge overrides retention only',
-          'never the ownership, confinement, or live-process checks',
-          'runtime-owned slot root',
-          'Child-tool caches remain project-owned.',
-      ],
-      'runtime': [
-          'projectId / environment / slot / runId',
-          'Service attribution belongs to process evidence',
-          'Rust materialises *host-absolute* placement at admission',
-      ],
-      'adapters': [
-          'An adapter is a Nix module',
-          'imports = [ adapters.postgres ];',
-          'the adopter references them as steps in its own composites',
-          'contributes *definitions only*',
-      ],
-      'derivation': [
-          'Status: **normative**.',
-          'no equality check of',
-          'flatten(ci) =',
-          'ci.check.fmt',
-          'servicesRequired(all) = ["api", "postgres", "worker"]',
-      ],
-      'tasks': [
-          'Invocations observe the live workspace by default',
-      ],
-      'development': [
-          'nix run .#gate -- --dirty',
-          'does not consume other uncommitted framework changes',
-          'Use the smallest proof that covers the change',
-          'Contract or cross-layer change',
-      ],
-  }
-  for name, explanations in journeys.items():
-      for explanation in explanations:
-          assert explanation in prose[name], (name, explanation)
-  derivation = index['topics']['derivation']['prose']
-  assert derivation.index('## 5. Golden vectors') < derivation.index('### 5.1 Representative examples')
-  assert set(re.findall(r'^#### V(\d+) ', derivation, re.M)) == {'1', '2', '3', '4', '6', '8', '9', '10'}
-  assert 'Requesting `task-output` for a composite is rejected' in prose['outputs']
-  for name, topic in index['topics'].items():
-      output = topic['text']
-      assert all(related['id'] != name for related in topic['related']), name
-      if topic['related'] and topic['members']:
-          assert output.index('### Related topics') < output.index('## Related definitions'), name
-      errors = [member['id'] for member in topic['members'] if member['kind'] == 'error']
-      if errors:
-          assert '### Error codes and related topics' in output, name
-          assert '### error ' not in output, name
-          for error in errors:
-              blocks = re.findall(r'^- `([^`]+)`\n(.*?)(?=^- `|^### |\Z)', output, re.M | re.S)
-              matches = [body for code, body in blocks if code == error]
-              assert len(matches) == 1, (name, error)
-              body = matches[0]
-              entry = next(entry for entry in index['api'] if entry['kind'] == 'error' and entry['id'] == error)
-              assert entry['description'] in body, (name, error)
-              assert 'Details: `docs api error ' + error + '`' in body, (name, error)
-              destination = ('This topic' if entry['contextTopic'] == name
-                             else '`docs topic ' + entry['contextTopic'] + '`')
-              assert 'Related topic: ' + destination in body, (name, error)
-              assert 'docs topic ' + name + '`' not in body, (name, error)
-  state = index['topics']['state']['text']
-  assert state.index('### option nixfied.state.persistence') < state.index('### option nixfied.placement.ports.base')
-  errors = index['topics']['errors']['text']
-  assert errors.index('### record output-schema/runtime-error\n') < errors.index('### record output-schema/run-task\n')
-  entries = {(x['kind'], x['id']): x for x in index['api'] + index['options']}
-  def refs(key, direction):
-      return {(x['kind'], x['id']) for x in entries[key][direction]}
-  assert ('command', 'run') in refs(('app', 'project/run'), 'references')
-  assert ('app', 'project/run') in refs(('command', 'run'), 'backlinks')
-  assert ('record', 'output-schema/run-json') in refs(('command', 'run'), 'references')
-  assert ('command', 'run') in refs(('record', 'output-schema/run-json'), 'backlinks')
-  assert ('record', 'primitive/TaskSpec') in refs(('record', 'primitive/Manifest'), 'references')
-  assert ('record', 'primitive/Manifest') in refs(('record', 'primitive/TaskSpec'), 'backlinks')
-  target = entries[('option', 'nixfied.target.system')]
-  assert ('topic', 'context') in refs(('option', target['id']), 'references')
-  assert 'docs topic state' not in target['text']
-  assert 'docs topic placeholders' not in target['text']
-  assert 'docs topic derivation' not in entries[('record', 'output-schema/runtime-error')]['text']
-  for option, topic in [('nixfied.services.<name>.stateRefs', 'state'),
-                        ('nixfied.tasks.<name>.requires', 'placeholders')]:
-      entry = entries[('option', option)]
-      assert 'docs topic ' + topic not in entry['description'], option
-      assert 'docs topic ' + topic in entry['text'], option
-      assert 'docs topic ' + topic + '`' not in index['topics'][topic]['text'], topic
-  outputs = index['topics']['outputs']
-  assert {fragment['document'] for fragment in outputs['fragments']} == {'GUIDE.md', 'CONTRACT.md'}
-  assert outputs['fragments'][0]['document'] == 'GUIDE.md'
-  assert outputs['fragments'][-1]['document'] == 'CONTRACT.md'
-  assert 'For an interactive run, use `summary`' in outputs['prose']
-  assert outputs['prose'].index('### Choose output') < outputs['prose'].index('## Output and failure contract')
-  assert '--output json' in outputs['prose']
-  assert '--output task-output' in outputs['prose']
-  assert '### 5.1' in index['topics']['derivation']['prose']
-  error_record = entries[('record', 'output-schema/runtime-error')]
-  error_backlinks = [ref['id'] for ref in error_record['backlinks'] if ref['kind'] == 'error']
-  rendered_backlinks = error_record['text'].split('### Referenced by', 1)[1]
-  assert set(re.findall(r'^- `([^`]+)`$', rendered_backlinks, re.M)) == set(error_backlinks)
-  assert rendered_backlinks.count('docs api error <code>') == 1
-
-  PYTHON
+    # Static expectations are checked independently in Nix; exercise every
+    # shipped topic through the actual dispatcher as well.
+    index=${docs}/share/nixfied/reference/index.json
+    while IFS= read -r topic; do
+      "$docs" topic "$topic" > actual-topic.txt
+      jq -r --arg topic "$topic" '.topics[$topic].text' "$index" > expected-topic.txt
+      diff -u expected-topic.txt actual-topic.txt
+    done < <(jq -r '.topics | keys[]' "$index")
     "$docs" topic context | grep -F 'XDG_CONFIG_HOME/nixfied/secrets' > /dev/null
     "$docs" topic commands | grep -F 'before checking duplication' > /dev/null
     "$docs" topic errors | grep -F 'Non-object details become an empty object' > /dev/null
