@@ -41,15 +41,21 @@ let
     lockFile = packageLock;
   };
 in
-rustPlatform.buildRustPackage {
-  pname = package;
-  version = "0.1.0";
-  src = sourceInfo.root;
-  cargoLock.lockFile = packageLock;
-  cargoDeps = packageCargoDeps;
-  inherit buildType;
-  cargoBuildFlags = [ "--package=${package}" ];
-  # The white-box `cargo test` floor runs outside the build sandbox (it binds
-  # ports and spawns process groups); here we only compile.
-  doCheck = false;
-}
+rustPlatform.buildRustPackage (
+  {
+    pname = package;
+    version = "0.1.0";
+    src = sourceInfo.root;
+    cargoLock.lockFile = packageLock;
+    cargoDeps = packageCargoDeps;
+    inherit buildType;
+    cargoBuildFlags = [ "--package=${package}" ];
+    # The white-box `cargo test` floor runs outside the build sandbox (it binds
+    # ports and spawns process groups); here we only compile.
+    doCheck = false;
+  }
+  // pkgs.lib.optionalAttrs (package == "nixfied-runtime" && pkgs.stdenv.hostPlatform.isDarwin) {
+    nativeBuildInputs = [ pkgs.rust-bindgen-unwrapped ];
+    SDKROOT = "${pkgs.apple-sdk.sdkroot}";
+  }
+)

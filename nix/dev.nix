@@ -26,10 +26,12 @@ let
       pkgs.stdenv.cc
       pkgs.sqlite
       pkgs.git
-    ];
+    ]
+    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.rust-bindgen-unwrapped;
     text = ''
       ${import ./checks/reth-peer-probe.nix { inherit pkgs; }}/bin/nixfied-reth-peer-tests
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+        export SDKROOT="${pkgs.apple-sdk.sdkroot}"
         export LIBRARY_PATH="${pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
       ''}
       NIXFIED_TEST_CHILD="${testChild}/bin/nixfied-test-child" \

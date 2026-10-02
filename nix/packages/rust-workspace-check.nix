@@ -14,48 +14,54 @@
 let
   rustToolchain = (import ../toolchain.nix { inherit pkgs; }).dev;
 in
-pkgs.stdenv.mkDerivation {
-  name = "nixfied-rust-workspace-check";
-  src = ../../runtime;
-  cargoDeps = pkgs.rustPlatform.importCargoLock {
-    lockFile = ../../runtime/Cargo.lock;
-  };
-  nativeBuildInputs = [
-    rustToolchain
-    pkgs.rustPlatform.cargoSetupHook
-  ];
-  buildPhase = ''
-    runHook preBuild
-    test -e ${referenceCheck}
-    test -x ${import ../checks/reth-peer-probe.nix { inherit pkgs; }}/bin/nixfied-reth-peer-tests
-    test -e ${import ../checks/upgrade-syntax.nix { inherit pkgs; }}
-    test -e ${import ../checks/syntax-projection.nix { inherit pkgs; }}
-    test -e ${import ../checks/maintenance.nix { inherit pkgs; }}
-    test -e ${import ../checks/structure-projection.nix { inherit pkgs; }}
-    test -e ${
-      import ../checks/generated.nix {
-        inherit pkgs;
-        package = "nixfied-runtime";
+pkgs.stdenv.mkDerivation (
+  {
+    name = "nixfied-rust-workspace-check";
+    src = ../../runtime;
+    cargoDeps = pkgs.rustPlatform.importCargoLock {
+      lockFile = ../../runtime/Cargo.lock;
+    };
+    nativeBuildInputs = [
+      rustToolchain
+      pkgs.rustPlatform.cargoSetupHook
+    ]
+    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.rust-bindgen-unwrapped;
+    buildPhase = ''
+      runHook preBuild
+      test -e ${referenceCheck}
+      test -x ${import ../checks/reth-peer-probe.nix { inherit pkgs; }}/bin/nixfied-reth-peer-tests
+      test -e ${import ../checks/upgrade-syntax.nix { inherit pkgs; }}
+      test -e ${import ../checks/syntax-projection.nix { inherit pkgs; }}
+      test -e ${import ../checks/maintenance.nix { inherit pkgs; }}
+      test -e ${import ../checks/structure-projection.nix { inherit pkgs; }}
+      test -e ${
+        import ../checks/generated.nix {
+          inherit pkgs;
+          package = "nixfied-runtime";
+        }
       }
-    }
-    test -e ${
-      import ../checks/generated.nix {
-        inherit pkgs;
-        package = "nixfied-cli";
+      test -e ${
+        import ../checks/generated.nix {
+          inherit pkgs;
+          package = "nixfied-cli";
+        }
       }
-    }
-    diff -u ${../../docs/OPTIONS.md} ${optionsDoc}
-    cargo fmt --all -- --check
-    # `clippy` runs the full rustc front end, so `--all-targets -D warnings` also
-    # type-checks every target — a separate `cargo check` would just recompile the
-    # workspace a second time.
-    cargo clippy --all-targets -- -D warnings
-    runHook postBuild
-  '';
-  installPhase = ''
-    runHook preInstall
-    mkdir -p "$out"
-    runHook postInstall
-  '';
-  doCheck = false;
-}
+      diff -u ${../../docs/OPTIONS.md} ${optionsDoc}
+      cargo fmt --all -- --check
+      # `clippy` runs the full rustc front end, so `--all-targets -D warnings` also
+      # type-checks every target — a separate `cargo check` would just recompile the
+      # workspace a second time.
+      cargo clippy --all-targets -- -D warnings
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out"
+      runHook postInstall
+    '';
+    doCheck = false;
+  }
+  // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+    SDKROOT = "${pkgs.apple-sdk.sdkroot}";
+  }
+)

@@ -340,7 +340,8 @@ state, deletion, and containment rules are in
   endpoint lock serializes startup mutation across state roots. Exact-bind
   preflight checks availability. The endpoint owner observes sockets held by
   freshly enumerated, identity-checked containment members: managed FD inodes
-  plus Linux SOCK_DIAG records, or full SDK-decoded macOS socket FD records.
+  plus Linux SOCK_DIAG records, or full macOS socket FD records decoded in Rust
+  through bindings generated from the selected SDK.
   It retains positive evidence even when unrelated inspection is incomplete.
   It never needs negative host-wide inventory. A complete round owns initial
   witnesses, successful probe outcomes and matching final witnesses. Only its

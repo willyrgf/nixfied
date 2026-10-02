@@ -770,20 +770,22 @@
           (publishPackage "devShell" "default" "Pinned Rust and Nix development environment"
             "Development shell with the private test-child fixture."
             (
-              pkgs.mkShell {
+              pkgs.mkShell ({
                 packages = [
                   (import ./nix/toolchain.nix { inherit pkgs; }).dev
                   pkgs.sqlite
                   pkgs.nix
                   pkgs.git
-                ];
+                ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.rust-bindgen-unwrapped;
                 NIXFIED_TEST_CHILD = "${nixfiedTestChild}/bin/nixfied-test-child";
                 NIXFIED_TEST_SLEEP = "${pkgs.coreutils}/bin/sleep";
                 NIXFIED_TEST_FIXTURES = toString (import ./nix/checks/runtime-fixtures.nix {
                   inherit pkgs;
                   testChild = nixfiedTestChild;
                 });
-              }
+              } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+                SDKROOT = "${pkgs.apple-sdk.sdkroot}";
+              })
             )
           )
         ];

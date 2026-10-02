@@ -1,22 +1,10 @@
 use std::collections::BTreeMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use super::{KernelSocketIdentity, MAX_DESCRIPTORS, SelectedEndpoint, SocketRecord, SocketScan};
 
-#[repr(C)]
-#[derive(Default)]
-struct SocketInfo {
-    address: [u8; 16],
-    socket_handle: u64,
-    inpcb_generation: u64,
-    family: u32,
-    port: u32,
-}
-const _: () = assert!(std::mem::size_of::<SocketInfo>() == 40);
-unsafe extern "C" {
-    fn nixfied_inspect_socket(pid: i32, fd: i32, out: *mut SocketInfo, size: usize) -> i32;
-}
+#[path = "macos_socket.rs"]
+mod socket;
 
 fn churn(error: &io::Error) -> bool {
     matches!(
@@ -94,56 +82,26 @@ pub(super) fn inspect(pid: u32, endpoints: &BTreeMap<String, &SelectedEndpoint>)
         }
     };
     for fd in fds {
-        let mut record = SocketInfo::default();
-        let result = unsafe {
-            nixfied_inspect_socket(
-                pid as i32,
-                fd,
-                &mut record,
-                std::mem::size_of::<SocketInfo>(),
-            )
-        };
-        if result == 0 {
-            continue;
-        }
-        if result < 0 {
-            let error = io::Error::from_raw_os_error(-result);
-            if !churn(&error) {
-                scan.uncertain(format!("cannot inspect managed socket FD: {error}"));
-            }
-            continue;
-        }
-        let address = match record.family {
-            4 => IpAddr::V4(Ipv4Addr::new(
-                record.address[0],
-                record.address[1],
-                record.address[2],
-                record.address[3],
-            )),
-            6 => IpAddr::V6(Ipv6Addr::from(record.address)),
-            _ => {
-                scan.uncertain("unsupported socket address family");
+        let record = match socket::inspect(pid as i32, fd) {
+            Ok(Some(record)) => record,
+            Ok(None) => continue,
+            Err(error) => {
+                if !churn(&error) {
+                    scan.uncertain(format!("cannot inspect managed socket FD: {error}"));
+                }
                 continue;
             }
         };
-        let Ok(port) = u16::try_from(record.port) else {
-            scan.uncertain("invalid socket port");
-            continue;
-        };
-        if record.socket_handle == 0 || port == 0 {
-            scan.uncertain("unusable socket identity");
-            continue;
-        }
         if endpoints
             .values()
-            .any(|endpoint| endpoint.host.ip() == address && endpoint.port == port)
+            .any(|endpoint| endpoint.host.ip() == record.address && endpoint.port == record.port)
         {
             scan.records.push(SocketRecord {
-                address,
-                port,
+                address: record.address,
+                port: record.port,
                 identity: KernelSocketIdentity::Macos {
-                    socket_handle: record.socket_handle,
-                    inpcb_generation: record.inpcb_generation,
+                    socket_handle: record.handle,
+                    inpcb_generation: record.generation,
                 },
             });
         }
