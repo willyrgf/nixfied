@@ -18,10 +18,15 @@ Completed on aarch64 Linux:
 - Nix-packaged runtime fixtures and shared CI floor (`5c24e14`): 164 focused
   integration tests and three library tests pass. Both hosted platforms now run
   the complete fixture-backed floor, including the Darwin decoder target.
-- Private Rust upgrade helper (`73c06d5`): 12 unit tests, an actual SIGTERM test,
+- Private Rust upgrade helper (`73c06d5`): initial unit/integration tests,
   formatting, Clippy, packaged syntax and source-selection checks pass. The
   source editor and guarded file mutation replace shell parsing, Python and C;
   concurrency limitations are documented in the contract and user guide.
+  Follow-up subtraction retains five source-edit/concurrent-edit tests and
+  removes eight redundant or low-value tests, including the duplicate SIGTERM
+  harness. The public gate owns actual interruption, apply/no-op, and stale
+  candidate coverage. The reduced suite, formatting, Clippy, and packaged
+  upgrade build pass on aarch64 Linux.
 - SDK-derived Rust macOS decoder (`c7a113f`): production build script, decoder
   and tests cross-typecheck against actual SDK 14.4, with generated layout
   assertions and Clippy. Linux all-target checking and Darwin package evaluation

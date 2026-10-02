@@ -62,11 +62,14 @@ nix run .#ci
 ```
 
 The private `nix/install/upgrade-helper` Cargo package is isolated from the
-installer and process runtime. Building `.#upgrade` runs its source-edit,
-filesystem-failure, and interruption tests, formatting, and Clippy. Nix owns
+installer and process runtime. Building `.#upgrade` runs five focused source-edit
+and concurrent-edit tests, formatting, and Clippy. Nix owns
 candidate resolution and reporting; the helper owns source edits and guarded
 application. The Nix gate independently exercises the packaged public upgrade
-surface, including historical reports and source selection.
+surface, including historical reports, source selection, successful/no-op
+application, stale candidates, and actual SIGTERM rollback. Those gate cases
+replace duplicate helper tests; helper tests retain the mid-write and rollback
+edit windows the public gate cannot deterministically reach.
 
 It is fail-fast and runs these local stages:
 
