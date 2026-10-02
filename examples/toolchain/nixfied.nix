@@ -20,22 +20,22 @@
 }:
 let
   # A worker daemon with no listener: it connects OUT to postgres and signals
-  # liveness through a heartbeat file under the slot state root — exactly the
+  # readiness through a marker under the slot state root — exactly the
   # queue-consumer/indexer shape the endpoint requirement used to force below
   # the seam.
   workerDaemon = pkgs.writeShellApplication {
     name = "toolchain-worker";
-    runtimeInputs = [ pkgs.coreutils ];
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.postgresql
+    ];
     text = ''
       state_dir="''${1:?missing state dir}"
       db_url="''${2:?missing db url}"
-      case "$db_url" in
-        *'%{'*) echo "unsubstituted placeholder in db url: $db_url" >&2; exit 3 ;;
-      esac
-      while true; do
-        date +%s > "$state_dir/worker-heartbeat"
-        sleep 1
-      done
+      rm -f "$state_dir/worker-ready"
+      [[ $(PGCONNECT_TIMEOUT=5 psql "$db_url" -X -w -tAc 'SELECT 1') == 1 ]]
+      touch "$state_dir/worker-ready"
+      exec sleep infinity
     '';
   };
 in
@@ -72,29 +72,37 @@ in
           "postgresql://postgres@\${host:postgres}:\${port:postgres}/postgres"
         ];
       };
-      # Readiness means "the probe answers": the heartbeat file exists.
+      # Readiness means "the probe answers": the successful startup marker exists.
       ready.probe = {
-          tools = [ pkgs.bash ];
-          run = [
-            "bash"
-            "-c"
-            ''test -e "$1"''
-            "probe"
-            "\${stateDir}/worker-heartbeat"
-          ];
-        };
-      ready.policy = { timeoutMs = 1000; retryIntervalMs = 200; maxAttempts = 30; };
+        tools = [ pkgs.bash ];
+        run = [
+          "bash"
+          "-c"
+          ''test -e "$1"''
+          "probe"
+          "\${stateDir}/worker-ready"
+        ];
+      };
+      ready.policy = {
+        timeoutMs = 1000;
+        retryIntervalMs = 200;
+        maxAttempts = 30;
+      };
       health.probe = {
-          tools = [ pkgs.bash ];
-          run = [
-            "bash"
-            "-c"
-            ''test -e "$1"''
-            "probe"
-            "\${stateDir}/worker-heartbeat"
-          ];
-        };
-      health.policy = { timeoutMs = 1000; retryIntervalMs = 200; maxAttempts = 30; };
+        tools = [ pkgs.bash ];
+        run = [
+          "bash"
+          "-c"
+          ''test -e "$1"''
+          "probe"
+          "\${stateDir}/worker-ready"
+        ];
+      };
+      health.policy = {
+        timeoutMs = 1000;
+        retryIntervalMs = 200;
+        maxAttempts = 30;
+      };
     };
     connectsTo = [ "postgres" ];
     logRefs = [ "service.worker" ];
@@ -195,7 +203,7 @@ in
       run = [
         "bash"
         "-c"
-        ''test -e "$1/worker-heartbeat"''
+        ''test -e "$1/worker-ready"''
         "e2e"
         "\${stateDir}"
       ];

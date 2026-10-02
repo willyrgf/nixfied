@@ -6,71 +6,42 @@
 # The runtime gains no knowledge of it; everything here is generic data.
 { pkgs, ... }:
 let
-  helper = pkgs.writeTextFile {
+  response = pkgs.writeText "synthetic-response" "ok";
+  helper = pkgs.writeShellApplication {
     name = "nixfied-synthetic-helper";
-    destination = "/bin/nixfied-synthetic-helper";
-    executable = true;
+    runtimeInputs = [
+      pkgs.darkhttpd
+      pkgs.curl
+    ];
     text = ''
-      #!${pkgs.python3}/bin/python3
-
-      import argparse
-      import socket
-      import sys
-
-
-      def run_service(args):
-          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-              listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-              listener.bind((args.host, args.port))
-              listener.listen()
-              print(
-                  f"nixfied-synthetic-helper listening on {args.host}:{args.port}",
-                  flush=True,
-              )
-              while True:
-                  conn, _addr = listener.accept()
-                  with conn:
-                      data = conn.recv(4096)
-                      if not data:
-                          continue
-                      elif data.startswith(b"GET "):
-                          conn.sendall(
-                              b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok"
-                          )
-                      else:
-                          conn.sendall(b"ok\n")
-                      conn.shutdown(socket.SHUT_WR)
-
-
-      def run_task(args):
-          with socket.create_connection((args.host, args.port), timeout=5) as conn:
-              conn.sendall(b"smoke\n")
-              with conn.makefile("rb") as response:
-                  data = response.read()
-                  if data != b"ok\n":
-                      raise SystemExit("invalid synthetic protocol response")
-                  sys.stdout.write(data.decode("ascii"))
-
-
-      parser = argparse.ArgumentParser(prog="nixfied-synthetic-helper")
-      sub = parser.add_subparsers(dest="command", required=True)
-      service = sub.add_parser("service")
-      service.add_argument("--host", required=True)
-      service.add_argument("--port", required=True, type=int)
-      task = sub.add_parser("task")
-      task.add_argument("--host", required=True)
-      task.add_argument("--port", required=True, type=int)
-      args = parser.parse_args()
-
-      if args.command == "service":
-          run_service(args)
-      elif args.command == "task":
-          run_task(args)
+      if [[ $# != 5 || "$2" != --host || "$4" != --port ]]; then
+        echo "expected service|task --host HOST --port PORT" >&2
+        exit 2
+      fi
+      case "$1" in
+        service)
+          exec darkhttpd ${response} --single-file --addr "$3" --port "$5" --no-keepalive
+          ;;
+        task)
+          reply=$(curl -q --silent --show-error --fail --noproxy '*' --globoff \
+            --max-time 5 --max-filesize 1024 --write-out . "http://$3:$5/")
+          [[ "$reply" == ok. ]] || { echo "invalid synthetic protocol response" >&2; exit 1; }
+          printf 'ok\n'
+          ;;
+        *) echo "unknown synthetic command" >&2; exit 2 ;;
+      esac
     '';
   };
   probe = {
     tools = [ "synthetic-helper" ];
-    run = [ "nixfied-synthetic-helper" "task" "--host" "\${host}" "--port" "\${port}" ];
+    run = [
+      "nixfied-synthetic-helper"
+      "task"
+      "--host"
+      "\${host}"
+      "--port"
+      "\${port}"
+    ];
   };
 in
 {

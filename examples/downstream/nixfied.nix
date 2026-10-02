@@ -11,70 +11,59 @@
 # Run it:      nixfied-runtime run --manifest <store>/manifest.json
 { pkgs, adapters, ... }:
 let
-  # A tiny TCP app used for both the api and the worker. In `service` mode it
-  # listens and answers; in `task` mode it connects and prints the reply. Real
-  # projects point closures at their own packaged binaries instead.
-  appHelper = pkgs.writeTextFile {
+  # Static HTTP responses keep the example focused on service composition.
+  responses = pkgs.linkFarm "downstream-responses" (
+    map
+      (label: {
+        name = label;
+        path = pkgs.writeText "response" "${label}-ok\n";
+      })
+      [
+        "api"
+        "worker"
+      ]
+  );
+  appHelper = pkgs.writeShellApplication {
     name = "downstream-app";
-    destination = "/bin/downstream-app";
-    executable = true;
+    runtimeInputs = [
+      pkgs.darkhttpd
+      pkgs.curl
+      pkgs.postgresql
+    ];
     text = ''
-      #!${pkgs.python3}/bin/python3
-      import argparse, os, socket, sys
-
-      def check_env(name):
-          # A named endpoint placeholder that survives substitution would reach
-          # us literally; treat that as a hard failure so the gate catches it.
-          value = os.environ.get(name)
-          if value is not None and "''${" in value:
-              print(f"unsubstituted placeholder in {name}: {value}", file=sys.stderr)
-              sys.exit(3)
-
-      def touch(target):
-          host, _, port = target.rpartition(":")
-          with socket.create_connection((host, int(port)), timeout=5) as c:
-              c.sendall(b"ping\n"); sys.stdout.write(c.recv(4096).decode())
-
-      def serve(a):
-          check_env("NIXFIED_DEMO_DSN")
-          # The runtime starts connectsTo dependencies first, so an upstream
-          # named by ''${host:..}:''${port:..} is already ready here.
-          if a.upstream:
-              touch(a.upstream)
-          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-              s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-              s.bind((a.host, a.port)); s.listen()
-              print(f"{a.label} listening on {a.host}:{a.port}", flush=True)
-              while True:
-                  c, _ = s.accept()
-                  with c:
-                      request = c.recv(4096)
-                      if request:
-                          c.sendall(f"{a.label}-ok\n".encode())
-                          while c.recv(4096):
-                              pass
-
-      def ping(a):
-          check_env("NIXFIED_DEMO_DSN")
-          with socket.create_connection((a.host, a.port), timeout=5) as c:
-              c.sendall(b"ping\n"); sys.stdout.write(c.recv(4096).decode())
-          for target in a.also:
-              touch(target)
-
-      p = argparse.ArgumentParser()
-      sub = p.add_subparsers(dest="cmd", required=True)
-      for name in ("service", "task"):
-          q = sub.add_parser(name)
-          q.add_argument("--label", required=True)
-          q.add_argument("--host", required=True)
-          q.add_argument("--port", required=True, type=int)
-          q.add_argument("--upstream", default=None)
-          q.add_argument("--also", action="append", default=[])
-      sub.add_parser("stop")
-      a = p.parse_args()
-      if a.cmd == "service": serve(a)
-      elif a.cmd == "task": ping(a)
-      else: sys.exit(0)
+      if [[ $# -lt 7 || "$2" != --label || "$4" != --host || "$6" != --port ]]; then
+        echo "expected service|task --label LABEL --host HOST --port PORT" >&2
+        exit 2
+      fi
+      mode="$1"; label="$3"; host="$5"; port="$7"
+      shift 7
+      case "$label" in api|worker) ;; *) exit 2 ;; esac
+      check_http() {
+        local reply
+        reply=$(curl -q --silent --show-error --fail --noproxy '*' --globoff \
+          --max-time 5 --max-filesize 1024 --write-out . "http://$1/")
+        [[ "$reply" == "$2-ok"$'\n.' ]] || { echo "invalid downstream response" >&2; exit 1; }
+        printf '%s-ok\n' "$2"
+      }
+      case "$mode" in
+        service)
+          if [[ $# != 0 ]]; then
+            [[ $# == 2 && "$1" == --upstream ]] || exit 2
+            check_http "$2" api
+          fi
+          exec darkhttpd "${responses}/$label" --single-file --addr "$host" --port "$port" --no-keepalive
+          ;;
+        task)
+          check_http "$host:$port" "$label"
+          if [[ $# != 0 ]]; then
+            [[ $# == 2 && "$1" == --also ]] || exit 2
+            check_http "$2" worker
+            # Real protocol success proves the environment DSN was substituted.
+            [[ $(PGCONNECT_TIMEOUT=5 psql "$NIXFIED_DEMO_DSN" -X -w -tAc 'SELECT 1') == 1 ]]
+          fi
+          ;;
+        *) exit 2 ;;
+      esac
     '';
   };
 
@@ -114,8 +103,14 @@ let
     };
     endpoint = {
       endpointId = "${name}-tcp";
-      readyProbe = { tools = [ "app" ]; run = taskRun name; };
-      healthProbe = { tools = [ "app" ]; run = taskRun name; };
+      readyProbe = {
+        tools = [ "app" ];
+        run = taskRun name;
+      };
+      healthProbe = {
+        tools = [ "app" ];
+        run = taskRun name;
+      };
     };
     inherit connectsTo;
     logRefs = [ "service.${name}" ];
@@ -123,8 +118,8 @@ let
 in
 {
   # Reuse the Postgres adapter for the database tier. It contributes the
-  # `postgres` service and the `smoke-query` task (a `SELECT 1`), and adds them
-  # to the `dev` environment; the declarations below merge with those.
+  # `postgres` service and the `smoke-query` task (a `SELECT 1`);
+  # the declarations below merge with those.
   imports = [ adapters.postgres ];
 
   nixfied.project.projectId = "downstream";
@@ -190,11 +185,9 @@ in
       run = taskRun "api" ++ [
         "--also"
         "\${host:worker}:\${port:worker}"
-        "--also"
-        "\${host:postgres}:\${port:postgres}"
       ];
       env = {
-        NIXFIED_DEMO_DSN = "tcp://\${host:postgres}:\${port:postgres}";
+        NIXFIED_DEMO_DSN = "postgresql://postgres@\${host:postgres}:\${port:postgres}/postgres";
       };
     };
     requires = [

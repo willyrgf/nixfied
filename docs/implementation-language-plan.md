@@ -1,6 +1,14 @@
 # Implementation language simplification plan
 
-Status: planned; implementation has not started. Baseline: `58611ee`.
+Status: implementation in progress. Baseline: `58611ee`.
+
+Completed on aarch64 Linux:
+
+- Polyglot removal (`c579903`): retained manifests, derivation vectors, and
+  publication evaluation passed.
+- Static HTTP synthetic/downstream helpers and endpoint-less worker: affected
+  manifests built; the complete runtime gate passed, including repeat lifecycle,
+  protocol checks and two-slot isolation. macOS execution remains pending.
 
 Reduce repository-owned implementations to Nix and Rust while preserving useful
 behavior and independent proofs. Delete redundant work first, use existing tools
