@@ -1,14 +1,54 @@
 # Implementation language simplification plan
 
-Status: implementation in progress. Baseline: `58611ee`.
+Status: source cutovers and Linux verification complete; native macOS
+verification deferred to the user's host. Baseline: `58611ee`.
 
 Completed on aarch64 Linux:
 
 - Polyglot removal (`c579903`): retained manifests, derivation vectors, and
   publication evaluation passed.
-- Static HTTP synthetic/downstream helpers and endpoint-less worker: affected
+- Static HTTP synthetic/downstream helpers and endpoint-less worker (`af54ec7`): affected
   manifests built; the complete runtime gate passed, including repeat lifecycle,
   protocol checks and two-slot isolation. macOS execution remains pending.
+- Reth protocol tool composition (`ec0225e`, `b36f100`): nine Rust composition
+  tests pass, including real Reth authentication and malformed secret bytes
+  rejected before networking. Custom Python framing and harnesses are deleted.
+- Reference checks (`e84add1`): retained independent Nix vectors and packaged
+  topic-output comparisons pass; the duplicate Python selector is deleted.
+- Nix-packaged runtime fixtures and shared CI floor (`5c24e14`): 164 focused
+  integration tests and three library tests pass. Both hosted platforms now run
+  the complete fixture-backed floor, including the Darwin decoder target.
+- Private Rust upgrade helper (`73c06d5`): 12 unit tests, an actual SIGTERM test,
+  formatting, Clippy, packaged syntax and source-selection checks pass. The
+  source editor and guarded file mutation replace shell parsing, Python and C;
+  concurrency limitations are documented in the contract and user guide.
+- SDK-derived Rust macOS decoder (`c7a113f`): production build script, decoder
+  and tests cross-typecheck against actual SDK 14.4, with generated layout
+  assertions and Clippy. Linux all-target checking and Darwin package evaluation
+  pass. This does not prove native macOS execution.
+- Linux release builds pass for `nixfied-cli`, `install`, and `nixfied-runtime`.
+- Full `nix run .#ci -- --dirty` passes on aarch64 Linux: flake checks,
+  fixture-backed Cargo floor, all 20 runtime gate cases, reference and source
+  isolation checks, upgrade transactions/source selection/historical reports,
+  and downstream adoption. The final malformed-secret-byte fix was separately
+  rebuilt and passed all nine Reth tests after the CI wrapper was realised.
+- Active source inventory contains no standalone Python, Perl, C, JavaScript,
+  TypeScript, or shell files. Remaining command expressions, SQL, and
+  Nix-packaged shell glue are intentional; frozen archives are unchanged.
+
+### Native macOS handoff
+
+The user will run these on a macOS host after the Linux work is complete:
+
+```sh
+nix run .#ci -- --dirty
+nix build .#nixfied-cli .#install .#nixfied-runtime --no-link
+```
+
+The full CI floor includes the decoder, endpoint, service, and output tests;
+the gates cover static-server lifecycle and upgrade mutation on Darwin. Keep
+this checklist until those results are recorded. SDK cross-compilation proves
+types and layouts, not live socket observation or Darwin filesystem behavior.
 
 Reduce repository-owned implementations to Nix and Rust while preserving useful
 behavior and independent proofs. Delete redundant work first, use existing tools
