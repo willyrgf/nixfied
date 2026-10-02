@@ -55,8 +55,8 @@ fn gate_with_descriptor() -> (Child, UnixStream, i32) {
 
 fn request(root: &std::path::Path) -> serde_json::Value {
     serde_json::json!({
-        "executable": test_shell().as_bytes(),
-        "args": [b"-c".as_slice(), b"printf ran > marker".as_slice()],
+        "executable": test_fixture().as_bytes(),
+        "args": [b"marker".as_slice(), b"marker".as_slice()],
         "env": [],
         "cwd": root.as_os_str().as_bytes(),
     })
@@ -135,11 +135,7 @@ fn invalid_request_values_reject_without_exposing_them() {
 fn complete_request_is_required_and_workload_keeps_stdin_environment_and_pid() {
     let root = TempDir::new();
     let mut value = request(&root.path);
-    value["args"] = serde_json::json!([
-        b"-c".as_slice(),
-        b"read value; printf '%s:%s:%s' \"$$\" \"$ONLY\" \"$value\"; printf ran > marker"
-            .as_slice()
-    ]);
+    value["args"] = serde_json::json!([b"launch-input".as_slice()]);
     value["env"] = serde_json::json!([[b"ONLY".as_slice(), b"private-value".as_slice()]]);
     let bytes = frame(&value);
     let (mut child, mut channel) = gate();
@@ -214,12 +210,7 @@ fn workload_keeps_unix_cwd_and_argument_bytes() {
     std::fs::create_dir(&raw_dir).unwrap();
     let (child, mut channel) = gate();
     let mut value = request(&raw_dir);
-    value["args"] = serde_json::json!([
-        b"-c".as_slice(),
-        b"printf '%s' \"$1\"; printf ran > marker".as_slice(),
-        b"test".as_slice(),
-        b"arg-\xff".as_slice()
-    ]);
+    value["args"] = serde_json::json!([b"launch-bytes".as_slice(), b"arg-\xff".as_slice()]);
     channel.write_all(&frame(&value)).unwrap();
     channel.shutdown(Shutdown::Write).unwrap();
     let output = wait_for_child_output(child, Duration::from_secs(5));
@@ -235,10 +226,7 @@ fn workload_signal_mask_is_reset_before_exec() {
     use std::os::unix::process::ExitStatusExt;
     let root = TempDir::new();
     let mut value = request(&root.path);
-    value["args"] = serde_json::json!([
-        b"-c".as_slice(),
-        b"kill -TERM $$; printf unexpected > marker".as_slice()
-    ]);
+    value["args"] = serde_json::json!([b"launch-signal".as_slice()]);
     let (child, mut channel) = gate();
     channel.write_all(&frame(&value)).unwrap();
     channel.shutdown(Shutdown::Write).unwrap();
@@ -278,8 +266,8 @@ fn owner_registry(root: &std::path::Path) -> nixfied_runtime::registry::Registry
 }
 fn prepared(root: &std::path::Path) -> nixfied_runtime::launch::PreparedLaunch {
     nixfied_runtime::launch::PreparedLaunch::new(
-        &test_shell(),
-        &["-c".into(), "printf ran > marker".into()],
+        &test_fixture(),
+        &["marker".into(), "marker".into()],
         &std::collections::BTreeMap::from([("PAYLOAD".into(), "x".repeat(60_000))]),
         root,
     )
@@ -463,7 +451,7 @@ fn abandoned_pending_launch_returns_an_inert_child_for_reaping() {
 fn owner_rejects_invalid_or_oversized_requests_before_constructing_a_launch() {
     use nixfied_runtime::launch::PreparedLaunch;
     let root = TempDir::new();
-    let executable = test_shell();
+    let executable = test_fixture();
     for (args, env) in [
         (
             vec!["secret\0value".into()],

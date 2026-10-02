@@ -1246,13 +1246,9 @@ fn leader_exit_alone_never_settles_a_live_process_group() {
     let mut registry = fixture.registry();
     let member_pid = fixture.tmp.path.join("member.pid");
     // The leader exits at once; its sleeping group member keeps running.
-    let mut leader = std::process::Command::new(test_shell())
-        .arg("-c")
-        .arg(format!(
-            "{} 30 & echo $! > {}; exit 0",
-            test_sleep(),
-            member_pid.display()
-        ))
+    let mut leader = std::process::Command::new(test_fixture())
+        .arg("orphan-member")
+        .arg(&member_pid)
         .process_group(0)
         .spawn()
         .unwrap();

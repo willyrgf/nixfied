@@ -22,13 +22,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: macOS process, endpoint, and capture proofs
-        run: |
-          nix develop --command bash -euo pipefail -c '
-            cd runtime
-            cargo build -p nixfied-runtime
-            cargo test -p nixfied-runtime --lib
-            cargo test -p nixfied-runtime --test endpoint --test service --test output
-          '
+        run: nix run .#test
 
   checks:
     runs-on: ubuntu-latest
@@ -44,11 +38,7 @@ jobs:
       #    independently, before the dogfood gate runs the runtime against itself.
       #    Pinned toolchain via the dev shell. fmt + clippy run in `nix flake check`.
       - name: cargo test floor
-        run: |
-          nix develop --command bash -euo pipefail -c '
-            cd runtime
-            cargo test --workspace
-          '
+        run: nix run .#test
 
       # 2. Structural gates (debug): rustfmt + clippy -D warnings + every manifest +
       #    the debug runtime build, all hermetic.

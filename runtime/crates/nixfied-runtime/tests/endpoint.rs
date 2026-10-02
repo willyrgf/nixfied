@@ -351,23 +351,23 @@ fn whole_round_retries_every_endpoint_and_rejects_replacement_during_last_probe(
         let original = value["services"]["synthetic"]["endpoints"]["synthetic-tcp"].clone();
         value["services"]["synthetic"]["endpoints"] = json!({"a": original.clone(), "z": original});
         value["services"]["synthetic"]["primaryEndpoint"] = json!("a");
-        let shell = test_shell();
+        let shell = test_fixture();
         value["closures"]["round-probe"] = json!({
             "kind": "executable", "storePath": closure_root_for_store_executable(Path::new(&shell)).unwrap(),
             "executable": shell, "targetSystem": value["target"]["closureSystem"],
             "requiresExecutable": true, "effects": ["process"]
         });
         for (id, host, selected_port) in [("a", "127.0.0.1", port), ("z", "::1", port + 1)] {
-            let script = if id == "a" {
-                r#"test "$1:$2" = "$3:$4" || exit 9; n=0; if test -e "$5"; then read -r n < "$5"; fi; printf '%s\n' "$((n + 1))" > "$5""#
+            let mode = if id == "a" {
+                "round-count"
             } else if replace {
-                r#"test "$1:$2" = "$3:$4" || exit 9; : > "$6"; while ! test -e "$7"; do :; done"#
+                "round-replace"
             } else {
-                r#"test "$1:$2" = "$3:$4" || exit 9; exit 7"#
+                "round-fail"
             };
             let probe = json!({
                 "tools": ["round-probe"], "executable": shell,
-                "run": ["sh", "-c", script, "probe", "${host}", "${port}", host, selected_port.to_string(), counter, request, replaced],
+                "run": ["nixfied-test-fixture", mode, "${host}", "${port}", host, selected_port.to_string(), counter, request, replaced],
                 "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null"
             });
             let endpoint = &mut value["services"]["synthetic"]["endpoints"][id];

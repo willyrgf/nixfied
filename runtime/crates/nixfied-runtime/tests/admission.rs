@@ -600,7 +600,7 @@ fn closure_store_path_escape_is_rejected() {
     let executable = outside_closure.join("bin/synthetic-helper");
     fs::create_dir_all(&store).unwrap();
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
-    fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(&executable, b"inert admission fixture").unwrap();
     let mut perms = fs::metadata(&executable).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&executable, perms).unwrap();
@@ -796,7 +796,7 @@ fn write_fixture_manifest(
     let manifest_path = tmp.path.join("manifest.json");
     if create_executable {
         fs::create_dir_all(executable.parent().expect("executable parent")).unwrap();
-        fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&executable, b"inert admission fixture").unwrap();
         let mut perms = fs::metadata(&executable).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&executable, perms).unwrap();

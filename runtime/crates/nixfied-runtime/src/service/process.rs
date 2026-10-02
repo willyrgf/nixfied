@@ -3027,6 +3027,17 @@ mod tests {
         }
     }
 
+    fn runtime_fixture_program() -> String {
+        std::path::PathBuf::from(
+            std::env::var_os("NIXFIED_TEST_FIXTURES")
+                .expect("NIXFIED_TEST_FIXTURES must name the Nix-built fixture package"),
+        )
+        .join("bin/nixfied-test-fixture")
+        .to_str()
+        .unwrap()
+        .to_owned()
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn capture_failure_preserves_observed_exit_or_interrupts_live_child() {
@@ -3039,16 +3050,13 @@ mod tests {
             let child = spawn_gated_captured_exec(
                 &CapturedExec {
                     authority: &authority,
-                    executable: "/bin/sh",
-                    args: &[
-                        "-c".into(),
-                        if exited {
-                            "printf x; exit 0"
-                        } else {
-                            "printf x; /bin/sleep 30"
-                        }
-                        .into(),
-                    ],
+                    executable: &runtime_fixture_program(),
+                    args: &[if exited {
+                        "capture-exited"
+                    } else {
+                        "capture-live"
+                    }
+                    .into()],
                     env: &BTreeMap::new(),
                     cwd: &root,
                     stdin: StdinPolicy::Null,
@@ -3117,13 +3125,8 @@ mod tests {
         let outcome = spawn_gated_captured_exec(
             &CapturedExec {
                 authority: &authority,
-                executable: "/bin/sh",
-                args: &[
-                    "-c".into(),
-                    "(/bin/sleep 2; printf survived > \"$1\") & printf secret; exit 0".into(),
-                    "probe".into(),
-                    marker.to_string_lossy().into_owned(),
-                ],
+                executable: &runtime_fixture_program(),
+                args: &["pipe-holder".into(), marker.to_string_lossy().into_owned()],
                 env: &BTreeMap::new(),
                 cwd: &root,
                 stdin: StdinPolicy::Null,

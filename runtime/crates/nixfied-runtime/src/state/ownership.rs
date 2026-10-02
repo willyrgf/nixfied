@@ -476,10 +476,10 @@ mod tests {
         let guard = fixture.acquire().unwrap();
         let inherited = guard.file.as_raw_fd();
         let marker = fixture.root.join("must-not-execute");
-        let mut command = Command::new(std::env::var("NIXFIED_TEST_SHELL").unwrap());
-        command
-            .args(["-c", "printf unexpected > \"$1\"", "test"])
-            .arg(&marker);
+        let mut command = Command::new(std::path::PathBuf::from(
+            std::env::var_os("NIXFIED_TEST_CHILD").unwrap(),
+        ));
+        command.arg("prepare").arg(&marker);
         // SAFETY: simulate a child descriptor setup fault using close only.
         // The guard's following close must report EBADF and prevent exec.
         unsafe {

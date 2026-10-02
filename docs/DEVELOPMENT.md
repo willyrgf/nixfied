@@ -75,8 +75,10 @@ Rust integration tests that exercise spawned process and socket behavior use a
 private Nix-built child executable. Run those tests through `nix develop` or
 `.#test`; raw Cargo outside that environment has no `NIXFIED_TEST_CHILD` fixture
 and fails loudly rather than skipping coverage. Lifecycle fixtures also receive
-`NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_SHELL` from the same Nix environments, so
-their declared programs are realised store closures.
+`NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_FIXTURES` from the same Nix environments.
+`nix/checks/runtime-fixtures.nix` packages the small shell programs; Rust supplies
+their arguments rather than authoring shell source. All declared fixture programs
+are realised store closures.
 
 The same `.#test` floor runs the Rust socket suite in
 `nix/checks/reth-peer-probe.rs`. Independent controlled responses exercise the
@@ -353,11 +355,10 @@ Dirty mode uses a path pin and therefore re-derives the downstream closure.
 ## Local versus hosted CI
 
 `nix run .#ci` is the canonical full local gate, not a byte-for-byte copy of the
-hosted workflow. `.github/workflows/checks.yml` separately runs the raw Cargo
-floor, flake checks, and gate; it also runs macOS runtime unit, endpoint, service,
-and output tests (including bounded capture and session-owned service processes)
-and builds the public CLI, installer, and optimized release runtime as a final
-safety net:
+hosted workflow. `.github/workflows/checks.yml` runs the fixture-backed `.#test`
+floor on Linux and macOS, including the macOS decoder tests. The Linux job then
+runs flake checks and the gate, and builds the public CLI, installer, and optimized
+release runtime as a final safety net:
 
 ```sh
 nix build .#nixfied-cli .#install --no-link
@@ -375,10 +376,9 @@ at every coupled success write. Run these on macOS as well as Linux; a prototype
 or a Linux pass does not establish macOS release coverage.
 
 The local check/gate path uses the debug runtime to keep iteration fast. The
-release package is what install and generated adopter apps ship. Because the
-hosted Linux Cargo step is raw, it currently lacks the realised manifest fixture and
-skips the interrupt-and-recover test described above; `.#test` remains the full
-fixture-backed local floor.
+release package is what install and generated adopter apps ship. Both hosted
+platforms use the same fixture-backed floor, including the realised Postgres
+manifest needed by interrupt-and-recover coverage.
 
 ## Change-specific verification
 

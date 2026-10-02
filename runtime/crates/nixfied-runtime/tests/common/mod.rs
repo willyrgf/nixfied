@@ -132,8 +132,15 @@ pub fn test_sleep() -> String {
         .to_owned()
 }
 
-pub fn test_shell() -> String {
-    fixture_executable("NIXFIED_TEST_SHELL")
+pub fn test_fixture() -> String {
+    fixture_program("nixfied-test-fixture")
+}
+
+pub fn fixture_program(name: &str) -> String {
+    let root = std::env::var_os("NIXFIED_TEST_FIXTURES")
+        .expect("NIXFIED_TEST_FIXTURES must name the Nix-built fixture package");
+    let path = PathBuf::from(root).join("bin").join(name);
+    validate_fixture_executable(path)
         .to_str()
         .unwrap()
         .to_owned()
@@ -143,9 +150,13 @@ fn fixture_executable(variable: &str) -> PathBuf {
     let configured = std::env::var_os(variable)
         .unwrap_or_else(|| panic!("{variable} must name the Nix-built test fixture"));
     let configured = PathBuf::from(configured);
+    validate_fixture_executable(configured)
+}
+
+fn validate_fixture_executable(configured: PathBuf) -> PathBuf {
     let canonical = configured.canonicalize().unwrap_or_else(|error| {
         panic!(
-            "{variable} {} should canonicalize: {error}",
+            "fixture {} should canonicalize: {error}",
             configured.display()
         )
     });
