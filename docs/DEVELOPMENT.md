@@ -12,6 +12,7 @@ nix/compiler/                  resolve -> validate -> derive -> emit manifest/do
 nix/spec/                      Nix-side manifest and ABI constants
 nix/adapters/                  Nix-side domain adapters
 nix/install/                   install and upgrade programs
+nix/install/upgrade-helper/    private Rust URL editing and guarded file application
 nix/lib/                       pure Nix helpers
 nix/docs/                      revision-bound reference and native query dispatcher
 nix/meta/                      private option/publication checking machinery
@@ -59,6 +60,13 @@ Run the full local repository gate with:
 ```sh
 nix run .#ci
 ```
+
+The private `nix/install/upgrade-helper` Cargo package is isolated from the
+installer and process runtime. Building `.#upgrade` runs its source-edit,
+filesystem-failure, and interruption tests, formatting, and Clippy. Nix owns
+candidate resolution and reporting; the helper owns source edits and guarded
+application. The Nix gate independently exercises the packaged public upgrade
+surface, including historical reports and source selection.
 
 It is fail-fast and runs these local stages:
 

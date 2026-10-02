@@ -6,18 +6,7 @@ let
   structure = import ../meta/default.nix { inherit (pkgs) lib; };
   syntax = import ../meta/command-default.nix { inherit (pkgs) lib; };
   projection = import ../meta/syntax-project.nix { inherit (pkgs) lib; inherit structure; } syntax;
-  atomicExchange = pkgs.stdenv.mkDerivation {
-    name = "nixfied-atomic-exchange";
-    src = ./atomic-exchange.c;
-    dontUnpack = true;
-    buildPhase = ''
-      $CC -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -o nixfied-atomic-exchange "$src"
-    '';
-    installPhase = ''
-      mkdir -p "$out/bin"
-      cp nixfied-atomic-exchange "$out/bin/"
-    '';
-  };
+  upgradeFiles = import ./upgrade-files.nix { inherit pkgs; };
 in
 pkgs.writeShellApplication {
   name = "nixfied-upgrade";
@@ -28,8 +17,7 @@ pkgs.writeShellApplication {
     pkgs.gnused
     pkgs.jq
     pkgs.nix
-    pkgs.python3
-    atomicExchange
+    upgradeFiles
   ];
   text = ''
     set -euo pipefail
@@ -170,101 +158,16 @@ pkgs.writeShellApplication {
     fi
 
     work="$(mktemp -d)"
-    apply_temp=""
     cleanup() {
-      [[ -z "$apply_temp" ]] || rm -f -- "$apply_temp"
       rm -rf -- "$work"
     }
     trap cleanup EXIT
 
-    nix_escape() {
-      local value="$1"
-      value="''${value//\\/\\\\}"
-      value="''${value//\"/\\\"}"
-      printf '%s' "$value"
-    }
-
-    brace_delta() {
-      local text="$1"
-      local delta=0
-      local i
-      local ch
-      for ((i = 0; i < ''${#text}; i++)); do
-        ch="''${text:i:1}"
-        case "$ch" in
-          "{") delta=$((delta + 1)) ;;
-          "}") delta=$((delta - 1)) ;;
-        esac
-      done
-      printf '%s' "$delta"
-    }
-
-    is_direct_nixfied_url() {
-      local stripped="$1"
-      [[ "$stripped" == 'nixfied.url="'*'";'* || "$stripped" == 'inputs.nixfied.url="'*'";'* ]]
-    }
-
-    is_nixfied_input_block_start() {
-      local stripped="$1"
-      [[ "$stripped" == 'nixfied={'* || "$stripped" == 'inputs.nixfied={'* ]]
-    }
-
     staged_flake=""
-    stage_flake_rewrite() {
-      [[ -n "$nixfied_url" ]] || return 0
-
-      local nixfied_url_escaped rewritten matches in_nixfied_input_block
-      local nixfied_input_block_depth line stripped indent
-      nixfied_url_escaped="$(nix_escape "$nixfied_url")"
-      rewritten="$work/flake.nix"
-      matches=0
-      in_nixfied_input_block=0
-      nixfied_input_block_depth=0
-      : >"$rewritten"
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        # Compare on a whitespace-stripped form so we match the exact `nixfied.url`
-        # assignment regardless of indentation/spacing. Attrset inputs are matched
-        # as a scoped block and only their inner `url = "...";` line is rewritten.
-        stripped="''${line//[[:space:]]/}"
-        if [[ "$in_nixfied_input_block" -eq 0 ]] && is_direct_nixfied_url "$stripped"; then
-          if [[ "$stripped" == 'inputs.nixfied.url="'* ]]; then
-            indent="''${line%%inputs.nixfied.url*}"
-            printf '%sinputs.nixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
-          else
-            indent="''${line%%nixfied.url*}"
-            printf '%snixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
-          fi
-          matches=$((matches + 1))
-        elif [[ "$in_nixfied_input_block" -eq 1 && "$stripped" == 'url="'*'";'* ]]; then
-          indent="''${line%%url*}"
-          printf '%surl = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
-          matches=$((matches + 1))
-        else
-          printf '%s\n' "$line" >>"$rewritten"
-        fi
-
-        if [[ "$in_nixfied_input_block" -eq 0 ]] && is_nixfied_input_block_start "$stripped"; then
-          in_nixfied_input_block=1
-          nixfied_input_block_depth="$(brace_delta "$line")"
-          if [[ "$nixfied_input_block_depth" -le 0 ]]; then
-            in_nixfied_input_block=0
-          fi
-        elif [[ "$in_nixfied_input_block" -eq 1 ]]; then
-          nixfied_input_block_depth=$((nixfied_input_block_depth + $(brace_delta "$line")))
-          if [[ "$nixfied_input_block_depth" -le 0 ]]; then
-            in_nixfied_input_block=0
-          fi
-        fi
-      done <"$flake"
-
-      if [[ "$matches" -ne 1 ]]; then
-        echo "expected exactly one nixfied input url assignment in flake.nix, found $matches" >&2
-        echo "No files were changed." >&2
-        echo "Refusing to guess which input pin to rewrite." >&2
-        exit 3
-      fi
-      staged_flake="$rewritten"
-    }
+    if [[ -n "$nixfied_url" ]]; then
+      staged_flake="$work/flake.nix"
+      nixfied-upgrade-files rewrite "$flake" "$staged_flake" "$nixfied_url"
+    fi
 
     assert_unchanged() {
       if [[ "$(file_identity "$flake")" != "$flake_before" \
@@ -276,64 +179,22 @@ pkgs.writeShellApplication {
       fi
     }
 
-    stage_flake_rewrite
-
-    # Replace a regular file only if the content captured before candidate
-    # preparation is still present. The exchange is atomic: a concurrent writer
-    # is observed after the swap and the original directory entry is restored
-    # before this function reports a conflict. Linux and Darwin provide the
-    # needed exchange primitive under different names.
-    atomic_replace() {
-      python3 - "$1" "$2" "$3" <<'PY'
-import hashlib
-import os
-import subprocess
-import sys
-
-staged, destination, expected = sys.argv[1:]
-
-def digest(path):
-    checksum = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            checksum.update(block)
-    return checksum.hexdigest()
-
-def fail(message, code):
-    print("atomic replace: " + message, file=sys.stderr)
-    raise SystemExit(code)
-
-def exchange(old_path, new_path):
-    result = subprocess.run(
-        ["nixfied-atomic-exchange", old_path, new_path], capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        fail("atomic exchange failed: " + result.stderr.strip(), 4)
-
-if not os.path.exists(staged):
-    fail("staged file is missing", 4)
-if os.path.lexists(destination):
-    if not os.path.isfile(destination) or os.path.islink(destination):
-        fail("destination is not a regular file", 4)
-    if digest(destination) != expected:
-        fail("destination changed concurrently", 3)
-    exchange(staged, destination)
-    if digest(staged) != expected:
-        exchange(staged, destination)
-        fail("destination changed concurrently", 3)
-    try:
-        os.unlink(staged)
-    except OSError:
-        pass
-else:
-    if expected != "absent":
-        fail("destination disappeared concurrently", 3)
-    try:
-        os.link(staged, destination)
-        os.unlink(staged)
-    except FileExistsError:
-        fail("destination appeared concurrently", 3)
-PY
+    # Forward catchable interruption to the one owner of file application and
+    # rollback. A second wait collects its result after an interrupted wait.
+    apply_files() {
+      local candidate_flake="$1" candidate_lock="$2" apply_pid apply_status=0 wait_interrupted=0
+      nixfied-upgrade-files apply "$root" "$flake_before" "$lock_before" "$project_before" \
+        "$candidate_flake" "$candidate_lock" &
+      apply_pid=$!
+      trap 'wait_interrupted=1; kill -TERM "$apply_pid" 2>/dev/null || true' INT TERM HUP
+      while true; do
+        wait_interrupted=0
+        apply_status=0
+        wait "$apply_pid" || apply_status=$?
+        [[ "$wait_interrupted" -eq 1 ]] || break
+      done
+      trap - INT TERM HUP
+      return "$apply_status"
     }
 
     if [[ "$update_lock" -eq 0 ]]; then
@@ -354,20 +215,7 @@ PY
           echo "upgrade applied: no (--plan)" >&2
         else
           assert_unchanged
-          install_flake="$flake.nixfied-upgrade.$$"
-          apply_temp="$install_flake"
-          cp -- "$staged_flake" "$install_flake"
-          replace_status=0
-          atomic_replace "$install_flake" "$flake" "$flake_before" || replace_status=$?
-          rm -f -- "$install_flake"
-          apply_temp=""
-          if [[ "$replace_status" -eq 3 ]]; then
-            echo "upgrade aborted: flake.nix changed concurrently; no project files were changed" >&2
-            exit 6
-          elif [[ "$replace_status" -ne 0 ]]; then
-            echo "failed to apply flake.nix; no project files were changed" >&2
-            exit 7
-          fi
+          apply_files "$staged_flake" ""
           echo "upgrade applied: yes" >&2
           echo "changed: flake.nix (nixfied.url -> $nixfied_url)" >&2
         fi
@@ -657,168 +505,7 @@ PY
     fi
     assert_unchanged
 
-    candidate_lock_identity="$(file_identity "$candidate_lock")"
-    candidate_flake_identity=""
-    if [[ -n "$staged_flake" ]]; then
-      candidate_flake_identity="$(file_identity "$staged_flake")"
-    fi
-
-    lock_backup="$work/flake.lock.before"
-    flake_backup="$work/flake.nix.before"
-
-    lock_apply_started=0
-    flake_apply_started=0
-    apply_in_progress=1
-    rollback() {
-      local rollback_failed=0 rollback_tmp replace_status current_identity
-      if [[ "$flake_apply_started" -eq 1 ]]; then
-        current_identity="$(file_identity "$flake")"
-        if [[ "$current_identity" == "$flake_before" ]]; then
-          flake_apply_started=0
-        elif [[ "$current_identity" != "$candidate_flake_identity" ]]; then
-          rollback_failed=1
-        fi
-      fi
-      if [[ "$flake_apply_started" -eq 1 ]]; then
-        rollback_tmp="$flake.nixfied-upgrade.rollback.$$"
-        if ! cp -- "$flake_backup" "$rollback_tmp"; then
-          rollback_failed=1
-        else
-          replace_status=0
-          atomic_replace "$rollback_tmp" "$flake" "$candidate_flake_identity" || replace_status=$?
-          rm -f -- "$rollback_tmp"
-          [[ "$replace_status" -eq 0 ]] || rollback_failed=1
-        fi
-      fi
-      if [[ "$lock_apply_started" -eq 1 ]]; then
-        current_identity="$(file_identity "$lock")"
-        if [[ "$current_identity" == "$lock_before" ]]; then
-          lock_apply_started=0
-        elif [[ "$current_identity" != "$candidate_lock_identity" ]]; then
-          rollback_failed=1
-        fi
-      fi
-      if [[ "$lock_apply_started" -eq 1 ]]; then
-        rollback_tmp="$lock.nixfied-upgrade.rollback.$$"
-        if ! cp -- "$lock_backup" "$rollback_tmp"; then
-          rollback_failed=1
-        else
-          replace_status=0
-          atomic_replace "$rollback_tmp" "$lock" "$candidate_lock_identity" || replace_status=$?
-          rm -f -- "$rollback_tmp"
-          [[ "$replace_status" -eq 0 ]] || rollback_failed=1
-        fi
-      fi
-      return "$rollback_failed"
-    }
-
-    on_interrupt() {
-      if [[ "$apply_in_progress" -eq 1 ]]; then
-        if ! rollback; then
-          echo "upgrade interrupted and rollback failed; inspect the project files" >&2
-          exit 8
-        fi
-        echo "upgrade interrupted; candidate rolled back" >&2
-      fi
-      exit 130
-    }
-    trap on_interrupt INT TERM HUP
-
-    if [[ "$lock_changed" -eq 1 ]]; then
-      if ! cp -- "$lock" "$lock_backup"; then
-        echo "failed to prepare flake.lock backup; no project files were changed" >&2
-        exit 7
-      fi
-    fi
-    if [[ "$flake_changed" -eq 1 ]]; then
-      if ! cp -- "$flake" "$flake_backup"; then
-        echo "failed to prepare flake.nix backup; no project files were changed" >&2
-        exit 7
-      fi
-    fi
-
-    if [[ "$lock_changed" -eq 1 ]]; then
-      lock_install="$lock.nixfied-upgrade.$$"
-      apply_temp="$lock_install"
-      lock_apply_started=1
-      if ! cp -- "$candidate_lock" "$lock_install"; then
-        apply_temp=""
-        if ! rollback; then
-          echo "failed to prepare candidate flake.lock and rollback also failed; inspect the project files" >&2
-          exit 8
-        fi
-        echo "failed to prepare candidate flake.lock; no project files were changed" >&2
-        exit 7
-      fi
-      replace_status=0
-      atomic_replace "$lock_install" "$lock" "$lock_before" || replace_status=$?
-      rm -f -- "$lock_install"
-      apply_temp=""
-      if [[ "$replace_status" -eq 3 ]]; then
-        echo "upgrade aborted: flake.lock changed concurrently; no project files were changed" >&2
-        exit 6
-      elif [[ "$replace_status" -ne 0 ]]; then
-        if ! rollback; then
-          echo "failed to apply candidate flake.lock and rollback also failed; inspect the project files" >&2
-          exit 8
-        fi
-        echo "failed to apply candidate flake.lock; candidate was rolled back" >&2
-        exit 7
-      fi
-      if [[ "$flake_changed" -eq 1 && "$(file_identity "$lock")" != "$candidate_lock_identity" ]]; then
-        if ! rollback; then
-          echo "flake.lock changed during the upgrade and rollback failed; inspect the project files" >&2
-          exit 8
-        fi
-        echo "flake.lock changed during the upgrade; candidate was rolled back" >&2
-        exit 6
-      fi
-    fi
-    if [[ "$flake_changed" -eq 1 && -n "''${NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK-}" ]]; then
-      echo "test pause after lock apply" >&2
-      sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK}"
-    fi
-    if [[ "$flake_changed" -eq 1 ]]; then
-      flake_install="$flake.nixfied-upgrade.$$"
-      apply_temp="$flake_install"
-      flake_apply_started=1
-      if ! cp -- "$staged_flake" "$flake_install"; then
-        apply_temp=""
-        if ! rollback; then
-          echo "failed to prepare candidate flake.nix and rollback also failed; inspect the project files" >&2
-          exit 8
-        fi
-        echo "failed to prepare candidate flake.nix; candidate was rolled back" >&2
-        exit 7
-      fi
-      replace_status=0
-      atomic_replace "$flake_install" "$flake" "$flake_before" || replace_status=$?
-      rm -f -- "$flake_install"
-      apply_temp=""
-      if [[ "$replace_status" -ne 0 ]]; then
-        if ! rollback; then
-          echo "failed to apply flake.nix and rollback also failed; inspect the project files" >&2
-          exit 8
-        fi
-        if [[ "$replace_status" -eq 3 ]]; then
-          echo "upgrade aborted: flake.nix changed concurrently; candidate was rolled back" >&2
-          exit 6
-        fi
-        echo "failed to apply flake.nix; candidate was rolled back" >&2
-        exit 7
-      fi
-    fi
-    if [[ "$(file_identity "$lock")" != "$candidate_lock_identity" \
-      || ( "$flake_changed" -eq 1 && "$(file_identity "$flake")" != "$candidate_flake_identity" ) ]]; then
-      if ! rollback; then
-        echo "project files changed during the upgrade and rollback failed; inspect the project files" >&2
-        exit 8
-      fi
-      echo "project files changed during the upgrade; candidate was rolled back" >&2
-      exit 6
-    fi
-    apply_in_progress=0
-    trap - INT TERM HUP
+    apply_files "$staged_flake" "$candidate_lock"
     report_result completed
   '';
 }

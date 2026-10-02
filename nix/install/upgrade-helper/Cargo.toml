@@ -1,0 +1,11 @@
+[package]
+name = "nixfied-upgrade-files"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+rnix = "0.14"
+rowan = "0.16"
+sha2 = "0.10"

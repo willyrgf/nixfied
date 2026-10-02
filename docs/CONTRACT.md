@@ -490,7 +490,7 @@ when the manifest/runtime contract changes.
 
 ## Output and failure contract
 
-- **UPGRADE-1:** the supplying Nixfied flake's Nix-only `upgrade` app inspects
+- **UPGRADE-1:** the supplying Nixfied flake's Nix-packaged `upgrade` app inspects
   upstream changes and mechanically repins the adopter's Nixfied input. Locked
   modes require an existing old lock and resolve one temporary candidate lock
   for identities, documentation, evaluation when required, and application.
@@ -543,7 +543,17 @@ when the manifest/runtime contract changes.
   `--no-lock` retains its separate mechanical URL-only continuation: no candidate
   resolution, lock write, documentation comparison or evaluation; it reports
   both skips, and force has no additional effect. This surface does not enter
-  `manifest.json`, `runtimeAbi`, Rust behavior or the adopter app inventory.
+  `manifest.json`, `runtimeAbi`, Rust runtime behavior or the adopter app inventory.
+  A private Rust helper owns literal input URL editing and file application;
+  Nix-packaged tools own source resolution, evaluation and reporting. URL edits
+  support literal root attribute sets with `inputs.nixfied.url` or equivalent
+  nested `inputs`/`nixfied` sets, preserving all bytes outside the URL literal.
+  Computed or ambiguous input declarations are rejected before mutation.
+  Cooperating upgraders serialize application on the project directory. Each
+  file replacement is atomic, but the pin/lock pair is not; guarded rollback
+  preserves detected intervening edits and retains displaced files when recovery
+  cannot safely complete. These checks are not universal compare-and-swap against
+  arbitrary editors and do not promise recovery from SIGKILL or power loss.
 - `run` resolves its output projection as explicit `--output <mode>`, then the
   selected root task's `defaultOutput`, then `summary`. The canonical mode domain
   is rendered by `nix run .#docs -- api command run`; the older mode-specific

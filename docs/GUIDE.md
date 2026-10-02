@@ -602,6 +602,14 @@ authoring conventions.
 
 ## Upgrade and recover
 
+URL rewrites accept a literal `inputs.nixfied.url` assignment or equivalent
+nested `inputs` and `nixfied` attribute sets. Computed or ambiguous declarations
+are refused rather than guessed. Edits preserve bytes outside the URL literal.
+Application serializes cooperating upgraders and checks for concurrent changes;
+the pin and lock are not one atomic filesystem update. If rollback cannot safely
+restore the originals, the error identifies retained recovery files. See
+[UPGRADE-1](CONTRACT.md#output-and-failure-contract) for the precise boundary.
+
 There are no manifest migrations, compatibility shims, or simultaneous old/new
 contracts. A new pin compiles a new manifest and ships its exactly matching
 runtime. Treat an upgrade as a deliberate contract transition.
