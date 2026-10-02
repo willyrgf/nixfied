@@ -78,20 +78,16 @@ and fails loudly rather than skipping coverage. Lifecycle fixtures also receive
 `NIXFIED_TEST_SLEEP` and `NIXFIED_TEST_SHELL` from the same Nix environments, so
 their declared programs are realised store closures.
 
-The same `.#test` floor runs `nix/checks/reth-probe.py` with the pinned Python
-interpreter. Controlled HTTP, WebSocket, and authenticated peers exercise the
-adapter protocol helper, including raw malformed responses and credential-safe
-failure output. These socket tests run outside the build sandbox. The standalone
-`nix/checks/prove-reth-endpoint-probes.py` additionally exercises the helper
-against the pinned Reth binary; it is integration coverage, not a substitute for
-the independent negative wire cases.
-
-The same floor runs the Rust socket suite in `nix/checks/reth-peer-probe.rs`.
-Independent HTTP responses and a native-command witness prove that the peer
-mode rejects malformed identities before invoking Reth, ignores advertised
-addresses, targets planned IPv4/IPv6 listeners, and preserves safe diagnostics.
-The suite also starts the pinned Reth binary and proves repeated native
-handshakes succeed while an unrelated TCP acceptor cannot satisfy the probe.
+The same `.#test` floor runs the Rust socket suite in
+`nix/checks/reth-peer-probe.rs`. Independent controlled responses exercise the
+packaged curl, WebSocket, and JWT composition: malformed envelopes, response
+limits, configuration/proxy isolation, authentication, and safe diagnostics.
+JSON-RPC IDs compare by numeric value; booleans and mismatched IDs reject.
+A native-command witness proves peer mode rejects malformed identities before
+invoking Reth, ignores advertised addresses, and targets planned IPv4/IPv6
+listeners. The suite also starts pinned Reth and checks HTTP, WebSocket,
+authenticated Engine API, missing/wrong credentials, and repeated native
+handshakes while an unrelated TCP acceptor cannot satisfy the peer probe.
 `nix/checks/reth-peer-probe.nix` packages both the fixtures and the actual adapter
 probe; the source gate checks formatting and compilation without binding ports.
 

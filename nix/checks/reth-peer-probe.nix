@@ -16,6 +16,7 @@ pkgs.runCommand "nixfied-reth-peer-tests" {
   nativeBuildInputs = [ toolchain ];
   NIXFIED_TEST_RETH_PROBE = "${fixtureProbe}/bin/nixfied-reth-probe";
   NIXFIED_TEST_REAL_RETH_PROBE = "${realProbe}/bin/nixfied-reth-probe";
+  NIXFIED_TEST_CURL = "${pkgs.curl}/bin/curl";
   NIXFIED_TEST_RETH = "${pkgs.reth}/bin/reth";
 } ''
   rustfmt --edition=2024 --check ${./reth-peer-probe.rs}
