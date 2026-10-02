@@ -654,6 +654,29 @@ existing `flake.lock` identifying the old source, and one resolvable temporary
 candidate lock. Upgrade owns only the
 requested URL assignment and candidate lock; it never edits `nixfied.nix`.
 
+The default installer writes the tracking URL `github:willyrgf/nixfied`;
+`flake.lock` holds the exact revision for reproducible builds. Subsequent
+upgrades discover new commits with the ordinary command above. A moving branch
+URL works the same way, following that branch.
+
+Putting a commit in `inputs.nixfied.url` freezes the selection itself. Refreshing
+the lock, including with `--refresh`, preserves that explicitly requested commit.
+Upgrade reports the complete original reference and explains a commit-pinned
+candidate. To switch a project to tracking, select the repository or branch once:
+
+```sh
+nix run github:willyrgf/nixfied#upgrade -- --root . \
+  --nixfied-url github:willyrgf/nixfied --plan
+# Review, then repeat without --plan to apply the tracking URL and candidate lock.
+```
+
+Future upgrades need no `--nixfied-url`; the applied URL selects the channel and
+the lock still selects one exact revision. The report's revision-free suggestion
+preserves the repository and any named ref; choose a moving branch rather than
+a fixed tag when you want future commits. The candidate lock records the selected
+URL, and documentation comparison and checked evaluation use its exact locked
+source even before that URL is applied to the project.
+
 `--plan` resolves and reports without evaluating `manifest.drvPath` or changing
 any project files, even with incompatible project outputs or declarations.
 `--plan` wins over `--force` regardless of order or repetition. Default apply

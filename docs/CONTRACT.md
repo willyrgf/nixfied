@@ -494,8 +494,17 @@ when the manifest/runtime contract changes.
   upstream changes and mechanically repins the adopter's Nixfied input. Locked
   modes require an existing old lock and resolve one temporary candidate lock
   for identities, documentation, evaluation when required, and application.
-  Source identities report type, original source, available revision and NAR
-  hash. The framed source diff for `README.md` and regular files under `docs/`
+  Source identities report type, complete original flake reference including
+  any selected ref or revision, available locked revision and NAR hash. The
+  candidate's original reference reflects an explicit URL override when supplied.
+  Its saved lock binds that original to the applied URL without changing resolved
+  source identities. Documentation materialization and checked evaluation use
+  the exact locked Nixfied references, independent of the current project URL.
+  An explicitly commit-pinned candidate remains pinned and reports why refresh
+  cannot advance it, with a one-time revision-free selection suggestion that
+  preserves the repository and any named ref. Repository or moving branch URLs
+  allow subsequent upgrades to discover commits while the lock fixes the exact
+  revision. The framed source diff for `README.md` and regular files under `docs/`
   is the only stdout payload; status, warnings, next steps and Nix diagnostics
   stay on stderr. Unavailable documentation is advisory and distinct from
   identical documentation; neither proves compatibility.

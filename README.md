@@ -56,6 +56,10 @@ nix run .#manifest-check    # admit it without executing a task
 nix run .#smoke             # run the starter's exported task
 ```
 
+The default input URL tracks Nixfied; `flake.lock` pins the exact revision.
+See [upgrade and recovery](docs/GUIDE.md#upgrade-and-recover) for routine upgrades
+and switching a commit-pinned input to tracking once.
+
 Replace the starter declarations with your services and workflows. Existing
 flakes are supported through the same `compileManifest` and `projectApps` calls;
 the installer refuses to edit an existing `flake.nix` and prints the merge

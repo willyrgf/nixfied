@@ -410,35 +410,66 @@ PY
       ' "$lock_path"
     }
 
+    # --override-input retains the project's old `original` in Nix's lock.
+    # Bind the candidate to the URL that will actually be written, without
+    # changing any resolved source identities or the other input nodes.
+    if [[ -n "$nixfied_url" ]]; then
+      if ! requested_original="$(NIXFIED_UPGRADE_REFERENCE="$nixfied_url" nix eval --json --impure --expr '
+        builtins.parseFlakeRef (builtins.getEnv "NIXFIED_UPGRADE_REFERENCE")
+      ')" || ! jq --argjson original "$requested_original" '
+        .nodes[.root].inputs.nixfied as $nixfied
+        | .nodes[$nixfied].original = $original
+      ' "$candidate_lock" >"$work/candidate-bound.lock"; then
+        echo "candidate lock reference binding failed" >&2
+        echo "upgrade applied: no" >&2
+        echo "upgrade not applied; no project files were changed" >&2
+        exit 4
+      fi
+      mv "$work/candidate-bound.lock" "$candidate_lock"
+    fi
+
+    locked_reference() {
+      NIXFIED_UPGRADE_SOURCE="$(lock_node_json "$1")" nix eval --raw --impure --expr '
+        builtins.flakeRefToString (builtins.fromJSON (builtins.getEnv "NIXFIED_UPGRADE_SOURCE")).locked
+      '
+    }
+
     report_identity() {
       local label="$1"
       local lock_path="$2"
-      local node_json
+      local node_json selection_json
       if ! node_json="$(lock_node_json "$lock_path")" || [[ -z "$node_json" ]]; then
         echo "$label source: unavailable (nixfied lock node is missing)" >&2
         return 1
       fi
+      if ! selection_json="$(NIXFIED_UPGRADE_SOURCE="$node_json" nix eval --json --impure --expr '
+        let
+          original = (builtins.fromJSON (builtins.getEnv "NIXFIED_UPGRADE_SOURCE")).original;
+        in {
+          reference = builtins.flakeRefToString original;
+          withoutRevision = if original ? rev then
+            builtins.flakeRefToString (builtins.removeAttrs original [ "rev" ])
+          else null;
+        }
+      ')"; then
+        echo "$label source: unavailable (original reference could not be rendered)" >&2
+        return 1
+      fi
       printf '%s source:\n' "$label" >&2
-      printf '%s\n' "$node_json" | jq -r '
-        def original_source:
-          if .original.type == "github" and (.original.owner? != null) and (.original.repo? != null) then
-            "github:" + .original.owner + "/" + .original.repo
-          elif .original.url? != null then
-            .original.url
-          elif .original.path? != null then
-            "path:" + .original.path
-          elif .original.type? != null then
-            .original.type
-          else
-            "unknown"
-          end;
+      printf '%s\n' "$node_json" | jq -r --argjson selection "$selection_json" '
         [
           "  type: " + (.locked.type // .original.type // "unknown"),
-          "  original: " + original_source,
+          "  original: " + $selection.reference,
           (if .locked.rev? != null then "  rev: " + .locked.rev else empty end),
           (if .locked.narHash? != null then "  narHash: " + .locked.narHash else empty end)
         ] | .[]
       ' >&2
+      if [[ "$label" == candidate ]] && jq -e '.withoutRevision != null' <<<"$selection_json" >/dev/null; then
+        echo "candidate selection: commit-pinned input URL; refreshing keeps the requested revision" >&2
+        echo "for future updates, choose a repository or moving branch URL once; flake.lock keeps the exact revision" >&2
+        printf '  without the commit pin: --nixfied-url %q (review with --plan; any named ref is preserved)\n' \
+          "$(jq -r '.withoutRevision' <<<"$selection_json")" >&2
+      fi
       return 0
     }
 
@@ -452,18 +483,18 @@ PY
       local label="$1"
       local lock_path="$2"
       local error_path="$work/$label-archive.stderr"
-      local archive_json source_path
+      local archive_json source_path reference
       if [[ ! -f "$lock_path" ]]; then
         echo "documentation diff unavailable: $label source has no lock file" >&2
         return 1
       fi
-      if ! archive_json="$(nix flake archive --json --no-write-lock-file \
-        --reference-lock-file "$lock_path" "$root" 2>"$error_path")"; then
+      if ! reference="$(locked_reference "$lock_path" 2>"$error_path")" || \
+        ! archive_json="$(nix flake archive --json --no-write-lock-file "$reference" 2>>"$error_path")"; then
         echo "documentation diff unavailable: $label source materialization failed" >&2
         [[ ! -s "$error_path" ]] || sed 's/^/  nix: /' "$error_path" >&2
         return 1
       fi
-      if ! source_path="$(printf '%s\n' "$archive_json" | jq -er '.inputs.nixfied.path // empty')"; then
+      if ! source_path="$(printf '%s\n' "$archive_json" | jq -er '.path // empty')"; then
         echo "documentation diff unavailable: $label source path was not present in nix flake archive output" >&2
         return 1
       fi
@@ -611,7 +642,9 @@ PY
 
     if [[ "$mode" == checked ]]; then
       status_break
-      if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
+      if ! candidate_reference="$(locked_reference "$candidate_lock")" || \
+        ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" \
+        --override-input nixfied "$candidate_reference" --raw \
         "$root#manifest.drvPath" >/dev/null; then
         report_result rejected
         exit 5

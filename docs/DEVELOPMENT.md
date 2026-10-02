@@ -308,6 +308,14 @@ explicit force repins without editing declarations or creating runtime state.
 A distinguishable throwing-output fixture independently proves that plan and
 force never evaluate outputs, including plan/force order and repetition. Both
 apply policies cover no-op results, concurrent conflicts and interrupted rollback.
+The packaged `nix/checks/upgrade-selection.nix` suite runs in the same Nix gate
+against a local Git repository. It proves that a moving branch discovers new
+commits without extra flags, an explicit input revision remains fixed with its
+complete reference and actionable guidance, and a one-time switch to tracking
+allows subsequent upgrades without an override. Plan preserves project files,
+and throwing source/project outputs prove that selection never requires their
+evaluation. These fixtures cover source selection; the historical archives
+continue to own exact documentation-diff coverage.
 Missing-lock and resolution failures still reject force. The
 checked-in scope patches and `scope.expected.diff` separately prove README
 changes plus documentation additions and deletions.

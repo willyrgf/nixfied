@@ -652,6 +652,8 @@ FIXTURE
 
     upgrade_transaction_tests
 
+    ${import ./checks/upgrade-selection.nix { inherit pkgs; }}/bin/nixfied-upgrade-selection-tests
+
     upgrade_versioned_tests() {
       local source_root old_source new_source git_root old_git_source new_git_source
       local unavailable_source old_path_pin new_path_pin old_git_pin new_git_pin
