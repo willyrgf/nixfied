@@ -139,7 +139,6 @@ less result/views/docs.md
 | [`postgres`](examples/postgres) | Postgres adapter lifecycle and smoke query |
 | [`reth`](examples/reth) | Multi-endpoint Reth adapter and JSON-RPC probe |
 | [`composite`](examples/composite) | Static task DAG over a service |
-| [`polyglot-stack`](examples/polyglot-stack) | Two language-specific services in one check |
 | [`downstream`](examples/downstream) | Realistic database, API, worker, and release flow |
 | [`toolchain`](examples/toolchain) | Heterogeneous tools, nested composites, and an endpoint-less worker |
 

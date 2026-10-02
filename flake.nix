@@ -389,7 +389,6 @@
             }
           );
           compositeManifest = nixfiedLib.compileManifest ./examples/composite/nixfied.nix;
-          polyglotManifest = nixfiedLib.compileManifest ./examples/polyglot-stack/nixfied.nix;
           downstreamManifest = nixfiedLib.compileManifest ./examples/downstream/nixfied.nix;
           # The example shard and the later slot-concurrency shard use distinct
           # deterministic windows. A stopped Postgres can leave a non-listening
@@ -481,7 +480,6 @@
               nixfied.tasks.example-minimal.invocation.env.MINIMAL_MANIFEST = toString minimalManifest;
               nixfied.tasks.example-postgres.invocation.env.POSTGRES_MANIFEST = toString postgresManifest;
               nixfied.tasks.example-composite.invocation.env.COMPOSITE_MANIFEST = toString compositeManifest;
-              nixfied.tasks.example-polyglot.invocation.env.POLYGLOT_MANIFEST = toString polyglotManifest;
               nixfied.tasks.example-downstream.invocation.env.DOWNSTREAM_MANIFEST = toString downstreamManifest;
               nixfied.tasks.example-reth.invocation.env.RETH_MANIFEST = toString rethManifest;
               nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MANIFEST = toString toolchainManifest;
@@ -592,10 +590,6 @@
           (publishPackage "root" "composite-manifest" "Composite task example manifest"
             "manifest.json and disposable views/docs.md, with realised closure dependencies."
             compositeManifest
-          )
-          (publishPackage "root" "polyglot-stack-manifest" "Polyglot service example manifest"
-            "manifest.json and disposable views/docs.md, with realised closure dependencies."
-            polyglotManifest
           )
           (publishPackage "root" "downstream-manifest" "Downstream workflow example manifest"
             "manifest.json and disposable views/docs.md, with realised closure dependencies."

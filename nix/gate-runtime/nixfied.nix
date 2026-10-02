@@ -177,29 +177,6 @@
     };
   };
 
-  nixfied.tasks.example-polyglot = {
-    invocation = {
-      tools = [
-        pkgs.bash
-        "rt"
-        "coreutils"
-      ];
-      run = [
-        "bash"
-        "-c"
-        ''
-          set -euo pipefail
-          mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-polyglot-inner"
-          NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
-            nixfied-runtime run --manifest "$POLYGLOT_MANIFEST/manifest.json" --task all --timeout-ms 60000 --output json \
-            > "''${stateDir}/gate-artifacts/example-polyglot.json"
-          NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
-            nixfied-runtime clean --manifest "$POLYGLOT_MANIFEST/manifest.json"
-        ''
-      ];
-    };
-  };
-
   nixfied.tasks.example-downstream = {
     invocation = {
       tools = [
@@ -894,7 +871,6 @@
       example-minimal.task = "example-minimal";
       example-postgres.task = "example-postgres";
       example-composite.task = "example-composite";
-      example-polyglot.task = "example-polyglot";
       example-downstream.task = "example-downstream";
       example-reth.task = "example-reth";
       example-toolchain.task = "example-toolchain";
