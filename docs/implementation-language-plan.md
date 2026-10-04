@@ -3,6 +3,12 @@
 Status: source cutovers and Linux verification complete; native macOS
 verification deferred to the user's host. Baseline: `58611ee`.
 
+Follow-up subtraction (`45436e6`–`2c42382`) removes redundant reference/protocol
+checks, fixture forwarding, repeated probe definitions, and an unused upgrade
+hook. Focused checks and full Linux `nix run .#ci` pass; revised macOS decoder
+tests cross-compile. Retain this plan until the macOS engineer completes native
+verification.
+
 Completed on aarch64 Linux:
 
 - Polyglot removal (`c579903`): retained manifests, derivation vectors, and
