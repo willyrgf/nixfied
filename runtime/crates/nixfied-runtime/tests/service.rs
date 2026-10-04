@@ -68,6 +68,7 @@ fn probe_registration_event_failure_prevents_workload_effects() {
         test_child().to_str().unwrap(),
         LISTEN_HOLD,
         port,
+        &test_fixture(),
         json!(["marker", "${stateDir}/must-not-execute"]),
         1,
     );
@@ -898,45 +899,39 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     assert_eq!(failure_events, 1);
 }
 
-/// The fixture manifest with an exec-based ready probe: a Nix-packaged fixture whose
-/// args are supplied per test. The probe's operation is bound on the closure,
-/// as admission requires.
+/// A service fixture with a directly declared Nix-built probe executable.
 fn exec_probe_fixture_value(
     executable: &str,
     start_args: &[&str],
     port: u16,
+    probe_program: &str,
     probe_args: Value,
     probe_attempts: u32,
 ) -> Value {
     let mut value = synthetic_manifest(executable, start_args, port, port);
-    add_probe_fixture_closure(&mut value);
-    let mut run = vec![json!("nixfied-test-fixture")];
-    run.extend(probe_args.as_array().expect("probe args").iter().cloned());
     value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"] =
-        probe_fixture_invocation(Value::Array(run));
+        probe_invocation(&mut value, probe_program, probe_args);
     value["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
         json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": probe_attempts});
     value
 }
 
-/// A realised fixture closure selected by invocation probes.
-fn add_probe_fixture_closure(value: &mut Value) {
+/// Declare the executable used by this probe and derive its invocation from it.
+fn probe_invocation(value: &mut Value, executable: &str, args: Value) -> Value {
+    let path = Path::new(executable);
     let target = value["target"]["closureSystem"].clone();
-    let shell = test_fixture();
-    let store_path = closure_root_for_store_executable(Path::new(&shell)).unwrap();
-    value["closures"]["probe-shell"] = json!({
-        "kind": "executable", "storePath": store_path, "executable": shell,
+    let store_path = closure_root_for_store_executable(path).unwrap();
+    value["closures"]["probe"] = json!({
+        "kind": "executable", "storePath": store_path, "executable": executable,
         "targetSystem": target,
-
         "requiresExecutable": true, "effects": ["process"]
     });
-}
-
-fn probe_fixture_invocation(run: Value) -> Value {
+    let mut run = vec![json!(path.file_name().unwrap().to_str().unwrap())];
+    run.extend(args.as_array().expect("probe args").iter().cloned());
     json!({
-        "tools": ["probe-shell"],
+        "tools": ["probe"],
         "run": run,
-        "executable": test_fixture(),
+        "executable": executable,
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
@@ -964,6 +959,7 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
             "${stateDir}/ready-flag",
         ],
         port,
+        &test_fixture(),
         json!(["exists", "${stateDir}/ready-flag"]),
         60,
     );
@@ -1024,6 +1020,7 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
         test_child().to_str().unwrap(),
         LISTEN_HOLD,
         port,
+        test_child().to_str().unwrap(),
         json!(["exit", "7"]),
         3,
     );
@@ -1087,6 +1084,7 @@ fn exec_probe_obeys_its_attempt_deadline() {
             child.to_str().unwrap(),
             &["listen", "127.0.0.1", "${port}", "hold"],
             port,
+            child.to_str().unwrap(),
             json!(["prepare", "${stateDir}/attempt", "${stateDir}/ack"]),
             1,
         );
@@ -1127,9 +1125,12 @@ fn exec_health_probe_failure_records_failed() {
         // The service is ready (tcp) but never healthy: the failed run must leave
         // service.failed evidence, not a clean stopped/completed registry state.
         let mut value = test_child_manifest(port, port);
-        add_probe_fixture_closure(&mut value);
         value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] =
-            probe_fixture_invocation(json!(["nixfied-test-fixture", "exit", "7"]));
+            probe_invocation(
+                &mut value,
+                test_child().to_str().unwrap(),
+                json!(["exit", "7"]),
+            );
         value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
             json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2});
         let mut fixture = ServiceFixture::from_value(value);
@@ -2947,15 +2948,17 @@ fn endpoint_less_fixture_from(mut value: Value) -> ServiceFixture {
     value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
     value["services"]["synthetic"]["endpoints"] = json!(null);
     value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
-    add_probe_fixture_closure(&mut value);
-    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] =
-        probe_fixture_invocation(json!(["nixfied-test-fixture", "exit", "0"]));
+    let probe = probe_invocation(
+        &mut value,
+        test_child().to_str().unwrap(),
+        json!(["exit", "0"]),
+    );
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = probe.clone();
     value["services"]["synthetic"]["lifecycle"]["ready"]["policy"] =
         json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5});
     // Health stays tcp in the fixture; make it an invocation probe too.
 
-    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] =
-        probe_fixture_invocation(json!(["nixfied-test-fixture", "exit", "0"]));
+    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = probe;
     value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
         json!({"timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5});
     // The smoke task's bare placeholder has no endpoint to resolve against an
@@ -3986,9 +3989,12 @@ fn service_failure_before_any_node_writes_failed_summary() {
         // probe with zero node results — the summary must still record failure.
         let mut value = if fail_health {
             let mut value = test_child_manifest(port, port);
-            add_probe_fixture_closure(&mut value);
             value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["healthProbe"] =
-                probe_fixture_invocation(json!(["nixfied-test-fixture", "exit", "7"]));
+                probe_invocation(
+                    &mut value,
+                    test_child().to_str().unwrap(),
+                    json!(["exit", "7"]),
+                );
             value["services"]["synthetic"]["lifecycle"]["health"]["policy"] =
                 json!({"timeoutMs": 1000, "retryIntervalMs": 10, "maxAttempts": 1});
             value
@@ -4489,6 +4495,7 @@ fn owner_killed_during_readiness_leaves_an_obligation_the_successor_settles() {
             "${stateDir}/ready-flag",
         ],
         port,
+        &test_fixture(),
         json!(["exists", "${stateDir}/ready-flag"]),
         400,
     );

@@ -6,9 +6,6 @@ let
     mode="''${1:?missing fixture mode}"
     shift
     case "$mode" in
-      exit|prepare)
-        exec ${testChild}/bin/nixfied-test-child "$mode" "$@"
-        ;;
       marker)
         [ "$#" -eq 1 ]
         printf ran > "$1"

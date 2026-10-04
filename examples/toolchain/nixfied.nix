@@ -38,6 +38,18 @@ let
       exec sleep infinity
     '';
   };
+  workerProbe = {
+    tools = [ "worker-marker-check" ];
+    run = [ "test" "-e" "\${stateDir}/worker-ready" ];
+  };
+  workerCheck = {
+    probe = workerProbe;
+    policy = {
+      timeoutMs = 1000;
+      retryIntervalMs = 200;
+      maxAttempts = 30;
+    };
+  };
 in
 {
   imports = [ adapters.postgres ];
@@ -58,6 +70,11 @@ in
       "file-write"
     ];
   };
+  nixfied.closures.worker-marker-check = {
+    package = pkgs.coreutils;
+    executable = "bin/test";
+    effects = [ "process" ];
+  };
 
   nixfied.services.worker = {
     # No `endpoint`/`endpoints`: durable, not listening.
@@ -73,36 +90,8 @@ in
         ];
       };
       # Readiness means "the probe answers": the successful startup marker exists.
-      ready.probe = {
-        tools = [ pkgs.bash ];
-        run = [
-          "bash"
-          "-c"
-          ''test -e "$1"''
-          "probe"
-          "\${stateDir}/worker-ready"
-        ];
-      };
-      ready.policy = {
-        timeoutMs = 1000;
-        retryIntervalMs = 200;
-        maxAttempts = 30;
-      };
-      health.probe = {
-        tools = [ pkgs.bash ];
-        run = [
-          "bash"
-          "-c"
-          ''test -e "$1"''
-          "probe"
-          "\${stateDir}/worker-ready"
-        ];
-      };
-      health.policy = {
-        timeoutMs = 1000;
-        retryIntervalMs = 200;
-        maxAttempts = 30;
-      };
+      ready = workerCheck;
+      health = workerCheck;
     };
     connectsTo = [ "postgres" ];
     logRefs = [ "service.worker" ];
@@ -195,19 +184,7 @@ in
   # `requires` toward an endpoint-less service keeps its ready-ordering and
   # derivation meaning — there is just nothing to address.
   nixfied.tasks.e2e = {
-    invocation = {
-      tools = [
-        pkgs.bash
-        pkgs.coreutils
-      ];
-      run = [
-        "bash"
-        "-c"
-        ''test -e "$1/worker-ready"''
-        "e2e"
-        "\${stateDir}"
-      ];
-    };
+    invocation = workerProbe;
     requires = [ "worker" ];
   };
 
