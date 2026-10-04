@@ -112,7 +112,7 @@ fn rewrite(source: &str, url: &str) -> std::result::Result<String, &'static str>
     Ok(result)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Snapshot {
     bytes: Vec<u8>,
     device: u64,
@@ -329,7 +329,6 @@ impl Replacement {
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Point {
-    BeforeApply,
     AfterExchange,
     AfterLock,
 }
@@ -341,7 +340,7 @@ fn apply(
     mut hook: impl FnMut(Point, &Path) -> Result<()>,
 ) -> Result<()> {
     let _guard = DirectoryLock::acquire(root)?;
-    let originals = [
+    let mut originals = [
         expected(&root.join("flake.nix"), hashes[0])?,
         expected(&root.join("flake.lock"), hashes[1])?,
     ];
@@ -350,7 +349,7 @@ fn apply(
     for (index, name, candidate) in [(1, "flake.lock", lock), (0, "flake.nix", flake)] {
         if let Some(candidate) = candidate {
             let original = originals[index]
-                .clone()
+                .take()
                 .ok_or_else(|| io::Error::other("replacement requires an existing regular file"))?;
             if let Some(replacement) = Replacement::prepare(root, name, original, candidate)? {
                 replacements.push(replacement);
@@ -358,7 +357,6 @@ fn apply(
         }
     }
     let outcome = (|| {
-        hook(Point::BeforeApply, root)?;
         for replacement in &mut replacements {
             if INTERRUPTED.load(Ordering::SeqCst) {
                 return Err(Failure::Interrupted);

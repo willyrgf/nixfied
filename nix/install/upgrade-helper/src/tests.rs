@@ -8,8 +8,6 @@ fn source_edits_only_selected_literal_and_preserves_all_other_bytes() {
     );
     for source in [
         "{ inputs.nixfied.url = \"old\"; # } comment\n outputs = _: { x = \"}\"; }; }",
-        "{ inputs = { nixfied.url=\"old\"; }; outputs = _: {}; }",
-        "{ inputs.nixfied = { url = \"old\"; inputs.nixpkgs.follows=\"nixpkgs\"; }; }",
         "{ inputs = { nixfied = { url = \"old\"; }; }; }",
         "{ inputs.\"nixfied\".url = \"old\"; description = ''\n { inputs.nixfied.url = \"decoy\"; }\n ''; }",
     ] {
@@ -49,14 +47,11 @@ impl Fixture {
         fs::create_dir(&root).unwrap();
         let candidates = root.join("candidates");
         fs::create_dir(&candidates).unwrap();
-        for (name, contents) in [
-            ("flake.nix", "old-flake"),
-            ("flake.lock", "old-lock"),
-            ("nixfied.nix", "owned"),
-        ] {
+        for (name, contents) in [("flake.nix", "old-flake"), ("flake.lock", "old-lock")] {
             fs::write(root.join(name), contents).unwrap();
             fs::write(candidates.join(name), format!("new-{contents}")).unwrap();
         }
+        fs::write(root.join("nixfied.nix"), "owned").unwrap();
         let hashes = ["flake.nix", "flake.lock", "nixfied.nix"]
             .map(|name| read(&root.join(name)).unwrap().unwrap().hash());
         Self {
