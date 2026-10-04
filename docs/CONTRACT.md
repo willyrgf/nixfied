@@ -544,9 +544,7 @@ when the manifest/runtime contract changes.
   resolution, lock write, documentation comparison or evaluation; it reports
   both skips, and force has no additional effect. This surface does not enter
   `manifest.json`, `runtimeAbi`, Rust runtime behavior or the adopter app inventory.
-  A private Rust helper owns literal input URL editing and file application;
-  Nix-packaged tools own source resolution, evaluation and reporting. URL edits
-  support literal root attribute sets with `inputs.nixfied.url` or equivalent
+  URL edits support literal root attribute sets with `inputs.nixfied.url` or equivalent
   nested `inputs`/`nixfied` sets, preserving all bytes outside the URL literal.
   Computed or ambiguous input declarations are rejected before mutation.
   Cooperating upgraders serialize application on the project directory. Each

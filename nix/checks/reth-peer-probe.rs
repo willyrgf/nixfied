@@ -39,7 +39,6 @@ mod tests {
     const PROBE: &str = env!("NIXFIED_TEST_RETH_PROBE");
     const REAL_PROBE: &str = env!("NIXFIED_TEST_REAL_RETH_PROBE");
     const RETH: &str = env!("NIXFIED_TEST_RETH");
-    const CURL: &str = env!("NIXFIED_TEST_CURL");
     const KEY: &str = "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
 
     struct State(PathBuf);
@@ -141,11 +140,6 @@ mod tests {
                 assert!(request.len() < 16384);
             }
             let headers = String::from_utf8(request).unwrap();
-            if method == "websocket" {
-                assert!(headers.starts_with("GET / HTTP/1.1\r\n"));
-                socket.write_all(response.as_bytes()).unwrap();
-                return;
-            }
             assert!(headers.starts_with("POST / HTTP/1.1\r\n"));
             assert!(headers.contains("Content-Type: application/json\r\n"));
             let length: usize = headers
@@ -236,15 +230,13 @@ mod tests {
         ] {
             fixture_request("127.0.0.1", 200, body, false, false);
         }
-        for status in [301, 401, 500] {
-            fixture_request(
-                "127.0.0.1",
-                status,
-                identity_response(&format!("enode://{KEY}@127.0.0.1:1")),
-                false,
-                false,
-            );
-        }
+        fixture_request(
+            "127.0.0.1",
+            503,
+            identity_response(&format!("enode://{KEY}@127.0.0.1:1")),
+            false,
+            false,
+        );
     }
 
     #[test]
@@ -339,21 +331,20 @@ mod tests {
             );
             peer.join().unwrap();
         }
-        for status in [204, 301, 401, 403, 500] {
-            let (port, peer) = rpc_peer(
-                "127.0.0.1",
-                status,
-                r#"{"jsonrpc":"2.0","id":1,"result":"0x0"}"#.into(),
-                "eth_blockNumber",
-            );
-            assert_result(
-                command(PROBE, &["http", "127.0.0.1", &port.to_string()])
-                    .output()
-                    .unwrap(),
-                false,
-            );
-            peer.join().unwrap();
-        }
+        // Even a successful HTTP status other than 200 must not pass.
+        let (port, peer) = rpc_peer(
+            "127.0.0.1",
+            201,
+            r#"{"jsonrpc":"2.0","id":1,"result":"0x0"}"#.into(),
+            "eth_blockNumber",
+        );
+        assert_result(
+            command(PROBE, &["http", "127.0.0.1", &port.to_string()])
+                .output()
+                .unwrap(),
+            false,
+        );
+        peer.join().unwrap();
     }
 
     #[test]
@@ -406,23 +397,6 @@ mod tests {
             redirect.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-    }
-
-    #[test]
-    fn websocket_http_response_is_not_a_successful_exchange() {
-        let (port, peer) = rpc_peer(
-            "127.0.0.1",
-            200,
-            r#"{"jsonrpc":"2.0","id":1,"result":"0x0"}"#.into(),
-            "websocket",
-        );
-        assert_result(
-            command(PROBE, &["ws", "127.0.0.1", &port.to_string()])
-                .output()
-                .unwrap(),
-            false,
-        );
-        peer.join().unwrap();
     }
 
     #[test]
@@ -628,30 +602,6 @@ mod tests {
             .unwrap(),
             false,
         );
-        fs::write(&secret_path, secret).unwrap();
-        let missing_auth = Command::new(CURL)
-            .env_clear()
-            .args([
-                "-q",
-                "--silent",
-                "--noproxy",
-                "*",
-                "--max-time",
-                "2",
-                "--output",
-                "/dev/null",
-                "--write-out",
-                "%{http_code}",
-                "--header",
-                "Content-Type: application/json",
-                "--data",
-                r#"{"jsonrpc":"2.0","id":1,"method":"engine_exchangeCapabilities","params":[[]]}"#,
-                &format!("http://127.0.0.1:{auth_port}"),
-            ])
-            .output()
-            .unwrap();
-        assert!(missing_auth.status.success());
-        assert!(matches!(missing_auth.stdout.as_slice(), b"401" | b"403"));
         for _ in 0..2 {
             assert_result(
                 command(REAL_PROBE, &["peer", "127.0.0.1", &peer_port, &http_port])

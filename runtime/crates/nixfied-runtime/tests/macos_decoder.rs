@@ -59,23 +59,32 @@ fn sdk_decoder_preserves_exact_addresses_and_kernel_identities() {
 }
 
 #[test]
-fn sdk_decoder_rejects_denied_short_and_incoherent_socket_records() {
+fn sdk_decoder_rejects_failed_and_incomplete_reads() {
+    let record = listener(false);
+    let size = std::mem::size_of_val(&record) as i32;
+    // Read failures precede address decoding; their behavior is family-independent.
+    // Positive incomplete lengths must ignore even a stale syscall errno.
+    for (bytes, errno, expected) in [
+        (0, 0, libc::EPROTO),
+        (-1, 0, libc::EPROTO),
+        (0, libc::EPERM, libc::EPERM),
+        (-1, libc::EBADF, libc::EBADF),
+        (-1, libc::ESRCH, libc::ESRCH),
+        (size - 1, libc::EPERM, libc::EPROTO),
+        (size + 1, libc::ESRCH, libc::EPROTO),
+    ] {
+        assert_eq!(
+            decode(record, bytes, errno).unwrap_err().raw_os_error(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn sdk_decoder_rejects_incoherent_socket_records() {
     for ipv6 in [false, true] {
         let record = listener(ipv6);
         let size = std::mem::size_of_val(&record) as i32;
-        for bytes in [0, -1, size - 1, size + 1] {
-            for errno in [libc::EPERM, libc::EBADF, libc::ESRCH, 0] {
-                let expected = if bytes <= 0 && errno != 0 {
-                    errno
-                } else {
-                    libc::EPROTO
-                };
-                assert_eq!(
-                    decode(record, bytes, errno).unwrap_err().raw_os_error(),
-                    Some(expected)
-                );
-            }
-        }
         for mutate in [
             |record: &mut sdk::socket_fdinfo| record.psi.soi_so = 0,
             |record: &mut sdk::socket_fdinfo| record.psi.soi_family = libc::AF_UNIX,

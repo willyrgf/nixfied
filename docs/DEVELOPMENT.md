@@ -62,14 +62,10 @@ nix run .#ci
 ```
 
 The private `nix/install/upgrade-helper` Cargo package is isolated from the
-installer and process runtime. Building `.#upgrade` runs five focused source-edit
-and concurrent-edit tests, formatting, and Clippy. Nix owns
-candidate resolution and reporting; the helper owns source edits and guarded
-application. The Nix gate independently exercises the packaged public upgrade
-surface, including historical reports, source selection, successful/no-op
-application, stale candidates, and actual SIGTERM rollback. Those gate cases
-replace duplicate helper tests; helper tests retain the mid-write and rollback
-edit windows the public gate cannot deterministically reach.
+installer and process runtime. Building `.#upgrade` checks source edits and
+concurrent-write handling, formatting, and Clippy. Nix owns resolution and
+reporting; the helper owns source edits and guarded application. The Nix gate
+tests public upgrade behavior, including actual interruption and rollback.
 
 It is fail-fast and runs these local stages:
 
@@ -92,15 +88,13 @@ their arguments rather than authoring shell source. All declared fixture program
 are realised store closures.
 
 The same `.#test` floor runs the Rust socket suite in
-`nix/checks/reth-peer-probe.rs`. Independent controlled responses exercise the
-packaged curl, WebSocket, and JWT composition: malformed envelopes, response
-limits, configuration/proxy isolation, authentication, and safe diagnostics.
+`nix/checks/reth-peer-probe.rs`. Controlled responses test adapter validation
+and safe failures; pinned Reth tests the packaged HTTP, WebSocket, JWT, and
+native peer integration.
 JSON-RPC IDs compare by numeric value; booleans and mismatched IDs reject.
-A native-command witness proves peer mode rejects malformed identities before
-invoking Reth, ignores advertised addresses, and targets planned IPv4/IPv6
-listeners. The suite also starts pinned Reth and checks HTTP, WebSocket,
-authenticated Engine API, missing/wrong credentials, and repeated native
-handshakes while an unrelated TCP acceptor cannot satisfy the peer probe.
+A native-command witness checks rejection before effects and planned endpoint
+selection. Missing or malformed local secrets reject before networking; the
+real node independently verifies the signer and rejects a wrong key.
 `nix/checks/reth-peer-probe.nix` packages both the fixtures and the actual adapter
 probe; the source gate checks formatting and compilation without binding ports.
 
