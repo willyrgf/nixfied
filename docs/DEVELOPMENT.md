@@ -375,7 +375,9 @@ platforms. macOS generates private Rust bindings from the Nix-selected SDK with
 the pinned unwrapped bindgen tool. Generated layout assertions and the Rust
 decoder check full record layouts and returned lengths; missing SDK/tool inputs
 fail the build rather than selecting fallback definitions. It does not consume
-a PCB inventory.
+a PCB inventory. Every Nix build that compiles the runtime, including isolated
+generated-source Cargo fixtures, must supply both the selected `SDKROOT` and
+`rust-bindgen-unwrapped`.
 Denied or unsupported inspection must refuse, never silently pass. The runtime
 unit observer checks exact IPv4/IPv6 and replacement; endpoint integration tests
 check complete rounds, nonprimary failure, replacement during the final probe,
