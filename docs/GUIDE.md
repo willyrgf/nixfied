@@ -388,10 +388,11 @@ health, stop, and clean semantics. A service may declare one endpoint, several
 named endpoints, or no endpoint. Every declared TCP endpoint receives a planned
 port and must be proven to belong to the process the runtime started; an open
 port alone is not readiness. A conflicting listener rejects startup.
-On macOS, a discrepancy between the kernel's PCB count and the records it
-returns prevents that proof. The runtime reports `PORT_UNVERIFIABLE`; when
-detected in preflight, service prepare has not begun. Endpoint-backed services
-require a usable kernel snapshot.
+On macOS, the runtime inspects socket FDs held by verified contained processes
+and requires complete SDK-sized records with exact socket identities. Inspection
+uncertainty that prevents a complete listener witness set reports
+`PORT_UNVERIFIABLE`. Preflight checks exact-bind availability before prepare;
+managed-listener inspection follows service start.
 
 Each run owns its services until the entire session finishes, then stops them.
 Tasks in the same graph share services. A later run starts fresh service

@@ -390,6 +390,31 @@ release package is what install and generated adopter apps ship. Both hosted
 platforms use the same fixture-backed floor, including the realised Postgres
 manifest needed by interrupt-and-recover coverage.
 
+### Native macOS language-refactor verification
+
+On 2026-10-05, native verification passed on arm64 macOS 27.0.1 (26A434),
+using Nix-selected Apple SDK 14.4, Rust 1.96.0 (`ac68faa20`), and unwrapped
+bindgen 0.72.1. The host Command Line Tools selected SDK 27.0; builds and tests
+used the Nix SDK. Full `nix run .#ci -- --dirty` and
+`nix build .#nixfied-cli .#install .#nixfied-runtime --no-link` passed after
+fixing missing Darwin bindgen inputs in isolated Cargo fixtures and explicitly
+resetting accepted HTTP fixture sockets to blocking mode.
+
+The floor executed all three macOS decoder tests, 13 endpoint tests, 69 service
+tests, 43 output tests, the real Postgres interruption/recovery test, and eight
+Reth composition tests. All 20 runtime gate cases passed, including static HTTP
+helpers, the Postgres-backed worker, and real Reth protocols. The private upgrade
+helper's five tests and the public gate proved concurrent-edit preservation,
+apply/no-op, stale candidates, concurrent upgrades, real SIGTERM rollback for
+checked and forced apply, source selection, and exact historical reports.
+
+This completed the native handoff for the Nix/Rust language cutovers. Active
+source inventory contained no standalone Python, Perl, C, JavaScript, TypeScript,
+or shell implementations; shell glue remained embedded and packaged in Nix,
+and historical archives were unchanged. An old-C/new-Rust decoder differential
+comparison was not run. This host does not establish execution coverage on
+Intel macOS or other macOS/SDK versions.
+
 ## Change-specific verification
 
 Use the smallest proof that covers the change, then widen for shared contracts:
