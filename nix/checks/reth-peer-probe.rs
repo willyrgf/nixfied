@@ -126,6 +126,9 @@ mod tests {
                     error => panic!("HTTP probe did not connect: {error:?}"),
                 }
             };
+            // Accepted sockets on Darwin inherit the listener's nonblocking mode.
+            // Request decoding uses blocking reads with the timeout below.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
