@@ -16,5 +16,5 @@ result
 !docs/repo-map.md
 # Conformance golden view snapshots are tracked fixtures, not stray docs.
 !runtime/crates/nixfied-conformance/goldens/**/docs.md
-/runtime/target/
+**/target/
 result-*
