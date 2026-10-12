@@ -57,9 +57,10 @@ pub struct DownReport {
 }
 
 /// Request cancellation of the slot's live session through its own FIFO and
-/// observe that same session until it settles; otherwise recover a dead owner
-/// under exclusive slot authority. A request never targets a successor, and a
-/// timeout reports incomplete shutdown without signaling anything itself.
+/// observe that same session until it settles and releases authority; otherwise
+/// recover a dead owner under exclusive slot authority. A request never targets
+/// a successor, and a timeout reports incomplete shutdown without signaling
+/// anything itself.
 pub fn down(
     placement: &HostPlacement,
     registry_identity: &RegistryIdentity,
@@ -68,29 +69,29 @@ pub fn down(
 ) -> RuntimeResult<DownReport> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let registry_path = placement.registry_path();
-    if RegistryReader::open_existing(&registry_path, registry_identity)?.is_none()
-        && !placement.registry_dir().join("slot.lock").exists()
-    {
+    let reader = RegistryReader::open_existing(&registry_path, registry_identity)?;
+    if reader.is_none() && !placement.registry_dir().join("slot.lock").exists() {
         return Ok(DownReport::default());
     }
-    let mut selected: Option<String> = None;
-    let mut requested = false;
-    loop {
-        if selected.is_none()
-            && let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
-        {
-            selected = latest_unfinished_session(&reader)?;
-            if let Some(run_id) = &selected {
-                requested =
-                    request_cancellation(&placement.registry_dir().join("runs").join(run_id))?
-                        == CancellationDelivery::Requested;
-            }
+    // Selection includes absence: a session published later is never a target.
+    let (selected, latest_rowid) = match &reader {
+        Some(reader) => session_selection(reader)?,
+        None => (None, 0),
+    };
+    let requested = match &selected {
+        Some(run_id) => {
+            request_cancellation(&placement.registry_dir().join("runs").join(run_id))?
+                == CancellationDelivery::Requested
         }
-        // The chosen session ends `down` once it settles, whether its own owner
-        // or a successor's recovery settled it.
-        if let Some(run_id) = &selected
-            && let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
-            && session_settled(&reader, run_id)?
+        None => false,
+    };
+    drop(reader);
+    loop {
+        // Finalization precedes evidence publication and slot release. A later
+        // run can only be published by an exclusive successor, proving handoff
+        // without acquiring its authority or requesting its cancellation.
+        if let Some(reader) = RegistryReader::open_existing(&registry_path, registry_identity)?
+            && session_handed_off(&reader, selected.as_deref(), latest_rowid)?
         {
             return Ok(DownReport {
                 canceled_run_id: selected.filter(|_| requested),
@@ -118,8 +119,10 @@ pub fn down(
     }
 }
 
-fn latest_unfinished_session(reader: &RegistryReader) -> RuntimeResult<Option<String>> {
-    reader
+fn session_selection(reader: &RegistryReader) -> RuntimeResult<(Option<String>, i64)> {
+    // The checked reader holds one coherent transaction across both queries.
+    // Decode a present run as String so a corrupt NULL id cannot mean absence.
+    let selected = reader
         .connection()
         .query_row(
             "SELECT run_id FROM runs WHERE finalization = 'unfinished' ORDER BY rowid DESC LIMIT 1",
@@ -127,15 +130,30 @@ fn latest_unfinished_session(reader: &RegistryReader) -> RuntimeResult<Option<St
             |row| row.get(0),
         )
         .optional()
-        .map_err(sql_error)
+        .map_err(sql_error)?;
+    let latest_rowid = reader
+        .connection()
+        .query_row("SELECT coalesce(max(rowid), 0) FROM runs", [], |row| {
+            row.get(0)
+        })
+        .map_err(sql_error)?;
+    Ok((selected, latest_rowid))
 }
 
-fn session_settled(reader: &RegistryReader, run_id: &str) -> RuntimeResult<bool> {
+fn session_handed_off(
+    reader: &RegistryReader,
+    selected: Option<&str>,
+    latest_rowid: i64,
+) -> RuntimeResult<bool> {
     reader
         .connection()
         .query_row(
-            "SELECT finalization = 'complete' FROM runs WHERE run_id = ?1",
-            [run_id],
+            "SELECT CASE WHEN ?2 IS NULL THEN successor_published ELSE (
+               SELECT finalization = 'complete' AND successor_published FROM runs WHERE run_id = ?2
+             ) END FROM (
+               SELECT EXISTS (SELECT 1 FROM runs WHERE rowid > ?1) AS successor_published
+             )",
+            params![latest_rowid, selected],
             |row| row.get(0),
         )
         .map_err(sql_error)
@@ -643,4 +661,144 @@ fn settle_down_process(registry: &mut Registry, row: &ProcessRow) -> RuntimeResu
 
 fn settle_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     settle_unresolved_process(registry, &row.process_key, &row.run_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admission::InvocationRoot;
+    use crate::registry::session::{
+        ExecutionOutcome, record_execution_outcome, record_finalization_complete,
+        record_run_created,
+    };
+    use crate::session_control::SessionControl;
+    use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
+
+    #[test]
+    fn missing_selected_session_reports_corruption_before_handoff() {
+        let root = crate::test_support::TestDir::new("down-missing-selection");
+        let identity = RegistryIdentity::for_slot("project", "dev", 0, "abi", "tool");
+        let registry = Registry::open_or_create(
+            crate::state::ownership::fixture_guard(&root, &identity),
+            &identity,
+        )
+        .unwrap();
+        let reader = RegistryReader::open_existing(registry.path(), &identity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            session_handed_off(&reader, Some("missing"), 0)
+                .unwrap_err()
+                .code,
+            ErrorCode::RegistryCorrupt
+        );
+        drop(reader);
+        registry.close().unwrap();
+    }
+
+    #[test]
+    fn absent_selection_observes_successor_handoff_without_selecting_it() {
+        let root = crate::test_support::TestDir::new("down-absent-selection");
+        let manifest = synthetic_manifest(&SyntheticManifestOptions {
+            executable: std::env::var("NIXFIED_TEST_CHILD").unwrap(),
+            ..Default::default()
+        });
+        let manifest_path = root.join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let mut context =
+            crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
+        context.invocation_root = InvocationRoot::Path(root.to_path_buf());
+        let admission = crate::admit_run(&manifest_path, &context).unwrap();
+        let manifest = admission.common().manifest();
+        let slot = crate::slot::select_slot(manifest, None).unwrap();
+        let identity = RegistryIdentity::for_slot(
+            &manifest.project.project_id,
+            slot.environment,
+            slot.slot,
+            &manifest.runtime_abi,
+            &manifest.toolchain_id,
+        );
+        let placement = crate::state::derive_slot_placement(
+            &manifest.project.project_id,
+            slot.environment,
+            slot.slot,
+            "first",
+            &root,
+        )
+        .unwrap();
+        let mut registry = Registry::open_or_create(
+            SlotGuard::acquire(&placement, &CancellationToken::new()).unwrap(),
+            &identity,
+        )
+        .unwrap();
+        record_run_created(&mut registry, "first", &admission, &placement).unwrap();
+        let hash = admission.common().computed_manifest_hash();
+        record_execution_outcome(&mut registry, "first", hash, ExecutionOutcome::Succeeded)
+            .unwrap();
+        record_finalization_complete(&mut registry, "first", hash).unwrap();
+        let reader = RegistryReader::open_existing(registry.path(), &identity)
+            .unwrap()
+            .unwrap();
+        let (selected, latest_rowid) = session_selection(&reader).unwrap();
+        assert_eq!(selected, None);
+        assert!(!session_handed_off(&reader, selected.as_deref(), latest_rowid).unwrap());
+        drop(reader);
+        registry.close().unwrap();
+
+        let successor = crate::state::derive_slot_placement(
+            &manifest.project.project_id,
+            slot.environment,
+            slot.slot,
+            "successor",
+            &root,
+        )
+        .unwrap();
+        let mut registry = Registry::open_or_create(
+            SlotGuard::acquire(&successor, &CancellationToken::new()).unwrap(),
+            &identity,
+        )
+        .unwrap();
+        let cancellation = CancellationToken::new();
+        let control = SessionControl::establish(
+            registry.authority().claim_run_dir(&successor).unwrap(),
+            &successor.run_dir(),
+            &cancellation,
+        )
+        .unwrap();
+        record_run_created(&mut registry, "successor", &admission, &successor).unwrap();
+        let reader = RegistryReader::open_existing(registry.path(), &identity)
+            .unwrap()
+            .unwrap();
+        assert!(session_handed_off(&reader, selected.as_deref(), latest_rowid).unwrap());
+        assert!(!cancellation.is_canceled());
+        assert_eq!(
+            session_selection(&reader).unwrap().0.as_deref(),
+            Some("successor")
+        );
+        drop(reader);
+        // SQLite permits NULL in a TEXT PRIMARY KEY. Corrupt data must not be
+        // decoded as the absence of an unfinished session.
+        registry
+            .connection()
+            .execute(
+                "INSERT INTO runs (
+               run_id, manifest_path, computed_manifest_hash, runtime_abi, toolchain_id,
+               generator_json, target_json, source_json, owner_identity, diagnostic_path
+             ) SELECT NULL, manifest_path, computed_manifest_hash, runtime_abi, toolchain_id,
+               generator_json, target_json, source_json, owner_identity, diagnostic_path
+             FROM runs WHERE run_id = 'successor'",
+                [],
+            )
+            .unwrap();
+        let reader = RegistryReader::open_existing(registry.path(), &identity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            session_selection(&reader).unwrap_err().code,
+            ErrorCode::RegistryCorrupt
+        );
+        drop(reader);
+        control.shutdown().unwrap();
+        registry.close().unwrap();
+    }
 }

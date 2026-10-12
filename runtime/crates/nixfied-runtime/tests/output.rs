@@ -8,7 +8,15 @@ use std::process::{Child, Output};
 use std::time::Duration;
 
 use common::*;
+use nixfied_runtime::RunAdmission;
+use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::redaction::REDACTION_TOKEN;
+use nixfied_runtime::registry::Registry;
+use nixfied_runtime::registry::session::{
+    ExecutionOutcome, record_execution_outcome, record_finalization_complete, record_run_created,
+};
+use nixfied_runtime::session_control::SessionControl;
+use nixfied_runtime::state::{StateIdentity, apply_retention, prepare_slot_state};
 use serde_json::{Value, json};
 
 fn task_manifest(args: &[&str]) -> Value {
@@ -1469,6 +1477,8 @@ fn down_cancels_the_live_session_through_its_own_endpoint_and_observes_settlemen
         json!({"canceledRunId": run_id, "stopped": [], "stale": []}),
         "the owner, not down, performs teardown"
     );
+    // No child wait or cleanup retry supplies the authority handoff: down does.
+    assert_success(&fixture.output("clean", &[]));
     let owner = wait_for_child_output(owner, Duration::from_secs(5));
     assert_eq!(owner.status.code(), Some(27));
     assert!(String::from_utf8_lossy(&owner.stderr).contains("CANCELED"));
@@ -1485,6 +1495,118 @@ fn down_cancels_the_live_session_through_its_own_endpoint_and_observes_settlemen
         !endpoint.exists(),
         "the owner removes its endpoint before slot release"
     );
+}
+
+/// A real admitted owner whose finalization and guard release the test controls.
+fn held_session(
+    fixture: &RuntimeFixture,
+    run_id: &str,
+) -> (RunAdmission, Registry, SessionControl, CancellationToken) {
+    let manifest = serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+    let admission = fixture_admission(&manifest, &fixture.tmp.path);
+    let selected = nixfied_runtime::slot::select_slot(admission.common().manifest(), None).unwrap();
+    let placement =
+        default_placement(admission.common().manifest(), run_id, &fixture.state_base).unwrap();
+    let mut registry = open_slot_registry(&placement, admission.common().manifest(), &selected);
+    let state = StateIdentity::from_selected_slot(admission.common(), &selected);
+    let recovered = nixfied_runtime::control::recover_slot(&mut registry, &state, 1000).unwrap();
+    prepare_slot_state(&state, &mut registry, recovered.recovered).unwrap();
+    let directory = registry.authority().claim_run_dir(&placement).unwrap();
+    let cancellation = CancellationToken::new();
+    let control =
+        SessionControl::establish(directory, &placement.run_dir(), &cancellation).unwrap();
+    record_run_created(&mut registry, run_id, &admission, &placement).unwrap();
+    (admission, registry, control, cancellation)
+}
+
+fn finalize_held_session(admission: &RunAdmission, registry: &mut Registry, run_id: &str) {
+    let manifest_hash = admission.common().computed_manifest_hash();
+    record_execution_outcome(registry, run_id, manifest_hash, ExecutionOutcome::Canceled).unwrap();
+    let selected = nixfied_runtime::slot::select_slot(admission.common().manifest(), None).unwrap();
+    let state = StateIdentity::from_selected_slot(admission.common(), &selected);
+    apply_retention(&state, registry).unwrap();
+    record_finalization_complete(registry, run_id, manifest_hash).unwrap();
+}
+
+fn stop_requester(child: &Child) {
+    let pid = child.id() as libc::pid_t;
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+    let mut status = 0;
+    assert_eq!(
+        unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) },
+        pid
+    );
+    assert!(libc::WIFSTOPPED(status));
+}
+
+#[test]
+fn down_times_out_after_finalization_while_the_selected_owner_holds_authority() {
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["output", "hex", "", ""]));
+    let run_id = "held-owner";
+    let (admission, mut registry, control, cancellation) = held_session(&fixture, run_id);
+    let down = fixture
+        .command("down", &["--timeout-ms", "1000"])
+        .spawn()
+        .unwrap();
+    poll_until(
+        Duration::from_secs(5),
+        "selected owner cancellation",
+        || cancellation.is_canceled().then_some(()),
+    );
+    stop_requester(&down);
+    finalize_held_session(&admission, &mut registry, run_id);
+    assert_eq!(
+        unsafe { libc::kill(down.id() as libc::pid_t, libc::SIGCONT) },
+        0
+    );
+    let down = wait_for_child_output(down, Duration::from_secs(5));
+    assert_eq!(down.status.code(), Some(31));
+    assert!(String::from_utf8_lossy(&down.stderr).contains("LIFECYCLE_FAILED"));
+    assert_eq!(session_row(&fixture, run_id).1, "complete");
+    control.shutdown().unwrap();
+    registry.close().unwrap();
+    assert_success(&fixture.output("clean", &[]));
+}
+
+#[test]
+fn down_observes_selected_handoff_without_waiting_for_or_canceling_successor() {
+    let fixture = RuntimeFixture::new(leaf_task_manifest(&["output", "hex", "", ""]));
+    let first_run = "handoff-owner";
+    let (admission, mut registry, control, cancellation) = held_session(&fixture, first_run);
+    let down = fixture
+        .command("down", &["--timeout-ms", "10000"])
+        .spawn()
+        .unwrap();
+    poll_until(
+        Duration::from_secs(5),
+        "selected owner cancellation",
+        || cancellation.is_canceled().then_some(()),
+    );
+    // The old request cannot acquire the idle gap; the successor gets authority
+    // before it resumes, and keeps that authority until the request returns.
+    stop_requester(&down);
+    finalize_held_session(&admission, &mut registry, first_run);
+    control.shutdown().unwrap();
+    registry.close().unwrap();
+    let successor_run = "handoff-successor";
+    let (admission, mut registry, control, cancellation) = held_session(&fixture, successor_run);
+    assert_eq!(
+        unsafe { libc::kill(down.id() as libc::pid_t, libc::SIGCONT) },
+        0
+    );
+    let down = wait_for_child_output(down, Duration::from_secs(5));
+    assert_success(&down);
+    let report: Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert_eq!(report["canceledRunId"], first_run);
+    assert!(!cancellation.is_canceled());
+    assert_eq!(
+        session_row(&fixture, successor_run),
+        (None, "unfinished".into())
+    );
+    finalize_held_session(&admission, &mut registry, successor_run);
+    control.shutdown().unwrap();
+    registry.close().unwrap();
+    assert_success(&fixture.output("clean", &[]));
 }
 
 #[test]

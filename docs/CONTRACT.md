@@ -385,8 +385,13 @@ when the manifest/runtime contract changes.
   scoped receiver only sets the session's cancellation token. `down` selects the
   newest unfinished session once, opens that endpoint nonblocking without
   following symlinks, verifies a private FIFO, and writes one byte. It then
-  observes that selected session until its finalization completes (reporting
-  `canceledRunId`) or its owner releases the slot. A missing reader, missing
+  observes that selected session until its finalization completes and its owner
+  releases slot authority (reporting `canceledRunId`). Finalization alone does
+  not prove release: evidence publication and endpoint shutdown still hold the
+  slot. `down` proves handoff by acquiring the idle slot or by observing a later
+  run published under exclusive successor authority; it never waits for that
+  successor to finish or requests its cancellation. Selection, including no
+  unfinished session, is fixed before waiting. A missing reader, missing
   endpoint, or broken pipe means no live owner; `down` then acquires the slot
   and performs predecessor recovery. `down` never signals the owner or a
   process group of a live session and never targets a successor; if the owner

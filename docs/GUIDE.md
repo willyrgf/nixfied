@@ -433,9 +433,11 @@ and its final outcome is recorded under that `runId`. `--daemon` cannot be
 combined with `--output`, and it rejects tasks that read interactive stdin.
 
 `down` asks the slot's live session to cancel through that session's own
-control endpoint and waits for it to finish its normal teardown; if the owning
-runtime has died, `down` takes the slot and stops the recorded processes. It
-never cancels a newer session that replaced the one it selected.
+control endpoint and waits for it to finish its normal teardown and release slot
+authority; if the owning runtime has died, `down` takes the slot and stops the
+recorded processes. A successful return permits immediate cleanup or reuse when
+no successor holds the slot. It never cancels a newer session that replaced the
+one it selected, and does not wait for that successor to finish.
 
 Each slot has its own state root, registry, process records, and
 deterministic candidate port window. `nixfied.placement.ports` controls the base,

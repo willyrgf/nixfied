@@ -58,7 +58,7 @@ placement-components: original-bytes single-normal no-slash no-nul no-dot no-dot
 surface: check run ps down clean
 # down requests cancellation of one selected live session through its own FIFO
 # and observes that session; a dead owner is recovered only under slot authority.
-session-cancellation: descriptor-relative-mkfifoat private-session-directories runs-session-control-fifo any-byte-cancels separate-keeper-writer scoped-receiver-token-only nonblocking-sender select-once never-successor observe-selected-settlement dead-owner-recovery-under-slot timeout-reports-incomplete no-pid-signaling endpoint-removed-before-release
+session-cancellation: descriptor-relative-mkfifoat private-session-directories runs-session-control-fifo any-byte-cancels separate-keeper-writer scoped-receiver-token-only nonblocking-sender select-once-including-absence never-successor observe-selected-settlement-and-authority-handoff idle-slot-or-later-exclusive-run-proves-handoff dead-owner-recovery-under-slot timeout-reports-incomplete no-pid-signaling endpoint-removed-before-release
 # Private bootstrap mode, not an adopter app or manifest command. It dispatches
 # before ordinary admission and receives exactly one bounded execution request.
 # Private command-owned presenter: read-only evidence tailing, never a workload.
