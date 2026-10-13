@@ -312,6 +312,10 @@ impl<'a> RunSession<'a> {
             }
         };
         let footer_succeeded = failures.is_empty();
+        if let Some(error) = failures.primary.as_ref() {
+            self.diagnostics
+                .write(self.redactor.redact_text(&error.to_string()));
+        }
         write_run_footer(
             &mut self.diagnostics,
             footer_succeeded,

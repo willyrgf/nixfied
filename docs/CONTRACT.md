@@ -463,6 +463,11 @@ when the manifest/runtime contract changes.
   checkpoints. Ready-service checks include descendant escape detection, and the
   startup grace period polls containment and cancellation. No background process
   scanner owns or updates this evidence.
+  Linux task-directory opening and children-file reads treat `ENOENT` and `ESRCH` as
+  a task that exited during inspection; the proc permission check can report
+  `ESRCH` after lookup of an inode whose task has disappeared. Other inspection
+  errors remain terminal. Leader liveness, identity, bounds and escape checks
+  still apply; task disappearance grants no retry or service-success evidence.
 - Invocation-probe waits and retry delays observe cancellation, the current
   service and already-started services. Checkpoints run between waits of at most
   10 ms; host inspection, capture settlement, registry I/O and scheduling add
@@ -590,7 +595,9 @@ when the manifest/runtime contract changes.
   environment, the caller's stdout/stderr, and one private socket; it inherits
   no locks, secrets, database writers, or cancellation FIFO. The session owner
   never writes caller streams while it has duties: runtime progress lines are
-  retained in the run's `diagnostics.log` source. Each process registers its
+  retained in the run's `diagnostics.log` source. Summary diagnostics include
+  the primary redacted error code and message observed before the footer,
+  including in a background session. Each process registers its
   source label, presentation (`selected`, `shown`, or `hidden` for per-attempt
   probe logs), and run-relative stdout/stderr paths before release. The helper
   discovers sources in short read-only transactions, tails them by run identity

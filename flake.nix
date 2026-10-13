@@ -386,6 +386,21 @@
               imports = [ ./examples/postgres/nixfied.nix ];
               nixfied.placement.ports.base = lib.mkForce 25580;
               nixfied.state.persistence = lib.mkForce "persistent";
+              nixfied.closures.test-child = {
+                package = nixfiedTestChild;
+                executable = "bin/nixfied-test-child";
+                effects = [ "process" ];
+              };
+              nixfied.tasks.backend-churn-owner = {
+                requires = [ "postgres" ];
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "block"
+                  ];
+                };
+              };
             }
           );
           compositeManifest = nixfiedLib.compileManifest ./examples/composite/nixfied.nix;

@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -8,7 +9,8 @@ use common::*;
 /// Kill-and-recover: the runtime is SIGKILL'd while postgres is still
 /// running, leaving an orphaned service process. The next run of the same
 /// manifest must stop the orphan, start a fresh process against retained
-/// persistent pgdata, and complete smoke-query. Explicit purge then removes data.
+/// persistent pgdata, and complete smoke-query. A later ready owner survives
+/// actual PostgreSQL backend turnover. Explicit purge then removes data.
 ///
 /// Skipped when `NIXFIED_TEST_POSTGRES_MANIFEST` is not set — only the
 /// nix-wrapped test runner (`.#test`) provides it.
@@ -160,6 +162,69 @@ fn interrupt_and_recover_stops_orphan_and_starts_fresh_postgres() {
 
     let pgdata = state_base.join("data/postgres-example/dev/0/pgdata/PG_VERSION");
     assert!(pgdata.exists(), "recovery must retain persistent pgdata");
+
+    let owner = runtime("run", &["--task", "backend-churn-owner", "--daemon"])
+        .output()
+        .expect("backend churn owner should establish");
+    assert_success(&owner);
+    let acknowledgement: serde_json::Value = serde_json::from_slice(&owner.stdout).unwrap();
+    let churn_run = acknowledgement["runId"].as_str().unwrap();
+    let postgres_pid = poll_until(
+        Duration::from_secs(90),
+        "ready PostgreSQL and owner task",
+        || {
+            registry_ro(&state_base)
+                .query_row(
+                    "SELECT pid FROM processes WHERE run_id = ?1 AND role = 'service'
+                 AND status = 'ready' AND EXISTS (SELECT 1 FROM processes
+                 WHERE run_id = ?1 AND role = 'task' AND status = 'running')",
+                    [churn_run],
+                    |row| row.get::<_, i32>(0),
+                )
+                .ok()
+        },
+    );
+    let churn = (|| -> std::io::Result<()> {
+        // Every trust-authenticated connection proves a real backend was born.
+        let startup = b"\0\x03\0\0user\0postgres\0database\0postgres\0\0";
+        let length = u32::try_from(4 + startup.len()).unwrap().to_be_bytes();
+        for _ in 0..4096 {
+            let mut client = TcpStream::connect(("127.0.0.1", port))?;
+            client.set_read_timeout(Some(Duration::from_secs(5)))?;
+            client.write_all(&length)?;
+            client.write_all(startup)?;
+            let mut authenticated = [0; 9];
+            client.read_exact(&mut authenticated)?;
+            if authenticated != [b'R', 0, 0, 0, 8, 0, 0, 0, 0] {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "PostgreSQL did not return AuthenticationOk",
+                ));
+            }
+        }
+        Ok(())
+    })();
+    let observed = runtime("ps", &[])
+        .output()
+        .expect("ps should observe the owner");
+    // Always stop the owner before asserting workload evidence.
+    let down = runtime("down", &[]).output().expect("owner should stop");
+    assert_success(&down);
+    let down: serde_json::Value = serde_json::from_slice(&down.stdout).unwrap();
+    assert_eq!(down["canceledRunId"], serde_json::json!(churn_run));
+    churn.expect("the native owner must survive every real backend exit");
+    assert_success(&observed);
+    let observed: serde_json::Value = serde_json::from_slice(&observed.stdout).unwrap();
+    assert!(
+        observed["processes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|process| {
+                process["pid"] == serde_json::json!(postgres_pid)
+                    && process["live"] == serde_json::json!(true)
+            })
+    );
 
     let clean = runtime("clean", &["--purge"])
         .output()

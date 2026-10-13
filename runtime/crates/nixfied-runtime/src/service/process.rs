@@ -2825,15 +2825,20 @@ fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
 
 #[cfg(target_os = "linux")]
 fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
+    task_directory_child_pids(&PathBuf::from(format!("/proc/{parent}/task")))
+}
+
+#[cfg(target_os = "linux")]
+fn task_directory_child_pids(directory: &Path) -> RuntimeResult<Vec<u32>> {
     let failed = |error: std::io::Error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("cannot inspect managed descendants: {error}"),
         )
     };
-    let threads = match std::fs::read_dir(format!("/proc/{parent}/task")) {
+    let threads = match std::fs::read_dir(directory) {
         Ok(threads) => threads,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if proc_task_disappeared(&error) => return Ok(Vec::new()),
         Err(error) => return Err(failed(error)),
     };
     let mut children = Vec::new();
@@ -2847,7 +2852,7 @@ fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
         let entry = entry.map_err(failed)?;
         let content = match std::fs::read_to_string(entry.path().join("children")) {
             Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if proc_task_disappeared(&error) => continue,
             Err(error) => return Err(failed(error)),
         };
         for child in content.split_whitespace() {
@@ -2857,6 +2862,12 @@ fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
         }
     }
     Ok(children)
+}
+
+#[cfg(target_os = "linux")]
+fn proc_task_disappeared(error: &std::io::Error) -> bool {
+    // A task can exit between proc lookup and the kernel's permission check.
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(target_os = "macos")]
@@ -2968,6 +2979,51 @@ mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
     use nixfied_manifest::ServiceId;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn descendant_scan_admits_esrch_from_a_real_dead_task_inode() {
+        use std::os::fd::AsRawFd;
+
+        let mut child = std::process::Command::new(
+            std::env::var_os("NIXFIED_TEST_SLEEP").expect("Nix sleep fixture"),
+        )
+        .arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+        let task_directory = std::fs::File::open(format!("/proc/{}/task", child.id()));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let task_directory = task_directory.unwrap();
+        let dead_inode = PathBuf::from(format!("/proc/self/fd/{}", task_directory.as_raw_fd()));
+
+        let error = std::fs::read_dir(&dead_inode).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+        assert!(task_directory_child_pids(&dead_inode).unwrap().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn descendant_scan_keeps_other_inspection_failures_terminal() {
+        for code in [libc::EACCES, libc::EIO, libc::EPERM, libc::EINVAL] {
+            assert!(!proc_task_disappeared(&std::io::Error::from_raw_os_error(
+                code
+            )));
+        }
+        let root = crate::test_support::TestDir::new("proc-not-directory");
+        let file = root.join("file");
+        std::fs::write(&file, []).unwrap();
+        let error = task_directory_child_pids(&file).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ProcEscape);
+        assert!(
+            error
+                .message
+                .starts_with("cannot inspect managed descendants:")
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

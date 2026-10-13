@@ -1829,6 +1829,12 @@ fn background_failure_after_acknowledgement_belongs_to_the_session() {
         runs.join(run_id).join("logs/task.0.stdout.log").is_file(),
         "background evidence is retained under the acknowledged identity"
     );
+    wait_for_registry(&fixture, "SELECT output = 'sealed' FROM runs");
+    let diagnostics = fs::read_to_string(runs.join(run_id).join("diagnostics.log")).unwrap();
+    assert!(
+        diagnostics.contains("TaskFailed: task smoke exited with code 3"),
+        "the background owner's causal error is retained: {diagnostics}"
+    );
 }
 
 #[test]
