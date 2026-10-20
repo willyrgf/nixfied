@@ -483,6 +483,16 @@ pub(crate) struct FileIdentity {
     pub(crate) inode: u64,
 }
 
+impl FileIdentity {
+    pub(crate) fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
 impl From<&libc::stat> for FileIdentity {
     fn from(stat: &libc::stat) -> Self {
         #[allow(clippy::unnecessary_cast)]

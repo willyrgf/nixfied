@@ -5,6 +5,34 @@ use serde_json::{Value, json};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
+/// Preserve native SQLite contention through validation. Polling readers may
+/// retry only BUSY/LOCKED, never a checked schema or ownership rejection.
+pub(crate) enum ReadFailure {
+    Sql(rusqlite::Error),
+    Checked(RuntimeError),
+}
+
+impl From<rusqlite::Error> for ReadFailure {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sql(error)
+    }
+}
+
+impl From<RuntimeError> for ReadFailure {
+    fn from(error: RuntimeError) -> Self {
+        Self::Checked(error)
+    }
+}
+
+impl From<ReadFailure> for RuntimeError {
+    fn from(error: ReadFailure) -> Self {
+        match error {
+            ReadFailure::Sql(error) => sql_error(error),
+            ReadFailure::Checked(error) => error,
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegistryIdentityDiagnostic<'a> {
@@ -199,13 +227,9 @@ fn verify_setting(conn: &Connection, setting: &str, required: i64) -> RuntimeRes
     Ok(())
 }
 
-fn is_empty_unversioned(conn: &Connection) -> RuntimeResult<bool> {
-    let version: i64 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(sql_error)?;
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
-        .map_err(sql_error)?;
+pub(crate) fn is_empty_unversioned(conn: &Connection) -> Result<bool, ReadFailure> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
     Ok(version == 0 && count == 0)
 }
 
@@ -217,9 +241,9 @@ struct SchemaObject {
     sql: Option<String>,
 }
 
-fn schema_objects(conn: &Connection) -> RuntimeResult<Vec<SchemaObject>> {
-    conn.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
-        .map_err(sql_error)?
+fn schema_objects(conn: &Connection) -> Result<Vec<SchemaObject>, ReadFailure> {
+    Ok(conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")?
         .query_map([], |row| {
             Ok(SchemaObject {
                 kind: row.get(0)?,
@@ -227,27 +251,26 @@ fn schema_objects(conn: &Connection) -> RuntimeResult<Vec<SchemaObject>> {
                 table: row.get(2)?,
                 sql: row.get(3)?,
             })
-        })
-        .map_err(sql_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_error)
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
-fn verify_schema(conn: &Connection) -> RuntimeResult<()> {
+fn verify_schema(conn: &Connection) -> Result<(), ReadFailure> {
     // Let SQLite interpret the one authored definition, including constraints
     // and implicit indexes. Do not maintain a second partial column inventory.
-    let expected = Connection::open_in_memory().map_err(sql_error)?;
-    expected.execute_batch(SCHEMA_SQL).map_err(sql_error)?;
+    let expected = Connection::open_in_memory()?;
+    expected.execute_batch(SCHEMA_SQL)?;
     if schema_objects(conn)? != schema_objects(&expected)? {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             "registry schema does not match its exact version",
-        ));
+        )
+        .into());
     }
     Ok(())
 }
 
-fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
+fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> Result<(), ReadFailure> {
     let existing = conn
         .query_row(
             "SELECT schema_version, project_id, environment, slot, runtime_abi, toolchain_id FROM registry_meta WHERE id = 1",
@@ -263,20 +286,21 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeRes
                 ))
             },
         )
-        .optional()
-        .map_err(sql_error)?;
+        .optional()?;
     let Some((schema_version, project_id, environment, slot, runtime_abi, toolchain_id)) = existing
     else {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             "registry metadata row is missing",
-        ));
+        )
+        .into());
     };
     if schema_version != SCHEMA_VERSION {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             format!("expected registry schema_version {SCHEMA_VERSION}, got {schema_version}"),
-        ));
+        )
+        .into());
     }
 
     let found = RegistryIdentity {
@@ -320,7 +344,8 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeRes
         return Err(RuntimeError::new(code, message)
             .with_detail("expectedRegistryIdentity", registry_identity_json(identity))
             .with_detail("foundRegistryIdentity", registry_identity_json(&found))
-            .with_detail("mismatchedFields", mismatched_fields));
+            .with_detail("mismatchedFields", mismatched_fields)
+            .into());
     }
     Ok(())
 }
@@ -337,15 +362,17 @@ fn registry_identity_json(identity: &RegistryIdentity) -> Value {
 
 /// Validate an existing registry without repairing, initializing or changing its
 /// journal settings. The caller holds a coherent SQLite read transaction.
-pub(crate) fn verify_existing(conn: &Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
-    let version = conn
-        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .map_err(sql_error)?;
+pub(crate) fn verify_existing(
+    conn: &Connection,
+    identity: &RegistryIdentity,
+) -> Result<(), ReadFailure> {
+    let version = conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
     if version != SCHEMA_VERSION {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             format!("expected registry user_version {SCHEMA_VERSION}, got {version}"),
-        ));
+        )
+        .into());
     }
     verify_schema(conn)?;
     verify_identity(conn, identity)
