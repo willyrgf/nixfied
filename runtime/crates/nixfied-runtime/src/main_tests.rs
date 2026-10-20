@@ -411,15 +411,14 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
                 &redactor,
             ),
             cancellation: &cancellation,
+            direct_selected: true,
         };
-        let node = PlanNode {
-            node_id: nixfied_manifest::NodeId::new("smoke"),
-            task: admission
-                .common()
-                .execution_manifest()
-                .leaf("smoke")
-                .unwrap(),
-        };
+        let plan = plan(
+            admission.common().execution_manifest(),
+            &nixfied_manifest::TaskId::new("smoke"),
+            0,
+        )
+        .unwrap();
         let conflicting = if collision == "summary" {
             placement.summary_path().with_file_name("summary.0.json")
         } else {
@@ -434,10 +433,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             &mut evidence,
             &[],
             &mut diagnostics,
-            &node,
-            NodeRole::Root {
-                direct_selected: true,
-            },
+            TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
         )
         .unwrap_err();
         assert_eq!(
@@ -474,10 +470,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             &mut evidence,
             &[],
             &mut diagnostics,
-            &node,
-            NodeRole::Root {
-                direct_selected: true,
-            },
+            TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
         )
         .unwrap();
         let task = evidence.tasks.last().unwrap();

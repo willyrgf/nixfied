@@ -1077,9 +1077,9 @@ mod tests {
         let execution = lower(document).expect("graph inputs must admit");
         let plan = super::super::plan::plan(&execution, &TaskId::new(task), 0).unwrap();
         let mut services: Vec<_> = plan
-            .services
+            .services()
             .iter()
-            .map(|binding| binding.service.name.to_string())
+            .map(|binding| binding.service().name.to_string())
             .collect();
         services.sort();
         services
@@ -1354,9 +1354,9 @@ mod tests {
         assert!(em.leaf("pipeline").is_none());
         let plan = super::super::plan::plan(&em, &TaskId::new("pipeline"), 0).unwrap();
         assert_eq!(
-            plan.nodes
+            plan.nodes()
                 .iter()
-                .map(|node| node.node_id.as_str())
+                .map(|node| node.node_id().as_str())
                 .collect::<Vec<_>>(),
             ["pipeline.first", "pipeline.second"]
         );

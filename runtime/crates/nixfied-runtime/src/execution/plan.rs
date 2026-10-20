@@ -7,19 +7,130 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
 pub struct RunPlan<'a> {
-    pub services: Vec<ServiceBinding<'a>>,
-    pub nodes: Vec<PlanNode<'a>>,
+    services: Vec<ServiceBinding<'a>>,
+    nodes: Vec<PlanNode<'a>>,
 }
 #[derive(Debug)]
 pub struct ServiceBinding<'a> {
-    pub service: &'a super::types::ExecService,
-    pub prepare_nodes: Vec<PlanNode<'a>>,
-    pub endpoint_ports: BTreeMap<String, u16>,
+    service: &'a super::types::ExecService,
+    prepare_nodes: Vec<PlanNode<'a>>,
+    endpoint_ports: BTreeMap<String, u16>,
 }
 #[derive(Debug)]
 pub struct PlanNode<'a> {
-    pub node_id: NodeId,
-    pub task: &'a super::types::ExecTask,
+    node_id: NodeId,
+    task: &'a super::types::ExecTask,
+}
+
+/// One root occurrence in the canonical execution order. Only its plan can
+/// construct it; a preparation with the same spelling is a different kind.
+#[derive(Debug, Clone, Copy)]
+pub struct ObservedRootLeaf<'plan, 'manifest> {
+    node: &'plan PlanNode<'manifest>,
+    has_continuation: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PreparationLeaf<'plan, 'manifest> {
+    node: &'plan PlanNode<'manifest>,
+}
+
+/// Task identity, path and attribution travel together through execution.
+#[derive(Debug, Clone, Copy)]
+pub enum TaskOccurrence<'plan, 'manifest> {
+    Root(ObservedRootLeaf<'plan, 'manifest>),
+    Preparation(PreparationLeaf<'plan, 'manifest>),
+}
+
+impl<'manifest> RunPlan<'manifest> {
+    pub fn services(&self) -> &[ServiceBinding<'manifest>] {
+        &self.services
+    }
+
+    pub fn nodes(&self) -> &[PlanNode<'manifest>] {
+        &self.nodes
+    }
+
+    pub fn root_leaves(&self) -> impl ExactSizeIterator<Item = ObservedRootLeaf<'_, 'manifest>> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(position, node)| ObservedRootLeaf {
+                node,
+                has_continuation: position + 1 < self.nodes.len(),
+            })
+    }
+
+    pub fn root_leaf(&self, step_path: &str) -> RuntimeResult<ObservedRootLeaf<'_, 'manifest>> {
+        self.root_leaves()
+            .find(|leaf| leaf.node.node_id.as_str() == step_path)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::TaskSelectionInvalid,
+                    "observation step must name a root leaf in the selected plan",
+                )
+            })
+    }
+}
+
+impl<'manifest> ServiceBinding<'manifest> {
+    pub fn service(&self) -> &'manifest super::types::ExecService {
+        self.service
+    }
+
+    pub fn endpoint_ports(&self) -> &BTreeMap<String, u16> {
+        &self.endpoint_ports
+    }
+
+    pub fn preparation_leaves(
+        &self,
+    ) -> impl ExactSizeIterator<Item = PreparationLeaf<'_, 'manifest>> {
+        self.prepare_nodes
+            .iter()
+            .map(|node| PreparationLeaf { node })
+    }
+}
+
+impl<'manifest> PlanNode<'manifest> {
+    pub fn node_id(&self) -> &NodeId {
+        &self.node_id
+    }
+
+    pub fn task(&self) -> &'manifest super::types::ExecTask {
+        self.task
+    }
+}
+
+impl<'plan, 'manifest> ObservedRootLeaf<'plan, 'manifest> {
+    pub fn node(self) -> &'plan PlanNode<'manifest> {
+        self.node
+    }
+
+    pub fn has_continuation(self) -> bool {
+        self.has_continuation
+    }
+}
+
+impl<'plan, 'manifest> PreparationLeaf<'plan, 'manifest> {
+    pub fn node(self) -> &'plan PlanNode<'manifest> {
+        self.node
+    }
+}
+
+impl<'plan, 'manifest> TaskOccurrence<'plan, 'manifest> {
+    pub fn node(self) -> &'plan PlanNode<'manifest> {
+        match self {
+            Self::Root(leaf) => leaf.node(),
+            Self::Preparation(leaf) => leaf.node(),
+        }
+    }
+
+    pub fn root_step_path(self) -> Option<&'plan str> {
+        match self {
+            Self::Root(leaf) => Some(leaf.node().node_id().as_str()),
+            Self::Preparation(_) => None,
+        }
+    }
 }
 
 struct LogicalPlan<'a> {
@@ -667,6 +778,53 @@ mod tests {
             )],
         );
         assert_eq!(plan_paths(&em, "twice"), vec!["twice.first", "twice.again"]);
+    }
+
+    #[test]
+    fn observation_selects_exact_root_occurrence_and_canonical_continuation() {
+        let em = vector_manifest(
+            vec!["unit"],
+            vec![composite(
+                "twice",
+                vec![("again", "unit", vec!["first"]), ("first", "unit", vec![])],
+            )],
+        );
+        let plan = plan_program(&em, &TaskId::new("twice"), 0).unwrap();
+        // Canonical execution follows dependencies, not lexical step ordering.
+        let first = plan.root_leaf("twice.first").unwrap();
+        let again = plan.root_leaf("twice.again").unwrap();
+        assert!(first.has_continuation());
+        assert!(!again.has_continuation());
+        for leaf in [first, again] {
+            assert_eq!(leaf.node().task().task_id.as_str(), "unit");
+        }
+        for invalid in ["", "unit", "twice", "twice.first.extra", "first"] {
+            assert_eq!(
+                plan.root_leaf(invalid).unwrap_err().code,
+                ErrorCode::TaskSelectionInvalid,
+            );
+        }
+    }
+
+    #[test]
+    fn preparation_spelling_never_grants_root_attribution() {
+        let mut em = manifest(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
+        em.tasks
+            .insert(TaskId::new("unit"), ExecutableTask::Leaf(leaf_task("unit")));
+        em.services.get_mut("a").unwrap().prepare = Some(TaskId::new("unit"));
+        let plan = plan_program(&em, &TaskId::new("all"), 0).unwrap();
+        let direct = plan_program(&em, &TaskId::new("unit"), 0).unwrap();
+        let root = TaskOccurrence::Root(direct.root_leaf("unit").unwrap());
+        let preparation =
+            TaskOccurrence::Preparation(plan.services()[0].preparation_leaves().next().unwrap());
+        assert_eq!(root.node().node_id().as_str(), "unit");
+        assert_eq!(preparation.node().node_id().as_str(), "unit");
+        assert_eq!(root.root_step_path(), Some("unit"));
+        assert_eq!(preparation.root_step_path(), None);
+        assert_eq!(
+            plan.root_leaf("unit").unwrap_err().code,
+            ErrorCode::TaskSelectionInvalid
+        );
     }
 
     /// Golden vector V3: selecting a leaf directly yields one node whose step

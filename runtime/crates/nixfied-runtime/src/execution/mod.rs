@@ -11,7 +11,9 @@ mod plan;
 mod types;
 
 pub use lower::lower;
-pub use plan::{PlanNode, RunPlan, ServiceBinding, plan};
+pub use plan::{
+    ObservedRootLeaf, PlanNode, PreparationLeaf, RunPlan, ServiceBinding, TaskOccurrence, plan,
+};
 pub use types::*;
 
 /// Borrow raw invocation positions before relational lowering, in secret-check order.

@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::admission::RunAdmission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::ExecTask;
+use crate::execution::{ExecTask, TaskOccurrence};
 use crate::output::{EvidenceSource, SourcePresentation};
 use crate::redaction::CaptureOutcome;
 use crate::redaction::Redactor;
@@ -123,13 +123,14 @@ pub fn run_dependent_task_cancellable(
     registry: &mut Registry,
     run_context: RunContext<'_>,
     started: &[&ReadyService],
-    node_id: &str,
+    selected: TaskOccurrence<'_, '_>,
     occurrence: u64,
-    task: &ExecTask,
     cancellation: &CancellationToken,
     presentation: SourcePresentation,
 ) -> Result<TaskExecution, TaskExecutionError> {
     cancellation.check().map_err(TaskExecutionError::before)?;
+    let node_id = selected.node().node_id().as_str();
+    let task = selected.node().task();
     let task_id = task.task_id.as_str();
     let declared_dependencies =
         required_services(task, started).map_err(TaskExecutionError::before)?;
