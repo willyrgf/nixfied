@@ -215,36 +215,6 @@ fn acquire_shared_at_boundaries(
     }
 }
 
-/// Recheck the helper's learned continuity and exact creation marker after the
-/// commit. Observer abandonment is no longer a cancellation input here.
-pub fn committed_cursor(
-    admission: &ControlAdmission,
-    location: &SlotLocation,
-    cursor: &CursorWire,
-    run_id: &str,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<CursorWire> {
-    let scope = Scope::new(admission, location)?;
-    loop {
-        cancellation.check()?;
-        if let Some(mut seeking) = Seeking::resume(scope.clone(), cursor)?
-            && let Some(snapshot) = seeking.read()?
-        {
-            let publication = snapshot
-                .first_after(seeking.watermark())
-                .ok_or_else(|| corrupt("established run has no post-enrollment creation marker"))?;
-            if publication.run_id() != run_id {
-                return Err(corrupt(
-                    "established run is not the first post-enrollment publication",
-                ));
-            }
-            drop(snapshot);
-            return Ok(seeking.cursor());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 /// Validate a bounded helper selection against canonical facts and the original
 /// enrollment, then transfer that one fixed selection to observation.
 pub fn select_reply(
@@ -326,12 +296,7 @@ mod tests {
                 executable: std::env::var("NIXFIED_TEST_CHILD").unwrap(),
                 ..Default::default()
             });
-            let path = root.join("manifest.json");
-            std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-            let mut context =
-                crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
-            context.invocation_root = crate::admission::InvocationRoot::Path(root.to_path_buf());
-            let admission = crate::admit_run(&path, &context).unwrap();
+            let admission = crate::test_support::admit_manifest(&root, &manifest);
             let location = crate::state::derive_slot_location(
                 admission.common().project_id(),
                 "dev",
@@ -376,6 +341,7 @@ mod tests {
                 run,
                 &DeclaredRunRequest::new(&self.admission, &TaskId::new("smoke"), timeout).unwrap(),
                 &self.location.for_run(run).unwrap(),
+                None,
             )
             .unwrap();
             if failed {
@@ -393,6 +359,153 @@ mod tests {
                 )
                 .unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn committed_publication_carries_history_without_an_acknowledgement_reader() {
+        use std::io::Read;
+        use std::os::unix::fs::MetadataExt;
+
+        let fixture = Fixture::new();
+        let mut writer = fixture.writer();
+        writer
+            .append_event(crate::registry::EventInsert::new("before-enrollment", "{}"))
+            .unwrap();
+        let seeking = fixture.seeking();
+        let (mut launcher, mut owner) = Establishment::shared_fixture(seeking.cursor());
+        let mut purpose = crate::background::SessionPurpose::Detached(&mut owner);
+        // Recovery can extend learned history without advancing enrollment.
+        writer
+            .append_event(crate::registry::EventInsert::new("recovery", "{}"))
+            .unwrap();
+        let placement = fixture.location.for_run("published").unwrap();
+        record_run_created(
+            &mut writer,
+            "published",
+            &DeclaredRunRequest::new(&fixture.admission, &TaskId::new("smoke"), 5000).unwrap(),
+            &placement,
+            purpose.shared_cursor(),
+        )
+        .unwrap();
+        purpose.mark_committed();
+        let sequence: i64 = writer
+            .connection()
+            .query_row(
+                "SELECT seq FROM events WHERE event_type = 'run.created' AND run_id = 'published'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sequence, 3);
+        let file = std::fs::metadata(writer.path()).unwrap();
+        writer
+            .connection()
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        let blocker = rusqlite::Connection::open(writer.path()).unwrap();
+        blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        // A reader here cannot make progress; acknowledgement uses only the
+        // publication already validated in the committing transaction.
+        purpose
+            .acknowledge(crate::background::Acknowledgement {
+                run_id: "published".to_owned(),
+                run_dir: placement.run_dir(),
+                logs_dir: placement.logs_dir(),
+            })
+            .unwrap();
+        launcher.set_nonblocking(false).unwrap();
+        launcher
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut header = [0; 8];
+        launcher.read_exact(&mut header).unwrap();
+        assert_eq!(&header[..4], b"NXD2");
+        let mut body = vec![0; u32::from_be_bytes(header[4..].try_into().unwrap()) as usize];
+        launcher.read_exact(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "result":"established", "runId":"published",
+                "runDir":placement.run_dir(), "logsDir":placement.logs_dir(),
+                "cursor":{"watermark":1,"history":{"state":"complete",
+                    "device":file.dev(),"inode":file.ino(),"greatestSeq":3}}
+            })
+        );
+        blocker.execute_batch("ROLLBACK").unwrap();
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn rejected_publication_rolls_back_run_and_keeps_the_learned_cursor() {
+        for fault in [
+            "event",
+            "commit",
+            "earlier",
+            "rewind",
+            "replacement",
+            "duplicate",
+            "schema",
+            "identity",
+            "version",
+        ] {
+            let fixture = Fixture::new();
+            let mut cursor = fixture.seeking().cursor();
+            let mut writer = fixture.writer();
+            match fault {
+                "event" => writer.connection().execute_batch("CREATE TRIGGER deny_creation BEFORE INSERT ON events WHEN NEW.event_type = 'run.created' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap(),
+                "commit" => {
+                    unsafe extern "C" fn veto(_: *mut std::ffi::c_void) -> libc::c_int { 1 }
+                    // Veto the actual native commit without changing schema.
+                    unsafe { rusqlite::ffi::sqlite3_commit_hook(writer.connection().handle(), Some(veto), std::ptr::null_mut()); }
+                }
+                "earlier" => fixture.publish(&mut writer, "first-failed", 5000, true),
+                "rewind" => {
+                    // Learn actual high water, then regress the native file.
+                    let mut seeking = fixture.seeking();
+                    writer.append_event(crate::registry::EventInsert::new("learned", "{}")).unwrap();
+                    writer.append_event(crate::registry::EventInsert::new("learned-again", "{}")).unwrap();
+                    drop(seeking.read().unwrap().unwrap());
+                    cursor = seeking.cursor();
+                    writer.connection().execute_batch("DELETE FROM events").unwrap();
+                }
+                "replacement" => {
+                    std::fs::rename(writer.path(), writer.path().with_extension("old")).unwrap();
+                    std::fs::write(writer.path(), b"replacement").unwrap();
+                }
+                "duplicate" => {
+                    fixture.publish(&mut writer, "prior", 5000, true);
+                    writer.connection().execute_batch("INSERT INTO events(at,event_type,run_id,payload_json) VALUES ('now','run.created','prior','{}')").unwrap();
+                }
+                "schema" => writer.connection().execute_batch("CREATE TABLE unexpected (value TEXT)").unwrap(),
+                "identity" => { writer.connection().execute("UPDATE registry_meta SET project_id = 'other'", []).unwrap(); }
+                "version" => writer.connection().pragma_update(None, "user_version", 19).unwrap(),
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(&cursor).unwrap();
+            let result = record_run_created(
+                &mut writer,
+                "rejected",
+                &DeclaredRunRequest::new(&fixture.admission, &TaskId::new("smoke"), 5000).unwrap(),
+                &fixture.location.for_run("rejected").unwrap(),
+                Some(&mut cursor),
+            );
+            assert_eq!(
+                result.unwrap_err().code,
+                if fault == "identity" {
+                    ErrorCode::StateUnowned
+                } else {
+                    ErrorCode::RegistryCorrupt
+                },
+                "{fault}"
+            );
+            assert_eq!(serde_json::to_value(&cursor).unwrap(), before, "{fault}");
+            let count: i64 = writer.connection().query_row(
+                "SELECT (SELECT count(*) FROM runs WHERE run_id = 'rejected') + (SELECT count(*) FROM events WHERE run_id = 'rejected')",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(count, 0, "{fault}");
+            writer.close().unwrap();
         }
     }
 

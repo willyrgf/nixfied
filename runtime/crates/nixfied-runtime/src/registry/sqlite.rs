@@ -1,3 +1,4 @@
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
@@ -12,6 +13,7 @@ use crate::state::ownership::SlotGuard;
 
 pub struct Registry {
     path: PathBuf,
+    file: FileIdentity,
     conn: Connection,
     identity: RegistryIdentity,
     redactor: Redactor,
@@ -29,6 +31,23 @@ impl Registry {
         guard.validate()?;
         guard.check_identity(&identity.project_id, &identity.environment, identity.slot)?;
         let path = guard.registry_path().to_path_buf();
+        // Establish even a fresh bootstrap's identity before SQLite opens it.
+        let before = match registry_file_identity(&path)? {
+            Some(file) => file,
+            None => {
+                let created = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .map_err(|error| invalid_read(error.to_string()))?;
+                FileIdentity::from_metadata(
+                    &created
+                        .metadata()
+                        .map_err(|error| invalid_read(error.to_string()))?,
+                )
+            }
+        };
         let mut conn = Connection::open(&path).map_err(|error| {
             with_registry_path(
                 RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()),
@@ -37,8 +56,14 @@ impl Registry {
         })?;
         schema::initialize(&mut conn, identity)
             .map_err(|error| with_registry_path(error, &path))?;
+        let file = registry_file_identity(&path)?
+            .ok_or_else(|| invalid_read("registry disappeared while opening its writer"))?;
+        if before != file {
+            return Err(invalid_read("registry changed while opening its writer"));
+        }
         Ok(Self {
             path,
+            file,
             conn,
             identity: identity.clone(),
             redactor: Redactor::empty(),
@@ -79,6 +104,10 @@ impl Registry {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn file_identity(&self) -> FileIdentity {
+        self.file
     }
 
     pub fn connection(&self) -> &Connection {
@@ -214,7 +243,7 @@ fn read_attempt(
     Ok(read)
 }
 
-fn registry_file_identity(path: &Path) -> RuntimeResult<Option<FileIdentity>> {
+pub(crate) fn registry_file_identity(path: &Path) -> RuntimeResult<Option<FileIdentity>> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(invalid_read(error.to_string())),

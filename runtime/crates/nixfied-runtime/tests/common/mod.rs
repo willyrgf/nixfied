@@ -349,6 +349,7 @@ pub fn start_fixture_service(
             5000,
         )?,
         placement,
+        None,
     )?;
     start_service_for_slot(
         admission,

@@ -3,6 +3,17 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// Write an accepted fixture and admit its bytes against its workspace root.
+#[track_caller]
+pub(crate) fn admit_manifest(root: &Path, manifest: &impl serde::Serialize) -> crate::RunAdmission {
+    let path = root.join("manifest.json");
+    std::fs::write(&path, serde_json::to_vec(manifest).unwrap()).unwrap();
+    let mut context =
+        crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
+    context.invocation_root = crate::admission::InvocationRoot::Path(root.to_path_buf());
+    crate::admit_run(&path, &context).unwrap()
+}
+
 /// A private, uniquely named temporary directory removed on drop.
 pub(crate) struct TestDir(PathBuf);
 

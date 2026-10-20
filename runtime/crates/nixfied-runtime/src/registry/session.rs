@@ -304,6 +304,7 @@ pub fn record_run_created(
     run_id: &str,
     request: &DeclaredRunRequest<'_>,
     placement: &HostPlacement,
+    cursor: Option<&mut super::observation::CursorWire>,
 ) -> RuntimeResult<()> {
     request.preflight(placement)?;
     let admission = request.admission;
@@ -311,6 +312,9 @@ pub fn record_run_created(
         .map_err(|_| invalid("cannot encode recorded source"))?;
     let owner_identity = serde_json::to_string(&OwnerIdentity::current()?)
         .map_err(|_| invalid("cannot encode owner identity"))?;
+    let file = registry.file_identity();
+    let path = registry.path().to_path_buf();
+    let identity = registry.identity().clone();
     let RegistryContext {
         connection,
         redactor,
@@ -352,7 +356,22 @@ pub fn record_run_created(
             payload_json: "{}",
         },
     )?;
+    // Prepare shared publication evidence while rollback is still possible.
+    // After commitment no fallible check may report a precommit rejection.
+    let publication = cursor
+        .map(|cursor| {
+            super::schema::verify_existing(&transaction, &identity).map_err(RuntimeError::from)?;
+            let next = cursor.after_creation(&transaction, file, run_id)?;
+            if super::sqlite::registry_file_identity(&path)? != Some(file) {
+                return Err(invalid("registry changed before run publication"));
+            }
+            Ok((cursor, next))
+        })
+        .transpose()?;
     transaction.commit().map_err(sql_error)?;
+    if let Some((cursor, next)) = publication {
+        *cursor = next;
+    }
     Ok(())
 }
 

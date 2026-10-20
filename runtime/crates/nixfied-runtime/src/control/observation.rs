@@ -718,13 +718,7 @@ mod tests {
                 "exit",
                 "0"
             ]);
-            let path = root.join("manifest.json");
-            std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-            let mut admission_context =
-                crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
-            admission_context.invocation_root =
-                crate::admission::InvocationRoot::Path(root.to_path_buf());
-            let admission = crate::admit_run(&path, &admission_context).unwrap();
+            let admission = crate::test_support::admit_manifest(&root, &manifest);
             let location = crate::state::derive_slot_location(
                 admission.common().project_id(),
                 "dev",
@@ -746,6 +740,7 @@ mod tests {
                 "selected",
                 &request,
                 &location.for_run("selected").unwrap(),
+                None,
             )
             .unwrap();
             let owner_json: String = writer
@@ -794,6 +789,7 @@ mod tests {
                             "successor",
                             &request,
                             &location.for_run("successor").unwrap(),
+                            None,
                         )
                         .unwrap(),
                         _ => unreachable!(),

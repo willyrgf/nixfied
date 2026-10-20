@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::error::{
     ObservationEstablishment, ObservationSelection, ObservationStage, ObservationWait,
@@ -585,18 +584,19 @@ impl SessionPurpose<'_> {
             Self::Detached(channel) => channel.mark_committed(),
         }
     }
-    pub fn acknowledge(
-        &mut self,
-        acknowledgement: Acknowledgement,
-        admission: &crate::admission::ControlAdmission,
-        location: &crate::state::SlotLocation,
-        cancellation: &CancellationToken,
-    ) -> RuntimeResult<()> {
+    pub fn shared_cursor(&mut self) -> Option<&mut CursorWire> {
+        match self {
+            Self::Detached(Establishment {
+                purpose: Purpose::Shared(cursor),
+                ..
+            }) => Some(cursor),
+            _ => None,
+        }
+    }
+    pub fn acknowledge(&mut self, acknowledgement: Acknowledgement) -> RuntimeResult<()> {
         match self {
             Self::Foreground => Ok(()),
-            Self::Detached(channel) => {
-                channel.acknowledge(acknowledgement, admission, location, cancellation)
-            }
+            Self::Detached(channel) => channel.acknowledge(acknowledgement),
         }
     }
 }
@@ -677,33 +677,18 @@ impl Establishment {
         self.phase = Phase::Committed;
     }
 
-    pub fn acknowledge(
-        &mut self,
-        acknowledgement: Acknowledgement,
-        admission: &crate::admission::ControlAdmission,
-        location: &crate::state::SlotLocation,
-        cancellation: &CancellationToken,
-    ) -> RuntimeResult<()> {
+    pub fn acknowledge(&mut self, acknowledgement: Acknowledgement) -> RuntimeResult<()> {
         if self.phase != Phase::Committed {
             return Err(transport_failure("acknowledgement precedes commitment"));
         }
         let body = match &self.purpose {
             Purpose::Daemon => serde_json::to_vec(&DaemonReply::Established(acknowledgement)),
-            Purpose::Shared(cursor) => {
-                let cursor = crate::control::ensure::committed_cursor(
-                    admission,
-                    location,
-                    cursor,
-                    &acknowledgement.run_id,
-                    cancellation,
-                )?;
-                serde_json::to_vec(&SharedReply::Established {
-                    run_id: acknowledgement.run_id,
-                    run_dir: acknowledgement.run_dir,
-                    logs_dir: acknowledgement.logs_dir,
-                    cursor,
-                })
-            }
+            Purpose::Shared(cursor) => serde_json::to_vec(&SharedReply::Established {
+                run_id: acknowledgement.run_id,
+                run_dir: acknowledgement.run_dir,
+                logs_dir: acknowledgement.logs_dir,
+                cursor: cursor.clone(),
+            }),
         };
         self.write_reply(body);
         Ok(())
@@ -752,6 +737,7 @@ impl Establishment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cancellation::CancellationToken;
     use crate::cancellation::WaitBudget;
 
     fn cursor() -> CursorWire {

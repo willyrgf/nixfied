@@ -130,6 +130,27 @@ enum HistoryWire {
 }
 
 impl CursorWire {
+    pub(crate) fn after_creation(
+        &self,
+        connection: &rusqlite::Connection,
+        file: FileIdentity,
+        run_id: &str,
+    ) -> RuntimeResult<Self> {
+        let (greatest, publications) = publications(connection)?;
+        let mut history = self.checked()?;
+        history.advance(History::Complete { file, greatest })?;
+        let first = publications
+            .values()
+            .filter(|publication| publication.sequence > self.watermark)
+            .min_by_key(|publication| publication.sequence);
+        if first.is_none_or(|publication| publication.run_id() != run_id) {
+            return Err(invalid(
+                "established run is not the first post-enrollment publication",
+            ));
+        }
+        Ok(Self::from_checked(self.watermark, &history))
+    }
+
     fn from_checked(watermark: i64, history: &History) -> Self {
         let history = match history {
             History::Unseen => HistoryWire::Unseen {},
@@ -302,7 +323,7 @@ impl Snapshot {
                 Contents::Empty
             }
             RegistryRead::Snapshot { reader, file } => {
-                let (maximum, publications) = publications(&reader)?;
+                let (maximum, publications) = publications(reader.connection())?;
                 history.advance(History::Complete {
                     file,
                     greatest: maximum,
@@ -671,8 +692,9 @@ impl RawProcess {
     }
 }
 
-fn publications(reader: &RegistryReader) -> RuntimeResult<(i64, BTreeMap<String, Publication>)> {
-    let connection = reader.connection();
+fn publications(
+    connection: &rusqlite::Connection,
+) -> RuntimeResult<(i64, BTreeMap<String, Publication>)> {
     let invalid_sequence: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE seq <= 0)",
@@ -690,21 +712,26 @@ fn publications(reader: &RegistryReader) -> RuntimeResult<(i64, BTreeMap<String,
             row.get(0)
         })
         .map_err(sql_error)?;
-    let runs = connection
-        .prepare("SELECT run_id FROM runs")
-        .map_err(sql_error)?
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sql_error)?
-        .collect::<Result<BTreeSet<_>, _>>()
+    let runs: usize = connection
+        .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
         .map_err(sql_error)?;
-    let markers = connection.prepare("SELECT seq, run_id, process_key FROM events WHERE event_type = 'run.created' ORDER BY seq").map_err(sql_error)?
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?)))
-        .map_err(sql_error)?.collect::<Result<Vec<_>, _>>().map_err(sql_error)?;
+    let mut statement = connection.prepare("SELECT e.seq, e.run_id, e.process_key, r.run_id IS NOT NULL FROM events e LEFT JOIN runs r ON r.run_id = e.run_id WHERE e.event_type = 'run.created' ORDER BY e.seq").map_err(sql_error)?;
+    let markers = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })
+        .map_err(sql_error)?;
     let mut publications = BTreeMap::new();
-    for (sequence, run, process) in markers {
+    for marker in markers {
+        let (sequence, run, process, exists) = marker.map_err(sql_error)?;
         if !valid_run_id(&run)
             || process.is_some()
-            || !runs.contains(&run)
+            || !exists
             || publications
                 .insert(
                     run.clone(),
@@ -718,7 +745,7 @@ fn publications(reader: &RegistryReader) -> RuntimeResult<(i64, BTreeMap<String,
             return Err(invalid("invalid or duplicate run creation provenance"));
         }
     }
-    if publications.len() != runs.len() {
+    if publications.len() != runs {
         return Err(invalid("run is missing its creation marker"));
     }
     Ok((maximum, publications))

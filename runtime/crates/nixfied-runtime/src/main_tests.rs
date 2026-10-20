@@ -488,6 +488,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             &DeclaredRunRequest::new(&admission, &nixfied_manifest::TaskId::new("twice"), 5000)
                 .unwrap(),
             &placement,
+            None,
         )
         .unwrap();
         let redactor = Redactor::from_secrets(admission.secrets());

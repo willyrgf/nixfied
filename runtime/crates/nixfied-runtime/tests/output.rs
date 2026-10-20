@@ -1541,6 +1541,7 @@ fn held_session(
         )
         .unwrap(),
         &placement,
+        None,
     )
     .unwrap();
     (admission, registry, control, cancellation)

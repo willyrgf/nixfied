@@ -1143,7 +1143,13 @@ fn execute_owned(
         establishment.check_abandonment()?;
         // This commit establishes the run for every owner mode. No workload
         // has been released, and no service transition can create this row.
-        record_run_created(&mut registry, run_id, request, placement)?;
+        record_run_created(
+            &mut registry,
+            run_id,
+            request,
+            placement,
+            establishment.shared_cursor(),
+        )?;
         establishment.mark_committed();
         if let Some(from_manifest_hash) = preparation {
             diagnostics.write(format_args!(
@@ -1212,16 +1218,11 @@ fn execute_owned(
             return session.finalize(Some(error), None);
         }};
     }
-    if let Err(error) = establishment.acknowledge(
-        nixfied_runtime::background::Acknowledgement {
-            run_id: run_id.to_owned(),
-            run_dir: placement.run_dir().clone(),
-            logs_dir: placement.logs_dir().clone(),
-        },
-        admission.common(),
-        placement.location(),
-        cancellation,
-    ) {
+    if let Err(error) = establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
+        run_id: run_id.to_owned(),
+        run_dir: placement.run_dir().clone(),
+        logs_dir: placement.logs_dir().clone(),
+    }) {
         finish_run!(error, Vec::new());
     }
     // The command-owned presenter exists before any workload is released; its

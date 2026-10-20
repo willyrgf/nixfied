@@ -512,6 +512,7 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
         )
         .unwrap(),
         &placement,
+        None,
     )
     .unwrap();
     registry.connection().execute_batch("CREATE TRIGGER deny_task_registration BEFORE INSERT ON events WHEN NEW.event_type = 'task.running' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap();

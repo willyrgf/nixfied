@@ -668,7 +668,6 @@ fn settle_unsettled(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admission::InvocationRoot;
     use crate::registry::session::{
         ExecutionOutcome, record_execution_outcome, record_finalization_complete,
         record_run_created,
@@ -705,12 +704,7 @@ mod tests {
             executable: std::env::var("NIXFIED_TEST_CHILD").unwrap(),
             ..Default::default()
         });
-        let manifest_path = root.join("manifest.json");
-        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let mut context =
-            crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
-        context.invocation_root = InvocationRoot::Path(root.to_path_buf());
-        let admission = crate::admit_run(&manifest_path, &context).unwrap();
+        let admission = crate::test_support::admit_manifest(&root, &manifest);
         let manifest = admission.common().manifest();
         let slot = crate::slot::select_slot(manifest, None).unwrap();
         let identity = RegistryIdentity::for_slot(
@@ -743,6 +737,7 @@ mod tests {
             )
             .unwrap(),
             &placement,
+            None,
         )
         .unwrap();
         let hash = admission.common().computed_manifest_hash();
@@ -788,6 +783,7 @@ mod tests {
             )
             .unwrap(),
             &successor,
+            None,
         )
         .unwrap();
         let reader = RegistryReader::open_existing(registry.path(), &identity)
