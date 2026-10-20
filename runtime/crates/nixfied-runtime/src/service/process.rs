@@ -3036,7 +3036,8 @@ fn process_bsd_info(pid: u32) -> RuntimeResult<Option<libc::proc_bsdinfo>> {
         libc::proc_pidinfo(
             native_pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            // A nonzero argument includes zombies until they are reaped.
+            1,
             info.as_mut_ptr().cast(),
             size,
         )
@@ -3144,11 +3145,13 @@ mod tests {
 
     #[test]
     fn exact_leader_sampling_reports_a_waitable_zombie_without_claiming_liveness() {
-        let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_CHILD").unwrap())
-            .args(["exit", "0"])
+        let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_SLEEP").unwrap())
+            .arg("30")
             .spawn()
             .unwrap();
         let pid = child.id();
+        let before = sample_leader(pid);
+        child.kill().unwrap();
         let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
         let waited = unsafe {
             libc::waitid(
@@ -3161,12 +3164,27 @@ mod tests {
         let sample = sample_leader(pid);
         let live = process_present(pid);
         child.wait().unwrap();
+        let after = sample_leader(pid);
         assert_eq!(waited, 0);
-        assert!(matches!(
-            sample.unwrap(),
-            LeaderSample::Present { zombie: true, .. }
-        ));
+        let LeaderSample::Present {
+            start_identity,
+            pgid,
+            zombie: false,
+        } = before.unwrap()
+        else {
+            panic!("live child was not sampled")
+        };
+        let sample = sample.unwrap();
+        assert!(
+            matches!(
+                sample,
+                LeaderSample::Present { start_identity: ref observed, pgid: observed_group, zombie: true }
+                    if observed == &start_identity && observed_group == pgid
+            ),
+            "{sample:?}"
+        );
         assert!(!live.unwrap());
+        assert!(matches!(after.unwrap(), LeaderSample::Absent));
     }
 
     #[cfg(target_os = "linux")]
