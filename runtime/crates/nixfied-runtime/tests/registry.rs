@@ -5,6 +5,101 @@ mod common;
 use common::*;
 
 #[test]
+fn historical_source_is_closed_metadata_without_current_filesystem_admission() {
+    use nixfied_runtime::admission::source::RecordedSource;
+    use serde_json::{Value, json};
+    let historical = json!({
+        "codebaseId": "main",
+        "logicalRoot": ".",
+        "observedRoot": "/unavailable-nixfied-historical-source/root",
+        "sourceMode": "snapshot",
+        "sourceIdentity": "/unavailable-nixfied-historical-source",
+        "dirtyPolicy": "reject",
+        "admissionFingerprintPolicy": "",
+    });
+    for policy in ["", "an authored policy the runtime does not interpret"] {
+        let mut value = historical.clone();
+        value["admissionFingerprintPolicy"] = json!(policy);
+        let checked = RecordedSource::decode(&value.to_string()).unwrap();
+        assert_eq!(serde_json::to_value(checked).unwrap(), value);
+    }
+    for field in [
+        "codebaseId",
+        "logicalRoot",
+        "observedRoot",
+        "sourceMode",
+        "sourceIdentity",
+        "dirtyPolicy",
+        "admissionFingerprintPolicy",
+    ] {
+        for replacement in [None, Some(Value::Null), Some(json!(true)), Some(json!(7))] {
+            let mut value = historical.clone();
+            match replacement {
+                None => {
+                    value.as_object_mut().unwrap().remove(field);
+                }
+                Some(replacement) => value[field] = replacement,
+            }
+            let error = RecordedSource::decode(&value.to_string()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::RegistryCorrupt, "{field}");
+        }
+    }
+    let mut unknown = historical.clone();
+    unknown["untrusted-do-not-echo"] = json!("untrusted-do-not-echo");
+    let mut invalids = vec![unknown.to_string(), "null".to_owned(), "[]".to_owned()];
+    // A closed struct decoder also rejects duplicate known members.
+    invalids.push(
+        historical
+            .to_string()
+            .replacen("{", "{\"codebaseId\":\"main\",", 1),
+    );
+    for (field, invalid) in [
+        ("codebaseId", "untrusted-do-not-echo"),
+        ("logicalRoot", "../untrusted-do-not-echo"),
+        ("logicalRoot", "/untrusted-do-not-echo"),
+        ("logicalRoot", "untrusted\0do-not-echo"),
+        ("observedRoot", "untrusted-do-not-echo"),
+        ("observedRoot", "/untrusted\0do-not-echo"),
+        ("sourceIdentity", "untrusted-do-not-echo"),
+        ("sourceIdentity", "/untrusted\0do-not-echo"),
+        ("sourceIdentity", ""),
+        ("sourceMode", "untrusted-do-not-echo"),
+        ("dirtyPolicy", "untrusted-do-not-echo"),
+    ] {
+        let mut value = historical.clone();
+        value[field] = json!(invalid);
+        invalids.push(value.to_string());
+    }
+    for invalid in invalids {
+        let error = RecordedSource::decode(&invalid).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("do-not-echo")
+        );
+    }
+}
+
+#[test]
+fn admitted_source_metadata_rejects_lossy_observed_roots() {
+    use nixfied_runtime::admission::source::{AdmittedSource, RecordedSource};
+    use std::os::unix::ffi::OsStringExt;
+    let source = AdmittedSource {
+        codebase_id: "main".into(),
+        logical_root: ".".into(),
+        observed_root: std::ffi::OsString::from_vec(b"/source-\xff".to_vec()).into(),
+        source_mode: nixfied_manifest::SourceMode::LiveWorkspace,
+        source_identity: "workspace".into(),
+        dirty_policy: nixfied_manifest::DirtyPolicy::Allow,
+        admission_fingerprint_policy: String::new(),
+    };
+    let error = RecordedSource::from_admitted(&source).unwrap_err();
+    assert_eq!(error.code, ErrorCode::LifecycleFailed);
+    assert!(!error.message.contains('\u{fffd}'));
+}
+
+#[test]
 fn competing_initializers_admit_one_writer_before_schema_creation() {
     let tmp = TempDir::new();
     let placement = registry_placement(&tmp.path, &registry_identity());
