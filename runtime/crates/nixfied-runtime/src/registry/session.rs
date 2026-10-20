@@ -75,6 +75,16 @@ pub fn new_run_id() -> RuntimeResult<String> {
     Ok(format!("run-{}", crate::token::random_hex()?))
 }
 
+/// Bounded machine selectors and private bootstrap identities share this exact
+/// grammar. Filesystem placement deliberately has a broader component domain.
+pub fn valid_run_id(run_id: &str) -> bool {
+    !run_id.is_empty()
+        && run_id.len() <= 128
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
 /// Record the run row up front, before any service starts, so every admitted run
 /// leaves durable evidence — including a service-less selection (a task or
 /// environment of only service-less tasks) whose service loop never runs and so

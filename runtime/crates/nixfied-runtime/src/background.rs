@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::session::valid_run_id;
 
 pub const COMMAND: &str = "__session-owner";
 const PROTOCOL: crate::channel::Protocol = crate::channel::Protocol {
@@ -282,15 +283,6 @@ impl Establishment {
     }
 }
 
-/// Launcher-allocated identities are single path components.
-fn valid_run_id(run_id: &str) -> bool {
-    !run_id.is_empty()
-        && run_id.len() <= 128
-        && run_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +373,15 @@ mod tests {
         }
         for invalid in ["", "../x", "a/b", "run 1", "run\0"] {
             assert!(!valid_run_id(invalid), "{invalid:?}");
+        }
+        assert!(valid_run_id(&"a".repeat(128)));
+        for invalid in [
+            "a".repeat(129),
+            "run_1".into(),
+            "run.1".into(),
+            "run-é".into(),
+        ] {
+            assert!(!valid_run_id(&invalid));
         }
     }
 }
