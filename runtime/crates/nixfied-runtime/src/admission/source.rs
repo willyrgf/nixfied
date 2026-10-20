@@ -19,6 +19,103 @@ pub struct AdmittedSource {
     pub admission_fingerprint_policy: String,
 }
 
+/// Checked historical provenance, without source or secret admission. Stored
+/// bytes can construct this metadata value, never an `AdmittedSource`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedSource {
+    codebase_id: String,
+    logical_root: String,
+    observed_root: String,
+    source_mode: SourceMode,
+    source_identity: String,
+    dirty_policy: DirtyPolicy,
+    admission_fingerprint_policy: String,
+}
+
+// A closed input DTO is deliberately separate from the output/proof value.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordedSourceWire {
+    codebase_id: String,
+    logical_root: String,
+    observed_root: String,
+    source_mode: SourceMode,
+    source_identity: String,
+    dirty_policy: DirtyPolicy,
+    admission_fingerprint_policy: String,
+}
+
+impl RecordedSource {
+    pub fn decode(json: &str) -> RuntimeResult<Self> {
+        let wire: RecordedSourceWire =
+            serde_json::from_str(json).map_err(|_| invalid_recorded_source("source_json"))?;
+        wire.check()
+    }
+
+    /// Derive non-secret comparison metadata from actual admission. This
+    /// checks lossless publication, without introducing a second admission.
+    pub fn from_admitted(source: &AdmittedSource) -> RuntimeResult<Self> {
+        let observed_root = source.observed_root.to_str().ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::LifecycleFailed,
+                "source observedRoot cannot be serialized losslessly as UTF-8",
+            )
+        })?;
+        RecordedSourceWire {
+            codebase_id: source.codebase_id.clone(),
+            logical_root: source.logical_root.clone(),
+            observed_root: observed_root.to_owned(),
+            source_mode: source.source_mode,
+            source_identity: source.source_identity.clone(),
+            dirty_policy: source.dirty_policy,
+            admission_fingerprint_policy: source.admission_fingerprint_policy.clone(),
+        }
+        .check()
+    }
+}
+
+impl RecordedSourceWire {
+    fn check(self) -> RuntimeResult<RecordedSource> {
+        if self.codebase_id != "main" {
+            return Err(invalid_recorded_source("codebaseId"));
+        }
+        if self.logical_root.contains('\0')
+            || validate_logical_root(&self.logical_root, Path::new(&self.logical_root)).is_err()
+        {
+            return Err(invalid_recorded_source("logicalRoot"));
+        }
+        if self.observed_root.contains('\0') || !Path::new(&self.observed_root).is_absolute() {
+            return Err(invalid_recorded_source("observedRoot"));
+        }
+        if self.source_identity.is_empty()
+            || (matches!(
+                self.source_mode,
+                SourceMode::Snapshot | SourceMode::FlakeInput
+            ) && (self.source_identity.contains('\0')
+                || !Path::new(&self.source_identity).is_absolute()))
+        {
+            return Err(invalid_recorded_source("sourceIdentity"));
+        }
+        Ok(RecordedSource {
+            codebase_id: self.codebase_id,
+            logical_root: self.logical_root,
+            observed_root: self.observed_root,
+            source_mode: self.source_mode,
+            source_identity: self.source_identity,
+            dirty_policy: self.dirty_policy,
+            admission_fingerprint_policy: self.admission_fingerprint_policy,
+        })
+    }
+}
+
+fn invalid_recorded_source(field: &'static str) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::RegistryCorrupt,
+        format!("invalid recorded source field {field}"),
+    )
+}
+
 pub(super) fn check_source(
     manifest: &ValidatedManifest,
     invocation_root: &InvocationRoot,
