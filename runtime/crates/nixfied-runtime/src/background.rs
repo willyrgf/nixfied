@@ -629,8 +629,7 @@ enum Phase {
 /// explicit; its transport owns the corresponding closed request purpose.
 pub enum SessionPurpose<'a> {
     Foreground,
-    Daemon(&'a mut Establishment),
-    Shared(&'a mut Establishment),
+    Detached(&'a mut Establishment),
 }
 
 impl SessionPurpose<'_> {
@@ -640,13 +639,13 @@ impl SessionPurpose<'_> {
     pub fn check_abandonment(&mut self) -> RuntimeResult<()> {
         match self {
             Self::Foreground => Ok(()),
-            Self::Daemon(channel) | Self::Shared(channel) => channel.check_abandonment(),
+            Self::Detached(channel) => channel.check_abandonment(),
         }
     }
     pub fn mark_committed(&mut self) {
         match self {
             Self::Foreground => {}
-            Self::Daemon(channel) | Self::Shared(channel) => channel.mark_committed(),
+            Self::Detached(channel) => channel.mark_committed(),
         }
     }
     pub fn acknowledge(
@@ -658,7 +657,7 @@ impl SessionPurpose<'_> {
     ) -> RuntimeResult<()> {
         match self {
             Self::Foreground => Ok(()),
-            Self::Daemon(channel) | Self::Shared(channel) => {
+            Self::Detached(channel) => {
                 channel.acknowledge(acknowledgement, admission, location, cancellation)
             }
         }
