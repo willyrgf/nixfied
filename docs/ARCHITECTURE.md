@@ -286,7 +286,9 @@ each rule.
   publication ordering or a tested host-power-loss guarantee.
 - **Liveness is observed against the OS** because PIDs are reused and records
   outlive processes; `ps` confirms process identity before it reports a status
-  and writes nothing.
+  and writes nothing. `service/process.rs` owns exact leader sampling on Linux
+  and macOS. Zombies count as absent; stopped processes remain live. Inspection
+  failure is an error, not evidence of absence.
 - **Registry readers own stored representation.** Endpoint rows are immutable:
   one per owning process and endpoint id, with the raw address spelling for exact
   comparison. Ready activation compares the complete recorded set with the
@@ -340,11 +342,18 @@ each rule.
   exact native leaders outside the transaction, rereads canonical evidence and
   finally resamples the owner. Only that path constructs private-field output
   proof values; stored metadata and private DTOs cannot mint admission or success.
+  `execution/plan.rs` owns root occurrence and preparation attribution. Ordinary
+  root execution follows service readiness and initial health; canonical task
+  evidence supplies the completion proof without adding a health table or a
+  second node-completion authority. It does not prove current endpoint health.
 - **The run commit separates shared startup from observation.** NXD2 carries
   explicit daemon/shared purposes. Shared transport tracks full frame delivery;
   after full dispatch observer cancellation cannot kill the helper or send its
   FIFO cancellation. Abandonment can prevent a new precommit run; a committed
   owner continues even before ACK. One elapsed budget covers all observer phases.
+  Recovery already in progress may finish after the observer leaves. Checkpoints
+  before and after recovery and before run creation reject observed abandonment.
+  Recovery stays in the ordinary executor without extending the observer's wait.
 
 ## Ports, state, containment
 
