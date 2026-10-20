@@ -1,11 +1,53 @@
 use std::mem;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 static PROCESS_SIGNAL_CANCELED: AtomicBool = AtomicBool::new(false);
 static PROCESS_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+
+/// One caller-local observation budget. Carry this same value through selection,
+/// transport and task waiting; constructing an absolute full-duration deadline
+/// would overflow for valid large u64 millisecond limits.
+#[derive(Debug)]
+pub struct WaitBudget {
+    started: Instant,
+    limit: Duration,
+}
+
+impl WaitBudget {
+    pub fn new(milliseconds: NonZeroU64) -> Self {
+        Self {
+            started: Instant::now(),
+            limit: Duration::from_millis(milliseconds.get()),
+        }
+    }
+
+    pub fn remaining(&self) -> Duration {
+        self.limit.saturating_sub(self.started.elapsed())
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.remaining().is_zero()
+    }
+
+    /// A checked short deadline for native channel helpers, never more than
+    /// 10 ms or the caller's remaining budget. None means local expiry.
+    pub fn poll_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
+        let remaining = self
+            .limit
+            .saturating_sub(now.saturating_duration_since(self.started));
+        if remaining.is_zero() {
+            None
+        } else {
+            now.checked_add(remaining.min(Duration::from_millis(10)))
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
@@ -124,5 +166,34 @@ fn install_handler(
         } else {
             Err(std::io::Error::last_os_error())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observation_budget_accepts_full_u64_without_absolute_deadline_overflow() {
+        let budget = WaitBudget::new(NonZeroU64::new(u64::MAX).unwrap());
+        assert!(!budget.is_expired());
+        assert!(budget.remaining() > Duration::from_secs(u32::MAX.into()));
+        let before = Instant::now();
+        let deadline = budget.poll_deadline().unwrap();
+        let after = Instant::now();
+        assert!(deadline >= before);
+        assert!(deadline <= after + Duration::from_millis(10));
+    }
+
+    #[test]
+    fn observation_budget_keeps_elapsed_time_and_saturates_after_expiry() {
+        let started = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        let budget = WaitBudget {
+            started,
+            limit: Duration::from_secs(1),
+        };
+        assert_eq!(budget.remaining(), Duration::ZERO);
+        assert!(budget.is_expired());
+        assert!(budget.poll_deadline().is_none());
     }
 }
