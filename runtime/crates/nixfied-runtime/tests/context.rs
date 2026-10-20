@@ -12,6 +12,11 @@ fn new_run_rejects_non_utf8_state_or_source_metadata_before_slot_or_workload_eff
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     for bad_source in [false, true] {
+        // macOS rejects non-UTF-8 directory names before a source root can
+        // reach runtime admission. State paths need not exist to be rejected.
+        if bad_source && cfg!(target_os = "macos") {
+            continue;
+        }
         let temp = TempDir::new();
         let non_utf8 = temp.path.join(OsString::from_vec(b"native-\xff".to_vec()));
         let state = if bad_source {
