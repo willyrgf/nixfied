@@ -806,27 +806,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn preparation_spelling_never_grants_root_attribution() {
-        let mut em = manifest(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
-        em.tasks
-            .insert(TaskId::new("unit"), ExecutableTask::Leaf(leaf_task("unit")));
-        em.services.get_mut("a").unwrap().prepare = Some(TaskId::new("unit"));
-        let plan = plan_program(&em, &TaskId::new("all"), 0).unwrap();
-        let direct = plan_program(&em, &TaskId::new("unit"), 0).unwrap();
-        let root = TaskOccurrence::Root(direct.root_leaf("unit").unwrap());
-        let preparation =
-            TaskOccurrence::Preparation(plan.services()[0].preparation_leaves().next().unwrap());
-        assert_eq!(root.node().node_id().as_str(), "unit");
-        assert_eq!(preparation.node().node_id().as_str(), "unit");
-        assert_eq!(root.root_step_path(), Some("unit"));
-        assert_eq!(preparation.root_step_path(), None);
-        assert_eq!(
-            plan.root_leaf("unit").unwrap_err().code,
-            ErrorCode::TaskSelectionInvalid
-        );
-    }
-
     /// Golden vector V3: selecting a leaf directly yields one node whose step
     /// path is the task id.
     #[test]

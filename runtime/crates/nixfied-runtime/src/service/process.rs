@@ -3091,7 +3091,7 @@ mod tests {
     use nixfied_manifest::ServiceId;
 
     #[test]
-    fn exact_leader_sampling_keeps_stopped_identity_and_distinguishes_reaped_absence() {
+    fn exact_leader_sampling_tracks_live_stopped_zombie_and_reaped_identity() {
         let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_SLEEP").unwrap())
             .arg("30")
             .spawn()
@@ -3101,16 +3101,28 @@ mod tests {
         let before = sample_leader(pid);
         let stopped = unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
         let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        let waited = unsafe { libc::waitid(libc::P_PID, pid, info.as_mut_ptr(), libc::WSTOPPED) };
+        let stopped_wait =
+            unsafe { libc::waitid(libc::P_PID, pid, info.as_mut_ptr(), libc::WSTOPPED) };
         let during = sample_leader(pid);
-        unsafe {
-            libc::kill(pid as i32, libc::SIGCONT);
-        }
+        let continued = unsafe { libc::kill(pid as i32, libc::SIGCONT) };
+        let resumed = sample_leader(pid);
         child.kill().unwrap();
+        let exited_wait = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        let zombie = sample_leader(pid);
+        let zombie_live = process_present(pid);
         child.wait().unwrap();
         let after = sample_leader(pid);
         assert_eq!(stopped, 0);
-        assert_eq!(waited, 0);
+        assert_eq!(stopped_wait, 0);
+        assert_eq!(continued, 0);
+        assert_eq!(exited_wait, 0);
         let LeaderSample::Present {
             start_identity,
             pgid,
@@ -3121,9 +3133,17 @@ mod tests {
         };
         assert_eq!(pgid, group);
         assert!(!start_identity.is_empty());
+        for sample in [during, resumed] {
+            assert!(
+                matches!(sample.unwrap(), LeaderSample::Present { start_identity: observed, pgid, zombie: false } if observed == start_identity && pgid == group)
+            );
+        }
+        let zombie = zombie.unwrap();
         assert!(
-            matches!(during.unwrap(), LeaderSample::Present { start_identity: observed, pgid, zombie: false } if observed == start_identity && pgid == group)
+            matches!(zombie, LeaderSample::Present { start_identity: ref observed, pgid, zombie: true } if observed == &start_identity && pgid == group),
+            "{zombie:?}"
         );
+        assert!(!zombie_live.unwrap());
         assert!(matches!(after.unwrap(), LeaderSample::Absent));
         for invalid in [0, i32::MAX as u32 + 1, u32::MAX] {
             assert_eq!(
@@ -3141,50 +3161,6 @@ mod tests {
                 code
             )));
         }
-    }
-
-    #[test]
-    fn exact_leader_sampling_reports_a_waitable_zombie_without_claiming_liveness() {
-        let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_SLEEP").unwrap())
-            .arg("30")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let before = sample_leader(pid);
-        child.kill().unwrap();
-        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        let waited = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid,
-                info.as_mut_ptr(),
-                libc::WEXITED | libc::WNOWAIT,
-            )
-        };
-        let sample = sample_leader(pid);
-        let live = process_present(pid);
-        child.wait().unwrap();
-        let after = sample_leader(pid);
-        assert_eq!(waited, 0);
-        let LeaderSample::Present {
-            start_identity,
-            pgid,
-            zombie: false,
-        } = before.unwrap()
-        else {
-            panic!("live child was not sampled")
-        };
-        let sample = sample.unwrap();
-        assert!(
-            matches!(
-                sample,
-                LeaderSample::Present { start_identity: ref observed, pgid: observed_group, zombie: true }
-                    if observed == &start_identity && observed_group == pgid
-            ),
-            "{sample:?}"
-        );
-        assert!(!live.unwrap());
-        assert!(matches!(after.unwrap(), LeaderSample::Absent));
     }
 
     #[cfg(target_os = "linux")]
