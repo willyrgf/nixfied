@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::thread;
@@ -2298,7 +2299,8 @@ pub(crate) fn get_process_group(pid: u32) -> RuntimeResult<i32> {
 }
 
 pub(crate) fn process_group(pid: u32) -> RuntimeResult<Option<i32>> {
-    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    let native_pid = checked_native_pid(pid)?;
+    let pgid = unsafe { libc::getpgid(native_pid) };
     if pgid < 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::ESRCH) {
@@ -2318,30 +2320,38 @@ pub(crate) fn process_is_live_with_identity(
     pgid: i32,
     platform_start: Option<&str>,
 ) -> RuntimeResult<bool> {
-    let Some(current_pgid) = process_group(pid)? else {
-        return Ok(false);
-    };
-    if current_pgid != pgid {
-        return Ok(false);
+    checked_native_pid(
+        pgid.try_into()
+            .map_err(|_| leader_inspection_error("invalid process group identity"))?,
+    )?;
+    match sample_leader(pid)? {
+        LeaderSample::Absent => Ok(false),
+        LeaderSample::Present {
+            start_identity,
+            pgid: current_pgid,
+            zombie,
+        } => Ok(!zombie
+            && current_pgid == pgid
+            && platform_start.is_none_or(|expected| expected == start_identity)),
     }
-    if let Some(expected) = platform_start
-        && platform_start_identity(pid).as_deref() != Some(expected)
-    {
-        return Ok(false);
-    }
-    Ok(!process_is_zombie(pid))
 }
 
 /// Whether any non-zombie process currently holds `pid`, whatever its identity.
 pub(crate) fn process_present(pid: u32) -> RuntimeResult<bool> {
-    Ok(process_group(pid)?.is_some() && !process_is_zombie(pid))
+    Ok(matches!(
+        sample_leader(pid)?,
+        LeaderSample::Present { zombie: false, .. }
+    ))
 }
 
 pub(crate) fn process_is_live_with_start_identity(
     pid: u32,
     platform_start: Option<&str>,
 ) -> RuntimeResult<bool> {
-    Ok(process_group(pid)?.is_some() && identity_alive(pid, platform_start))
+    Ok(
+        matches!(sample_leader(pid)?, LeaderSample::Present { start_identity, zombie: false, .. }
+        if platform_start == Some(start_identity.as_str())),
+    )
 }
 
 /// Fresh process facts for a listener candidate; never synthesized from socket
@@ -2875,22 +2885,108 @@ fn direct_child_pids(parent: u32) -> RuntimeResult<Vec<u32>> {
     bounded_macos_members(parent as i32, libc::proc_listchildpids)
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let fields_after_comm = stat.rsplit_once(") ")?.1;
-    let start_time_ticks = fields_after_comm.split_whitespace().nth(19)?;
-    Some(format!("linux-start-ticks:{start_time_ticks}"))
+/// One native leader sample. This says nothing about descendants or the
+/// executor's progress. Inspection uncertainty is never represented as absence.
+#[derive(Debug)]
+pub(crate) enum LeaderSample {
+    Absent,
+    Present {
+        start_identity: String,
+        pgid: i32,
+        zombie: bool,
+    },
+}
+
+fn checked_native_pid(pid: u32) -> RuntimeResult<libc::pid_t> {
+    i32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            leader_inspection_error("process identity is outside the positive native PID domain")
+        })
+}
+
+fn leader_inspection_error(message: &'static str) -> RuntimeError {
+    RuntimeError::new(ErrorCode::ProcEscape, message)
+}
+
+fn process_inspection_absent(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH))
 }
 
 #[cfg(target_os = "linux")]
-fn process_is_zombie(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
+pub(crate) fn sample_leader(pid: u32) -> RuntimeResult<LeaderSample> {
+    checked_native_pid(pid)?;
+    let stat = match std::fs::read(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if process_inspection_absent(&error) => return Ok(LeaderSample::Absent),
+        Err(_) => {
+            return Err(leader_inspection_error(
+                "cannot inspect process leader identity",
+            ));
+        }
     };
-    stat.rsplit_once(") ")
-        .and_then(|(_, fields)| fields.split_whitespace().next())
-        == Some("Z")
+    parse_linux_leader(pid, &stat)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_leader(pid: u32, stat: &[u8]) -> RuntimeResult<LeaderSample> {
+    checked_native_pid(pid)?;
+    let malformed = || leader_inspection_error("malformed native process leader record");
+    if !stat.starts_with(format!("{pid} (").as_bytes()) {
+        return Err(malformed());
+    }
+    // comm may contain spaces, closing parentheses, newlines and non-UTF-8
+    // bytes. Only the numeric suffix is textual; its last ')' ends comm.
+    let end = stat
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or_else(malformed)?;
+    let suffix = stat.get(end + 1..).ok_or_else(malformed)?;
+    if suffix.first() != Some(&b' ') {
+        return Err(malformed());
+    }
+    let suffix = std::str::from_utf8(suffix).map_err(|_| malformed())?;
+    let fields: Vec<_> = suffix.split_ascii_whitespace().collect();
+    // Linux's complete stat record has 52 fields; comm and PID precede this
+    // suffix. Do not treat a short read as a process that disappeared.
+    if fields.len() != 50
+        || !matches!(
+            fields[0],
+            "R" | "S" | "D" | "Z" | "T" | "t" | "X" | "x" | "K" | "W" | "P" | "I"
+        )
+        || fields[1..].iter().any(|field| {
+            field.parse::<i128>().ok().is_none_or(|number| {
+                number < i128::from(i64::MIN)
+                    || number > i128::from(u64::MAX)
+                    || number.to_string() != *field
+            })
+        })
+    {
+        return Err(malformed());
+    }
+    let pgid: u32 = fields[2].parse().map_err(|_| malformed())?;
+    let pgid = checked_native_pid(pgid)?;
+    let start: u64 = fields[19].parse().map_err(|_| malformed())?;
+    Ok(LeaderSample::Present {
+        start_identity: format!("linux-start-ticks:{start}"),
+        pgid,
+        zombie: matches!(fields[0], "Z" | "X" | "x"),
+    })
+}
+
+pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
+    match sample_leader(pid).ok()? {
+        LeaderSample::Absent => None,
+        LeaderSample::Present { start_identity, .. } => Some(start_identity),
+    }
+}
+
+fn process_is_zombie(pid: u32) -> bool {
+    matches!(
+        sample_leader(pid),
+        Ok(LeaderSample::Present { zombie: true, .. })
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -2919,22 +3015,6 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
-    let info = process_bsd_info(pid)?;
-    Some(format!(
-        "macos-start-time:{}:{}",
-        info.pbi_start_tvsec, info.pbi_start_tvusec
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn process_is_zombie(pid: u32) -> bool {
-    process_bsd_info(pid)
-        .map(|info| info.pbi_status == libc::SZOMB)
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
 pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
     for pid in listener_group_members(pgid)? {
         // Membership may change after the bounded list is returned.
@@ -2946,22 +3026,49 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
 }
 
 #[cfg(target_os = "macos")]
-fn process_bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+fn process_bsd_info(pid: u32) -> RuntimeResult<Option<libc::proc_bsdinfo>> {
+    let native_pid = checked_native_pid(pid)?;
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     let result = unsafe {
         libc::proc_pidinfo(
-            pid as libc::c_int,
+            native_pid,
             libc::PROC_PIDTBSDINFO,
             0,
             info.as_mut_ptr().cast(),
             size,
         )
     };
-    if result != size {
-        return None;
+    if result <= 0 && process_inspection_absent(&io::Error::last_os_error()) {
+        return Ok(None);
     }
-    Some(unsafe { info.assume_init() })
+    if result != size {
+        return Err(leader_inspection_error(
+            "cannot inspect complete native process leader record",
+        ));
+    }
+    let info = unsafe { info.assume_init() };
+    if info.pbi_pid != pid || info.pbi_start_tvusec >= 1_000_000 {
+        return Err(leader_inspection_error(
+            "malformed native process leader record",
+        ));
+    }
+    Ok(Some(info))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn sample_leader(pid: u32) -> RuntimeResult<LeaderSample> {
+    let Some(info) = process_bsd_info(pid)? else {
+        return Ok(LeaderSample::Absent);
+    };
+    Ok(LeaderSample::Present {
+        start_identity: format!(
+            "macos-start-time:{}:{}",
+            info.pbi_start_tvsec, info.pbi_start_tvusec
+        ),
+        pgid: checked_native_pid(info.pbi_pgid)?,
+        zombie: info.pbi_status == libc::SZOMB,
+    })
 }
 
 #[derive(Serialize)]
@@ -2979,6 +3086,109 @@ mod tests {
     use super::*;
     use crate::admission::secrets::ResolvedSecrets;
     use nixfied_manifest::ServiceId;
+
+    #[test]
+    fn exact_leader_sampling_keeps_stopped_identity_and_distinguishes_reaped_absence() {
+        let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_SLEEP").unwrap())
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let group = unsafe { libc::getpgid(pid as i32) };
+        let before = sample_leader(pid);
+        let stopped = unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let waited = unsafe { libc::waitid(libc::P_PID, pid, info.as_mut_ptr(), libc::WSTOPPED) };
+        let during = sample_leader(pid);
+        unsafe {
+            libc::kill(pid as i32, libc::SIGCONT);
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let after = sample_leader(pid);
+        assert_eq!(stopped, 0);
+        assert_eq!(waited, 0);
+        let LeaderSample::Present {
+            start_identity,
+            pgid,
+            zombie: false,
+        } = before.unwrap()
+        else {
+            panic!("live child was not sampled")
+        };
+        assert_eq!(pgid, group);
+        assert!(!start_identity.is_empty());
+        assert!(
+            matches!(during.unwrap(), LeaderSample::Present { start_identity: observed, pgid, zombie: false } if observed == start_identity && pgid == group)
+        );
+        assert!(matches!(after.unwrap(), LeaderSample::Absent));
+        for invalid in [0, i32::MAX as u32 + 1, u32::MAX] {
+            assert_eq!(
+                sample_leader(invalid).unwrap_err().code,
+                ErrorCode::ProcEscape
+            );
+        }
+        for code in [libc::EACCES, libc::EPERM, libc::EIO, libc::EINVAL] {
+            assert!(!process_inspection_absent(&io::Error::from_raw_os_error(
+                code
+            )));
+        }
+        for code in [libc::ENOENT, libc::ESRCH] {
+            assert!(process_inspection_absent(&io::Error::from_raw_os_error(
+                code
+            )));
+        }
+    }
+
+    #[test]
+    fn exact_leader_sampling_reports_a_waitable_zombie_without_claiming_liveness() {
+        let mut child = std::process::Command::new(std::env::var_os("NIXFIED_TEST_CHILD").unwrap())
+            .args(["exit", "0"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        let sample = sample_leader(pid);
+        let live = process_present(pid);
+        child.wait().unwrap();
+        assert_eq!(waited, 0);
+        assert!(matches!(
+            sample.unwrap(),
+            LeaderSample::Present { zombie: true, .. }
+        ));
+        assert!(!live.unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exact_linux_record_accepts_unix_comm_bytes_and_rejects_malformed_identity() {
+        let record = b"42 (odd) name\xff) R 3284474 3284474 3284474 0 -1 4194304 149 0 0 0 0 0 0 0 20 0 1 0 116023528 5971968 384 18446744073709551615 209559877582848 209559877608092 281474109962512 0 0 0 0 0 0 0 0 0 17 7 0 0 0 0 0 209559877712480 209559877714120 209560779530240 281474109967036 281474109967056 281474109967056 281474109972459 0\n";
+        assert!(
+            matches!(parse_linux_leader(42, record).unwrap(), LeaderSample::Present { start_identity, pgid: 3284474, zombie: false } if start_identity == "linux-start-ticks:116023528")
+        );
+        assert_eq!(
+            parse_linux_leader(43, record).unwrap_err().code,
+            ErrorCode::ProcEscape
+        );
+        for invalid in [
+            b"42 (short) R 1 42".as_slice(),
+            &record[..record.len() - 3],
+            b"42 (bad) R not-numeric".as_slice(),
+        ] {
+            assert_eq!(
+                parse_linux_leader(42, invalid).unwrap_err().code,
+                ErrorCode::ProcEscape
+            );
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
