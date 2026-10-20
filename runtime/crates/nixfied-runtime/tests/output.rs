@@ -402,6 +402,22 @@ fn run_and_aggregate_views_cross_the_native_redaction_and_formatting_boundary() 
     assert_eq!(value["tasks"][0]["taskId"], REDACTION_TOKEN);
     assert_eq!(value["nodes"][0]["success"], true);
     assert_eq!(value["success"], true);
+    let task_summary = fs::read_to_string(result["task"]["summaryPath"].as_str().unwrap()).unwrap();
+    assert!(task_summary.starts_with("{\n  \"canceled\": false,"));
+    assert!(task_summary.ends_with("\n}"));
+    assert!(!task_summary.contains("smoke"));
+    let task: Value = serde_json::from_str(&task_summary).unwrap();
+    assert_eq!(task, result["task"]);
+    let event: String = fixture
+        .registry()
+        .query_row(
+            "SELECT payload_json FROM events WHERE event_type = 'task.succeeded'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!event.contains("smoke"));
+    assert_eq!(serde_json::from_str::<Value>(&event).unwrap(), task);
     assert_eq!(
         value
             .as_object()

@@ -252,7 +252,7 @@ pub fn run_dependent_task_cancellable(
     let timed_out = terminal_status == TaskTerminalStatus::TimedOut;
     let canceled = terminal_status == TaskTerminalStatus::Canceled;
     let outcome_error = task_outcome_error(task, &outcome, terminal_status);
-    let run = TaskRun {
+    let evidence = TaskRun {
         task_id: task_id.to_string(),
         step_path: node_id.to_string(),
         process_key: process_key.clone(),
@@ -268,20 +268,12 @@ pub fn run_dependent_task_cancellable(
             .summary_path()
             .with_file_name(format!("summary.{occurrence}.json")),
     };
-    let evidence = run;
-    if let Err(error) = write_summary(&evidence, run_context.redactor) {
-        return Err(TaskExecutionError::after(error, evidence));
-    }
-    let mut payload_value = match serde_json::to_value(&evidence) {
+    let payload_value = match write_summary(&evidence, run_context.redactor) {
         Ok(value) => value,
         Err(error) => {
-            return Err(TaskExecutionError::after(
-                RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
-                evidence,
-            ));
+            return Err(TaskExecutionError::after(error, evidence));
         }
     };
-    run_context.redactor.redact_value(&mut payload_value);
     let payload_json = match serde_json::to_string(&payload_value) {
         Ok(value) => value,
         Err(error) => {
@@ -413,14 +405,14 @@ fn required_services<'s>(
         .collect()
 }
 
-fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
+fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<serde_json::Value> {
     let mut summary = serde_json::to_value(run)
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     redactor.redact_value(&mut summary);
-    let summary = serde_json::to_vec_pretty(&summary)
+    let bytes = serde_json::to_vec_pretty(&summary)
         .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     std::fs::File::create_new(&run.summary_path)
-        .and_then(|mut file| file.write_all(&summary))
+        .and_then(|mut file| file.write_all(&bytes))
         .map_err(|error| {
             RuntimeError::new(
                 ErrorCode::StateUnwritable,
@@ -429,7 +421,8 @@ fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
                     run.summary_path.display()
                 ),
             )
-        })
+        })?;
+    Ok(summary)
 }
 
 #[derive(Serialize)]
