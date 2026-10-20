@@ -538,9 +538,10 @@ carry a Nix policy. `RequiredPresent` requires and emits an input even when the
 decoder has a default. `RequiredOmitAbsent` requires an optional input and omits
 null; `RequiredOmitEmpty` requires a collection and omits empties.
 `PreserveSupplied` permits missing input only when decoding accepts omission,
-and retains explicitly supplied values, including empties. Outer constructors
-accept pre-emission values; nested record values must already obey their Nix
-emission policies. Neither boundary reconstructs or defaults a child record.
+and retains explicitly supplied values, including empties. One recursive constructor
+accepts pre-emission values throughout the record graph and applies each record's
+field and omission policies before serialization. Nested records require the same
+inputs as direct construction; no constructor invents or defaults a child field.
 
 Record identities are either `Inventory(coordinate)` or `Local(name)`. Local
 identities cannot evade existing inventory coverage. References and generated

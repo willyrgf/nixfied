@@ -473,51 +473,44 @@ let
     || builtins.isFloat value
     || (builtins.isList value && builtins.all isJson value)
     || (builtins.isAttrs value && builtins.all isJson (builtins.attrValues value));
-  matches =
-    value: input:
-    if value.kind == "Text" then
-      builtins.isString input
-    else if value.kind == "Boolean" then
-      builtins.isBool input
-    else if value.kind == "Integer" then
-      (
-        if value.bits == 64 then
-          (if value.signed then lib.types.int else lib.types.ints.unsigned)
-        else
-          lib.types.ints.${"${if value.signed then "s" else "u"}${toString value.bits}"}
-      ).check
-        input
-      && (!value.nonzero || input != 0)
-    else if value.kind == "Enum" then
-      builtins.isString input && builtins.elem input vocabularyMap.${value.coordinate}.members
-    else if value.kind == "List" then
-      builtins.isList input
-      && builtins.all (matches value.element) input
-      && (!value.unique || lib.unique input == input)
+  constructValue =
+    owner: value: input:
+    let
+      check = condition: require condition "invalid constructor value for ${owner}";
+    in
+    if value.kind == "List" then
+      check (builtins.isList input && (!value.unique || lib.unique input == input)) (
+        map (constructValue owner value.element) input
+      )
     else if value.kind == "Map" then
-      builtins.isAttrs input && builtins.all (matches value.value) (builtins.attrValues input)
+      check (builtins.isAttrs input) (builtins.mapAttrs (_: constructValue owner value.value) input)
     else if value.kind == "RecordRef" then
-      recordMatches recordMap.${value.id} input
+      construct recordMap.${value.id} input
     else if value.kind == "NativeDomain" then
-      matches value.wire input && (value.producerCheck == null || value.producerCheck input)
+      let
+        scalar = constructValue owner value.wire input;
+      in
+      check (value.producerCheck == null || value.producerCheck scalar) scalar
     else
-      isJson input;
-  fieldMatches =
-    field: input: (input == null && field.decode.kind == "Optional") || matches field.value input;
-  recordMatches =
-    record: input:
-    builtins.isAttrs input
-    && record.produced
-    && builtins.removeAttrs input (map (field: field.name) record.fields) == { }
-    && builtins.all (
-      field:
-      if input ? ${field.name} then
-        fieldMatches field input.${field.name}
-        && (field.nixEncode != "RequiredOmitAbsent" || input.${field.name} != null)
-        && (field.nixEncode != "RequiredOmitEmpty" || input.${field.name} != emptyValue field.value)
-      else
-        field.nixEncode != "RequiredPresent"
-    ) record.fields;
+      check (
+        if value.kind == "Text" then
+          builtins.isString input
+        else if value.kind == "Boolean" then
+          builtins.isBool input
+        else if value.kind == "Integer" then
+          (
+            if value.bits == 64 then
+              (if value.signed then lib.types.int else lib.types.ints.unsigned)
+            else
+              lib.types.ints.${"${if value.signed then "s" else "u"}${toString value.bits}"}
+          ).check
+            input
+          && (!value.nonzero || input != 0)
+        else if value.kind == "Enum" then
+          builtins.isString input && builtins.elem input vocabularyMap.${value.coordinate}.members
+        else
+          isJson input
+      ) input;
   checkGraph =
     trail: record:
     require (!(builtins.elem record.id trail)) "recursive record graph" (
@@ -598,8 +591,10 @@ let
                     supplied = input ? ${field.name};
                     value = input.${field.name};
                     checked =
-                      require (fieldMatches field value) "invalid constructor value for ${record.id}.${field.name}"
-                        value;
+                      if value == null && field.decode.kind == "Optional" then
+                        null
+                      else
+                        constructValue "${record.id}.${field.name}" field.value value;
                     omit =
                       !supplied
                       || (field.nixEncode == "RequiredOmitAbsent" && checked == null)
@@ -621,7 +616,6 @@ builtins.seq valid {
   inherit
     recordMap
     vocabularyMap
-    matches
     walk
     snake
     variant

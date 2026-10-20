@@ -87,8 +87,8 @@ let
       )
     ];
   };
-  nested =
-    field: input:
+  nestedValue =
+    field: value: input:
     let
       checked = check {
         vocabularies = [ ];
@@ -103,7 +103,7 @@ let
               };
               fields = [
                 (
-                  (d.field "child" (d.ref child.identity) { kind = "Required"; } "Emitted child.")
+                  (d.field "child" value { kind = "Required"; } "Nested constructor input.")
                   // {
                     nixEncode = "RequiredPresent";
                   }
@@ -115,6 +115,8 @@ let
       };
     in
     checked.constructors."local/Parent" { child = input; };
+  nested = field: nestedValue field (d.ref child.identity);
+  collection = nestedValue optional (d.mapOf (d.list (d.ref child.identity)));
   optional = builtins.head child.fields;
   empty = optional // {
     value = d.list d.text;
@@ -211,35 +213,43 @@ let
       expected = true;
     };
     host = {
-      expr = rejects (
-        make "Endpoint" {
-          endpointId = "web";
-          host = "0.0.0.0";
-          readyProbe = make "Invocation" (invocation // { timeoutMs = null; });
-          healthProbe = make "Invocation" (invocation // { timeoutMs = null; });
-        }
-      );
+      expr =
+        let
+          endpoint =
+            host:
+            make "Endpoint" {
+              inherit host;
+              endpointId = "web";
+              readyProbe = invocation // {
+                timeoutMs = null;
+              };
+              healthProbe = invocation // {
+                timeoutMs = null;
+              };
+            };
+        in
+        builtins.deepSeq (endpoint "127.0.0.1") (rejects (endpoint "0.0.0.0"));
       expected = true;
     };
     nestedAbsent = {
-      expr = nested optional { };
-      expected = {
-        child = { };
-      };
+      expr = rejects (nested optional { });
+      expected = true;
     };
     nestedNull = {
-      expr = rejects (nested optional { value = null; });
-      expected = true;
-    };
-    nestedEmpty = {
-      expr = nested empty { };
+      expr = nested optional { value = null; };
       expected = {
         child = { };
       };
     };
-    nestedExplicitEmpty = {
-      expr = rejects (nested empty { value = [ ]; });
+    nestedEmpty = {
+      expr = rejects (nested empty { });
       expected = true;
+    };
+    nestedExplicitEmpty = {
+      expr = nested empty { value = [ ]; };
+      expected = {
+        child = { };
+      };
     };
     nestedPresent = {
       expr = nested optional { value = "text"; };
@@ -249,6 +259,52 @@ let
     };
     nestedUnknown = {
       expr = rejects (nested optional { extra = true; });
+      expected = true;
+    };
+    nestedCollections = {
+      expr = collection {
+        entries = [
+          { value = null; }
+          { value = "text"; }
+        ];
+      };
+      expected = {
+        child.entries = [
+          { }
+          { value = "text"; }
+        ];
+      };
+    };
+    nestedCollectionsMissing = {
+      expr = rejects (collection {
+        entries = [ { } ];
+      });
+      expected = true;
+    };
+    nestedCollectionsInvalid = {
+      expr = rejects (collection {
+        entries = [ { value = 1; } ];
+      });
+      expected = true;
+    };
+    nestedCollectionsUnknown = {
+      expr = rejects (collection {
+        entries = [
+          {
+            value = "text";
+            extra = true;
+          }
+        ];
+      });
+      expected = true;
+    };
+    nestedContext = {
+      expr =
+        builtins.hasContext
+          (builtins.head
+            (collection { entries = [ { value = builtins.toFile "nested-context" "context"; } ]; })
+            .child.entries
+          ).value;
       expected = true;
     };
     unknownMetadata = {

@@ -20,6 +20,11 @@ let
             executable = "bin/sleep";
             effects = if service ? endpoint || service ? endpoints then [ "process" "network-listener" ] else [ "process" ];
           };
+          closures.nonlistener = {
+            package = pkgs.coreutils;
+            executable = "bin/sleep";
+            effects = [ "process" ];
+          };
           services.web = service;
         };
       };
@@ -54,8 +59,12 @@ let
     (wire.services.web.endpoints.web.readyProbe == (compile multi).manifest.services.web.endpoints.z.readyProbe)
     # The package occurs only in endpoint probes; traversal must realise it and
     # synthesize the closure used by both phases on both endpoints.
-    (builtins.length (builtins.attrNames wire.closures) == 2)
+    (builtins.length (builtins.attrNames wire.closures) == 3)
     (builtins.elem pkgs.hello (compile base).packages)
+    (accepts (lib.recursiveUpdate base { lifecycle.start.invocation.tools = [ "server" "nonlistener" ]; }))
+    (!(accepts (lib.recursiveUpdate base { lifecycle.start.invocation.tools = [ "nonlistener" "server" ]; })))
+    (!(accepts (phaseChange "start" { invocation.tools = [ "absent" ]; })))
+    (!(accepts (phaseChange "start" { invocation.run = [ "absent" ]; })))
     (!(accepts (endpointChange { readyProbe = null; })))
     (!(accepts (base // { endpoint = { endpointId = "web"; }; })))
     (!(accepts (multi // { endpoints = multi.endpoints // { z = { readyProbe = probe; }; }; })))
