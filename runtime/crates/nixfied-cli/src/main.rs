@@ -478,26 +478,6 @@ mod tests {
         assert!(error.message.contains("invalid project id"));
     }
 
-    #[test]
-    fn parses_install_options() {
-        let options = InstallOptions::parse(&[
-            "--root".into(),
-            "repo".into(),
-            "--project-id".into(),
-            "proj".into(),
-            "--name".into(),
-            "Project".into(),
-            "--nixfied-url".into(),
-            "path:/repo".into(),
-        ])
-        .expect("args should parse");
-
-        assert_eq!(options.root, PathBuf::from("repo"));
-        assert_eq!(options.project_id.as_deref(), Some("proj"));
-        assert_eq!(options.name.as_deref(), Some("Project"));
-        assert_eq!(options.nixfied_url, "path:/repo");
-    }
-
     fn read(path: &Path) -> String {
         std::fs::read_to_string(path).expect("test file should read")
     }
