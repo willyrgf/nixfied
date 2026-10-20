@@ -40,20 +40,37 @@ flexibility. Prove invariants with independent checks and tests.
   explicit checked outcomes. Keep admission, execution, lifecycle, output,
   containment, and cleanup failures distinct. Invalid admission starts no
   child process.
-- **Prefer subtraction.** Choose the smallest design that preserves the
-  invariant. Delete duplication, states, branches, and change sites rather
-  than adding coordination or partial workarounds.
+- **Prefer subtraction.** Extend the existing owner and execution path first.
+  Compare the proposed design with a concrete smaller alternative. Justify new
+  representations, conversions, queries, handoffs, and effect phases by the
+  required guarantee or boundary that the smaller design cannot preserve.
+  Remove superseded machinery in the same change.
 - **Prove the guarantee.** Test accepted construction, rejected inputs,
   invariant-preserving transformations, and runtime or relational behavior.
   Use compile-time proofs where the language supports them and runtime tests
   for runtime facts; tests support the design but do not replace it.
 
-For every non-trivial change, answer:
+For every non-trivial change, answer briefly in the discussion or PR:
 
 1. What invariant must always hold?
 2. Which invalid states are made unrepresentable?
 3. Which owner rejects what the types cannot express, and when?
-4. What tests or checks prove the invariant and cover coupled surfaces?
+4. Which existing owner/path is reused, and why is the smaller alternative
+   insufficient?
+5. What tests or checks prove the invariant and cover coupled surfaces?
+
+## Code Review Rules
+
+- Review the complete feature diff for avoidable machinery; report it as a
+  blocking finding even when tests pass. Identify the concrete smaller design
+  and the guarantees it preserves. Resolve findings before completion while
+  retaining independent regression proofs.
+- Before freezing added public fields or diagnostic variants, justify each by
+  a concrete consumer need. Keep internal bookkeeping private.
+- At completion, report measured added/deleted production and test lines, with
+  generated files, fixtures, and docs accounted separately. Explain growth
+  against the smallest complete design; never compress code or weaken guarantees
+  to meet a line target.
 
 ## Boundaries
 
