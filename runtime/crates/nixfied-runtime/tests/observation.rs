@@ -634,6 +634,33 @@ fn committed_root_evidence_accepts_nonzero_exit_and_returns_independent_capture_
 }
 
 #[test]
+fn relative_recorded_manifest_is_corrupt_for_inspection_and_task_observation() {
+    let (owner, _) = Owner::start(false);
+    owner.observe().unwrap();
+    let connection = rusqlite::Connection::open(owner.location.registry_path()).unwrap();
+    connection
+        .execute("UPDATE runs SET manifest_path='relative/manifest.json'", [])
+        .unwrap();
+    let inspected = inspect(
+        &owner.admission,
+        &owner.location,
+        &Selector::current(),
+        &budget(5000),
+        &CancellationToken::new(),
+    );
+    let observed = owner.observe();
+    connection
+        .execute(
+            "UPDATE runs SET manifest_path=?1",
+            [owner.fixture.manifest_path.to_str().unwrap()],
+        )
+        .unwrap();
+    assert_eq!(inspected.unwrap_err().code, ErrorCode::RegistryCorrupt);
+    assert_eq!(observed.unwrap_err().code, ErrorCode::RegistryCorrupt);
+    assert!(owner.observe().is_ok());
+}
+
+#[test]
 fn ready_status_before_initial_health_never_satisfies_root_observation() {
     let (owner, release) = Owner::start(true);
     let error = await_selected(
