@@ -16,6 +16,72 @@ mod common;
 use common::*;
 
 #[test]
+fn slot_coordinates_anchor_relative_bases_without_materializing_any_state() {
+    use nixfied_runtime::state::{SlotIdentity, SlotLocation};
+    let tmp = TempDir::new();
+    let slot = SlotIdentity::new("project", "dev", 7).unwrap();
+    let relative = SlotLocation::new(slot.clone(), "state", &tmp.path).unwrap();
+    let absolute = SlotLocation::new(slot.clone(), tmp.path.join("state"), &tmp.path).unwrap();
+    assert_eq!(relative, absolute);
+    assert_eq!(relative.state_base(), tmp.path.join("state"));
+    assert_eq!(
+        relative.state_root(),
+        tmp.path.join("state/data/project/dev/7")
+    );
+    assert_eq!(
+        relative.registry_path(),
+        tmp.path
+            .join("state/registry/project/dev/7/registry.sqlite3")
+    );
+    let run = relative.for_run("run-one").unwrap();
+    assert_eq!(
+        run.run_dir(),
+        tmp.path.join("state/registry/project/dev/7/runs/run-one")
+    );
+    for invalid in ["", ".", "..", "../other", "run/other", "run\0"] {
+        assert_eq!(
+            relative.for_run(invalid).unwrap_err().code,
+            ErrorCode::StateUnwritable
+        );
+    }
+    for invalid in ["", "state\0"] {
+        assert_eq!(
+            SlotLocation::new(slot.clone(), invalid, &tmp.path)
+                .unwrap_err()
+                .code,
+            ErrorCode::StateUnwritable
+        );
+    }
+    assert_eq!(
+        SlotLocation::new(slot, "state", std::path::Path::new("relative"))
+            .unwrap_err()
+            .code,
+        ErrorCode::StateUnwritable
+    );
+    assert_eq!(std::fs::read_dir(&tmp.path).unwrap().count(), 0);
+}
+
+#[test]
+fn slot_coordinates_keep_native_unix_bytes_until_machine_projection() {
+    use nixfied_runtime::state::{SlotIdentity, SlotLocation};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let tmp = TempDir::new();
+    let base = std::ffi::OsString::from_vec(b"state-\xff".to_vec());
+    let location = SlotLocation::new(
+        SlotIdentity::new("project", "dev", 0).unwrap(),
+        &base,
+        &tmp.path,
+    )
+    .unwrap();
+    assert_eq!(
+        location.state_base().as_os_str().as_bytes(),
+        tmp.path.join(&base).as_os_str().as_bytes()
+    );
+    assert!(serde_json::to_value(location.state_root()).is_err());
+    assert_eq!(std::fs::read_dir(&tmp.path).unwrap().count(), 0);
+}
+
+#[test]
 fn materializes_m0_roots_and_slot_marker() {
     let fixture = StateFixture::new();
 
@@ -216,7 +282,7 @@ fn materialization_refuses_symlinked_roots_and_nested_run_paths() {
 
         let error = (|| {
             let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
-                &layout,
+                layout.location(),
                 &nixfied_runtime::cancellation::CancellationToken::new(),
             )?;
             let registry = slot_registry_with(guard, &identity)?;

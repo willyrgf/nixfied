@@ -1,3 +1,4 @@
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -47,26 +48,53 @@ impl SlotIdentity {
     }
 }
 
-/// The host paths of one session in one slot, derived on demand from the
-/// state base, the slot identity, and the run identity.
+/// Absolute lexical coordinates of one slot. Derivation neither creates state
+/// nor claims filesystem identity; mutation still requires the slot guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostPlacement {
+pub struct SlotLocation {
     state_base: PathBuf,
     slot: SlotIdentity,
-    run_id: String,
 }
 
-impl HostPlacement {
+impl SlotLocation {
+    pub fn new(
+        slot: SlotIdentity,
+        state_base: impl AsRef<Path>,
+        invocation_cwd: &Path,
+    ) -> RuntimeResult<Self> {
+        let state_base = state_base.as_ref();
+        if state_base.as_os_str().is_empty() || state_base.as_os_str().as_bytes().contains(&0) {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                "state base must be nonempty and NUL-free",
+            ));
+        }
+        let state_base = if state_base.is_absolute() {
+            state_base.to_path_buf()
+        } else {
+            if !invocation_cwd.is_absolute() {
+                return Err(RuntimeError::new(
+                    ErrorCode::StateUnwritable,
+                    "invocation cwd must be absolute",
+                ));
+            }
+            invocation_cwd.join(state_base)
+        };
+        if state_base.as_os_str().as_bytes().contains(&0) {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                "placement cwd must be NUL-free",
+            ));
+        }
+        Ok(Self { state_base, slot })
+    }
+
     pub fn state_base(&self) -> &Path {
         &self.state_base
     }
 
     pub fn slot(&self) -> &SlotIdentity {
         &self.slot
-    }
-
-    pub fn run_id(&self) -> &str {
-        &self.run_id
     }
 
     /// Application data and coordination/evidence have structurally disjoint roots.
@@ -81,6 +109,51 @@ impl HostPlacement {
 
     pub fn registry_path(&self) -> PathBuf {
         self.registry_dir().join("registry.sqlite3")
+    }
+
+    pub fn for_run(&self, run_id: &str) -> RuntimeResult<HostPlacement> {
+        normal_component("runId", run_id)?;
+        Ok(HostPlacement {
+            location: self.clone(),
+            run_id: run_id.to_owned(),
+        })
+    }
+}
+
+/// One run's evidence derives only from its slot location and run component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostPlacement {
+    location: SlotLocation,
+    run_id: String,
+}
+
+impl HostPlacement {
+    pub fn location(&self) -> &SlotLocation {
+        &self.location
+    }
+
+    pub fn state_base(&self) -> &Path {
+        self.location.state_base()
+    }
+
+    pub fn slot(&self) -> &SlotIdentity {
+        self.location.slot()
+    }
+
+    pub fn state_root(&self) -> PathBuf {
+        self.location.state_root()
+    }
+
+    pub fn registry_dir(&self) -> PathBuf {
+        self.location.registry_dir()
+    }
+
+    pub fn registry_path(&self) -> PathBuf {
+        self.location.registry_path()
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     pub fn run_dir(&self) -> PathBuf {
@@ -133,20 +206,23 @@ pub fn derive_slot_placement(
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
-    let state_base = state_base.as_ref().to_path_buf();
-    if state_base.as_os_str().is_empty() {
-        return Err(RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            "state base cannot be empty",
-        ));
-    }
+    derive_slot_location(project, environment, slot, state_base)?.for_run(run_id)
+}
+
+pub fn derive_slot_location(
+    project: &str,
+    environment: &str,
+    slot: u32,
+    state_base: impl AsRef<Path>,
+) -> RuntimeResult<SlotLocation> {
     let slot = SlotIdentity::new(project, environment, slot)?;
-    normal_component("runId", run_id)?;
-    Ok(HostPlacement {
-        state_base,
-        slot,
-        run_id: run_id.to_owned(),
-    })
+    let cwd = std::env::current_dir().map_err(|_| {
+        RuntimeError::new(
+            ErrorCode::StateUnwritable,
+            "cannot resolve placement invocation cwd",
+        )
+    })?;
+    SlotLocation::new(slot, state_base, &cwd)
 }
 
 fn normal_component(field: &str, value: &str) -> RuntimeResult<()> {

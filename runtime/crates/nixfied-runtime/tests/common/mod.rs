@@ -581,7 +581,7 @@ pub fn process_group_has_non_zombie_member(pgid: i32) -> bool {
 pub fn registry_guard(placement: &HostPlacement) -> nixfied_runtime::state::ownership::SlotGuard {
     poll_until(Duration::from_secs(5), "fixture slot authority", || {
         nixfied_runtime::state::ownership::SlotGuard::try_acquire(
-            placement,
+            placement.location(),
             &nixfied_runtime::cancellation::CancellationToken::new(),
         )
         .expect("fixture slot authority")

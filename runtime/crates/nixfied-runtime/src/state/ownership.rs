@@ -9,6 +9,7 @@ use std::process::{Child, Command};
 
 use super::HostPlacement;
 use super::placement::SlotIdentity;
+use super::placement::SlotLocation;
 use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, PrivateFile};
@@ -25,7 +26,7 @@ pub struct SlotGuard {
 
 impl SlotGuard {
     pub fn acquire(
-        placement: &HostPlacement,
+        placement: &SlotLocation,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<Self> {
         Self::try_acquire(placement, cancellation)?.ok_or_else(|| {
@@ -39,7 +40,7 @@ impl SlotGuard {
     /// Like [`Self::acquire`], but contention is an explicit `None` so an
     /// observer can keep waiting without mistaking it for another failure.
     pub fn try_acquire(
-        placement: &HostPlacement,
+        placement: &SlotLocation,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<Option<Self>> {
         cancellation.check()?;
@@ -243,7 +244,7 @@ pub(crate) fn fixture_guard(
         root,
     )
     .unwrap();
-    SlotGuard::acquire(&placement, &CancellationToken::new()).unwrap()
+    SlotGuard::acquire(placement.location(), &CancellationToken::new()).unwrap()
 }
 
 #[cfg(test)]
@@ -271,7 +272,7 @@ mod tests {
             Self { root, placement }
         }
         fn acquire(&self) -> RuntimeResult<SlotGuard> {
-            SlotGuard::acquire(&self.placement, &CancellationToken::new())
+            SlotGuard::acquire(self.placement.location(), &CancellationToken::new())
         }
     }
 
@@ -312,13 +313,13 @@ mod tests {
         let placement =
             crate::state::derive_slot_placement("project", "dev", 0, "session", &alias).unwrap();
         let guard = fixture.acquire().unwrap();
-        assert!(SlotGuard::acquire(&placement, &CancellationToken::new()).is_err());
+        assert!(SlotGuard::acquire(placement.location(), &CancellationToken::new()).is_err());
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _guard = guard;
             panic!("test unwind");
         }));
         assert!(unwind.is_err());
-        SlotGuard::acquire(&placement, &CancellationToken::new())
+        SlotGuard::acquire(placement.location(), &CancellationToken::new())
             .unwrap()
             .release()
             .unwrap();
@@ -371,7 +372,7 @@ mod tests {
         let fixture = Fixture::new();
         let token = CancellationToken::new();
         token.cancel();
-        assert!(SlotGuard::acquire(&fixture.placement, &token).is_err());
+        assert!(SlotGuard::acquire(fixture.placement.location(), &token).is_err());
         assert!(!fixture.placement.registry_dir().exists());
         let guard = fixture.acquire().unwrap();
         let lock = fixture.placement.registry_dir().join("slot.lock");
