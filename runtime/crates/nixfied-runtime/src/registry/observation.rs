@@ -792,6 +792,31 @@ mod tests {
     }
 
     #[test]
+    fn exclusive_bootstrap_contention_is_retryable_without_learning_or_hiding_corruption() {
+        let fixture = Fixture::new();
+        let raw = rusqlite::Connection::open(fixture.scope.location.registry_path()).unwrap();
+        raw.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let mut history = History::default();
+        assert!(
+            Snapshot::read(&fixture.scope, &mut history)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(history, History::Unseen));
+        raw.execute_batch("ROLLBACK").unwrap();
+        drop(fixture.read(&mut history).unwrap());
+        assert!(matches!(history, History::Bootstrap(_)));
+        fixture.writer().close().unwrap();
+        drop(fixture.read(&mut history).unwrap());
+        assert!(matches!(history, History::Complete { greatest: 0, .. }));
+        raw.pragma_update(None, "user_version", 19).unwrap();
+        assert_eq!(
+            fixture.read(&mut history).err().unwrap().code,
+            ErrorCode::RegistryCorrupt
+        );
+    }
+
+    #[test]
     fn history_keeps_complete_zero_distinct_from_missing_and_bootstrap() {
         use std::os::unix::fs::MetadataExt;
         for fault in ["missing", "bootstrap", "replacement"] {
