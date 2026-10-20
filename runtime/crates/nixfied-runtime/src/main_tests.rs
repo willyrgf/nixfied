@@ -543,6 +543,8 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         if collision == "summary" {
             assert_eq!(evidence.tasks.len(), 1);
             assert_eq!(evidence.nodes().len(), 1);
+            assert_eq!(error.observed, Some(ExecutionOutcome::Succeeded));
+            assert!(evidence.tasks[0].success);
             assert_eq!(std::fs::read_to_string(&counter).unwrap(), "1");
             assert_eq!(
                 error.error.details["taskRun"]["stdoutPath"],
@@ -550,8 +552,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             );
         } else {
             assert!(evidence.tasks.is_empty());
-            assert!(evidence.root_nodes.is_empty());
-            assert!(evidence.selected_task.is_none());
+            assert!(evidence.root_tasks().is_empty());
             assert!(
                 !counter.exists(),
                 "log collision must prevent child execution"

@@ -54,10 +54,6 @@ pub enum TaskExecutionError {
         error: Box<RuntimeError>,
         outcome: crate::registry::session::ExecutionOutcome,
     },
-    AfterTerminal {
-        error: Box<RuntimeError>,
-        evidence: Box<TaskRun>,
-    },
 }
 
 impl TaskExecutionError {
@@ -65,18 +61,9 @@ impl TaskExecutionError {
         Self::BeforeTerminal(Box::new(error))
     }
 
-    fn after(error: RuntimeError, evidence: TaskRun) -> Self {
-        Self::AfterTerminal {
-            error: Box::new(error),
-            evidence: Box::new(evidence),
-        }
-    }
-
     pub fn error(&self) -> &RuntimeError {
         match self {
-            Self::BeforeTerminal(error)
-            | Self::AfterTerminal { error, .. }
-            | Self::ObservedWithoutEvidence { error, .. } => error,
+            Self::BeforeTerminal(error) | Self::ObservedWithoutEvidence { error, .. } => error,
         }
     }
 }
@@ -268,35 +255,20 @@ pub fn run_dependent_task_cancellable(
             .summary_path()
             .with_file_name(format!("summary.{occurrence}.json")),
     };
-    let payload_value = match write_summary(&evidence, run_context.redactor) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(TaskExecutionError::after(error, evidence));
-        }
-    };
-    let payload_json = match serde_json::to_string(&payload_value) {
-        Ok(value) => value,
-        Err(error) => {
-            return Err(TaskExecutionError::after(
-                RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
-                evidence,
-            ));
-        }
-    };
-    if let Err(error) = mark_invocation_finished(
-        registry,
-        invocation.identity(&process_key),
-        terminal_status,
-        &payload_json,
-        Some(CaptureOutcome::Complete),
-    ) {
-        return Err(TaskExecutionError::after(error, evidence));
-    }
+    let publication = write_summary(&evidence, run_context.redactor).and_then(|payload| {
+        mark_invocation_finished(
+            registry,
+            invocation.identity(&process_key),
+            terminal_status,
+            &payload.to_string(),
+            Some(CaptureOutcome::Complete),
+        )
+    });
     // The run's evidence (exit code, log and summary paths) already exists;
     // carry it on the error so the failure surface links to it instead of
     // discarding it. A timeout is an execution failure, not an operator
     // cancellation — only a canceled run reports CANCELED.
-    match outcome_error {
+    match publication.err().or(outcome_error) {
         None => Ok(TaskExecution::Succeeded(evidence)),
         Some(error) => Ok(TaskExecution::Failed { error, evidence }),
     }

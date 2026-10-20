@@ -339,9 +339,7 @@ impl<'a> RunSession<'a> {
         }
 
         let primary_task = if self.direct_selected {
-            self.evidence
-                .selected_task
-                .map(|index| self.evidence.tasks[index.0].clone())
+            self.evidence.root_tasks().first().cloned()
         } else {
             self.evidence.tasks.last().cloned()
         };
@@ -1422,7 +1420,7 @@ fn service_output(info: &nixfied_runtime::service::ServiceInfo) -> ServiceRunOut
 /// the owner never writes them to caller streams. The first write failure is
 /// kept for finalization and later lines are dropped.
 struct SessionDiagnostics {
-    file: Option<std::fs::File>,
+    file: std::fs::File,
     enabled: bool,
     failure: Option<RuntimeError>,
 }
@@ -1447,7 +1445,7 @@ impl SessionDiagnostics {
                 )
             })?;
         Ok(Self {
-            file: Some(file),
+            file,
             enabled,
             failure: None,
         })
@@ -1457,21 +1455,15 @@ impl SessionDiagnostics {
         if !self.enabled || self.failure.is_some() {
             return;
         }
-        let Some(file) = self.file.as_mut() else {
-            return;
-        };
-        if let Err(error) = writeln!(file, "{line}") {
+        if let Err(error) = writeln!(self.file, "{line}") {
             self.failure = Some(diagnostic_error(error));
         }
     }
 
     /// Close the writer before the output seal; sealed sources never grow.
-    fn close(&mut self) -> Result<(), RuntimeError> {
-        let closed = match self.file.take() {
-            Some(file) => file.sync_all().map_err(diagnostic_error),
-            None => Ok(()),
-        };
-        match self.failure.take() {
+    fn close(self) -> Result<(), RuntimeError> {
+        let closed = self.file.sync_all().map_err(diagnostic_error);
+        match self.failure {
             Some(error) => Err(error),
             None => closed,
         }
@@ -1496,15 +1488,12 @@ fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
     })
 }
 
-#[derive(Clone, Copy)]
-struct EvidenceIndex(usize);
-
 #[derive(Default)]
 struct RunEvidence {
     next_occurrence: u64,
     tasks: Vec<TaskRun>,
-    root_nodes: Vec<EvidenceIndex>,
-    selected_task: Option<EvidenceIndex>,
+    // Service preparations finish before root execution begins.
+    first_root: Option<usize>,
 }
 
 impl RunEvidence {
@@ -1519,21 +1508,22 @@ impl RunEvidence {
         Ok(occurrence)
     }
 
+    fn root_tasks(&self) -> &[TaskRun] {
+        &self.tasks[self.first_root.unwrap_or(self.tasks.len())..]
+    }
+
     fn nodes(&self) -> Vec<NodeResult> {
-        self.root_nodes
+        self.root_tasks()
             .iter()
-            .map(|index| {
-                let task = &self.tasks[index.0];
-                NodeResult {
-                    node_id: task.step_path.clone(),
-                    task_id: task.task_id.clone(),
-                    success: task.success,
-                    exit_code: task.exit_code,
-                    duration_ms: task.duration_ms,
-                    stdout_path: task.stdout_path.clone(),
-                    stderr_path: task.stderr_path.clone(),
-                    summary_path: task.summary_path.clone(),
-                }
+            .map(|task| NodeResult {
+                node_id: task.step_path.clone(),
+                task_id: task.task_id.clone(),
+                success: task.success,
+                exit_code: task.exit_code,
+                duration_ms: task.duration_ms,
+                stdout_path: task.stdout_path.clone(),
+                stderr_path: task.stderr_path.clone(),
+                summary_path: task.summary_path.clone(),
             })
             .collect()
     }
@@ -1607,7 +1597,6 @@ fn execute_node(
                 observed: Some(outcome),
             });
         }
-        Err(TaskExecutionError::AfterTerminal { error, evidence }) => (*evidence, Some(*error)),
     };
     // Checkpoint before settling success: a service exit observed after the
     // task's own exit still fails the node and the session.
@@ -1622,14 +1611,11 @@ fn execute_node(
     } else {
         ExecutionOutcome::Failed
     };
-    let index = EvidenceIndex(evidence.tasks.len());
+    let index = evidence.tasks.len();
     evidence.tasks.push(task_run);
     if let TaskOccurrence::Root(_) = selected {
-        evidence.root_nodes.push(index);
-        if context.direct_selected {
-            evidence.selected_task = Some(index);
-        }
-        let task_run = &evidence.tasks[index.0];
+        evidence.first_root.get_or_insert(index);
+        let task_run = &evidence.tasks[index];
         if error.is_some() {
             diagnostics.write(format_args!(
                 "  fail {} ({}) {} exit={}",
@@ -1655,7 +1641,7 @@ fn execute_node(
         (Some(error), _) => Err(NodeFailure {
             error: Box::new(decorate(attach_task_evidence(
                 error,
-                &evidence.tasks[index.0],
+                &evidence.tasks[index],
             ))),
             observed: Some(observed),
         }),

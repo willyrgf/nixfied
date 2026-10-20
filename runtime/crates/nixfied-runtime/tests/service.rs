@@ -871,6 +871,69 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 }
 
 #[test]
+fn terminal_event_failure_retains_completed_task_evidence_and_prior_observation() {
+    let port = available_port_window(1);
+    let mut value = test_child_manifest(port, port);
+    set_task_run_args(
+        &mut value,
+        &["output", "literal", "completed-output", "completed-error"],
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let service = fixture.start_ready("run-task-publication-failure", port);
+    fixture
+        .registry
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER reject_task_terminal BEFORE INSERT ON events
+         WHEN NEW.event_type = 'task.succeeded'
+         BEGIN SELECT RAISE(ABORT, 'injected'); END",
+        )
+        .unwrap();
+
+    let TaskExecution::Failed { error, evidence } = fixture
+        .run_smoke(&service, &CancellationToken::new())
+        .expect("completed capture must retain task evidence")
+    else {
+        panic!("terminal event publication must fail");
+    };
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert!(evidence.success);
+    assert_eq!(evidence.exit_code, Some(0));
+    assert_eq!(
+        fs::read(&evidence.stdout_path).unwrap(),
+        b"completed-output"
+    );
+    assert_eq!(fs::read(&evidence.stderr_path).unwrap(), b"completed-error");
+    let summary: Value =
+        serde_json::from_slice(&fs::read(&evidence.summary_path).unwrap()).unwrap();
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["processKey"], evidence.process_key);
+    assert_eq!(
+        fixture.query::<String>(
+            "SELECT execution_outcome FROM processes WHERE process_key = ?1",
+            [&evidence.process_key],
+        ),
+        "succeeded"
+    );
+    assert_eq!(
+        fixture.query::<String>(
+            "SELECT status || '/' || ownership || '/' || capture FROM processes WHERE process_key = ?1",
+            [&evidence.process_key],
+        ),
+        "running/unresolved/pending",
+        "failed publication must roll back settlement without rewriting observed execution"
+    );
+    assert_eq!(
+        fixture.query::<i64>(
+            "SELECT count(*) FROM events WHERE event_type = 'task.succeeded'",
+            []
+        ),
+        0
+    );
+    service.stop(&mut fixture.registry, 1000).unwrap();
+}
+
+#[test]
 fn readiness_timeout_stops_started_service_and_records_failed() {
     let port = available_port_window(1);
     let mut fixture = ServiceFixture::new(&test_sleep(), &["30"], port);
@@ -3675,8 +3738,13 @@ fn repeated_prepares_and_root_keep_distinct_occurrence_evidence() {
             assert_eq!(&recorded, task);
         }
         assert_eq!(
-            summary["nodes"].as_array().unwrap().len(),
-            expected_count.saturating_sub(2)
+            summary["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node["nodeId"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["pipeline.again", "pipeline.final"][..expected_count.saturating_sub(2)]
         );
     }
 }
