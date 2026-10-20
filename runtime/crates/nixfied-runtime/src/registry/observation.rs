@@ -385,7 +385,7 @@ impl Snapshot {
             (String, String, String, String, String, String, Option<String>, String) = reader.connection().query_row(
                 "SELECT manifest_path, computed_manifest_hash, root_task, source_json, operation_timeout_ms, owner_identity, execution_outcome, finalization FROM runs WHERE run_id = ?1",
                 [run], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))).map_err(sql_error)?;
-        if manifest.is_empty() || manifest.contains('\0') {
+        if manifest.contains('\0') || !std::path::Path::new(&manifest).is_absolute() {
             return Err(invalid("invalid recorded manifest_path"));
         }
         Ok(RunFacts {
