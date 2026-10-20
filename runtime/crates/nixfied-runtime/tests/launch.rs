@@ -504,6 +504,12 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     registry.authority().claim_run_dir(&placement).unwrap();
     record_run_created(&mut registry, "gated-task", &admission, &placement).unwrap();
     registry.connection().execute_batch("CREATE TRIGGER deny_task_registration BEFORE INSERT ON events WHEN NEW.event_type = 'task.running' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap();
+    let plan = nixfied_runtime::execution::plan(
+        admission.common().execution_manifest(),
+        &nixfied_manifest::TaskId::new("smoke"),
+        0,
+    )
+    .unwrap();
     let error = run_dependent_task_cancellable(
         &placement,
         &mut registry,
@@ -515,13 +521,8 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
             &nixfied_runtime::redaction::Redactor::empty(),
         ),
         &[],
-        "smoke",
+        nixfied_runtime::execution::TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
         0,
-        admission
-            .common()
-            .execution_manifest()
-            .leaf("smoke")
-            .unwrap(),
         &nixfied_runtime::cancellation::CancellationToken::new(),
         nixfied_runtime::output::SourcePresentation::Shown,
     )

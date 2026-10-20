@@ -10,7 +10,7 @@ use std::time::Instant;
 use nixfied_manifest::TaskDefaultOutput;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::error_code_wire;
-use nixfied_runtime::execution::{PlanNode, plan};
+use nixfied_runtime::execution::{TaskOccurrence, plan};
 use nixfied_runtime::output::{
     OutputStream, ProjectionOperation, SourcePresentation, output_projection_io_error,
 };
@@ -1008,15 +1008,15 @@ fn run_placed(
     // anything spawns: `${port:<serviceId>}` substitution addresses each service's
     // primary endpoint by service id.
     let slot_endpoints: nixfied_runtime::service::SlotEndpoints = plan
-        .services
+        .services()
         .iter()
         .filter_map(|binding| {
-            let service = binding.service;
+            let service = binding.service();
             let primary_id = service.primary_endpoint()?;
             let (_, primary) = service.endpoints().find(|(id, _)| *id == primary_id)?;
-            let port = *binding.endpoint_ports.get(primary_id.as_str())?;
+            let port = *binding.endpoint_ports().get(primary_id.as_str())?;
             Some((
-                binding.service.name.clone(),
+                binding.service().name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
                     endpoint_id: primary_id.to_string(),
                     host: primary.host,
@@ -1072,32 +1072,32 @@ fn run_placed(
             Err(error) => finish_run!(error, Vec::new()),
         }
     }
-    for binding in &plan.services {
-        let service_name = binding.service.name.as_str();
+    for binding in plan.services() {
+        let service_name = binding.service().name.as_str();
         session
             .diagnostics
             .write(format_args!("  starting service {service_name}"));
 
         let prepare_runner: Option<PrepareRunner<'_>> =
-            binding.service.prepare.as_ref().map(|_| {
+            binding.service().prepare.as_ref().map(|_| {
                 let context = NodeContext {
                     placement,
                     run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
                     cancellation,
+                    direct_selected,
                 };
                 let evidence = &mut session.evidence;
                 let started = &session.started;
                 let diagnostics = &mut session.diagnostics;
                 Box::new(move |registry: &mut Registry| {
-                    for node in &binding.prepare_nodes {
+                    for leaf in binding.preparation_leaves() {
                         execute_node(
                             &context,
                             registry,
                             evidence,
                             started,
                             diagnostics,
-                            node,
-                            NodeRole::Prepare,
+                            TaskOccurrence::Preparation(leaf),
                         )
                         .map_err(|failure| *failure.error)?;
                     }
@@ -1115,7 +1115,7 @@ fn run_placed(
             ServiceSelection {
                 launcher: &launcher,
                 service_name,
-                endpoint_ports: &binding.endpoint_ports,
+                endpoint_ports: binding.endpoint_ports(),
                 slot_endpoints: &slot_endpoints,
                 run_timeout_ms: options.timeout_ms,
                 cancellation,
@@ -1180,19 +1180,19 @@ fn run_placed(
         placement,
         run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
         cancellation,
+        direct_selected,
     };
-    for (index, node) in plan.nodes.iter().enumerate() {
+    for leaf in plan.root_leaves() {
         if let Err(failure) = execute_node(
             &context,
             &mut session.registry,
             &mut session.evidence,
             &session.started,
             &mut session.diagnostics,
-            node,
-            NodeRole::Root { direct_selected },
+            TaskOccurrence::Root(leaf),
         ) {
             let observed = match failure.observed {
-                Some(ExecutionOutcome::Succeeded) if index + 1 == plan.nodes.len() => {
+                Some(ExecutionOutcome::Succeeded) if !leaf.has_continuation() => {
                     Some(ExecutionOutcome::Succeeded)
                 }
                 Some(ExecutionOutcome::Succeeded) => Some(ExecutionOutcome::Failed),
@@ -1211,16 +1211,16 @@ fn reject_interactive_stdin(
     plan: &nixfied_runtime::execution::RunPlan<'_>,
 ) -> Result<(), RuntimeError> {
     let inherits = plan
-        .nodes
+        .nodes()
         .iter()
         .chain(
-            plan.services
+            plan.services()
                 .iter()
-                .flat_map(|binding| binding.prepare_nodes.iter()),
+                .flat_map(|binding| binding.preparation_leaves().map(|leaf| leaf.node())),
         )
-        .any(|node| node.task.exec.stdin == nixfied_manifest::StdinPolicy::Inherit)
-        || plan.services.iter().any(|binding| {
-            binding.service.start.exec.stdin == nixfied_manifest::StdinPolicy::Inherit
+        .any(|node| node.task().exec.stdin == nixfied_manifest::StdinPolicy::Inherit)
+        || plan.services().iter().any(|binding| {
+            binding.service().start.exec.stdin == nixfied_manifest::StdinPolicy::Inherit
         });
     if inherits {
         return Err(RuntimeError::new(
@@ -1369,12 +1369,6 @@ impl RunEvidence {
     }
 }
 
-#[derive(Clone, Copy)]
-enum NodeRole {
-    Prepare,
-    Root { direct_selected: bool },
-}
-
 #[derive(Debug)]
 struct NodeFailure {
     error: Box<RuntimeError>,
@@ -1394,6 +1388,7 @@ struct NodeContext<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
     run: RunContext<'a>,
     cancellation: &'a CancellationToken,
+    direct_selected: bool,
 }
 
 fn execute_node(
@@ -1402,35 +1397,33 @@ fn execute_node(
     evidence: &mut RunEvidence,
     started: &[ReadyService],
     diagnostics: &mut SessionDiagnostics,
-    node: &PlanNode<'_>,
-    role: NodeRole,
+    selected: TaskOccurrence<'_, '_>,
 ) -> Result<(), NodeFailure> {
-    let decorate = |error: RuntimeError| match role {
-        NodeRole::Prepare => error,
-        NodeRole::Root { .. } => error.with_detail("failedNodeId", node.node_id.as_str()),
+    let node = selected.node();
+    let decorate = |error: RuntimeError| match selected {
+        TaskOccurrence::Preparation(_) => error,
+        TaskOccurrence::Root(_) => error.with_detail("failedNodeId", node.node_id().as_str()),
     };
     let occurrence = evidence.allocate_occurrence().map_err(decorate)?;
-    let task = node.task;
-    if matches!(role, NodeRole::Prepare) {
+    let task = node.task();
+    if matches!(selected, TaskOccurrence::Preparation(_)) {
         diagnostics.write(format_args!(
             "  prepare node {} ({})",
-            node.node_id, task.task_id
+            node.node_id(),
+            task.task_id
         ));
     }
-    let presentation = match role {
-        NodeRole::Root {
-            direct_selected: true,
-        } => SourcePresentation::Selected,
-        NodeRole::Prepare | NodeRole::Root { .. } => SourcePresentation::Shown,
+    let presentation = match selected {
+        TaskOccurrence::Root(_) if context.direct_selected => SourcePresentation::Selected,
+        TaskOccurrence::Preparation(_) | TaskOccurrence::Root(_) => SourcePresentation::Shown,
     };
     let result = run_dependent_task_cancellable(
         context.placement,
         registry,
         context.run,
         &started.iter().collect::<Vec<_>>(),
-        node.node_id.as_str(),
+        selected,
         occurrence,
-        task,
         context.cancellation,
         presentation,
     );
@@ -1461,16 +1454,16 @@ fn execute_node(
     };
     let index = EvidenceIndex(evidence.tasks.len());
     evidence.tasks.push(task_run);
-    if let NodeRole::Root { direct_selected } = role {
+    if let TaskOccurrence::Root(_) = selected {
         evidence.root_nodes.push(index);
-        if direct_selected {
+        if context.direct_selected {
             evidence.selected_task = Some(index);
         }
         let task_run = &evidence.tasks[index.0];
         if error.is_some() {
             diagnostics.write(format_args!(
                 "  fail {} ({}) {} exit={}",
-                node.node_id,
+                node.node_id(),
                 task.task_id,
                 human_duration(task_run.duration_ms),
                 human_exit_code(task_run.exit_code)
@@ -1482,7 +1475,7 @@ fn execute_node(
         } else {
             diagnostics.write(format_args!(
                 "  ok {} ({}) {}",
-                node.node_id,
+                node.node_id(),
                 task.task_id,
                 human_duration(task_run.duration_ms)
             ));

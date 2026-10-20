@@ -3064,6 +3064,12 @@ impl ServiceFixture {
         service: &ReadyService,
         cancellation: &CancellationToken,
     ) -> Result<TaskExecution, TaskExecutionError> {
+        let plan = nixfied_runtime::execution::plan(
+            self.admission.common().execution_manifest(),
+            &nixfied_manifest::TaskId::new("smoke"),
+            0,
+        )
+        .unwrap();
         run_dependent_task_cancellable(
             &self.placement,
             &mut self.registry,
@@ -3075,13 +3081,8 @@ impl ServiceFixture {
                 &Redactor::from_secrets(self.admission.secrets()),
             ),
             &[service],
-            "smoke",
+            nixfied_runtime::execution::TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
             0,
-            self.admission
-                .common()
-                .execution_manifest()
-                .leaf("smoke")
-                .expect("smoke task"),
             cancellation,
             SourcePresentation::Shown,
         )
