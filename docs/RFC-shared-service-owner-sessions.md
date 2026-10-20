@@ -1,7 +1,11 @@
 # RFC Shared service owner sessions
 
-Status: proposed. Scope: generic runtime controls and observation. This proposal
-does not change the current [contract](CONTRACT.md).
+Status: delivered and superseded. This historical proposal and its companion
+[implementation design](DESIGN-shared-service-owner-sessions.md) record the
+preimplementation review. The maintained [contract](CONTRACT.md),
+[guide](GUIDE.md#share-a-service-owner), [architecture](ARCHITECTURE.md#registry-and-liveness)
+and [verification guide](DEVELOPMENT.md#change-specific-verification) own the
+shipped behavior, boundaries and checks. The proposal text below is historical.
 
 ## Decision
 
@@ -108,13 +112,16 @@ escape hatch remains framework-test-only. New operands are:
 | Control | Operands and validation |
 | --- | --- |
 | `context` | Common operands only. |
-| `observe` inspection | Exactly one of `--current` or `--run-id <id>`. |
+| `observe` inspection | Exactly one of `--current` or `--run-id <id>`; optional `--wait-timeout-ms <positive u64>` bounds obtaining a coherent selection and samples. |
 | `observe` awaiting a task | The same selector plus `--until-step <stepPath>` and optional `--wait-timeout-ms <positive u64>`. |
 | `ensure` | Required `--task <id>` and `--until-step <stepPath>`; optional `--wait-timeout-ms <positive u64>` and existing `--timeout-ms <u64>` runtime operation timeout. |
 
-Each new value operand and selector occurs at most once. Observation timeout
-defaults to 60000 ms and is accepted only when waiting. `ensure`'s operation
-timeout defaults to the existing run default of 5000 ms. It remains distinct
+Each new value operand and selector occurs at most once; common operands retain
+their existing native parsing rules. Run IDs use the existing bounded ASCII
+background identity grammar. Observation timeout defaults to 60000 ms, including
+inspection read contention; inspection still never follows publication.
+`ensure`'s operation timeout defaults to the existing run default of 5000 ms.
+It remains distinct
 from task deadlines and observer timeout. None accepts `--daemon` or `--output`.
 Help exits 0 before admission; otherwise success emits one JSON value on stdout
 and failure emits the current structured `RuntimeError` on stderr. Diagnostics
@@ -133,6 +140,10 @@ coordinates, without claiming canonical filesystem identity for nonexistent
 paths. Preserve non-UTF-8 paths internally; JSON projection rejects paths it
 cannot represent rather than replacing bytes. System path aliases remain
 subject to the existing descriptor-based execution checks.
+
+New runs likewise preflight persisted machine locators for lossless UTF-8 before
+slot or application mutation. This closes current lossy path publication in the
+same contract cutover; byte-oriented environment selection remains unchanged.
 
 Separate slot coordinates from run-specific evidence paths in the native
 placement types, so a context query needs no invented run identity. Host paths
@@ -246,8 +257,10 @@ Four new error codes use exit class `error`:
 Selector syntax and duplicate operands use `MANIFEST_ADMISSION`; unknown tasks,
 invalid root steps, and invalid `ensure` continuation use
 `TASK_SELECTION_INVALID`. Waiting with a different manifest uses
-`REQUEST_MISMATCH`. Observer signals use `CANCELED`; uncertain bootstrap replies
-use `LIFECYCLE_FAILED` with the allocated run ID and explicit uncertainty.
+`REQUEST_MISMATCH`. Observer signals use `CANCELED`; expiry during bootstrap uses
+`OBSERVATION_TIMEOUT`, while premature EOF or malformed replies use
+`LIFECYCLE_FAILED`. After complete dispatch, both retain the allocated run ID and
+explicit uncertainty unless a conclusive reply is known.
 Admission, registry, filesystem, identity-inspection, and output-projection
 errors keep their existing classifications. An accepted task with incomplete
 evidence can never satisfy waiting.
@@ -267,6 +280,10 @@ These immutable facts are owned by the run row. Do not create a service table,
 configuration hash, reusable service identity, or required sidecar.
 Operation timeout retains its full `u64` range, including zero as currently
 accepted; the registry codec must not narrow it to SQLite's signed integer range.
+
+Historical source decoding is source-owned metadata validation, distinct from
+fresh admission. It neither resolves today's filesystem/secrets nor narrows
+authored fingerprint-policy text to an invented closed vocabulary.
 
 For reuse, match the slot's checked registry identity, raw manifest hash,
 selected root task, the existing admitted-source fields, and operation timeout.
@@ -344,6 +361,15 @@ decision and returns either a new establishment or a selected competing run.
 A mismatch never cancels or recovers the selected run. An acquired guard is
 released before returning to read-only observation.
 
+Keep sampled registry continuity across that handoff: checked file identity,
+bootstrap-to-complete progression and the greatest observed event sequence are
+monotonic and separate from frozen `H`. Once checked, disappearance, replacement,
+reset or event-order regression rejects, including complete history at `H = 0`.
+The helper validates a resumed cursor against actual admitted scope before
+effects; replies return learned continuity. No durable epoch or second identity
+authority is added. The implementation design defines the exact codec and
+limitations of these invocation-local checks.
+
 Registry initialization currently exposes SQLite before schema commit. Add a
 native read result distinguishing absence, exactly the already-admissible empty
 unversioned bootstrap state, a complete checked snapshot, and narrowly retryable
@@ -370,6 +396,13 @@ or interrupting any observer after that point never writes to the owner's
 cancellation FIFO, even if that observer initiated establishment. An uncertain
 reply reports the allocated run identity and uncertainty, without inventing
 success or automatically canceling a possible shared owner.
+
+Before commit, already-begun ordinary predecessor recovery may outlive its
+observer. The operation timeout bounds individual stops, not total cleanup or
+helper lifetime. Abandonment checks before/after recovery and before commit
+prevent a new run after observed launcher loss; the observer returns on its own
+budget without waiting for that recovery. There is no new recovery executor or
+cooperative cleanup protocol.
 
 Ordinary `run --daemon` preserves its existing interruption behavior. The new
 purpose is explicit rather than silently changing all background launches.
