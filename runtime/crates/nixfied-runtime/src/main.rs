@@ -25,7 +25,8 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, apply_retention, derive_slot_placement, prepare_slot_state, state_base_from_env,
+    StateIdentity, apply_retention, derive_slot_location, derive_slot_placement,
+    prepare_slot_state, state_base_from_env,
 };
 use nixfied_runtime::{
     AdmissionContext, ControlAdmission, RunAdmission, RuntimeError, StoreOriginPolicy,
@@ -868,7 +869,7 @@ fn enrich_run_error(
     placement: &nixfied_runtime::state::HostPlacement,
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
 ) -> RuntimeError {
-    enrich_placed_error(error, placement, selected_slot)
+    enrich_placed_error(error, placement.location(), selected_slot)
         .with_detail("runId", run_id)
         .with_detail("runDir", placement.run_dir())
         .with_detail("logsDir", placement.logs_dir())
@@ -893,7 +894,7 @@ fn post_admission_error(error: RuntimeError) -> RuntimeError {
 /// directly instead of asking operators to re-derive them.
 fn enrich_placed_error(
     error: RuntimeError,
-    placement: &nixfied_runtime::state::HostPlacement,
+    placement: &nixfied_runtime::state::SlotLocation,
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
 ) -> RuntimeError {
     error
@@ -930,7 +931,8 @@ fn run_placed(
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
-    let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(placement, cancellation)?;
+    let guard =
+        nixfied_runtime::state::ownership::SlotGuard::acquire(placement.location(), cancellation)?;
     let registry = Registry::open_or_create(
         guard,
         &RegistryIdentity::for_slot(
@@ -1776,11 +1778,10 @@ fn run_control_admitted(
 ) -> Result<(), RuntimeError> {
     let manifest = admission.manifest();
     let selected_slot = select_slot(manifest, options.slot).map_err(post_admission_error)?;
-    let placement = derive_slot_placement(
+    let placement = derive_slot_location(
         &manifest.project.project_id,
         selected_slot.environment,
         selected_slot.slot,
-        "control",
         &options.state_base,
     )
     .map_err(post_admission_error)?;

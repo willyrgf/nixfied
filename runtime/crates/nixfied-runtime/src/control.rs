@@ -18,7 +18,7 @@ use crate::service::{
     settle_service_terminal, settle_unresolved_process,
 };
 use crate::session_control::{CancellationDelivery, request_cancellation};
-use crate::state::HostPlacement;
+use crate::state::SlotLocation;
 use crate::state::ownership::SlotGuard;
 use crate::state::{RetentionOutcome, StateIdentity, apply_retention};
 
@@ -62,7 +62,7 @@ pub struct DownReport {
 /// a successor, and a timeout reports incomplete shutdown without signaling
 /// anything itself.
 pub fn down(
-    placement: &HostPlacement,
+    placement: &SlotLocation,
     registry_identity: &RegistryIdentity,
     state: &StateIdentity,
     timeout_ms: u64,
@@ -727,7 +727,7 @@ mod tests {
         )
         .unwrap();
         let mut registry = Registry::open_or_create(
-            SlotGuard::acquire(&placement, &CancellationToken::new()).unwrap(),
+            SlotGuard::acquire(placement.location(), &CancellationToken::new()).unwrap(),
             &identity,
         )
         .unwrap();
@@ -754,7 +754,7 @@ mod tests {
         )
         .unwrap();
         let mut registry = Registry::open_or_create(
-            SlotGuard::acquire(&successor, &CancellationToken::new()).unwrap(),
+            SlotGuard::acquire(successor.location(), &CancellationToken::new()).unwrap(),
             &identity,
         )
         .unwrap();

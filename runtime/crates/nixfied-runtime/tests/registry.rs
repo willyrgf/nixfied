@@ -110,7 +110,7 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
                 scope.spawn(|| {
                     start.wait();
                     let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(
-                        &placement,
+                        placement.location(),
                         &nixfied_runtime::cancellation::CancellationToken::new(),
                     )?;
                     Registry::open_or_create(guard, &registry_identity())

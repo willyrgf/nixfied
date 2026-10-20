@@ -12,5 +12,8 @@ pub use marker::{
     MARKER_FILE_NAME, MARKER_VERSION, MarkerDecision, StateIdentity, StateMarker,
     commit_slot_marker, evaluate_slot_marker,
 };
-pub use placement::{HostPlacement, SlotIdentity, derive_slot_placement, state_base_from_env};
+pub use placement::{
+    HostPlacement, SlotIdentity, SlotLocation, derive_slot_location, derive_slot_placement,
+    state_base_from_env,
+};
 pub use preparation::{PreparationReport, prepare_slot_state};
