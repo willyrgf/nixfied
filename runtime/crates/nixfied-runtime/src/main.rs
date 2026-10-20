@@ -925,17 +925,13 @@ fn run_placed(
         )
     })?;
     let manifest = admission.common().manifest();
-    let state_root = placement.state_root();
     let run_started = Instant::now();
-    // Exclusive recovery settles every predecessor before the state marker
-    // decision, independently of manifest provenance.
     // Observed abandonment before slot acquisition starts no session work.
     if let Some(establishment) = establishment.as_deref_mut() {
         establishment.check_abandonment()?;
     }
     let guard = nixfied_runtime::state::ownership::SlotGuard::acquire(placement, cancellation)?;
-    let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
-    let mut registry = Registry::open_or_create(
+    let registry = Registry::open_or_create(
         guard,
         &RegistryIdentity::for_slot(
             &manifest.project.project_id,
@@ -945,57 +941,98 @@ fn run_placed(
             &manifest.toolchain_id,
         ),
     )?;
-    registry.set_redactor(redactor.clone());
-    let recovery =
-        nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
-    // Recovery effects already settled are kept; abandonment observed now
-    // still prevents any new generation or session.
-    if let Some(establishment) = establishment.as_deref_mut() {
-        establishment.check_abandonment()?;
-    }
-    let preparation = prepare_slot_state(&identity, &mut registry, recovery.recovered)?;
-    // The never-reused evidence directory: an existing one is an identity
-    // collision, refused before any session fact is published.
-    let run_dir = registry.authority().claim_run_dir(placement)?;
+    execute_owned(
+        registry,
+        admission,
+        plan,
+        redactor,
+        options,
+        run_id,
+        selected_slot,
+        placement,
+        cancellation,
+        presenter,
+        establishment,
+        &launcher,
+        run_started,
+    )
+}
 
+/// Every acquisition path transfers its sole writable registry here. This is
+/// the only execution/recovery/finalization tail for an established session.
+#[allow(clippy::too_many_arguments)]
+fn execute_owned(
+    mut registry: Registry,
+    admission: &RunAdmission,
+    plan: &nixfied_runtime::execution::RunPlan<'_>,
+    redactor: &Redactor,
+    options: &RunOptions,
+    run_id: &str,
+    selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
+    placement: &nixfied_runtime::state::HostPlacement,
+    cancellation: &CancellationToken,
+    presenter: &mut Option<CommandPresenter>,
+    mut establishment: Option<&mut nixfied_runtime::background::Establishment>,
+    launcher: &Path,
+    run_started: Instant,
+) -> Result<RunOutput, RuntimeError> {
+    let state_root = placement.state_root();
+    registry.set_redactor(redactor.clone());
+    // Before RunSession takes ownership, every setup rejection still closes
+    // SQLite and the slot guard through their checked consuming boundary.
+    let setup = (|| {
+        let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
+        if let Some(establishment) = establishment.as_deref_mut() {
+            establishment.check_abandonment()?;
+        }
+        // Exclusive recovery settles every predecessor before the state marker
+        // decision, independently of manifest provenance.
+        let recovery =
+            nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
+        // Recovery effects already settled are kept; abandonment observed now
+        // still prevents any new generation or session.
+        if let Some(establishment) = establishment.as_deref_mut() {
+            establishment.check_abandonment()?;
+        }
+        let preparation = prepare_slot_state(&identity, &mut registry, recovery.recovered)?;
+        // The never-reused evidence directory: an existing one is an identity
+        // collision, refused before any session fact is published.
+        let run_dir = registry.authority().claim_run_dir(placement)?;
+        // Publish the endpoint and diagnostic source before the run commit.
+        let control = nixfied_runtime::session_control::SessionControl::establish(
+            run_dir,
+            &placement.run_dir(),
+            cancellation,
+        )?;
+        let mut diagnostics =
+            SessionDiagnostics::create(&placement.run_dir(), options.output_mode.emit_summary())?;
+        if let Some(establishment) = establishment.as_deref_mut() {
+            establishment.check_abandonment()?;
+        }
+        // This commit establishes the run for every owner mode. No workload
+        // has been released, and no service transition can create this row.
+        record_run_created(&mut registry, run_id, admission, placement)?;
+        if preparation.provenance_refreshed {
+            diagnostics.write(format_args!(
+                "  updated slot provenance from manifest {} (data retained)",
+                preparation
+                    .from_manifest_hash
+                    .as_deref()
+                    .unwrap_or("unknown"),
+            ));
+        }
+        Ok((identity, control, diagnostics))
+    })();
+    let (identity, control, diagnostics) = match setup {
+        Ok(setup) => setup,
+        Err(error) => return nixfied_runtime::error::both(Err(error), registry.close()),
+    };
     let direct_selected = admission
         .common()
         .execution_manifest()
         .leaf(options.task.as_str())
         .is_some();
 
-    // The session's cancellation endpoint exists before the session is
-    // published, so `down` can reach every session it can select.
-    let control = nixfied_runtime::session_control::SessionControl::establish(
-        run_dir,
-        &placement.run_dir(),
-        cancellation,
-    )?;
-    // The diagnostic source exists before the commit that registers it, so no
-    // fallible step separates establishment from its acknowledgement. Runtime
-    // progress is retained evidence from here on; the presenter, not the
-    // session owner, shows it while session duties remain.
-    let mut diagnostics =
-        SessionDiagnostics::create(&placement.run_dir(), options.output_mode.emit_summary())?;
-    // Observed abandonment before the commit prevents all new work. After the
-    // commit the session is established and independent of its launcher.
-    if let Some(establishment) = establishment.as_deref_mut() {
-        establishment.check_abandonment()?;
-    }
-    // Record the run row before any service starts, so even a service-less
-    // selection (a task tree whose leaves require nothing) leaves durable run
-    // evidence for `ps` and recovery. Service transitions require this exact
-    // row and never create or repair it themselves.
-    record_run_created(&mut registry, run_id, admission, placement)?;
-    if preparation.provenance_refreshed {
-        diagnostics.write(format_args!(
-            "  updated slot provenance from manifest {} (data retained)",
-            preparation
-                .from_manifest_hash
-                .as_deref()
-                .unwrap_or("unknown"),
-        ));
-    }
     if let Some(establishment) = establishment {
         establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
             run_id: run_id.to_owned(),
@@ -1067,7 +1104,7 @@ fn run_placed(
             identity: session.registry.identity().clone(),
             mode,
         };
-        match CommandPresenter::spawn(session.registry.authority(), &launcher, &init) {
+        match CommandPresenter::spawn(session.registry.authority(), launcher, &init) {
             Ok(spawned) => *session.presenter = Some(spawned),
             Err(error) => finish_run!(error, Vec::new()),
         }
@@ -1082,7 +1119,7 @@ fn run_placed(
             binding.service().prepare.as_ref().map(|_| {
                 let context = NodeContext {
                     placement,
-                    run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
+                    run: RunContext::new(launcher, admission, run_id, &state_root, redactor),
                     cancellation,
                     direct_selected,
                 };
@@ -1113,7 +1150,7 @@ fn run_placed(
             run_id,
             selected_slot,
             ServiceSelection {
-                launcher: &launcher,
+                launcher,
                 service_name,
                 endpoint_ports: binding.endpoint_ports(),
                 slot_endpoints: &slot_endpoints,
@@ -1178,7 +1215,7 @@ fn run_placed(
 
     let context = NodeContext {
         placement,
-        run: RunContext::new(&launcher, admission, run_id, &state_root, redactor),
+        run: RunContext::new(launcher, admission, run_id, &state_root, redactor),
         cancellation,
         direct_selected,
     };
