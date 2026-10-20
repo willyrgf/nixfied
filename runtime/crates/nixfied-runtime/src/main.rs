@@ -707,7 +707,7 @@ fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeErro
             .cloned()
             .collect(),
     };
-    // Establishment includes predecessor recovery, bounded by the operation timeout.
+    // This is a reply budget, not a bound on total predecessor recovery.
     let wait = std::time::Duration::from_millis(timeout_ms)
         .saturating_add(std::time::Duration::from_secs(10));
     use nixfied_runtime::background::LaunchOutcome;

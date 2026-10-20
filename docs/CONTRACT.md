@@ -396,6 +396,11 @@ when the manifest/runtime contract changes.
   The selected step must be a root composite leaf with a later root occurrence;
   inherited stdin rejects before dispatch. Matching compares the raw manifest
   digest, root task, all seven source fields, then operation timeout exactly.
+  It identifies the declared request, not equivalence of mutable files or
+  resolved secret values; reuse neither reloads configuration nor rotates the
+  owner's admitted secrets. Missing current source or secret material rejects
+  full admission before touching the owner. Matching foreground and daemon
+  owners remain subject to their original launcher's cancellation behavior.
   One live unfinished owner is pinned, including a finalizing owner. Otherwise
   enrollment freezes the native event high-water mark. The first subsequent
   `run.created` publication wins regardless of its result or request; no caller
@@ -405,7 +410,9 @@ when the manifest/runtime contract changes.
   recovery, or state preparation. Acquired authority with a selected publication
   reports request mismatch first, otherwise `SESSION_UNAVAILABLE` with
   `authority-released`; it creates no successor. Precommit abandonment checks
-  occur before and after recovery and before run creation. The run commit makes
+  occur before and after recovery and before run creation. Already-begun
+  predecessor recovery may outlive the observer; operation timeout bounds
+  individual stops, not total recovery or helper lifetime. The run commit makes
   the shared owner independent, including before its acknowledgement arrives.
   Only an incompletely delivered request permits terminating the unestablished
   helper. After full dispatch, observer cancellation, timeout, EOF, malformed
@@ -767,10 +774,8 @@ Native producers place task evidence under `taskRun`, projection issues under
 Session controls use typed `details.sessionObservation` alternatives inventoried
 as `observation-error-*` records. These retain selection, stage, establishment
 certainty and known evidence without captured data. Safe nonrecursive causes
-preserve this envelope. New controls emit JSON on both success and failure;
-help is plain text and completes before parsing or admission. New operands are
-single-use, acquiring and parsing a repeated value before duplicate rejection;
-common operand acquisition and repetition remain unchanged.
+preserve this envelope. `context`, `observe` and `ensure` emit JSON on both
+success and failure; help is plain text and completes before parsing or admission.
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.
@@ -847,11 +852,20 @@ and rejects whitespace, negative values and overflow. Task repetition acquires
 the next operand before checking duplication. Output repetition validates the
 next mode before checking duplication, so a repeated invalid mode reports an
 invalid mode and a repeated task without an operand reports a missing value.
-Flags set their native state idempotently. Purge changes only the native cleanup
-policy selection. Output defaults remain explicit mode, then selected task's
-default, then summary. The early error projection scans output operands natively:
+Existing run and cleanup flags set their native state idempotently. Purge changes
+only the native cleanup policy selection. Output defaults remain explicit mode,
+then selected task's default, then summary. The early error projection scans
+output operands natively:
 the last operand-bearing occurrence selects projection; a trailing bare output
 flag does not clear it. Removed output aliases retain their specific rejection.
+
+`observe` requires exactly one of `--current` or `--run-id`; run selectors contain
+1–128 ASCII alphanumeric or hyphen bytes. `ensure` requires `--task` and
+`--until-step`. These selectors, `--until-step`, `--task` and `--wait-timeout-ms`
+are single-use in the session controls; repeated values are acquired and parsed
+before duplicate rejection. Observation timeout is a positive `u64`, including
+for inspection. Common operand acquisition and repetition remain unchanged.
+`context`, `observe` and `ensure` accept neither `--output` nor `--daemon`.
 
 Installer collects OS strings. Missing or non-UTF-8 root command prints successful
 root usage. Root `help`, `-h` and `--help` route natively. After `install`, either

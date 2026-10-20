@@ -335,7 +335,8 @@ nix run .#docs -- api command run
 
 Declare a root composite with an initialization leaf followed by a holding leaf
 when independent clients need one service group to remain available. Each client
-can request the same declared owner and wait for its initialization:
+can request the same declared owner and wait for its initialization. The owner
+may hold one service or a fixed group, including endpoint-less workers:
 
 ```sh
 nix run .#context
@@ -352,7 +353,22 @@ fails. `ensure` always performs full admission and requires an exact match of
 manifest bytes, root task, source provenance and operation timeout before reuse.
 It returns `disposition: established` or `observed` with the same observation
 shape. The awaited leaf must have a continuation in the root plan. An ordinary
-background owner may also be observed or reused if its declared request matches.
+foreground or daemon owner may also be observed or reused if its declared request
+matches; it retains its original launcher's cancellation behavior. The
+continuation check establishes plan structure; the holding task expresses the
+intended lifetime.
+
+Root tasks follow service readiness and initial health. Put application
+initialization in an ordinary task so permanent application rejection is a task
+failure. A daemon acknowledgement or `ps` ready status alone does not establish
+completed startup. Run clients outside the owner session; clients launched as
+separate Nixfied runs need another slot or project context.
+
+Matching identifies the declared request; changing files or secret values can
+leave that request unchanged. Reuse keeps the owner's admitted secrets and does
+not reload configuration. Use explicit shutdown and a fresh run when new inputs
+must take effect. Missing current source or secret material rejects `ensure`
+before touching the owner; `observe` remains available without that material.
 
 The default observation timeout is 60000 ms; change it with positive
 `--wait-timeout-ms`. `--timeout-ms` on ensure is the separate operation timeout
@@ -362,13 +378,14 @@ Use explicit `down` to stop the owner. A wait never retargets or restarts a
 failed or settled selection. `REQUEST_MISMATCH`, `SESSION_UNAVAILABLE`, and
 `OBSERVATION_TIMEOUT` include structured `sessionObservation` details. Complete
 dispatch without a reply can leave establishment uncertain: inspect the slot
-before deciding what to do next.
+before deciding what to do next. Already-begun predecessor recovery can outlive
+the observer; its operation timeout bounds individual stops, not total cleanup.
 
 Successful observation supplies retained redacted capture paths, accepted exit
-evidence and fresh leader identities. It does not promise current endpoint health
-or perform application-specific target/schema checks; the client must validate
-those before connecting. New controls emit JSON, and accept neither `--output`
-nor `--daemon`.
+evidence and fresh leader identities. Read the selected task's returned capture
+paths, then perform application-specific target/schema checks before connecting.
+Observation does not promise current endpoint health. `context`, `observe` and
+`ensure` emit JSON, and accept neither `--output` nor `--daemon`.
 
 ### Choose output
 

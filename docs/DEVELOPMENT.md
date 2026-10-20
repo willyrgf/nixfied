@@ -385,6 +385,11 @@ and TIME_WAIT restart. Service tests parse raw witness events and inject failure
 at every coupled success write. Run these on macOS as well as Linux; a prototype
 or a Linux pass does not establish macOS release coverage.
 
+Exact leader sampling tests also hold an exited child unreaped, prove that the
+zombie is absent to observation, then reap it and check native absence. Run this
+proof on both Linux and macOS; macOS process inspection must request zombie
+records to distinguish them from inspection errors.
+
 The local check/gate path uses the debug runtime to keep iteration fast. The
 release package is what install and generated adopter apps ship. Both hosted
 platforms use the same fixture-backed floor, including the realised Postgres
@@ -454,8 +459,9 @@ check compares freshly rendered files for both runtime and CLI. Its synthetic
 structural fixture supplies its own file map to the same formatting step.
 
 `nix/checks/syntax.nix` checks malformed declarations, help laziness, ten exact
-help fixtures (including context, observe and ensure) and an added optional argument without a formatter edit. Runtime
-and CLI command tests exercise native parsing and encoding. The source check
+help fixtures (including context, observe and ensure) and an added optional
+argument without a formatter edit. Runtime and CLI command tests exercise native
+parsing and encoding. The source check
 also runs `nix/checks/upgrade-syntax.nix` against the packaged shell parser;
 existing adoption and upgrade goldens cover its continuation. The gate's
 source-isolation matrix in `nix/gate-nix.nix` varies CLI-generated sources as well
