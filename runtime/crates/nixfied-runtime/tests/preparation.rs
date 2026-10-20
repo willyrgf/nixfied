@@ -32,8 +32,8 @@ fn second_run_same_manifest_adopts_marker() {
         .prepare("run-2", &identity)
         .expect("second run of the same manifest should adopt the slot");
 
-    assert!(!first.provenance_refreshed);
-    assert!(!second.provenance_refreshed);
+    assert!(first.is_none());
+    assert!(second.is_none());
     assert!(sentinel.exists(), "adopted state root must be preserved");
     assert_eq!(
         fixture.marker().computed_manifest_hash,
@@ -55,9 +55,8 @@ fn changed_manifest_hash_updates_provenance_and_preserves_state_root() {
         .prepare("run-2", &fixture.identity(true))
         .expect("a changed manifest hash should refresh provenance, not refuse");
 
-    assert!(report.provenance_refreshed);
     assert_eq!(
-        report.from_manifest_hash.as_deref(),
+        report.as_deref(),
         Some(expected_hash(&fixture.manifest, false).as_str())
     );
     assert!(
@@ -155,7 +154,7 @@ fn pre_existing_empty_state_root_is_fresh() {
         .prepare("run-1", &fixture.identity(false))
         .expect("an empty state root has no state to adopt and is a fresh slot");
 
-    assert!(!report.provenance_refreshed);
+    assert!(report.is_none());
     assert_eq!(
         fixture.marker().computed_manifest_hash,
         expected_hash(&fixture.manifest, false)
@@ -272,7 +271,7 @@ fn predecessor_recovery_is_required_for_both_same_and_changed_manifest() {
         let report = prepare_slot_state(&identity_b, &mut registry, recovery.recovered)
             .expect("preparation follows successful recovery");
 
-        assert_eq!(report.provenance_refreshed, changed);
+        assert_eq!(report.is_some(), changed);
         poll_until(Duration::from_secs(5), "an empty predecessor group", || {
             (!process_group_has_non_zombie_member(pgid)).then_some(())
         });
@@ -315,7 +314,7 @@ fn interrupted_run_recovers_then_provenance_refresh_proceeds() {
         .prepare("run-2", &fixture.identity(true))
         .expect("the refresh must recover interrupted leftovers, not trip on them");
 
-    assert!(report.provenance_refreshed);
+    assert!(report.is_some());
     let process_status: String = fixture
         .registry()
         .connection()
@@ -362,7 +361,7 @@ impl PreparationFixture {
         &self,
         run_id: &str,
         identity: &StateIdentity,
-    ) -> Result<nixfied_runtime::state::PreparationReport, nixfied_runtime::RuntimeError> {
+    ) -> Result<Option<String>, nixfied_runtime::RuntimeError> {
         let placement = self.placement(run_id);
         let mut registry = open_registry(&placement, &self.manifest);
         let recovery = nixfied_runtime::control::recover_slot(&mut registry, identity, 1000)?;

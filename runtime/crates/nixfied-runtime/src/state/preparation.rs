@@ -1,8 +1,6 @@
 //! Slot marker and provenance preparation after predecessor recovery. Manifest
 //! provenance never selects which processes recovery must settle.
 
-use serde::Serialize;
-
 use crate::control::Recovered;
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry};
@@ -10,49 +8,29 @@ use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker, publish_slot_marker,
 };
 
-/// What [`prepare_slot_state`] did to make the slot usable for this identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreparationReport {
-    pub provenance_refreshed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_manifest_hash: Option<String>,
-}
-
-impl PreparationReport {
-    fn unchanged() -> Self {
-        Self {
-            provenance_refreshed: false,
-            from_manifest_hash: None,
-        }
-    }
-}
-
 /// Prepare the marker-owned state root after the slot owner has completed
 /// predecessor recovery, which the consumed proof attests: no process or
 /// endpoint obligation remains and no deletion is pending, so no generation or
 /// provenance rewrite can race an unfinished deletion. This function never
 /// signals processes. The application tree is inspected and created only
 /// through the slot guard's held descriptor.
+/// Returns the previous manifest hash exactly when provenance was refreshed.
 pub fn prepare_slot_state(
     identity: &StateIdentity,
     registry: &mut Registry,
     recovered: Recovered,
-) -> RuntimeResult<PreparationReport> {
+) -> RuntimeResult<Option<String>> {
     recovered.check(registry)?;
     let report = match evaluate_slot_marker(registry, identity)? {
         MarkerDecision::Fresh => {
             commit_slot_marker(registry, identity)?;
-            PreparationReport::unchanged()
+            None
         }
-        MarkerDecision::Adopt(_) => PreparationReport::unchanged(),
+        MarkerDecision::Adopt => None,
         MarkerDecision::Refresh { existing } => {
             record_provenance_refresh(registry, identity, &existing)?;
             publish_slot_marker(registry, identity, Some(&existing))?;
-            PreparationReport {
-                provenance_refreshed: true,
-                from_manifest_hash: Some(existing.computed_manifest_hash),
-            }
+            Some(existing.computed_manifest_hash)
         }
     };
     Ok(report)

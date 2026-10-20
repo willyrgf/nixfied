@@ -143,7 +143,7 @@ impl StateMarker {
             && self.target == identity.target
             && self.persistence == identity.persistence;
         Ok(if provenance_matches {
-            MarkerDecision::Adopt(self.clone())
+            MarkerDecision::Adopt
         } else {
             MarkerDecision::Refresh {
                 existing: self.clone(),
@@ -165,11 +165,13 @@ impl StateMarker {
 
 /// What a run must do with the slot's state root before using it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// The transient refresh decision owns its existing marker inline.
+#[allow(clippy::large_enum_variant)]
 pub enum MarkerDecision {
     /// No marker on disk — first use of the slot.
     Fresh,
     /// The marker matches the requested identity exactly.
-    Adopt(StateMarker),
+    Adopt,
     /// Same owner and retention authorization, different recorded provenance.
     Refresh { existing: StateMarker },
 }

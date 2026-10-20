@@ -16,4 +16,4 @@ pub use placement::{
     HostPlacement, SlotIdentity, SlotLocation, derive_slot_location, derive_slot_placement,
     state_base_from_env,
 };
-pub use preparation::{PreparationReport, prepare_slot_state};
+pub use preparation::prepare_slot_state;

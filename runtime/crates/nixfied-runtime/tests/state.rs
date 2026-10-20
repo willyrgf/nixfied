@@ -124,7 +124,7 @@ fn materializes_m0_roots_and_slot_marker() {
             .expect("marker should parse");
     assert!(matches!(
         marker.compare(&fixture.identity),
-        Ok(MarkerDecision::Adopt(_))
+        Ok(MarkerDecision::Adopt)
     ));
     assert_eq!(marker.marker_version, MARKER_VERSION);
     assert!(marker.data_generation.starts_with("gen-"));
@@ -194,7 +194,7 @@ fn slot_one_marker_records_selected_identity() {
     assert_eq!(marker.slot, 1);
     assert!(matches!(
         marker.compare(&identity),
-        Ok(MarkerDecision::Adopt(_))
+        Ok(MarkerDecision::Adopt)
     ));
 }
 
@@ -378,7 +378,7 @@ fn interrupted_first_marker_publication_does_not_block_the_slot() {
             .unwrap();
     assert!(matches!(
         marker.compare(&identity),
-        Ok(MarkerDecision::Adopt(_))
+        Ok(MarkerDecision::Adopt)
     ));
 
     // Any other unmarked content is still refused.

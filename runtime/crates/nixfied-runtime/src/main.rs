@@ -1145,13 +1145,10 @@ fn execute_owned(
         // has been released, and no service transition can create this row.
         record_run_created(&mut registry, run_id, request, placement)?;
         establishment.mark_committed();
-        if preparation.provenance_refreshed {
+        if let Some(from_manifest_hash) = preparation {
             diagnostics.write(format_args!(
                 "  updated slot provenance from manifest {} (data retained)",
-                preparation
-                    .from_manifest_hash
-                    .as_deref()
-                    .unwrap_or("unknown"),
+                from_manifest_hash,
             ));
         }
         Ok((identity, control, diagnostics))
