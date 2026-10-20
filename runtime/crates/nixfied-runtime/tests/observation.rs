@@ -37,6 +37,13 @@ impl Owner {
     }
 
     fn prepared(health_barrier: bool) -> (Self, std::path::PathBuf, std::path::PathBuf) {
+        Self::prepared_with(health_barrier, |_, _| {})
+    }
+
+    fn prepared_with(
+        health_barrier: bool,
+        configure: impl FnOnce(&mut Value, &std::path::Path),
+    ) -> (Self, std::path::PathBuf, std::path::PathBuf) {
         let markers = TempDir::new();
         let counter = markers.path.join("initialize-count");
         let hold = markers.path.join("holding");
@@ -74,6 +81,7 @@ impl Owner {
             value["services"]["synthetic"]["lifecycle"]["health"]["policy"]["timeoutMs"] =
                 json!(10000);
         }
+        configure(&mut value, &markers.path);
         let fixture = RuntimeFixture::new(value);
         let admission = admit_control(
             &fixture.manifest_path,
@@ -110,6 +118,96 @@ impl Owner {
             &CancellationToken::new(),
         )
     }
+}
+
+#[test]
+fn observation_checks_the_whole_group_with_endpointless_and_multiple_endpoint_members() {
+    let (owner, _, holding) = Owner::prepared_with(false, |value, markers| {
+        let port = available_port_window(2);
+        value["placement"]["slotPlacements"]["0"]["candidatePorts"] =
+            json!({"start":port,"end":port + 1});
+        let mut second = value["services"]["synthetic"]["endpoints"]["synthetic-tcp"].clone();
+        second["endpointId"] = json!("z-v6");
+        second["host"] = json!("::1");
+        value["services"]["synthetic"]["endpoints"]["z-v6"] = second;
+        let program =
+            value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"][0].clone();
+        value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = json!([
+            program,
+            "listen-pair",
+            "${port:synthetic-tcp}",
+            "${port:z-v6}",
+            markers.join("never-replace"),
+            markers.join("replaced")
+        ]);
+        add_service_clone(
+            value,
+            "aux",
+            &[
+                "output",
+                "hex-block",
+                "",
+                "",
+                markers.join("aux-started").to_str().unwrap(),
+            ],
+            &[],
+        );
+        let probe =
+            value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["readyProbe"].clone();
+        let service = value["services"]["aux"].as_object_mut().unwrap();
+        service.remove("endpoints");
+        service.remove("primaryEndpoint");
+        value["services"]["aux"]["lifecycle"]["start"]["invocation"]["tools"] =
+            json!(["fixture-probe"]);
+        value["services"]["aux"]["lifecycle"]["ready"]["probe"] = probe.clone();
+        value["services"]["aux"]["lifecycle"]["health"]["probe"] = probe;
+        value["services"]["synthetic"]["connectsTo"] = json!(["aux"]);
+    });
+    let output = owner.fixture.output(
+        "ensure",
+        &[
+            "--task",
+            "owner",
+            "--until-step",
+            "owner.initialize",
+            "--wait-timeout-ms",
+            "5000",
+        ],
+    );
+    assert_success(&output);
+    assert!(wait_for_path(&holding, Duration::from_secs(3)));
+    assert!(owner._markers.path.join("aux-started").exists());
+    let wire: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let services = &wire["observation"]["session"]["services"];
+    assert_eq!(services[0]["serviceId"], "aux");
+    assert_eq!(services[0]["endpoints"], json!([]));
+    assert_eq!(services[1]["serviceId"], "synthetic");
+    assert_eq!(services[1]["endpoints"][0]["endpointId"], "synthetic-tcp");
+    assert_eq!(services[1]["endpoints"][1]["endpointId"], "z-v6");
+    assert_eq!(services[1]["endpoints"][1]["host"], "::1");
+    let raw = rusqlite::Connection::open(owner.location.registry_path()).unwrap();
+    let counts: (i64, i64, i64) = raw
+        .query_row(
+            "SELECT (SELECT count(*) FROM runs),
+        (SELECT count(*) FROM processes WHERE role='service'), (SELECT count(*) FROM ports)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 2, 2));
+    let key = services[0]["processKey"].as_str().unwrap();
+    raw.execute(
+        "UPDATE processes SET service_name='synthetic' WHERE process_key=?1",
+        [key],
+    )
+    .unwrap();
+    let observed = owner.observe();
+    raw.execute(
+        "UPDATE processes SET service_name='aux' WHERE process_key=?1",
+        [key],
+    )
+    .unwrap();
+    assert_eq!(observed.unwrap_err().code, ErrorCode::RegistryCorrupt);
 }
 
 #[test]
@@ -272,6 +370,146 @@ fn initiating_observer_signal_after_commit_leaves_shared_owner_and_other_observe
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn committed_shared_helper_survives_observer_abandonment_before_any_ack_can_be_delivered() {
+    use nixfied_runtime::admission::{InvocationRoot, admit_run};
+    use nixfied_runtime::registry::session::{DeclaredRunRequest, RecordedRunRequestWire};
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let (owner, release, health_started) = Owner::prepared(true);
+    let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
+    context.invocation_root = InvocationRoot::Path(owner.fixture.tmp.path.clone());
+    let admitted = admit_run(&owner.fixture.manifest_path, &context).unwrap();
+    let expected =
+        DeclaredRunRequest::new(&admitted, &nixfied_manifest::TaskId::new("owner"), 5000)
+            .unwrap()
+            .recorded()
+            .unwrap();
+    let (mut observer, mut channel) = UnixStream::pair().unwrap();
+    observer.set_nonblocking(true).unwrap();
+    channel.set_nonblocking(true).unwrap();
+    let size: libc::c_int = 4096;
+    assert_eq!(
+        unsafe {
+            libc::setsockopt(
+                channel.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&size as *const libc::c_int).cast(),
+                std::mem::size_of_val(&size) as libc::socklen_t,
+            )
+        },
+        0
+    );
+    // Fill the helper-to-observer queue independently of the protocol. The
+    // observer never reads it, so no acknowledgement byte can be delivered.
+    let mut filled = 0;
+    loop {
+        match channel.write(&[b'x'; 4096]) {
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            result => panic!("cannot arrange bounded reply barrier: {result:?}"),
+        }
+    }
+    assert!(filled > 0);
+    let inherited = channel.as_raw_fd();
+    let parent = observer.as_raw_fd();
+    let mut command = Command::new(runtime_binary());
+    command
+        .args(["__session-owner", &inherited.to_string()])
+        .current_dir(&owner.fixture.tmp.path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::close(parent) != 0
+                || libc::fcntl(inherited, libc::F_SETFD, 0) != 0
+                || libc::setsid() < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let helper = command.spawn().unwrap();
+    drop(channel);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let body = serde_json::to_vec(&json!({"purpose":"shared", "runId":"run-before-ack", "execution":{
+            "manifestPath":owner.fixture.manifest_path,"allowNonStoreManifest":true,"task":"owner", "slot":0,
+            "stateBase":owner.fixture.state_base,"operationTimeoutMs":5000},
+            "expectedRequest":RecordedRunRequestWire::from_recorded(&expected),
+            "cursor":{"watermark":0,"history":{"state":"unseen"}}})).unwrap();
+        let mut frame = b"NXD2".to_vec();
+        frame.extend((body.len() as u32).to_be_bytes());
+        frame.extend(body);
+        observer.write_all(&frame).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let publication = loop {
+            if owner.location.registry_path().exists() {
+                let read = (|| -> rusqlite::Result<Option<(i64, i64, i64)>> {
+                    let raw = rusqlite::Connection::open_with_flags(
+                        owner.location.registry_path(),
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )?;
+                    raw.busy_timeout(Duration::ZERO)?;
+                    let exists: bool = raw.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='events' AND type='table')", [], |row| row.get(0))?;
+                    if !exists {
+                        return Ok(None);
+                    }
+                    raw.query_row("SELECT (SELECT count(*) FROM runs),
+                        (SELECT count(*) FROM events WHERE event_type='run.created' AND run_id='run-before-ack'),
+                        (SELECT count(*) FROM processes)", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map(Some)
+                })();
+                match read {
+                    Ok(Some(counts)) if counts.1 == 1 => break counts,
+                    Ok(_) => {}
+                    Err(rusqlite::Error::SqliteFailure(error, _))
+                        if matches!(
+                            error.code,
+                            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                        ) => {}
+                    Err(error) => panic!("independent publication inspection failed: {error}"),
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no independent committed publication"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(
+            publication,
+            (1, 1, 0),
+            "publication precedes reply delivery and workloads"
+        );
+        observer.shutdown(std::net::Shutdown::Write).unwrap();
+        drop(observer);
+        assert!(
+            wait_for_path(&health_started, Duration::from_secs(5)),
+            "committed helper stopped when its observer left"
+        );
+        fs::write(release, []).unwrap();
+        let observed = serde_json::to_value(owner.observe().unwrap()).unwrap();
+        assert_eq!(observed["session"]["runId"], "run-before-ack");
+        assert_eq!(
+            fs::read_to_string(owner._markers.path.join("initialize-count")).unwrap(),
+            "1"
+        );
+    }));
+    let stopped = owner.fixture.output("down", &["--timeout-ms", "5000"]);
+    let finished = wait_for_child_output(helper, Duration::from_secs(5));
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+    assert_success(&stopped);
+    assert_eq!(finished.status.code(), Some(27));
 }
 
 #[test]

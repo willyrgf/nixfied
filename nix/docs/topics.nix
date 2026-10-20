@@ -31,6 +31,9 @@ in
       (entry "command" "ps")
       (entry "command" "down")
       (entry "command" "clean")
+      (entry "command" "context")
+      (entry "command" "observe")
+      (entry "command" "ensure")
       (entry "package" "root/nixfied-runtime")
       (entry "record" "primitive/Manifest")
       (entry "record" "local/CheckOutput")
@@ -151,6 +154,9 @@ in
       (entry "record" "output-schema/linux-socket-identity")
       (entry "record" "output-schema/macos-socket-identity")
       (entry "record" "output-schema/last-round")
+      (entry "record" "output-schema/task-observation")
+      (entry "record" "output-schema/observation-session")
+      (entry "record" "output-schema/observation-request")
       (entry "record" "primitive/Endpoint")
       (option [
         "nixfied"
@@ -224,6 +230,7 @@ in
       (fragment ../../docs/ADAPTERS.md "## Conventions")
       (fragment ../../docs/ADAPTERS.md "## Multiple listeners: declare every endpoint")
       (fragment ../../docs/ADAPTERS.md "## Endpoint-less services: durable is not listening")
+      (fragment ../../docs/GUIDE.md "### Share a service owner")
     ];
     related = [
       "state"
@@ -470,6 +477,12 @@ in
       (entry "record" "output-schema/run-task")
       (entry "record" "output-schema/runtime-error-port-conflict")
       (entry "record" "output-schema/port-conflict-endpoint")
+      (entry "record" "output-schema/observation-error-slot-busy")
+      (entry "record" "output-schema/observation-error-request-mismatch")
+      (entry "record" "output-schema/observation-error-timeout")
+      (entry "record" "output-schema/observation-error-canceled")
+      (entry "record" "output-schema/observation-error-bootstrap-uncertain")
+      (entry "record" "output-schema/observation-error-unavailable")
     ];
     fragments = [
       (fragment ../../docs/CONTRACT.md "## Runtime error diagnostics")

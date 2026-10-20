@@ -275,6 +275,9 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" api command upgrade | grep -F 'inverse update_lock' > /dev/null
     "$docs" api app project/run | grep -F 'See command run' > /dev/null
     "$docs" topic runtime > runtime-topic.txt
+    "$docs" topic services > services-topic.txt
+    grep -Fq '### Share a service owner' services-topic.txt
+    grep -Fq 'output-schema/task-observation' services-topic.txt
     grep -Fq 'Slot mutation has one owner' runtime-topic.txt
     grep -Fq 'Admission correctness (Rust)' runtime-topic.txt
     grep -Fq 'Execution correctness (Rust)' runtime-topic.txt
