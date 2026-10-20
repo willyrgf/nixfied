@@ -754,7 +754,7 @@ fn run_background_owner(
                         "a background session has no output projection",
                     ));
                 }
-                run_session(parsed, run_id, SessionPurpose::Daemon(&mut establishment))
+                run_session(parsed, run_id, SessionPurpose::Detached(&mut establishment))
             }),
         nixfied_runtime::background::Request::Shared {
             run_id,
@@ -939,7 +939,7 @@ fn run_shared_owner(
                     &placement,
                     &cancellation,
                     &mut None,
-                    SessionPurpose::Shared(establishment),
+                    SessionPurpose::Detached(establishment),
                     &launcher,
                     Instant::now(),
                 )
