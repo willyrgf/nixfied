@@ -353,6 +353,24 @@ impl ObservationEvidence {
 }
 
 #[derive(Serialize)]
+struct ObservationCheckpoint<'a> {
+    stage: ObservationStage,
+    selection: &'a ObservationSelection,
+    establishment: &'a ObservationEstablishment,
+    #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
+    step: Option<&'a crate::control::observation::RootStepPath>,
+}
+
+#[derive(Clone, Copy)]
+/// Borrowed wait inputs and diagnostic provenance, with no selection or lifecycle authority.
+pub struct ObservationWait<'a> {
+    pub budget: &'a crate::cancellation::WaitBudget,
+    pub cancellation: &'a crate::cancellation::CancellationToken,
+    pub establishment: &'a ObservationEstablishment,
+    pub step: Option<&'a crate::control::observation::RootStepPath>,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum SessionObservationDetail<'a> {
     SlotBusy {
@@ -362,20 +380,8 @@ enum SessionObservationDetail<'a> {
         field: RequestMismatchField,
         selection: &'a ObservationSelection,
     },
-    Timeout {
-        stage: ObservationStage,
-        selection: &'a ObservationSelection,
-        establishment: &'a ObservationEstablishment,
-        #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
-        step: Option<&'a crate::control::observation::RootStepPath>,
-    },
-    Canceled {
-        stage: ObservationStage,
-        selection: &'a ObservationSelection,
-        establishment: &'a ObservationEstablishment,
-        #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
-        step: Option<&'a crate::control::observation::RootStepPath>,
-    },
+    Timeout(ObservationCheckpoint<'a>),
+    Canceled(ObservationCheckpoint<'a>),
     BootstrapUncertain {
         selection: &'a ObservationSelection,
         establishment: &'a ObservationEstablishment,
@@ -415,43 +421,35 @@ pub fn request_mismatch(
     )
 }
 
-pub fn observation_checkpoint(
-    budget: &crate::cancellation::WaitBudget,
-    cancellation: &crate::cancellation::CancellationToken,
-    stage: ObservationStage,
-    selection: &ObservationSelection,
-    establishment: &ObservationEstablishment,
-    step: Option<&crate::control::observation::RootStepPath>,
-) -> RuntimeResult<()> {
-    if cancellation.is_canceled() {
-        return Err(
-            RuntimeError::new(ErrorCode::Canceled, "session observation was canceled").with_detail(
-                "sessionObservation",
-                SessionObservationDetail::Canceled {
-                    stage,
-                    selection,
-                    establishment,
-                    step,
-                },
-            ),
-        );
+impl ObservationWait<'_> {
+    pub fn checkpoint(
+        &self,
+        stage: ObservationStage,
+        selection: &ObservationSelection,
+    ) -> RuntimeResult<()> {
+        let checkpoint = ObservationCheckpoint {
+            stage,
+            selection,
+            establishment: self.establishment,
+            step: self.step,
+        };
+        let (code, message, detail) = if self.cancellation.is_canceled() {
+            (
+                ErrorCode::Canceled,
+                "session observation was canceled",
+                SessionObservationDetail::Canceled(checkpoint),
+            )
+        } else if self.budget.is_expired() {
+            (
+                ErrorCode::ObservationTimeout,
+                "session observation deadline expired",
+                SessionObservationDetail::Timeout(checkpoint),
+            )
+        } else {
+            return Ok(());
+        };
+        Err(RuntimeError::new(code, message).with_detail("sessionObservation", detail))
     }
-    if budget.is_expired() {
-        return Err(RuntimeError::new(
-            ErrorCode::ObservationTimeout,
-            "session observation deadline expired",
-        )
-        .with_detail(
-            "sessionObservation",
-            SessionObservationDetail::Timeout {
-                stage,
-                selection,
-                establishment,
-                step,
-            },
-        ));
-    }
-    Ok(())
 }
 
 pub fn bootstrap_uncertain(
@@ -492,50 +490,6 @@ pub fn session_unavailable(
     )
 }
 
-/// Enrich an already-native timeout/cancellation without deserializing a proof
-/// or recursively redacting its structural envelope.
-pub fn observation_establishment(
-    mut error: RuntimeError,
-    establishment: &ObservationEstablishment,
-) -> RuntimeError {
-    if matches!(
-        error.code,
-        ErrorCode::ObservationTimeout | ErrorCode::Canceled
-    ) && let Some(Value::Object(detail)) = error.details.get_mut("sessionObservation")
-        && matches!(
-            detail.get("kind").and_then(Value::as_str),
-            Some("timeout" | "canceled")
-        )
-    {
-        detail.insert(
-            "establishment".into(),
-            serde_json::to_value(establishment).expect("checked metadata serializes"),
-        );
-    }
-    error
-}
-
-pub fn observation_step(
-    mut error: RuntimeError,
-    step: &crate::control::observation::RootStepPath,
-) -> RuntimeError {
-    if matches!(
-        error.code,
-        ErrorCode::ObservationTimeout | ErrorCode::Canceled
-    ) && let Some(Value::Object(detail)) = error.details.get_mut("sessionObservation")
-        && matches!(
-            detail.get("kind").and_then(Value::as_str),
-            Some("timeout" | "canceled")
-        )
-    {
-        detail.insert(
-            "stepPath".into(),
-            serde_json::to_value(step).expect("checked step serializes"),
-        );
-    }
-    error
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,14 +503,13 @@ mod tests {
         canceled.cancel();
         let budget = crate::cancellation::WaitBudget::new(std::num::NonZeroU64::new(1).unwrap());
         std::thread::sleep(std::time::Duration::from_millis(2));
-        let error = observation_checkpoint(
-            &budget,
-            &canceled,
-            ObservationStage::Task,
-            &selection,
-            &establishment,
-            Some(&step),
-        )
+        let error = ObservationWait {
+            budget: &budget,
+            cancellation: &canceled,
+            establishment: &establishment,
+            step: Some(&step),
+        }
+        .checkpoint(ObservationStage::Task, &selection)
         .unwrap_err();
         assert_eq!(
             error.code,
@@ -574,14 +527,13 @@ mod tests {
             cause.details,
             serde_json::json!({"sessionObservation":canceled_detail})
         );
-        let timeout = observation_checkpoint(
-            &budget,
-            &crate::cancellation::CancellationToken::new(),
-            ObservationStage::Establishment,
-            &selection,
-            &establishment,
-            None,
-        )
+        let timeout = ObservationWait {
+            budget: &budget,
+            cancellation: &crate::cancellation::CancellationToken::new(),
+            establishment: &establishment,
+            step: None,
+        }
+        .checkpoint(ObservationStage::Establishment, &selection)
         .unwrap_err();
         assert_eq!(timeout.code, ErrorCode::ObservationTimeout);
         assert_eq!(
@@ -589,6 +541,35 @@ mod tests {
             serde_json::json!({"sessionObservation":{"kind":"timeout", "stage":"establishment",
             "selection":{"state":"unenrolled"},"establishment":{"state":"uncertain","candidateRunId":"run-1"}}})
         );
+        let pinned = ObservationSelection(SelectionDetail::Pinned {
+            run: "run-1".into(),
+        });
+        let established = ObservationEstablishment::established("run-1").unwrap();
+        for (signal, kind, code) in [
+            (true, "canceled", ErrorCode::Canceled),
+            (false, "timeout", ErrorCode::ObservationTimeout),
+        ] {
+            let cancellation = crate::cancellation::CancellationToken::new();
+            if signal {
+                cancellation.cancel();
+            }
+            let error = ObservationWait {
+                budget: &budget,
+                cancellation: &cancellation,
+                establishment: &established,
+                step: Some(&step),
+            }
+            .checkpoint(ObservationStage::Task, &pinned)
+            .unwrap_err();
+            assert_eq!(error.code, code);
+            assert_eq!(
+                error.details,
+                serde_json::json!({"sessionObservation":{
+                    "kind":kind,"stage":"task","selection":{"state":"pinned","runId":"run-1"},
+                    "establishment":{"state":"established","runId":"run-1"},"stepPath":"owner.init"
+                }})
+            );
+        }
         assert_eq!(
             bootstrap_uncertain(&selection, &establishment).details,
             serde_json::json!({"sessionObservation":{

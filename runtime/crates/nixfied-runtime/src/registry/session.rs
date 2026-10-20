@@ -18,19 +18,18 @@ pub use super::status::ExecutionOutcome;
 /// construct it or stand in for its source, secret, closure or host checks.
 pub struct DeclaredRunRequest<'a> {
     admission: &'a RunAdmission,
-    root_task: &'a nixfied_manifest::TaskId,
-    operation_timeout_ms: u64,
+    recorded: RecordedRunRequest,
 }
 
 impl<'a> DeclaredRunRequest<'a> {
     pub fn admission(&self) -> &'a RunAdmission {
         self.admission
     }
-    pub fn root_task(&self) -> &'a nixfied_manifest::TaskId {
-        self.root_task
+    pub fn root_task(&self) -> &nixfied_manifest::TaskId {
+        self.recorded.root_task()
     }
     pub fn operation_timeout_ms(&self) -> u64 {
-        self.operation_timeout_ms
+        self.recorded.operation_timeout_ms()
     }
     pub fn new(
         admission: &'a RunAdmission,
@@ -50,22 +49,20 @@ impl<'a> DeclaredRunRequest<'a> {
             })?;
         Ok(Self {
             admission,
-            root_task,
-            operation_timeout_ms,
+            recorded: RecordedRunRequest {
+                computed_manifest_hash: admission.common().computed_manifest_hash().to_owned(),
+                root_task: root_task.clone(),
+                source: RecordedSource::from_admitted(admission.source())?,
+                operation_timeout_ms,
+            },
         })
     }
 
-    pub fn recorded(&self) -> RuntimeResult<RecordedRunRequest> {
-        Ok(RecordedRunRequest {
-            computed_manifest_hash: self.admission.common().computed_manifest_hash().to_owned(),
-            root_task: self.root_task.clone(),
-            source: RecordedSource::from_admitted(self.admission.source())?,
-            operation_timeout_ms: self.operation_timeout_ms,
-        })
+    pub fn recorded(&self) -> &RecordedRunRequest {
+        &self.recorded
     }
 
     pub fn preflight(&self, placement: &HostPlacement) -> RuntimeResult<()> {
-        self.recorded()?;
         utf8_locator(self.admission.common().manifest_path(), "manifestPath")?;
         utf8_locator(placement.state_base(), "stateBase")?;
         for (field, path) in [
@@ -111,14 +108,14 @@ impl RecordedRunRequestWire {
         }
     }
     pub fn checked(&self) -> RuntimeResult<RecordedRunRequest> {
-        let source = serde_json::to_string(&self.source)
-            .map_err(|_| invalid("cannot encode comparison source"))?;
-        RecordedRunRequest::decode(
-            &self.computed_manifest_hash,
-            &self.root_task,
-            &source,
-            &self.operation_timeout_ms.to_string(),
-        )
+        let root_task =
+            RecordedRunRequest::checked_root(&self.computed_manifest_hash, &self.root_task)?;
+        Ok(RecordedRunRequest {
+            computed_manifest_hash: self.computed_manifest_hash.clone(),
+            root_task,
+            source: self.source.clone().check()?,
+            operation_timeout_ms: self.operation_timeout_ms,
+        })
     }
 }
 
@@ -129,6 +126,21 @@ impl RecordedRunRequest {
         source_json: &str,
         timeout: &str,
     ) -> RuntimeResult<Self> {
+        let root_task = Self::checked_root(hash, root_task)?;
+        let operation_timeout_ms = timeout
+            .parse::<u64>()
+            .ok()
+            .filter(|value| value.to_string() == timeout)
+            .ok_or_else(|| invalid("invalid recorded operation_timeout_ms"))?;
+        Ok(Self {
+            computed_manifest_hash: hash.to_owned(),
+            root_task,
+            source: RecordedSource::decode(source_json)?,
+            operation_timeout_ms,
+        })
+    }
+
+    fn checked_root(hash: &str, root_task: &str) -> RuntimeResult<nixfied_manifest::TaskId> {
         if hash.len() != 64
             || !hash
                 .bytes()
@@ -139,17 +151,7 @@ impl RecordedRunRequest {
         if !nixfied_manifest::validation::is_step_safe_id(root_task) {
             return Err(invalid("invalid recorded root_task"));
         }
-        let operation_timeout_ms = timeout
-            .parse::<u64>()
-            .ok()
-            .filter(|value| value.to_string() == timeout)
-            .ok_or_else(|| invalid("invalid recorded operation_timeout_ms"))?;
-        Ok(Self {
-            computed_manifest_hash: hash.to_owned(),
-            root_task: nixfied_manifest::TaskId::new(root_task),
-            source: RecordedSource::decode(source_json)?,
-            operation_timeout_ms,
-        })
+        Ok(nixfied_manifest::TaskId::new(root_task))
     }
 
     pub fn computed_manifest_hash(&self) -> &str {
@@ -305,7 +307,7 @@ pub fn record_run_created(
 ) -> RuntimeResult<()> {
     request.preflight(placement)?;
     let admission = request.admission;
-    let source_json = serde_json::to_string(&request.recorded()?.source)
+    let source_json = serde_json::to_string(request.recorded().source())
         .map_err(|_| invalid("cannot encode recorded source"))?;
     let owner_identity = serde_json::to_string(&OwnerIdentity::current()?)
         .map_err(|_| invalid("cannot encode owner identity"))?;
@@ -335,8 +337,8 @@ pub fn record_run_created(
                 utf8_locator(&placement.summary_path(), "summaryPath")?,
                 owner_identity,
                 crate::output::DIAGNOSTIC_SOURCE,
-                request.root_task.as_str(),
-                request.operation_timeout_ms.to_string(),
+                request.root_task().as_str(),
+                request.operation_timeout_ms().to_string(),
             ],
         )
         .map_err(sql_error)?;

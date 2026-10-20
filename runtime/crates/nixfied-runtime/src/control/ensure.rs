@@ -3,14 +3,12 @@
 //! recovery or a successor.
 use std::time::Duration;
 
-use nixfied_manifest::TaskId;
-
-use crate::admission::{ControlAdmission, RunAdmission};
+use crate::admission::ControlAdmission;
 use crate::background::Establishment;
-use crate::cancellation::{CancellationToken, WaitBudget};
+use crate::cancellation::CancellationToken;
 use crate::error::{
-    ErrorCode, ObservationEstablishment, ObservationSelection, ObservationStage, RuntimeError,
-    RuntimeResult, SessionUnavailableReason, observation_checkpoint, session_unavailable,
+    ErrorCode, ObservationSelection, ObservationStage, ObservationWait, RuntimeError,
+    RuntimeResult, SessionUnavailableReason, session_unavailable,
 };
 use crate::registry::Registry;
 use crate::registry::observation::{CursorWire, History, PinnedRun, Scope, Seeking, Snapshot};
@@ -37,29 +35,21 @@ pub struct EnsureOutput {
 }
 
 pub fn enroll(
-    admission: &RunAdmission,
+    request: &DeclaredRunRequest<'_>,
     location: &SlotLocation,
-    selected_task: &TaskId,
-    operation_timeout_ms: u64,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> RuntimeResult<Enrollment> {
-    let expected =
-        DeclaredRunRequest::new(admission, selected_task, operation_timeout_ms)?.recorded()?;
-    let scope = Scope::new(admission.common(), location)?;
+    let expected = request.recorded();
+    let scope = Scope::new(request.admission().common(), location)?;
     Context::from_location(location)?;
     let mut history = History::default();
     loop {
-        observation_checkpoint(
-            budget,
-            cancellation,
+        wait.checkpoint(
             ObservationStage::Selection,
             &ObservationSelection::unenrolled(),
-            &ObservationEstablishment::not_requested(),
-            None,
         )?;
         let Some(snapshot) = Snapshot::read(&scope, &mut history)? else {
-            std::thread::sleep(budget.remaining().min(Duration::from_millis(10)));
+            std::thread::sleep(wait.budget.remaining().min(Duration::from_millis(10)));
             continue;
         };
         let unfinished = snapshot.unfinished()?;
@@ -83,14 +73,10 @@ pub fn enroll(
             return Ok(Enrollment::Seeking(seeking));
         };
         let pinned = seeking.pin(publication);
-        compare_request(&expected, &recorded, &ObservationSelection::pinned(&pinned))?;
-        observation_checkpoint(
-            budget,
-            cancellation,
+        compare_request(expected, &recorded, &ObservationSelection::pinned(&pinned))?;
+        wait.checkpoint(
             ObservationStage::Selection,
             &ObservationSelection::pinned(&pinned),
-            &ObservationEstablishment::not_requested(),
-            None,
         )?;
         return Ok(Enrollment::Pinned(pinned));
     }
@@ -161,7 +147,7 @@ fn acquire_shared_at_boundaries(
     }
     compare_request(
         expected,
-        &actual.recorded()?,
+        actual.recorded(),
         &ObservationSelection::seeking(&seeking),
     )?;
     loop {
@@ -171,10 +157,9 @@ fn acquire_shared_at_boundaries(
             std::thread::sleep(Duration::from_millis(10));
             continue;
         };
-        if let Some(publication) = snapshot.first_after(seeking.watermark())? {
+        if let Some(publication) = snapshot.first_after(seeking.watermark()) {
             let recorded = snapshot.run(publication.run_id())?.request;
             drop(snapshot);
-            precommit.learn_shared_cursor(seeking.cursor())?;
             let pinned = seeking.pin(publication);
             compare_request(expected, &recorded, &ObservationSelection::pinned(&pinned))?;
             return Ok(SharedDecision::Selected(pinned));
@@ -201,20 +186,11 @@ fn acquire_shared_at_boundaries(
             Ok(snapshot) => snapshot,
             Err(error) => return crate::error::both(Err(error), guard.release()),
         };
-        let publication = snapshot.first_after(seeking.watermark());
-        let publication = match publication {
-            Ok(publication) => publication,
-            Err(error) => {
-                drop(snapshot);
-                return crate::error::both(Err(error), guard.release());
-            }
-        };
-        if let Some(publication) = publication {
+        if let Some(publication) = snapshot.first_after(seeking.watermark()) {
             let recorded = snapshot.run(publication.run_id());
             drop(snapshot);
             // Guard acquisition proves this selected publication released
-            // authority. Close the checked registry without any recovery.
-            let registry = Registry::open_or_create(guard, scope.identity())?;
+            // authority. Release without opening a writer or running recovery.
             let pinned = seeking.pin(publication);
             let operation = recorded.and_then(|facts| {
                 compare_request(
@@ -229,7 +205,7 @@ fn acquire_shared_at_boundaries(
                     None,
                 ))
             });
-            return crate::error::both(operation, registry.close());
+            return crate::error::both(operation, guard.release());
         }
         drop(snapshot);
         if let Err(error) = precommit.learn_shared_cursor(seeking.cursor()) {
@@ -255,7 +231,7 @@ pub fn committed_cursor(
             && let Some(snapshot) = seeking.read()?
         {
             let publication = snapshot
-                .first_after(seeking.watermark())?
+                .first_after(seeking.watermark())
                 .ok_or_else(|| corrupt("established run has no post-enrollment creation marker"))?;
             if publication.run_id() != run_id {
                 return Err(corrupt(
@@ -275,8 +251,7 @@ pub fn select_reply(
     mut seeking: Seeking,
     reply: &crate::background::SharedSelection,
     expected: &DeclaredRunRequest<'_>,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> RuntimeResult<PinnedRun> {
     let (run_id, created_sequence, cursor) = match reply {
         crate::background::SharedSelection::Established {
@@ -291,17 +266,13 @@ pub fn select_reply(
     };
     seeking.merge_cursor(cursor)?;
     loop {
-        observation_checkpoint(
-            budget,
-            cancellation,
+        wait.checkpoint(
             ObservationStage::Establishment,
             &ObservationSelection::seeking(&seeking),
-            &ObservationEstablishment::not_requested(),
-            None,
         )?;
         if let Some(snapshot) = seeking.read()? {
             let publication = snapshot
-                .first_after(seeking.watermark())?
+                .first_after(seeking.watermark())
                 .ok_or_else(|| corrupt("bootstrap selection has no canonical publication"))?;
             if publication.run_id() != run_id
                 || created_sequence.is_some_and(|sequence| publication.sequence() != sequence)
@@ -314,13 +285,13 @@ pub fn select_reply(
             drop(snapshot);
             let pinned = seeking.pin(publication);
             compare_request(
-                &expected.recorded()?,
+                expected.recorded(),
                 &recorded,
                 &ObservationSelection::pinned(&pinned),
             )?;
             return Ok(pinned);
         }
-        std::thread::sleep(budget.remaining().min(Duration::from_millis(10)));
+        std::thread::sleep(wait.budget.remaining().min(Duration::from_millis(10)));
     }
 }
 
@@ -331,11 +302,17 @@ fn corrupt(message: &'static str) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission::RunAdmission;
+    use crate::cancellation::WaitBudget;
+    use crate::error::ObservationEstablishment;
     use crate::registry::session::{
         ExecutionOutcome, record_execution_outcome, record_finalization_complete,
         record_run_created,
     };
-    use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
+    use nixfied_manifest::{
+        TaskId,
+        fixtures::{SyntheticManifestOptions, synthetic_manifest},
+    };
 
     struct Fixture {
         root: crate::test_support::TestDir,
@@ -379,12 +356,14 @@ mod tests {
         }
         fn seeking(&self) -> Seeking {
             let Enrollment::Seeking(seeking) = enroll(
-                &self.admission,
+                &DeclaredRunRequest::new(&self.admission, &TaskId::new("smoke"), 5000).unwrap(),
                 &self.location,
-                &TaskId::new("smoke"),
-                5000,
-                &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
-                &CancellationToken::new(),
+                &ObservationWait {
+                    budget: &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
+                    cancellation: &CancellationToken::new(),
+                    establishment: &ObservationEstablishment::not_requested(),
+                    step: None,
+                },
             )
             .unwrap() else {
                 panic!("new slot was not idle");
@@ -431,7 +410,7 @@ mod tests {
                 &actual,
                 &fixture.location,
                 seeking,
-                &actual.recorded().unwrap(),
+                actual.recorded(),
                 &mut precommit,
                 &CancellationToken::new(),
                 |phase| {
@@ -446,6 +425,12 @@ mod tests {
                             );
                             fixture.publish(&mut writer, "later-matching", 5000, false);
                             writer.close().unwrap();
+                            let raw = rusqlite::Connection::open(fixture.location.registry_path())
+                                .unwrap();
+                            let mode: String = raw
+                                .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+                                .unwrap();
+                            assert_eq!(mode, "delete");
                             published = true;
                         }
                         AcquisitionBoundary::UnderGuard => guarded = true,
@@ -475,6 +460,10 @@ mod tests {
                 serde_json::json!({"state":"pinned","runId":"first-failed"})
             );
             let raw = rusqlite::Connection::open(fixture.location.registry_path()).unwrap();
+            let mode: String = raw
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(mode, "delete", "selection must not initialize a writer");
             let counts: (i64,i64,i64) = raw.query_row("SELECT (SELECT count(*) FROM runs),
                 (SELECT count(*) FROM processes), (SELECT count(*) FROM events WHERE event_type NOT IN ('run.created','run.execution-settled','run.finalized'))",
                 [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
@@ -500,7 +489,7 @@ mod tests {
             &actual,
             &fixture.location,
             seeking,
-            &actual.recorded().unwrap(),
+            actual.recorded(),
             &mut precommit,
             &CancellationToken::new(),
             |phase| {

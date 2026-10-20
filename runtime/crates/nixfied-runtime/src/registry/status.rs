@@ -8,6 +8,31 @@
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
+/// Whether the owner proved that a process and its captured writers are gone.
+/// Leader exit alone never settles ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ownership {
+    Settled,
+    Unresolved,
+}
+
+impl Ownership {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::Unresolved => "unresolved",
+        }
+    }
+
+    pub(crate) fn from_db(raw: &str) -> Option<Self> {
+        match raw {
+            "settled" => Some(Self::Settled),
+            "unresolved" => Some(Self::Unresolved),
+            _ => None,
+        }
+    }
+}
+
 /// A status stored as a fixed string in a registry column.
 pub trait DbStatus: Copy + Sized + 'static {
     /// The domain name, for parse-error messages.

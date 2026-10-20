@@ -23,6 +23,7 @@ use crate::redaction::{
     CAPTURE_SHUTDOWN_TIMEOUT, CaptureOutcome, RedactedLogRelays, Redactor, child_output,
 };
 use crate::registry::Registry;
+use crate::registry::status::Ownership;
 use crate::service::endpoint::{
     CompleteWitnessSet, EndpointFailure, EndpointLockGuards, ExpectedOwner, ListenerObservation,
     acquire_startup_locks, observe_listeners, preflight,
@@ -33,12 +34,12 @@ use crate::service::readiness::{
     exec_probe_attempt,
 };
 use crate::service::registry::{
-    EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, Ownership,
-    ProcessRecord, ServiceRecord, ServiceSettlement, ServiceStartOutcome, ServiceTerminal,
-    StopPolicy, TaskTerminalStatus, commit_service_check, mark_invocation_finished,
-    mark_process_escape, record_capture_outcome, record_event, record_invocation_canceling,
-    record_invocation_observed, record_invocation_started, record_service_start,
-    record_service_start_intent, settle_service_start, settle_service_terminal,
+    EndpointRecord, InvocationIdentity, InvocationOwner, InvocationProcessRecord, ProcessRecord,
+    ServiceRecord, ServiceSettlement, ServiceStartOutcome, ServiceTerminal, StopPolicy,
+    TaskTerminalStatus, commit_service_check, mark_invocation_finished, mark_process_escape,
+    record_capture_outcome, record_event, record_invocation_canceling, record_invocation_observed,
+    record_invocation_started, record_service_start, record_service_start_intent,
+    settle_service_start, settle_service_terminal,
 };
 use crate::slot::SelectedSlot;
 use crate::state::ownership::SlotGuard;

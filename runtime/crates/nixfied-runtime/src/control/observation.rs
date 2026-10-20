@@ -1,7 +1,6 @@
 //! Native session projections and run-pinned observation. Registry facts and
 //! leader samples remain separate until final successful construction here.
 use serde::Serialize;
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::admission::ControlAdmission;
@@ -9,21 +8,23 @@ use crate::cancellation::{CancellationToken, WaitBudget};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::error::{
     ObservationEstablishment, ObservationEvidence, ObservationSelection, ObservationStage,
-    RequestMismatchField, SessionUnavailableReason, observation_checkpoint, request_mismatch,
+    ObservationWait, RequestMismatchField, SessionUnavailableReason, request_mismatch,
     session_unavailable,
 };
 use crate::output::utf8_locator;
 use crate::redaction::CaptureOutcome;
 use crate::registry::observation::{
-    CandidateSnapshot, CaptureState, History, Ownership, PinnedRun, ProcessFacts, RecordedHost,
-    Scope, ServiceFacts, Snapshot,
+    CandidateSnapshot, CaptureState, History, PinnedRun, ProcessFacts, Scope, ServiceFacts,
+    Snapshot,
 };
 use crate::registry::session::{
     ExecutionOutcome, OwnerIdentity, RecordedRunRequest, SessionProgress, valid_run_id,
 };
-use crate::registry::status::{DbStatus, ProcessStatus};
+use crate::registry::status::{DbStatus, Ownership, ProcessStatus};
 use crate::service::{LeaderSample, sample_leader};
 use crate::state::SlotLocation;
+
+pub use crate::registry::observation::EndpointCoordinate;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,14 +186,6 @@ impl From<SessionProgress> for Progress {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EndpointCoordinate {
-    endpoint_id: String,
-    host: RecordedHost,
-    port: u16,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ServiceLeader {
     service_id: String,
     process_key: String,
@@ -225,15 +218,7 @@ impl Session {
                     service_id: service.service_id.clone(),
                     process_key: service.process.key.clone(),
                     leader: Leader::service(&service.process)?,
-                    endpoints: service
-                        .endpoints
-                        .iter()
-                        .map(|endpoint| EndpointCoordinate {
-                            endpoint_id: endpoint.endpoint_id.clone(),
-                            host: endpoint.host.clone(),
-                            port: endpoint.port,
-                        })
-                        .collect(),
+                    endpoints: service.endpoints.clone(),
                 })
             })
             .collect::<RuntimeResult<Vec<_>>>()?;
@@ -292,20 +277,14 @@ fn select(
     admission: &ControlAdmission,
     location: &SlotLocation,
     selector: &Selector,
-    step: Option<&RootStepPath>,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> RuntimeResult<(Snapshot, Option<crate::registry::observation::Publication>)> {
     let scope = Scope::new(admission, location)?;
     let mut history = History::default();
     loop {
-        observation_checkpoint(
-            budget,
-            cancellation,
+        wait.checkpoint(
             ObservationStage::Selection,
             &ObservationSelection::unenrolled(),
-            &ObservationEstablishment::not_requested(),
-            step,
         )?;
         if let Some(snapshot) = Snapshot::read(&scope, &mut history)? {
             let publication = match selector.exact_run() {
@@ -314,7 +293,7 @@ fn select(
             };
             return Ok((snapshot, publication));
         }
-        pause(budget);
+        pause(wait.budget);
     }
 }
 
@@ -325,29 +304,28 @@ pub fn inspect(
     budget: &WaitBudget,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<ObserveOutput> {
+    let establishment = ObservationEstablishment::not_requested();
+    let wait = ObservationWait {
+        budget,
+        cancellation,
+        establishment: &establishment,
+        step: None,
+    };
     let context = context(admission, location)?;
-    let (snapshot, selected) = select(admission, location, selector, None, budget, cancellation)?;
+    let (snapshot, selected) = select(admission, location, selector, &wait)?;
     let Some(publication) = selected else {
-        observation_checkpoint(
-            budget,
-            cancellation,
+        wait.checkpoint(
             ObservationStage::Selection,
             &ObservationSelection::absent(selector),
-            &ObservationEstablishment::not_requested(),
-            None,
         )?;
         return Ok(ObserveOutput::Absent { context });
     };
     let candidate = snapshot.candidate(publication.run_id())?;
     let pinned = snapshot.pin(publication);
     let session = Session::sample(&candidate, &pinned)?;
-    observation_checkpoint(
-        budget,
-        cancellation,
+    wait.checkpoint(
         ObservationStage::Selection,
         &ObservationSelection::pinned(&pinned),
-        &ObservationEstablishment::not_requested(),
-        None,
     )?;
     Ok(ObserveOutput::Session { context, session })
 }
@@ -361,15 +339,15 @@ pub fn await_selected(
     cancellation: &CancellationToken,
 ) -> RuntimeResult<TaskObservation> {
     let lexical_step = RootStepPath::parse(step).ok();
-    context(admission, location)?;
-    let (snapshot, selected) = select(
-        admission,
-        location,
-        selector,
-        lexical_step.as_ref(),
+    let establishment = ObservationEstablishment::not_requested();
+    let wait = ObservationWait {
         budget,
         cancellation,
-    )?;
+        establishment: &establishment,
+        step: lexical_step.as_ref(),
+    };
+    context(admission, location)?;
+    let (snapshot, selected) = select(admission, location, selector, &wait)?;
     let Some(publication) = selected else {
         return Err(session_unavailable(
             SessionUnavailableReason::Absent,
@@ -378,14 +356,7 @@ pub fn await_selected(
             None,
         ));
     };
-    await_root(
-        admission,
-        location,
-        snapshot.pin(publication),
-        step,
-        budget,
-        cancellation,
-    )
+    await_root(admission, location, snapshot.pin(publication), step, &wait)
 }
 
 pub(crate) fn compare_request(
@@ -412,25 +383,19 @@ pub(crate) fn compare_request(
 
 fn read_candidate(
     pinned: &mut PinnedRun,
-    step: Option<&RootStepPath>,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
-    poll: &mut impl FnMut(),
+    wait: &ObservationWait<'_>,
+    poll: &mut impl FnMut(ObservationBoundary),
 ) -> RuntimeResult<CandidateSnapshot> {
     loop {
-        poll();
-        observation_checkpoint(
-            budget,
-            cancellation,
+        poll(ObservationBoundary::Poll);
+        wait.checkpoint(
             ObservationStage::Task,
             &ObservationSelection::pinned(pinned),
-            &ObservationEstablishment::not_requested(),
-            step,
         )?;
         if let Some(snapshot) = pinned.read()? {
             return snapshot.candidate(pinned.run_id());
         }
-        pause(budget);
+        pause(wait.budget);
     }
 }
 
@@ -459,51 +424,27 @@ fn validate_plan(
             return Err(corrupt("succeeded task status contradicts its outcome"));
         }
     }
-    let present: BTreeSet<_> = candidate
-        .services
-        .iter()
-        .map(|service| service.service_id.as_str())
-        .collect();
     for service in &candidate.services {
         let binding = plan
             .services()
             .iter()
             .find(|binding| binding.service().name.as_str() == service.service_id)
             .ok_or_else(|| corrupt("recorded service leaves the selected service group"))?;
-        let expected: Vec<_> = binding
-            .service()
-            .endpoints()
-            .map(|(id, endpoint)| {
-                (
-                    id.as_str(),
-                    endpoint.host.to_string(),
-                    binding.endpoint_ports()[id.as_str()],
-                )
-            })
-            .collect();
-        let actual: Vec<_> = service
-            .endpoints
-            .iter()
-            .map(|endpoint| {
-                (
-                    endpoint.endpoint_id.as_str(),
-                    endpoint.host.as_str().to_owned(),
-                    endpoint.port,
-                )
-            })
-            .collect();
-        if actual != expected {
+        if binding.service().endpoints().count() != service.endpoints.len()
+            || binding.service().endpoints().zip(&service.endpoints).any(
+                |((id, endpoint), actual)| {
+                    id.as_str() != actual.endpoint_id
+                        || endpoint.host.to_string() != actual.host.as_str()
+                        || binding.endpoint_ports()[id.as_str()] != actual.port
+                },
+            )
+        {
             return Err(corrupt(
                 "recorded endpoint set differs from the selected plan",
             ));
         }
     }
-    if !candidate.roots.is_empty()
-        && plan
-            .services()
-            .iter()
-            .any(|binding| !present.contains(binding.service().name.as_str()))
-    {
+    if !candidate.roots.is_empty() && candidate.services.len() != plan.services().len() {
         return Err(corrupt(
             "root attribution exists before its complete service group",
         ));
@@ -592,18 +533,15 @@ pub fn await_root(
     location: &SlotLocation,
     pinned: PinnedRun,
     step: &str,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> RuntimeResult<TaskObservation> {
-    await_root_with_poll(
-        admission,
-        location,
-        pinned,
-        step,
-        budget,
-        cancellation,
-        || {},
-    )
+    await_root_with_poll(admission, location, pinned, step, wait, |_| {})
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ObservationBoundary {
+    Poll,
+    LeadersSampled,
 }
 
 pub(crate) fn await_root_with_poll(
@@ -611,11 +549,14 @@ pub(crate) fn await_root_with_poll(
     location: &SlotLocation,
     mut pinned: PinnedRun,
     step: &str,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
-    mut poll: impl FnMut(),
+    wait: &ObservationWait<'_>,
+    mut poll: impl FnMut(ObservationBoundary),
 ) -> RuntimeResult<TaskObservation> {
     let lexical_step = RootStepPath::parse(step).ok();
+    let wait = ObservationWait {
+        step: lexical_step.as_ref(),
+        ..*wait
+    };
     let context = context(admission, location)?;
     let scope = Scope::new(admission, location)?;
     if pinned.scope().location() != scope.location()
@@ -627,13 +568,7 @@ pub(crate) fn await_root_with_poll(
         ));
     }
     let selection = ObservationSelection::pinned(&pinned);
-    let mut candidate = read_candidate(
-        &mut pinned,
-        lexical_step.as_ref(),
-        budget,
-        cancellation,
-        &mut poll,
-    )?;
+    let mut candidate = read_candidate(&mut pinned, &wait, &mut poll)?;
     if admission.computed_manifest_hash() != candidate.run.request.computed_manifest_hash() {
         return Err(request_mismatch(RequestMismatchField::Manifest, &selection));
     }
@@ -648,7 +583,7 @@ pub(crate) fn await_root_with_poll(
     let immutable = candidate.run.clone();
     let placement = location.for_run(pinned.run_id())?;
     loop {
-        poll();
+        poll(ObservationBoundary::Poll);
         validate_plan(&candidate, &plan)?;
         if candidate.run.request != immutable.request
             || candidate.run.owner != immutable.owner
@@ -676,7 +611,8 @@ pub(crate) fn await_root_with_poll(
                 .iter()
                 .all(|service| service.process.status == ProcessStatus::Ready);
         if ready {
-            let fresh = read_candidate(&mut pinned, Some(&step), budget, cancellation, &mut poll)?;
+            poll(ObservationBoundary::LeadersSampled);
+            let fresh = read_candidate(&mut pinned, &wait, &mut poll)?;
             validate_plan(&fresh, &plan)?;
             if fresh.run.request != immutable.request
                 || fresh.run.owner != immutable.owner
@@ -719,14 +655,7 @@ pub(crate) fn await_root_with_poll(
                     evidence.as_ref(),
                 ));
             }
-            observation_checkpoint(
-                budget,
-                cancellation,
-                ObservationStage::Task,
-                &selection,
-                &ObservationEstablishment::not_requested(),
-                Some(&step),
-            )?;
+            wait.checkpoint(ObservationStage::Task, &selection)?;
             let task = fresh
                 .roots
                 .get(step.as_str())
@@ -746,11 +675,147 @@ pub(crate) fn await_root_with_poll(
                 },
             });
         }
-        pause(budget);
-        candidate = read_candidate(&mut pinned, Some(&step), budget, cancellation, &mut poll)?;
+        pause(wait.budget);
+        candidate = read_candidate(&mut pinned, &wait, &mut poll)?;
     }
 }
 
 fn corrupt(message: &'static str) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::Registry;
+    use crate::registry::session::{
+        DeclaredRunRequest, record_execution_outcome, record_run_created,
+    };
+    use crate::state::ownership::SlotGuard;
+    use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
+    use serde_json::json;
+
+    #[test]
+    fn final_reread_rejects_settlement_or_successor_after_leader_sampling() {
+        for (mutation, reason) in [
+            ("none", None),
+            ("settled", Some("execution-settled")),
+            ("successor", Some("owner-replaced")),
+        ] {
+            let root = crate::test_support::TestDir::new("observation-final-reread");
+            let executable = std::env::var("NIXFIED_TEST_CHILD").unwrap();
+            let mut manifest = synthetic_manifest(&SyntheticManifestOptions {
+                executable: executable.clone(),
+                ..Default::default()
+            });
+            manifest["tasks"]["smoke"]["requires"] = json!([]);
+            manifest["tasks"]["smoke"]["invocation"]["run"] = json!([
+                std::path::Path::new(&executable)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "exit",
+                "0"
+            ]);
+            let path = root.join("manifest.json");
+            std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            let mut admission_context =
+                crate::AdmissionContext::current(crate::StoreOriginPolicy::AllowNonStoreForTests);
+            admission_context.invocation_root =
+                crate::admission::InvocationRoot::Path(root.to_path_buf());
+            let admission = crate::admit_run(&path, &admission_context).unwrap();
+            let location = crate::state::derive_slot_location(
+                admission.common().project_id(),
+                "dev",
+                0,
+                root.join("state"),
+            )
+            .unwrap();
+            let scope = Scope::new(admission.common(), &location).unwrap();
+            let mut writer = Registry::open_or_create(
+                SlotGuard::acquire(&location, &CancellationToken::new()).unwrap(),
+                scope.identity(),
+            )
+            .unwrap();
+            let request =
+                DeclaredRunRequest::new(&admission, &nixfied_manifest::TaskId::new("smoke"), 5000)
+                    .unwrap();
+            record_run_created(
+                &mut writer,
+                "selected",
+                &request,
+                &location.for_run("selected").unwrap(),
+            )
+            .unwrap();
+            let owner_json: String = writer
+                .connection()
+                .query_row("SELECT owner_identity FROM runs", [], |row| row.get(0))
+                .unwrap();
+            let owner: OwnerIdentity = serde_json::from_str(&owner_json).unwrap();
+            writer.connection().execute(
+                "INSERT INTO processes(process_key,run_id,pid,pgid,start_identity,command_json,role,root_step_path,execution_outcome,exit_code,status,ownership,source_label,presentation,stdout_path,stderr_path,capture,stop_signal,stop_timeout_ms,containment)
+                 VALUES ('task','selected',?1,?1,?2,'{}','task','smoke','succeeded',0,'succeeded','settled','smoke','hidden','logs/out.log','logs/err.log','complete',15,1000,'process-group')",
+                rusqlite::params![owner.pid(), owner_json],
+            ).unwrap();
+            let snapshot = Snapshot::read(&scope, &mut History::default())
+                .unwrap()
+                .unwrap();
+            let publication = snapshot.publication("selected").unwrap().clone();
+            let pinned = snapshot.pin(publication);
+            let mut sampled = false;
+            let result = await_root_with_poll(
+                admission.common(),
+                &location,
+                pinned,
+                "smoke",
+                &ObservationWait {
+                    budget: &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
+                    cancellation: &CancellationToken::new(),
+                    establishment: &ObservationEstablishment::not_requested(),
+                    step: None,
+                },
+                |boundary| {
+                    if !matches!(boundary, ObservationBoundary::LeadersSampled) || sampled {
+                        return;
+                    }
+                    sampled = true;
+                    match mutation {
+                        "none" => {}
+                        "settled" => record_execution_outcome(
+                            &mut writer,
+                            "selected",
+                            admission.common().computed_manifest_hash(),
+                            ExecutionOutcome::Failed,
+                        )
+                        .unwrap(),
+                        "successor" => record_run_created(
+                            &mut writer,
+                            "successor",
+                            &request,
+                            &location.for_run("successor").unwrap(),
+                        )
+                        .unwrap(),
+                        _ => unreachable!(),
+                    }
+                },
+            );
+            assert!(sampled, "the wait must reach exact leader sampling");
+            if let Some(reason) = reason {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, ErrorCode::SessionUnavailable);
+                assert_eq!(error.details["sessionObservation"]["reason"], reason);
+                assert_eq!(
+                    error.details["sessionObservation"]["selection"],
+                    json!({"state":"pinned","runId":"selected"})
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap().session.owner.observation,
+                    LeaderObservation::Live
+                );
+            }
+            writer.close().unwrap();
+        }
+    }
 }

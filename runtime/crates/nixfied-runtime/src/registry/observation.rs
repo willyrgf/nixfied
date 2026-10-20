@@ -13,7 +13,7 @@ use crate::state::SlotLocation;
 
 use super::session::{OwnerIdentity, RecordedRunRequest, SessionProgress, valid_run_id};
 use super::sqlite::{RegistryRead, read_existing};
-use super::status::{DbStatus, ExecutionOutcome, ProcessRole, ProcessStatus};
+use super::status::{DbStatus, ExecutionOutcome, Ownership, ProcessRole, ProcessStatus};
 use super::{RegistryIdentity, RegistryReader, sql_error};
 use crate::output::EvidenceRelativePath;
 use crate::redaction::CaptureOutcome;
@@ -346,21 +346,15 @@ impl Snapshot {
         })
         .transpose()
     }
-    pub(crate) fn first_after(&self, watermark: i64) -> RuntimeResult<Option<Publication>> {
-        let Contents::Complete { reader, .. } = &self.contents else {
-            return Ok(None);
+    pub(crate) fn first_after(&self, watermark: i64) -> Option<Publication> {
+        let Contents::Complete { publications, .. } = &self.contents else {
+            return None;
         };
-        let marker: Option<(i64, String)> = reader.connection().query_row(
-            "SELECT seq, run_id FROM events WHERE event_type = 'run.created' AND seq > ?1 ORDER BY seq ASC LIMIT 1",
-            [watermark], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(sql_error)?;
-        marker
-            .map(|(sequence, run)| {
-                self.publication(&run)
-                    .filter(|publication| publication.sequence == sequence)
-                    .cloned()
-                    .ok_or_else(|| invalid("creation marker has inconsistent provenance"))
-            })
-            .transpose()
+        publications
+            .values()
+            .filter(|publication| publication.sequence > watermark)
+            .min_by_key(|publication| publication.sequence)
+            .cloned()
     }
     pub(crate) fn into_seeking(self) -> Seeking {
         Seeking {
@@ -455,7 +449,7 @@ impl Snapshot {
                             return Err(invalid("invalid or duplicate service endpoint identity"));
                         }
                         let host = RecordedHost::parse(host)?;
-                        coordinates.push(EndpointFacts {
+                        coordinates.push(EndpointCoordinate {
                             endpoint_id,
                             host,
                             port,
@@ -487,7 +481,7 @@ impl Snapshot {
                     self.publication(run)
                         .ok_or_else(|| invalid("selected run has no publication"))?
                         .sequence(),
-                )?
+                )
                 .is_some(),
         })
     }
@@ -507,12 +501,6 @@ pub(crate) struct CandidateSnapshot {
     pub(crate) roots: BTreeMap<String, ProcessFacts>,
     pub(crate) services: Vec<ServiceFacts>,
     pub(crate) successor: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ownership {
-    Unresolved,
-    Settled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,11 +528,12 @@ pub(crate) struct ProcessFacts {
 pub(crate) struct ServiceFacts {
     pub(crate) service_id: String,
     pub(crate) process: ProcessFacts,
-    pub(crate) endpoints: Vec<EndpointFacts>,
+    pub(crate) endpoints: Vec<EndpointCoordinate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EndpointFacts {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointCoordinate {
     pub(crate) endpoint_id: String,
     pub(crate) host: RecordedHost,
     pub(crate) port: u16,
@@ -637,11 +626,8 @@ impl RawProcess {
             .ok_or_else(|| invalid("process leader start identity is absent"))?;
         let status = ProcessStatus::from_db(&self.status)
             .ok_or_else(|| invalid("invalid process status"))?;
-        let ownership = match self.ownership.as_str() {
-            "unresolved" => Ownership::Unresolved,
-            "settled" => Ownership::Settled,
-            _ => return Err(invalid("invalid process ownership")),
-        };
+        let ownership = Ownership::from_db(&self.ownership)
+            .ok_or_else(|| invalid("invalid process ownership"))?;
         let capture = match self.capture.as_str() {
             "pending" => CaptureState::Pending,
             "complete" => CaptureState::Finished(CaptureOutcome::Complete),
@@ -884,15 +870,15 @@ mod tests {
         let seeking = fixture.read(&mut history).unwrap().into_seeking();
         assert_eq!(seeking.watermark(), 5);
         let cursor = seeking.cursor();
-        publish(&writer, "first-failed", true);
-        publish(&writer, "later-owner", false);
+        publish(&writer, "z-first-failed", true);
+        publish(&writer, "a-later-owner", false);
         let mut resumed = Seeking::resume(fixture.scope.clone(), &cursor)
             .unwrap()
             .unwrap();
         assert_eq!(resumed.watermark(), 5);
         let snapshot = resumed.read().unwrap().unwrap();
-        let selected = snapshot.first_after(resumed.watermark()).unwrap().unwrap();
-        assert_eq!(selected.run_id(), "first-failed");
+        let selected = snapshot.first_after(resumed.watermark()).unwrap();
+        assert_eq!(selected.run_id(), "z-first-failed");
         assert_eq!(selected.sequence(), 6);
         let facts = snapshot.run(selected.run_id()).unwrap();
         assert_eq!(
@@ -909,7 +895,7 @@ mod tests {
             "learned high water cannot regress across reply"
         );
         let pinned = parent.pin(selected);
-        assert_eq!(pinned.run_id(), "first-failed");
+        assert_eq!(pinned.run_id(), "z-first-failed");
         assert_eq!(pinned.created_sequence(), 6);
     }
 

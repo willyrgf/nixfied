@@ -22,19 +22,11 @@ pub struct AdmittedSource {
 /// Checked historical provenance, without source or secret admission. Stored
 /// bytes can construct this metadata value, never an `AdmittedSource`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordedSource {
-    codebase_id: String,
-    logical_root: String,
-    observed_root: String,
-    source_mode: SourceMode,
-    source_identity: String,
-    dirty_policy: DirtyPolicy,
-    admission_fingerprint_policy: String,
-}
+#[serde(transparent)]
+pub struct RecordedSource(RecordedSourceWire);
 
-// A closed input DTO is deliberately separate from the output/proof value.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+// These fields have one representation; only validation constructs the checked wrapper.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RecordedSourceWire {
     codebase_id: String,
@@ -73,17 +65,9 @@ impl RecordedSource {
 
 impl RecordedSourceWire {
     pub(crate) fn from_recorded(source: &RecordedSource) -> Self {
-        Self {
-            codebase_id: source.codebase_id.clone(),
-            logical_root: source.logical_root.clone(),
-            observed_root: source.observed_root.clone(),
-            source_mode: source.source_mode,
-            source_identity: source.source_identity.clone(),
-            dirty_policy: source.dirty_policy,
-            admission_fingerprint_policy: source.admission_fingerprint_policy.clone(),
-        }
+        source.0.clone()
     }
-    fn check(self) -> RuntimeResult<RecordedSource> {
+    pub(crate) fn check(self) -> RuntimeResult<RecordedSource> {
         if self.codebase_id != "main" {
             return Err(invalid_recorded_source("codebaseId"));
         }
@@ -104,15 +88,7 @@ impl RecordedSourceWire {
         {
             return Err(invalid_recorded_source("sourceIdentity"));
         }
-        Ok(RecordedSource {
-            codebase_id: self.codebase_id,
-            logical_root: self.logical_root,
-            observed_root: self.observed_root,
-            source_mode: self.source_mode,
-            source_identity: self.source_identity,
-            dirty_policy: self.dirty_policy,
-            admission_fingerprint_policy: self.admission_fingerprint_policy,
-        })
+        Ok(RecordedSource(self))
     }
 }
 

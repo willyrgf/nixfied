@@ -113,7 +113,7 @@ struct RunSession<'a> {
     placement: &'a nixfied_runtime::state::HostPlacement,
     state: &'a StateIdentity,
     admission: &'a RunAdmission,
-    options: &'a RunOptions,
+    timeout_ms: u64,
     redactor: &'a Redactor,
     cancellation: &'a CancellationToken,
     run_id: &'a str,
@@ -237,7 +237,7 @@ impl<'a> RunSession<'a> {
             // under cancellation, and never settles as a deliberate stop.
             while let Some(index) = self.started.iter().position(|service| service.exited()) {
                 let service = self.started.remove(index);
-                if let Err(error) = service.stop(&mut self.registry, self.options.timeout_ms) {
+                if let Err(error) = service.stop(&mut self.registry, self.timeout_ms) {
                     failures.push(error);
                 }
             }
@@ -247,7 +247,7 @@ impl<'a> RunSession<'a> {
             // The teardown policy is chosen once per service. Late
             // cancellation of an otherwise healthy teardown cancels what
             // remains; a failed session keeps stopping its services.
-            let timeout_ms = self.options.timeout_ms;
+            let timeout_ms = self.timeout_ms;
             let result = if canceled {
                 service.cancel(&mut self.registry, timeout_ms, "run canceled")
             } else if had_initial_failure {
@@ -795,8 +795,7 @@ fn run_session(
         output_mode,
         parsed_options.task.as_deref(),
     )?;
-    let background = establishment.is_background();
-    let options = parsed_options.resolve(output_mode, selected_task, background);
+    let options = parsed_options.resolve(output_mode, selected_task);
     let redactor = Redactor::from_secrets(admission.secrets());
     let manifest_path = admission.common().manifest_path().to_path_buf();
     let computed_manifest_hash = admission.common().computed_manifest_hash().to_owned();
@@ -920,20 +919,12 @@ fn run_shared_owner(
                         );
                     }
                 };
-                let options = RunOptions {
-                    background: true,
-                    state_base: execution.state_base.into(),
-                    timeout_ms: execution.operation_timeout_ms,
-                    output_mode: RunOutputValue::Summary,
-                    slot: Some(execution.slot),
-                    task,
-                };
                 execute_owned(
                     registry,
-                    &admission,
+                    &actual,
                     &plan,
                     &redactor,
-                    &options,
+                    RunOutputValue::Summary,
                     &run_id,
                     &selected_slot,
                     &placement,
@@ -974,7 +965,7 @@ fn run_admitted(
         selected_slot.slot,
     )
     .map_err(post_admission_error)?;
-    if options.background {
+    if establishment.is_background() {
         reject_interactive_stdin(&plan)?;
     }
     let placement = derive_slot_placement(
@@ -988,12 +979,13 @@ fn run_admitted(
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
-    DeclaredRunRequest::new(admission, &options.task, options.timeout_ms)?.preflight(&placement)?;
+    let request = DeclaredRunRequest::new(admission, &options.task, options.timeout_ms)?;
+    request.preflight(&placement)?;
     run_placed(
-        admission,
+        &request,
         &plan,
         redactor,
-        options,
+        options.output_mode,
         &run_id,
         &selected_slot,
         &placement,
@@ -1051,10 +1043,10 @@ fn enrich_placed_error(
 
 #[allow(clippy::too_many_arguments)]
 fn run_placed(
-    admission: &RunAdmission,
+    request: &DeclaredRunRequest<'_>,
     plan: &nixfied_runtime::execution::RunPlan<'_>,
     redactor: &Redactor,
-    options: &RunOptions,
+    output_mode: RunOutputValue,
     run_id: &str,
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
     placement: &nixfied_runtime::state::HostPlacement,
@@ -1062,6 +1054,7 @@ fn run_placed(
     presenter: &mut Option<CommandPresenter>,
     mut establishment: SessionPurpose<'_>,
 ) -> Result<RunOutput, RuntimeError> {
+    let admission = request.admission();
     let launcher = std::env::current_exe().map_err(|_| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ProcEscape,
@@ -1086,10 +1079,10 @@ fn run_placed(
     )?;
     execute_owned(
         registry,
-        admission,
+        request,
         plan,
         redactor,
-        options,
+        output_mode,
         run_id,
         selected_slot,
         placement,
@@ -1106,10 +1099,10 @@ fn run_placed(
 #[allow(clippy::too_many_arguments)]
 fn execute_owned(
     mut registry: Registry,
-    admission: &RunAdmission,
+    request: &DeclaredRunRequest<'_>,
     plan: &nixfied_runtime::execution::RunPlan<'_>,
     redactor: &Redactor,
-    options: &RunOptions,
+    output_mode: RunOutputValue,
     run_id: &str,
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
     placement: &nixfied_runtime::state::HostPlacement,
@@ -1119,6 +1112,8 @@ fn execute_owned(
     launcher: &Path,
     run_started: Instant,
 ) -> Result<RunOutput, RuntimeError> {
+    let admission = request.admission();
+    let timeout_ms = request.operation_timeout_ms();
     let state_root = placement.state_root();
     registry.set_redactor(redactor.clone());
     // Before RunSession takes ownership, every setup rejection still closes
@@ -1129,7 +1124,7 @@ fn execute_owned(
         // Exclusive recovery settles every predecessor before the state marker
         // decision, independently of manifest provenance.
         let recovery =
-            nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
+            nixfied_runtime::control::recover_slot(&mut registry, &identity, timeout_ms)?;
         // Recovery effects already settled are kept; abandonment observed now
         // still prevents any new generation or session.
         establishment.check_abandonment()?;
@@ -1144,16 +1139,11 @@ fn execute_owned(
             cancellation,
         )?;
         let mut diagnostics =
-            SessionDiagnostics::create(&placement.run_dir(), options.output_mode.emit_summary())?;
+            SessionDiagnostics::create(&placement.run_dir(), output_mode.emit_summary())?;
         establishment.check_abandonment()?;
         // This commit establishes the run for every owner mode. No workload
         // has been released, and no service transition can create this row.
-        record_run_created(
-            &mut registry,
-            run_id,
-            &DeclaredRunRequest::new(admission, &options.task, options.timeout_ms)?,
-            placement,
-        )?;
+        record_run_created(&mut registry, run_id, request, placement)?;
         establishment.mark_committed();
         if preparation.provenance_refreshed {
             diagnostics.write(format_args!(
@@ -1173,7 +1163,7 @@ fn execute_owned(
     let direct_selected = admission
         .common()
         .execution_manifest()
-        .leaf(options.task.as_str())
+        .leaf(request.root_task().as_str())
         .is_some();
 
     // The slot's cross-service endpoint map, known deterministically before
@@ -1204,7 +1194,7 @@ fn execute_owned(
         placement,
         state: &identity,
         admission,
-        options,
+        timeout_ms,
         redactor,
         cancellation,
         run_id,
@@ -1239,10 +1229,9 @@ fn execute_owned(
     }
     // The command-owned presenter exists before any workload is released; its
     // establishment failure releases no workload.
-    if let Some(mode) = options
-        .output_mode
+    if let Some(mode) = output_mode
         .presentation()
-        .filter(|_| !options.background)
+        .filter(|_| !establishment.is_background())
     {
         let init = PresenterInit {
             run_id: run_id.to_owned(),
@@ -1301,7 +1290,7 @@ fn execute_owned(
                 service_name,
                 endpoint_ports: binding.endpoint_ports(),
                 slot_endpoints: &slot_endpoints,
-                run_timeout_ms: options.timeout_ms,
+                run_timeout_ms: timeout_ms,
                 cancellation,
                 session_checkpoint: &observe_started,
                 prepare_runner,
@@ -1316,7 +1305,6 @@ fn execute_owned(
         // started and ends the run with that service's evidence.
         let mut checkpoint = observe_started;
         let registry = &mut session.registry;
-        let timeout_ms = options.timeout_ms;
         let healthy = match current_service.ready(registry, cancellation, &mut checkpoint) {
             Ok(mut service) => {
                 match service.check_health(registry, cancellation, &mut checkpoint) {
@@ -2137,9 +2125,7 @@ fn ensure_session(
     timeout_ms: u64,
 ) -> Result<(), RuntimeError> {
     use nixfied_runtime::control::{ensure, observation};
-    use nixfied_runtime::error::{
-        ObservationEstablishment, observation_establishment, observation_step,
-    };
+    use nixfied_runtime::error::{ObservationEstablishment, ObservationWait};
     let admission = nixfied_runtime::admit_run(
         &options.manifest_path,
         &admission_context(options.allow_non_store),
@@ -2173,24 +2159,24 @@ fn ensure_session(
             &options.state_base,
         )
         .map_err(post_admission_error)?;
-        DeclaredRunRequest::new(&admission, &task, timeout_ms)?.preflight(&placement)?;
+        let declared = DeclaredRunRequest::new(&admission, &task, timeout_ms)?;
+        declared.preflight(&placement)?;
         observation::context(admission.common(), placement.location())?;
-        Ok((task, step, run_id, placement))
+        Ok((declared, step, run_id, placement))
     })()
     .map_err(|error| redactor.redact_error(error))?;
-    let (task, step, run_id, placement) = prepared;
+    let (declared, step, run_id, placement) = prepared;
     let budget = nixfied_runtime::cancellation::WaitBudget::new(wait_ms);
     let cancellation = CancellationToken::new();
-    let enrollment = ensure::enroll(
-        &admission,
-        placement.location(),
-        &task,
-        timeout_ms,
-        &budget,
-        &cancellation,
-    )
-    .map_err(|error| observation_step(error, &step))?;
-    let (disposition, result, establishment) = match enrollment {
+    let establishment = ObservationEstablishment::not_requested();
+    let wait = ObservationWait {
+        budget: &budget,
+        cancellation: &cancellation,
+        establishment: &establishment,
+        step: Some(&step),
+    };
+    let enrollment = ensure::enroll(&declared, placement.location(), &wait)?;
+    let (disposition, observation) = match enrollment {
         ensure::Enrollment::Pinned(pinned) => (
             observation::EnsureDisposition::Observed,
             observation::await_root(
@@ -2198,10 +2184,8 @@ fn ensure_session(
                 placement.location(),
                 pinned,
                 step.as_str(),
-                &budget,
-                &cancellation,
-            ),
-            ObservationEstablishment::not_requested(),
+                &wait,
+            )?,
         ),
         ensure::Enrollment::Seeking(seeking) => {
             let request = nixfied_runtime::background::Request::Shared {
@@ -2213,18 +2197,18 @@ fn ensure_session(
                     )?
                     .to_owned(),
                     allow_non_store_manifest: options.allow_non_store,
-                    task: task.to_string(),
+                    task: declared.root_task().to_string(),
                     slot: placement.location().slot().slot(),
                     state_base: nixfied_runtime::output::utf8_locator(
                         placement.state_base(),
                         "stateBase",
                     )?
                     .to_owned(),
-                    operation_timeout_ms: timeout_ms,
+                    operation_timeout_ms: declared.operation_timeout_ms(),
                 },
                 expected_request: Box::new(
                     nixfied_runtime::registry::session::RecordedRunRequestWire::from_recorded(
-                        &DeclaredRunRequest::new(&admission, &task, timeout_ms)?.recorded()?,
+                        declared.recorded(),
                     ),
                 ),
                 cursor: seeking.cursor(),
@@ -2235,14 +2219,8 @@ fn ensure_session(
                     "cannot locate runtime executable",
                 )
             })?;
-            let launched = nixfied_runtime::background::launch_shared(
-                &runtime,
-                &request,
-                &seeking,
-                &step,
-                &budget,
-                &cancellation,
-            )?;
+            let launched =
+                nixfied_runtime::background::launch_shared(&runtime, &request, &seeking, &wait)?;
             let (disposition, establishment) = match &launched.selection {
                 nixfied_runtime::background::SharedSelection::Established {
                     acknowledgement,
@@ -2256,16 +2234,11 @@ fn ensure_session(
                     ObservationEstablishment::not_established(&run_id)?,
                 ),
             };
-            let pinned = ensure::select_reply(
-                seeking,
-                &launched.selection,
-                &DeclaredRunRequest::new(&admission, &task, timeout_ms)?,
-                &budget,
-                &cancellation,
-            )
-            .map_err(|error| {
-                observation_establishment(observation_step(error, &step), &establishment)
-            })?;
+            let wait = ObservationWait {
+                establishment: &establishment,
+                ..wait
+            };
+            let pinned = ensure::select_reply(seeking, &launched.selection, &declared, &wait)?;
             (
                 disposition,
                 launched.await_root(
@@ -2273,14 +2246,11 @@ fn ensure_session(
                     placement.location(),
                     pinned,
                     step.as_str(),
-                    &budget,
-                    &cancellation,
-                ),
-                establishment,
+                    &wait,
+                )?,
             )
         }
     };
-    let observation = result.map_err(|error| observation_establishment(error, &establishment))?;
     print_json(&ensure::EnsureOutput {
         disposition,
         observation,
@@ -2507,14 +2477,8 @@ struct ParsedRunOptions {
 }
 
 impl ParsedRunOptions {
-    fn resolve(
-        self,
-        output_mode: RunOutputValue,
-        task: nixfied_manifest::TaskId,
-        background: bool,
-    ) -> RunOptions {
+    fn resolve(self, output_mode: RunOutputValue, task: nixfied_manifest::TaskId) -> RunOptions {
         RunOptions {
-            background,
             state_base: self.state_base,
             timeout_ms: self.timeout_ms,
             output_mode,
@@ -2525,8 +2489,6 @@ impl ParsedRunOptions {
 }
 
 struct RunOptions {
-    /// A background owner retains evidence without a terminal presenter.
-    background: bool,
     state_base: PathBuf,
     timeout_ms: RunTimeoutMsValue,
     output_mode: RunOutputValue,

@@ -11,7 +11,7 @@ use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::session::{require_open_sources, require_run};
 use crate::registry::sql_error;
 use crate::registry::sqlite::RegistryContext;
-use crate::registry::status::{self, DbStatus, ProcessRole, ProcessStatus};
+use crate::registry::status::{self, DbStatus, Ownership, ProcessRole, ProcessStatus};
 
 pub(crate) struct ServiceRecord<'a> {
     pub(crate) service_name: &'a str,
@@ -394,23 +394,6 @@ pub(crate) enum ServiceTerminal<'a> {
 pub(crate) struct ServiceSettlement {
     pub(crate) ownership: Ownership,
     pub(crate) capture: CaptureOutcome,
-}
-
-/// Whether the owner proved that a process and its captured writers are gone.
-/// Leader exit alone never settles ownership.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ownership {
-    Settled,
-    Unresolved,
-}
-
-impl Ownership {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Settled => "settled",
-            Self::Unresolved => "unresolved",
-        }
-    }
 }
 
 pub(crate) fn settle_service_terminal(

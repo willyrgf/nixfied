@@ -118,6 +118,38 @@ impl Owner {
             &CancellationToken::new(),
         )
     }
+
+    fn ensure(&self, extra: &[&str]) -> std::process::Command {
+        let mut command = self.fixture.command(
+            "ensure",
+            &["--task", "owner", "--until-step", "owner.initialize"],
+        );
+        command.args(extra);
+        command
+    }
+
+    fn history(&self) -> Value {
+        let connection = self.fixture.registry();
+        let records = |sql| {
+            connection
+                .prepare(sql)
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let latest: i64 = connection
+            .query_row("SELECT coalesce(max(seq), 0) FROM events", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        json!({
+            "runs": records("SELECT json_array(run_id, manifest_path, computed_manifest_hash, root_task, operation_timeout_ms, source_json, owner_identity, execution_outcome, finalization) FROM runs ORDER BY run_id"),
+            "processes": records("SELECT json_array(process_key, pid, pgid, start_identity, status, ownership, capture) FROM processes ORDER BY process_key"),
+            "latestEvent": latest,
+        })
+    }
 }
 
 #[test]
@@ -163,17 +195,10 @@ fn observation_checks_the_whole_group_with_endpointless_and_multiple_endpoint_me
         value["services"]["aux"]["lifecycle"]["health"]["probe"] = probe;
         value["services"]["synthetic"]["connectsTo"] = json!(["aux"]);
     });
-    let output = owner.fixture.output(
-        "ensure",
-        &[
-            "--task",
-            "owner",
-            "--until-step",
-            "owner.initialize",
-            "--wait-timeout-ms",
-            "5000",
-        ],
-    );
+    let output = owner
+        .ensure(&["--wait-timeout-ms", "5000"])
+        .output()
+        .unwrap();
     assert_success(&output);
     assert!(wait_for_path(&holding, Duration::from_secs(3)));
     assert!(owner._markers.path.join("aux-started").exists());
@@ -217,18 +242,7 @@ fn concurrent_ensure_commands_commit_one_owner_and_one_canonical_initialization(
     for _ in 0..8 {
         children.push(
             owner
-                .fixture
-                .command(
-                    "ensure",
-                    &[
-                        "--task",
-                        "owner",
-                        "--until-step",
-                        "owner.initialize",
-                        "--wait-timeout-ms",
-                        "10000",
-                    ],
-                )
+                .ensure(&["--wait-timeout-ms", "10000"])
                 .spawn()
                 .unwrap(),
         );
@@ -283,19 +297,15 @@ fn concurrent_ensure_commands_commit_one_owner_and_one_canonical_initialization(
 fn ensure_establishes_and_reuses_full_u64_timeouts_without_an_instant_overflow() {
     let (owner, _, _) = Owner::prepared(false);
     for disposition in ["established", "observed"] {
-        let output = owner.fixture.output(
-            "ensure",
-            &[
-                "--task",
-                "owner",
-                "--until-step",
-                "owner.initialize",
+        let output = owner
+            .ensure(&[
                 "--timeout-ms",
                 "18446744073709551615",
                 "--wait-timeout-ms",
                 "18446744073709551615",
-            ],
-        );
+            ])
+            .output()
+            .unwrap();
         assert_success(&output);
         let wire: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(wire["disposition"], disposition);
@@ -314,18 +324,7 @@ fn ensure_establishes_and_reuses_full_u64_timeouts_without_an_instant_overflow()
 fn initiating_observer_signal_after_commit_leaves_shared_owner_and_other_observers_alive() {
     let (owner, release, health_started) = Owner::prepared(true);
     let initiator = owner
-        .fixture
-        .command(
-            "ensure",
-            &[
-                "--task",
-                "owner",
-                "--until-step",
-                "owner.initialize",
-                "--wait-timeout-ms",
-                "10000",
-            ],
-        )
+        .ensure(&["--wait-timeout-ms", "10000"])
         .spawn()
         .unwrap();
     assert!(wait_for_path(&health_started, Duration::from_secs(5)));
@@ -337,18 +336,7 @@ fn initiating_observer_signal_after_commit_leaves_shared_owner_and_other_observe
     let raw_owner: Value = serde_json::from_str(&raw_owner).unwrap();
     let owner_pid = raw_owner["pid"].as_i64().unwrap() as i32;
     let other = owner
-        .fixture
-        .command(
-            "ensure",
-            &[
-                "--task",
-                "owner",
-                "--until-step",
-                "owner.initialize",
-                "--wait-timeout-ms",
-                "10000",
-            ],
-        )
+        .ensure(&["--wait-timeout-ms", "10000"])
         .spawn()
         .unwrap();
     assert_eq!(
@@ -386,11 +374,9 @@ fn committed_shared_helper_survives_observer_abandonment_before_any_ack_can_be_d
     let mut context = AdmissionContext::current(StoreOriginPolicy::AllowNonStoreForTests);
     context.invocation_root = InvocationRoot::Path(owner.fixture.tmp.path.clone());
     let admitted = admit_run(&owner.fixture.manifest_path, &context).unwrap();
-    let expected =
-        DeclaredRunRequest::new(&admitted, &nixfied_manifest::TaskId::new("owner"), 5000)
-            .unwrap()
-            .recorded()
-            .unwrap();
+    let declared =
+        DeclaredRunRequest::new(&admitted, &nixfied_manifest::TaskId::new("owner"), 5000).unwrap();
+    let expected = declared.recorded();
     let (mut observer, mut channel) = UnixStream::pair().unwrap();
     observer.set_nonblocking(true).unwrap();
     channel.set_nonblocking(true).unwrap();
@@ -444,7 +430,7 @@ fn committed_shared_helper_survives_observer_abandonment_before_any_ack_can_be_d
         let body = serde_json::to_vec(&json!({"purpose":"shared", "runId":"run-before-ack", "execution":{
             "manifestPath":owner.fixture.manifest_path,"allowNonStoreManifest":true,"task":"owner", "slot":0,
             "stateBase":owner.fixture.state_base,"operationTimeoutMs":5000},
-            "expectedRequest":RecordedRunRequestWire::from_recorded(&expected),
+            "expectedRequest":RecordedRunRequestWire::from_recorded(expected),
             "cursor":{"watermark":0,"history":{"state":"unseen"}}})).unwrap();
         let mut frame = b"NXD2".to_vec();
         frame.extend((body.len() as u32).to_be_bytes());
@@ -513,38 +499,111 @@ fn committed_shared_helper_survives_observer_abandonment_before_any_ack_can_be_d
 }
 
 #[test]
-fn reuse_rejects_request_timeout_difference_and_full_admission_still_precedes_selection() {
-    let (owner, _) = Owner::start(false);
-    let mismatch = owner.fixture.output(
-        "ensure",
-        &[
-            "--task",
-            "owner",
-            "--until-step",
-            "owner.initialize",
-            "--timeout-ms",
-            "0",
-        ],
-    );
-    assert_eq!(mismatch.status.code(), Some(40));
-    let error: Value = serde_json::from_slice(&mismatch.stderr).unwrap();
-    assert_eq!(
-        error["details"]["sessionObservation"],
-        json!({"kind":"request-mismatch", "field":"operation-timeout",
-        "selection":{"state":"pinned","runId":owner.acknowledgement["runId"]}})
-    );
+fn public_reuse_rejects_each_request_difference_without_changing_the_owner() {
+    let (mut owner, _, holding) = Owner::prepared_with(false, |value, _| {
+        value["tasks"]["other-owner"] = value["tasks"]["owner"].clone();
+    });
+    let output = owner
+        .fixture
+        .output("run", &["--task", "owner", "--daemon"]);
+    assert_success(&output);
+    owner.acknowledgement = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(wait_for_path(&holding, Duration::from_secs(5)));
+    let before = owner.history();
+    let original = fs::read(&owner.fixture.manifest_path).unwrap();
+    let other_source = TempDir::new();
+    for field in ["operation-timeout", "root-task", "source", "manifest"] {
+        let mut command = match field {
+            "operation-timeout" => owner.ensure(&["--timeout-ms", "0"]),
+            "root-task" => owner.fixture.command(
+                "ensure",
+                &[
+                    "--task",
+                    "other-owner",
+                    "--until-step",
+                    "other-owner.initialize",
+                ],
+            ),
+            _ => owner.ensure(&[]),
+        };
+        if field == "source" {
+            command.current_dir(&other_source.path);
+        }
+        if field == "manifest" {
+            let mut different = original.clone();
+            different.push(b'\n');
+            fs::write(&owner.fixture.manifest_path, different).unwrap();
+        }
+        let mismatch = command.output().unwrap();
+        fs::write(&owner.fixture.manifest_path, &original).unwrap();
+        assert_eq!(mismatch.status.code(), Some(40), "{field}");
+        let error: Value = serde_json::from_slice(&mismatch.stderr).unwrap();
+        assert_eq!(
+            error["details"]["sessionObservation"],
+            json!({"kind":"request-mismatch", "field":field,
+            "selection":{"state":"pinned","runId":owner.acknowledgement["runId"]}})
+        );
+        assert_eq!(owner.history(), before, "{field}");
+        assert_eq!(
+            serde_json::to_value(owner.observe().unwrap()).unwrap()["session"]["runId"],
+            owner.acknowledgement["runId"]
+        );
+    }
     let rejected = owner
         .fixture
         .output("ensure", &["--task", "owner", "--until-step", "owner.hold"]);
     assert_eq!(rejected.status.code(), Some(37));
-    assert_eq!(
-        owner
-            .fixture
-            .registry()
-            .query_row("SELECT count(*) FROM runs", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
+    assert_eq!(owner.history(), before);
+}
+
+#[test]
+fn public_reuse_requires_current_source_and_secrets_without_touching_a_live_owner() {
+    let (mut owner, _, holding) = Owner::prepared_with(false, |value, _| {
+        value["codebases"][0]["logicalRoot"] = json!("source");
+        value["secrets"]["owner-token"] = json!({
+            "secretId":"owner-token", "source":{"kind":"file","path":"token"}
+        });
+        value["tasks"]["initialize"]["invocation"]["env"]["TOKEN"] = json!("${secret:owner-token}");
+    });
+    let source = owner.fixture.tmp.path.join("source");
+    fs::create_dir(&source).unwrap();
+    let secrets = owner._markers.path.join("secrets");
+    fs::create_dir(&secrets).unwrap();
+    let token = secrets.join("token");
+    fs::write(&token, "owner-secret-value").unwrap();
+    let output = owner
+        .fixture
+        .command("run", &["--task", "owner", "--daemon"])
+        .env("NIXFIED_SECRETS_DIR", &secrets)
+        .output()
+        .unwrap();
+    assert_success(&output);
+    owner.acknowledgement = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(wait_for_path(&holding, Duration::from_secs(5)));
+    let before = owner.history();
+    for (material, exit, code) in [
+        (&source, 17, "SOURCE_MISMATCH"),
+        (&token, 33, "SECRET_UNAVAILABLE"),
+    ] {
+        let unavailable = material.with_extension("unavailable");
+        fs::rename(material, &unavailable).unwrap();
+        let rejected = owner
+            .ensure(&[])
+            .env("NIXFIED_SECRETS_DIR", &secrets)
+            .output()
+            .unwrap();
+        let observed = owner.observe();
+        let after = owner.history();
+        fs::rename(unavailable, material).unwrap();
+        assert_eq!(rejected.status.code(), Some(exit));
+        let error: Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert_eq!(error["code"], code);
+        assert_eq!(after, before);
+        assert_eq!(
+            serde_json::to_value(observed.unwrap()).unwrap()["session"]["runId"],
+            owner.acknowledgement["runId"]
+        );
+    }
 }
 
 impl Drop for Owner {

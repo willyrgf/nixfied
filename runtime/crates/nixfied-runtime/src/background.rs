@@ -21,11 +21,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cancellation::{CancellationToken, WaitBudget};
+use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::error::{
-    ObservationEstablishment, ObservationSelection, ObservationStage, bootstrap_uncertain,
-    observation_checkpoint,
+    ObservationEstablishment, ObservationSelection, ObservationStage, ObservationWait,
+    bootstrap_uncertain,
 };
 use crate::registry::observation::{CursorWire, Seeking};
 use crate::registry::session::RecordedRunRequestWire;
@@ -243,17 +243,15 @@ impl SharedLaunch {
         location: &crate::state::SlotLocation,
         pinned: crate::registry::observation::PinnedRun,
         step: &str,
-        budget: &WaitBudget,
-        cancellation: &CancellationToken,
+        wait: &ObservationWait<'_>,
     ) -> RuntimeResult<crate::control::observation::TaskObservation> {
         crate::control::observation::await_root_with_poll(
             admission,
             location,
             pinned,
             step,
-            budget,
-            cancellation,
-            || self.reap_exited(),
+            wait,
+            |_| self.reap_exited(),
         )
     }
 }
@@ -429,9 +427,7 @@ pub fn launch_shared(
     runtime: &Path,
     request: &Request,
     seeking: &Seeking,
-    step: &crate::control::observation::RootStepPath,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> RuntimeResult<SharedLaunch> {
     let Request::Shared { run_id, .. } = request else {
         return Err(transport_failure("shared launch requires shared purpose"));
@@ -444,15 +440,7 @@ pub fn launch_shared(
         .map_err(|_| transport_failure("shared launch request exceeds its limit"))?;
     let selection = ObservationSelection::seeking(seeking);
     let (mut channel, mut helper) = spawn_owner(runtime)?;
-    let result = shared_exchange(
-        &mut channel,
-        &frame,
-        run_id,
-        &selection,
-        step,
-        budget,
-        cancellation,
-    );
+    let result = shared_exchange(&mut channel, &frame, run_id, &selection, wait);
     let _ = channel.shutdown(std::net::Shutdown::Write);
     match result {
         Exchange::Incomplete(error) => {
@@ -485,23 +473,18 @@ fn shared_exchange(
     frame: &[u8],
     candidate: &str,
     selection: &ObservationSelection,
-    step: &crate::control::observation::RootStepPath,
-    budget: &WaitBudget,
-    cancellation: &CancellationToken,
+    wait: &ObservationWait<'_>,
 ) -> Exchange {
     let not_established = match ObservationEstablishment::not_established(candidate) {
         Ok(value) => value,
         Err(error) => return Exchange::Incomplete(error),
     };
     let checkpoint = |establishment: &ObservationEstablishment| {
-        observation_checkpoint(
-            budget,
-            cancellation,
-            ObservationStage::Establishment,
-            selection,
+        ObservationWait {
             establishment,
-            Some(step),
-        )
+            ..*wait
+        }
+        .checkpoint(ObservationStage::Establishment, selection)
     };
     let mut written = 0;
     while written < frame.len() {
@@ -517,7 +500,7 @@ fn shared_exchange(
             Ok(count) => written += count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if let Some(deadline) = budget.poll_deadline() {
+                if let Some(deadline) = wait.budget.poll_deadline() {
                     let _ = crate::channel::wait(channel, libc::POLLOUT, deadline);
                 }
             }
@@ -551,7 +534,7 @@ fn shared_exchange(
                 );
             }
             Ok(None) => {
-                if let Some(deadline) = budget.poll_deadline() {
+                if let Some(deadline) = wait.budget.poll_deadline() {
                     let _ = crate::channel::wait(channel, libc::POLLIN, deadline);
                 }
             }
@@ -815,6 +798,7 @@ impl Establishment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cancellation::WaitBudget;
 
     fn cursor() -> CursorWire {
         serde_json::from_value(serde_json::json!({"watermark":0,"history":{"state":"unseen"}}))
@@ -880,9 +864,12 @@ mod tests {
                 &frame,
                 "run-1",
                 &ObservationSelection::unenrolled(),
-                &step,
-                &WaitBudget::new(std::num::NonZeroU64::new(20).unwrap()),
-                &CancellationToken::new(),
+                &ObservationWait {
+                    budget: &WaitBudget::new(std::num::NonZeroU64::new(20).unwrap()),
+                    cancellation: &CancellationToken::new(),
+                    establishment: &ObservationEstablishment::not_requested(),
+                    step: Some(&step),
+                },
             );
             let error = match result {
                 Exchange::Incomplete(error) if !complete => error,
@@ -925,9 +912,14 @@ mod tests {
                 &PROTOCOL.encode(b"{}").unwrap(),
                 "run-1",
                 &ObservationSelection::unenrolled(),
-                &crate::control::observation::RootStepPath::parse("owner.init").unwrap(),
-                &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
-                &CancellationToken::new(),
+                &ObservationWait {
+                    budget: &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
+                    cancellation: &CancellationToken::new(),
+                    establishment: &ObservationEstablishment::not_requested(),
+                    step: Some(
+                        &crate::control::observation::RootStepPath::parse("owner.init").unwrap(),
+                    ),
+                },
             );
             let Exchange::Complete(Err(error)) = result else {
                 panic!("lost full delivery");
@@ -969,9 +961,14 @@ mod tests {
             &PROTOCOL.encode(b"{}").unwrap(),
             "run-1",
             &ObservationSelection::unenrolled(),
-            &crate::control::observation::RootStepPath::parse("owner.init").unwrap(),
-            &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
-            &canceled,
+            &ObservationWait {
+                budget: &WaitBudget::new(std::num::NonZeroU64::new(1000).unwrap()),
+                cancellation: &canceled,
+                establishment: &ObservationEstablishment::not_requested(),
+                step: Some(
+                    &crate::control::observation::RootStepPath::parse("owner.init").unwrap(),
+                ),
+            },
         );
         let Exchange::Complete(Err(error)) = result else {
             panic!("lost dispatch completion");

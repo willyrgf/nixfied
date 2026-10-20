@@ -6,7 +6,7 @@ use common::*;
 
 #[test]
 fn declared_request_timeout_codec_and_schema_preserve_full_u64_exactly() {
-    use nixfied_runtime::registry::session::RecordedRunRequest;
+    use nixfied_runtime::registry::session::{RecordedRunRequest, RecordedRunRequestWire};
     use serde_json::json;
     let source = json!({"codebaseId": "main", "logicalRoot": ".", "observedRoot": "/historical",
         "sourceMode": "live-workspace", "sourceIdentity": "workspace", "dirtyPolicy": "allow",
@@ -21,10 +21,13 @@ fn declared_request_timeout_codec_and_schema_preserve_full_u64_exactly() {
         let checked =
             RecordedRunRequest::decode(&hash, "owner", &source.to_string(), &timeout.to_string())
                 .unwrap();
+        let expected = json!({"computedManifestHash": hash,
+            "rootTask": "owner", "source": source, "operationTimeoutMs": timeout});
+        assert_eq!(serde_json::to_value(checked).unwrap(), expected);
+        let wire: RecordedRunRequestWire = serde_json::from_value(expected.clone()).unwrap();
         assert_eq!(
-            serde_json::to_value(checked).unwrap(),
-            json!({"computedManifestHash": hash,
-            "rootTask": "owner", "source": source, "operationTimeoutMs": timeout})
+            serde_json::to_value(wire.checked().unwrap()).unwrap(),
+            expected
         );
         registry
             .connection()
@@ -82,6 +85,26 @@ fn declared_request_timeout_codec_and_schema_preserve_full_u64_exactly() {
             ErrorCode::RegistryCorrupt
         );
     }
+    let mut invalid = json!({"computedManifestHash": "bad", "rootTask": "bad.task",
+        "source": source, "operationTimeoutMs": u64::MAX});
+    invalid["source"]["logicalRoot"] = json!("../outside");
+    let wire: RecordedRunRequestWire = serde_json::from_value(invalid.clone()).unwrap();
+    assert_eq!(
+        wire.checked().unwrap_err().message,
+        "invalid recorded computed_manifest_hash"
+    );
+    invalid["computedManifestHash"] = json!(hash);
+    let wire: RecordedRunRequestWire = serde_json::from_value(invalid.clone()).unwrap();
+    assert_eq!(
+        wire.checked().unwrap_err().message,
+        "invalid recorded root_task"
+    );
+    invalid["rootTask"] = json!("owner");
+    let wire: RecordedRunRequestWire = serde_json::from_value(invalid).unwrap();
+    assert_eq!(
+        wire.checked().unwrap_err().message,
+        "invalid recorded source field logicalRoot"
+    );
 }
 
 #[test]
