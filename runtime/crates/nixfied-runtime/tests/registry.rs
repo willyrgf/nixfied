@@ -5,6 +5,128 @@ mod common;
 use common::*;
 
 #[test]
+fn declared_request_timeout_codec_and_schema_preserve_full_u64_exactly() {
+    use nixfied_runtime::registry::session::RecordedRunRequest;
+    use serde_json::json;
+    let source = json!({"codebaseId": "main", "logicalRoot": ".", "observedRoot": "/historical",
+        "sourceMode": "live-workspace", "sourceIdentity": "workspace", "dirtyPolicy": "allow",
+        "admissionFingerprintPolicy": ""});
+    let hash = "a".repeat(64);
+    let tmp = TempDir::new();
+    let identity = registry_identity();
+    let placement = registry_placement(&tmp.path, &identity);
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity).unwrap();
+    seed_run(registry.connection(), "run", None);
+    for timeout in [0, i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
+        let checked =
+            RecordedRunRequest::decode(&hash, "owner", &source.to_string(), &timeout.to_string())
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(checked).unwrap(),
+            json!({"computedManifestHash": hash,
+            "rootTask": "owner", "source": source, "operationTimeoutMs": timeout})
+        );
+        registry
+            .connection()
+            .execute(
+                "UPDATE runs SET operation_timeout_ms = ?1",
+                [timeout.to_string()],
+            )
+            .unwrap();
+        let stored: (String, String) = registry
+            .connection()
+            .query_row(
+                "SELECT operation_timeout_ms, typeof(operation_timeout_ms) FROM runs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (timeout.to_string(), "text".into()));
+    }
+    for invalid in [
+        "",
+        "+1",
+        "-1",
+        "00",
+        "01",
+        " 1",
+        "1 ",
+        "1.0",
+        "18446744073709551616",
+        "untrusted-do-not-echo",
+    ] {
+        let error =
+            RecordedRunRequest::decode(&hash, "owner", &source.to_string(), invalid).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+        assert!(!error.message.contains("do-not-echo"));
+        assert!(
+            registry
+                .connection()
+                .execute("UPDATE runs SET operation_timeout_ms = ?1", [invalid])
+                .is_err()
+        );
+    }
+    for invalid in ["", "Owner.path", "../owner", "untrusted-do-not-echo."] {
+        assert_eq!(
+            RecordedRunRequest::decode(&hash, invalid, &source.to_string(), "0")
+                .unwrap_err()
+                .code,
+            ErrorCode::RegistryCorrupt
+        );
+    }
+    for invalid in ["A".repeat(64), "a".repeat(63), "g".repeat(64)] {
+        assert_eq!(
+            RecordedRunRequest::decode(&invalid, "owner", &source.to_string(), "0")
+                .unwrap_err()
+                .code,
+            ErrorCode::RegistryCorrupt
+        );
+    }
+}
+
+#[test]
+fn root_attribution_is_unique_and_task_only_at_the_registry_boundary() {
+    let tmp = TempDir::new();
+    let identity = registry_identity();
+    let placement = registry_placement(&tmp.path, &identity);
+    let registry = Registry::open_or_create(registry_guard(&placement), &identity).unwrap();
+    seed_run(registry.connection(), "run-1", None);
+    for key in ["one", "two"] {
+        seed_process(
+            registry.connection(),
+            SeedProcess {
+                key,
+                ..Default::default()
+            },
+        );
+    }
+    registry
+        .connection()
+        .execute(
+            "UPDATE processes SET root_step_path = 'owner.initialize' WHERE process_key = 'one'",
+            [],
+        )
+        .unwrap();
+    for sql in [
+        "UPDATE processes SET root_step_path = 'owner.initialize' WHERE process_key = 'two'",
+        "UPDATE processes SET root_step_path = '' WHERE process_key = 'two'",
+        "UPDATE processes SET role = 'probe', service_name = 'service', root_step_path = 'owner.probe' WHERE process_key = 'two'",
+        "UPDATE processes SET role = 'service', service_name = 'service', root_step_path = 'owner.service' WHERE process_key = 'two'",
+    ] {
+        assert!(registry.connection().execute(sql, []).is_err(), "{sql}");
+    }
+    let root: Option<String> = registry
+        .connection()
+        .query_row(
+            "SELECT root_step_path FROM processes WHERE process_key = 'two'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(root, None);
+}
+
+#[test]
 fn historical_source_is_closed_metadata_without_current_filesystem_admission() {
     use nixfied_runtime::admission::source::RecordedSource;
     use serde_json::{Value, json};
@@ -130,7 +252,7 @@ fn competing_initializers_admit_one_writer_before_schema_creation() {
             .next()
             .unwrap()
             .code,
-        ErrorCode::CleanupRefused
+        ErrorCode::SlotBusy
     );
     let winner = results
         .iter()

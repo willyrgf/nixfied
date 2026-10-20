@@ -1132,7 +1132,12 @@ mod tests {
         record_run_created(
             &mut registry,
             "run-unsafe-lock-root",
-            &admission,
+            &crate::registry::session::DeclaredRunRequest::new(
+                &admission,
+                &nixfied_manifest::TaskId::new("smoke"),
+                5000,
+            )
+            .unwrap(),
             &placement,
         )
         .unwrap();

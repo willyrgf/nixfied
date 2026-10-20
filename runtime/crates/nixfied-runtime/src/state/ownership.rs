@@ -29,12 +29,12 @@ impl SlotGuard {
         placement: &SlotLocation,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<Self> {
-        Self::try_acquire(placement, cancellation)?.ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::CleanupRefused,
-                "slot is already owned by another session",
-            )
-        })
+        match Self::try_acquire(placement, cancellation)? {
+            Some(guard) => Ok(guard),
+            None => Err(crate::error::slot_busy(
+                &crate::control::observation::Context::from_location(placement)?,
+            )),
+        }
     }
 
     /// Like [`Self::acquire`], but contention is an explicit `None` so an
@@ -288,7 +288,7 @@ mod tests {
         let path = fixture.placement.registry_dir().join("slot.lock");
         let inode = fs::metadata(&path).unwrap().ino();
         fs::write(&path, b"inert contents").unwrap();
-        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
+        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::SlotBusy));
         // Closing an unrelated open must not release an open-description flock.
         drop(fs::File::open(&path).unwrap());
         assert!(fixture.acquire().is_err());
@@ -444,7 +444,7 @@ mod tests {
         command.arg("assert-fd-closed").arg(inherited.to_string());
         remove_close_on_exec(&mut command);
         assert!(guard.spawn(command).unwrap().wait().unwrap().success());
-        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
+        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::SlotBusy));
 
         let mut command = Command::new(std::env::var("NIXFIED_TEST_SLEEP").unwrap());
         command.arg("30");
@@ -492,7 +492,7 @@ mod tests {
         let error = guard.spawn(command).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(libc::EBADF));
         assert!(!marker.exists());
-        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::CleanupRefused));
+        assert!(matches!(fixture.acquire(), Err(error) if error.code == ErrorCode::SlotBusy));
         guard.release().unwrap();
         fixture.acquire().unwrap().release().unwrap();
     }

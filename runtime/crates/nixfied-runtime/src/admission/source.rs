@@ -34,9 +34,9 @@ pub struct RecordedSource {
 }
 
 // A closed input DTO is deliberately separate from the output/proof value.
-#[derive(serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RecordedSourceWire {
+pub(crate) struct RecordedSourceWire {
     codebase_id: String,
     logical_root: String,
     observed_root: String,
@@ -56,12 +56,8 @@ impl RecordedSource {
     /// Derive non-secret comparison metadata from actual admission. This
     /// checks lossless publication, without introducing a second admission.
     pub fn from_admitted(source: &AdmittedSource) -> RuntimeResult<Self> {
-        let observed_root = source.observed_root.to_str().ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                "source observedRoot cannot be serialized losslessly as UTF-8",
-            )
-        })?;
+        let observed_root =
+            crate::output::utf8_locator(&source.observed_root, "source observedRoot")?;
         RecordedSourceWire {
             codebase_id: source.codebase_id.clone(),
             logical_root: source.logical_root.clone(),
@@ -76,6 +72,17 @@ impl RecordedSource {
 }
 
 impl RecordedSourceWire {
+    pub(crate) fn from_recorded(source: &RecordedSource) -> Self {
+        Self {
+            codebase_id: source.codebase_id.clone(),
+            logical_root: source.logical_root.clone(),
+            observed_root: source.observed_root.clone(),
+            source_mode: source.source_mode,
+            source_identity: source.source_identity.clone(),
+            dirty_policy: source.dirty_policy,
+            admission_fingerprint_policy: source.admission_fingerprint_policy.clone(),
+        }
+    }
     fn check(self) -> RuntimeResult<RecordedSource> {
         if self.codebase_id != "main" {
             return Err(invalid_recorded_source("codebaseId"));

@@ -1515,7 +1515,18 @@ fn held_session(
     let cancellation = CancellationToken::new();
     let control =
         SessionControl::establish(directory, &placement.run_dir(), &cancellation).unwrap();
-    record_run_created(&mut registry, run_id, &admission, &placement).unwrap();
+    record_run_created(
+        &mut registry,
+        run_id,
+        &nixfied_runtime::registry::session::DeclaredRunRequest::new(
+            &admission,
+            &nixfied_manifest::TaskId::new("smoke"),
+            5000,
+        )
+        .unwrap(),
+        &placement,
+    )
+    .unwrap();
     (admission, registry, control, cancellation)
 }
 
@@ -1846,11 +1857,11 @@ fn background_launch_rejects_before_establishment_without_new_work() {
     let launch = fixture.output("run", &["--task", "smoke", "--daemon"]);
     assert_eq!(
         launch.status.code(),
-        Some(22),
+        Some(39),
         "{}",
         String::from_utf8_lossy(&launch.stderr)
     );
-    assert!(String::from_utf8_lossy(&launch.stderr).contains("CLEANUP_REFUSED"));
+    assert!(String::from_utf8_lossy(&launch.stderr).contains("SLOT_BUSY"));
     let runs: i64 = fixture
         .registry()
         .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))

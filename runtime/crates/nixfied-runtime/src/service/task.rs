@@ -199,6 +199,7 @@ pub fn run_dependent_task_cancellable(
     let manifest_hash = run_context.admission.common().computed_manifest_hash();
     let invocation = Invocation {
         owner: InvocationOwner::Task,
+        root_step_path: selected.root_step_path(),
         run_id: run_context.run_id,
         manifest_hash,
         source: &evidence,

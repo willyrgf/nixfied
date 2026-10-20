@@ -80,10 +80,14 @@ impl SlotLocation {
             }
             invocation_cwd.join(state_base)
         };
-        if state_base.as_os_str().as_bytes().contains(&0) {
+        Self::from_absolute(slot, state_base)
+    }
+
+    fn from_absolute(slot: SlotIdentity, state_base: PathBuf) -> RuntimeResult<Self> {
+        if !state_base.is_absolute() || state_base.as_os_str().as_bytes().contains(&0) {
             return Err(RuntimeError::new(
                 ErrorCode::StateUnwritable,
-                "placement cwd must be NUL-free",
+                "state placement must be absolute and NUL-free",
             ));
         }
         Ok(Self { state_base, slot })
@@ -216,6 +220,9 @@ pub fn derive_slot_location(
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<SlotLocation> {
     let slot = SlotIdentity::new(project, environment, slot)?;
+    if state_base.as_ref().is_absolute() {
+        return SlotLocation::from_absolute(slot, state_base.as_ref().to_path_buf());
+    }
     let cwd = std::env::current_dir().map_err(|_| {
         RuntimeError::new(
             ErrorCode::StateUnwritable,

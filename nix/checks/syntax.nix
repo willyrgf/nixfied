@@ -51,6 +51,9 @@ let
     ps = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/ps.txt;
     down = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/down.txt;
     clean = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/clean.txt;
+    context = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/context.txt;
+    observe = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/observe.txt;
+    ensure = ../../runtime/crates/nixfied-runtime/tests/fixtures/help/ensure.txt;
     install = ../../runtime/crates/nixfied-cli/tests/fixtures/install-help.txt;
     upgrade = ../fixtures/upgrade-help.txt;
   };
@@ -60,6 +63,9 @@ assert
     "check"
     "run"
     "ps"
+    "context"
+    "observe"
+    "ensure"
     "down"
     "clean"
     "install"
@@ -69,6 +75,29 @@ assert builtins.all (name: checked.help.${name} + "\n" == builtins.readFile help
   builtins.attrNames helpPaths
 );
 assert (check helpThrows).byName.run.name == "run";
+assert
+  checked.byName.observe.references == [
+    {
+      kind = "topic";
+      id = "commands";
+    }
+    {
+      kind = "record";
+      id = "output-schema/observe-absent";
+    }
+    {
+      kind = "record";
+      id = "output-schema/observe-session";
+    }
+    {
+      kind = "record";
+      id = "output-schema/observe-satisfied";
+    }
+    {
+      kind = "record";
+      id = "output-schema/runtime-error";
+    }
+  ];
 assert rejects (check helpThrows).help.run;
 assert (check helpWrongType).byName.run.name == "run";
 assert rejects (check helpWrongType).help.run;

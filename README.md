@@ -96,6 +96,12 @@ Nixfied owns:
 - runtime-owned run evidence;
 - marker-gated, path-confined cleanup of state roots it owns.
 
+Independent clients can use `context`, `observe`, and `ensure` to share one
+declared service owner. Ensure fully admits and matches the request, then waits
+for canonical root task evidence and fresh leader identities. Canceling an
+observer leaves a committed shared owner running; `down` stops it explicitly.
+See [sharing a service owner](docs/GUIDE.md#share-a-service-owner).
+
 Compiler and tool caches remain child-, tool-, and project-owned. Nixfied does
 not own their:
 

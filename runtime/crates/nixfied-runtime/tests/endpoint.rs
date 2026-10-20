@@ -168,7 +168,7 @@ fn lost_listener_does_not_grant_a_second_session_execution_rights() {
     let first = HeldSession::start(&fixture, &root);
     let (pid, first_key) = service_process(&root);
     let blocked = run_command(&fixture, &root).output().unwrap();
-    assert_error_code(&blocked, "CLEANUP_REFUSED", 22);
+    assert_error_code(&blocked, "SLOT_BUSY", 39);
     assert_eq!(
         unsafe { libc::kill(pid, 0) },
         0,
@@ -191,8 +191,8 @@ fn active_session_blocks_replacement_without_mutating_owner_evidence() {
     let before = service_evidence(&root, &key);
     assert_error_code(
         &run_command(&fixture, &root).output().unwrap(),
-        "CLEANUP_REFUSED",
-        22,
+        "SLOT_BUSY",
+        39,
     );
     assert_eq!(service_evidence(&root, &key), before);
     assert_eq!(unsafe { libc::kill(pid, 0) }, 0);

@@ -532,13 +532,16 @@ fn validate_tasks(manifest: &Manifest) -> Result<(), ValidationError> {
 /// Step names and task/service ids are step-path segments
 /// (docs/DERIVATION_SPEC.md §1): path-safe AND dot-free, so paths parse
 /// unambiguously on `.`.
-fn require_step_safe_id(field: &'static str, id: &str) -> Result<(), ValidationError> {
+pub fn is_step_safe_id(id: &str) -> bool {
     let mut chars = id.chars();
-    let valid = chars
+    chars
         .next()
         .is_some_and(|first| first.is_ascii_alphanumeric())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
-    if valid {
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+fn require_step_safe_id(field: &'static str, id: &str) -> Result<(), ValidationError> {
+    if is_step_safe_id(id) {
         Ok(())
     } else {
         Err(ValidationError::UnsupportedValue {

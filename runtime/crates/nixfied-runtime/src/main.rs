@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use nixfied_manifest::TaskDefaultOutput;
+use nixfied_runtime::background::SessionPurpose;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::error_code_wire;
 use nixfied_runtime::execution::{TaskOccurrence, plan};
@@ -16,7 +17,7 @@ use nixfied_runtime::output::{
 };
 use nixfied_runtime::presenter::{CommandPresenter, PresentationMode, PresenterInit};
 use nixfied_runtime::redaction::Redactor;
-use nixfied_runtime::registry::session::{new_run_id, record_run_created};
+use nixfied_runtime::registry::session::{DeclaredRunRequest, new_run_id, record_run_created};
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RegistryReader};
 use nixfied_runtime::service::{
     PrepareRunner, ReadyService, RunContext, SelectedEndpoint, ServiceSelection, TaskExecution,
@@ -453,6 +454,13 @@ fn run(args: &[String]) -> Result<(), RuntimeError> {
         PS_COMMAND => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
         DOWN_COMMAND => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
         CLEAN_COMMAND => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
+        CONTEXT_COMMAND => {
+            run_session_control(SessionCommand::Context, args.get(1..).unwrap_or(&[]))
+        }
+        OBSERVE_COMMAND => {
+            run_session_control(SessionCommand::Observe, args.get(1..).unwrap_or(&[]))
+        }
+        ENSURE_COMMAND => run_session_control(SessionCommand::Ensure, args.get(1..).unwrap_or(&[])),
         _ => Err(RuntimeError::unsupported_feature(
             "runtime.command",
             format!("unsupported runtime command: {command}"),
@@ -480,6 +488,12 @@ enum ErrorOutputProjection {
 }
 
 fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
+    if matches!(
+        args.first().map(String::as_str),
+        Some(CONTEXT_COMMAND | OBSERVE_COMMAND | ENSURE_COMMAND)
+    ) {
+        return ErrorOutputProjection::Json;
+    }
     if args.first().map(String::as_str) != Some(RUN_COMMAND) {
         return ErrorOutputProjection::Human;
     }
@@ -671,7 +685,7 @@ fn run_command(args: &[String]) -> Result<(), RuntimeError> {
     if parsed_options.daemon {
         return launch_background(args, parsed_options.timeout_ms);
     }
-    run_session(parsed_options, new_run_id()?, None)
+    run_session(parsed_options, new_run_id()?, SessionPurpose::Foreground)
 }
 
 /// The launcher validated syntax and option combinations; the owner performs
@@ -685,7 +699,7 @@ fn launch_background(args: &[String], timeout_ms: u64) -> Result<(), RuntimeErro
         )
     })?;
     let run_id = new_run_id()?;
-    let request = nixfied_runtime::background::Request {
+    let request = nixfied_runtime::background::Request::Daemon {
         run_id: run_id.clone(),
         args: args
             .iter()
@@ -731,15 +745,30 @@ fn run_background_owner(
     request: nixfied_runtime::background::Request,
     mut establishment: nixfied_runtime::background::Establishment,
 ) -> Result<(), RuntimeError> {
-    let result = parse_run_options(&request.args).and_then(|parsed| {
-        if parsed.daemon || parsed.output_mode.is_some() {
-            return Err(RuntimeError::new(
-                nixfied_runtime::ErrorCode::OutputModeConflict,
-                "a background session has no output projection",
-            ));
-        }
-        run_session(parsed, request.run_id, Some(&mut establishment))
-    });
+    let result = match request {
+        nixfied_runtime::background::Request::Daemon { run_id, args } => parse_run_options(&args)
+            .and_then(|parsed| {
+                if parsed.daemon || parsed.output_mode.is_some() {
+                    return Err(RuntimeError::new(
+                        nixfied_runtime::ErrorCode::OutputModeConflict,
+                        "a background session has no output projection",
+                    ));
+                }
+                run_session(parsed, run_id, SessionPurpose::Daemon(&mut establishment))
+            }),
+        nixfied_runtime::background::Request::Shared {
+            run_id,
+            execution,
+            expected_request,
+            cursor,
+        } => run_shared_owner(
+            run_id,
+            execution,
+            *expected_request,
+            cursor,
+            &mut establishment,
+        ),
+    };
     if let Err(error) = &result {
         establishment.reject(error);
     }
@@ -749,7 +778,7 @@ fn run_background_owner(
 fn run_session(
     parsed_options: ParsedRunOptions,
     run_id: String,
-    establishment: Option<&mut nixfied_runtime::background::Establishment>,
+    establishment: SessionPurpose<'_>,
 ) -> Result<(), RuntimeError> {
     let cancellation = CancellationToken::new();
     let admission = load_admitted_manifest(
@@ -766,7 +795,7 @@ fn run_session(
         output_mode,
         parsed_options.task.as_deref(),
     )?;
-    let background = establishment.is_some();
+    let background = establishment.is_background();
     let options = parsed_options.resolve(output_mode, selected_task, background);
     let redactor = Redactor::from_secrets(admission.secrets());
     let manifest_path = admission.common().manifest_path().to_path_buf();
@@ -806,12 +835,125 @@ fn run_session(
         }
     };
     let output = result.map_err(|error| {
-        redactor.redact_error(error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
+        let error = error.with_manifest_if_missing(manifest_path, computed_manifest_hash);
+        if error.code == nixfied_runtime::ErrorCode::SlotBusy {
+            // This envelope consists only of checked placement metadata. Its
+            // fixed keys and locators must survive vocabulary-matching secrets.
+            error
+        } else {
+            redactor.redact_error(error)
+        }
     })?;
     if options.output_mode.emit_json() {
         print_json_redacted(&output, &redactor)?;
     }
     Ok(())
+}
+
+fn run_shared_owner(
+    run_id: String,
+    execution: nixfied_runtime::background::Execution,
+    expected: nixfied_runtime::registry::session::RecordedRunRequestWire,
+    cursor: nixfied_runtime::registry::observation::CursorWire,
+    establishment: &mut nixfied_runtime::background::Establishment,
+) -> Result<(), RuntimeError> {
+    let cancellation = CancellationToken::new();
+    let admission = nixfied_runtime::admit_run(
+        Path::new(&execution.manifest_path),
+        &admission_context(execution.allow_non_store_manifest),
+    )?;
+    let redactor = Redactor::from_secrets(admission.secrets());
+    let result = (|| {
+        let task = validate_run_selection(
+            admission.common().execution_manifest(),
+            RunOutputValue::Summary,
+            Some(&execution.task),
+        )?;
+        let selected_slot = select_slot(admission.common().manifest(), Some(execution.slot))
+            .map_err(post_admission_error)?;
+        let plan = plan(
+            admission.common().execution_manifest(),
+            &task,
+            selected_slot.slot,
+        )
+        .map_err(post_admission_error)?;
+        reject_interactive_stdin(&plan)?;
+        let placement = derive_slot_placement(
+            admission.common().project_id(),
+            selected_slot.environment,
+            selected_slot.slot,
+            &run_id,
+            Path::new(&execution.state_base),
+        )
+        .map_err(post_admission_error)?;
+        let actual = DeclaredRunRequest::new(&admission, &task, execution.operation_timeout_ms)?;
+        actual.preflight(&placement)?;
+        let expected = expected.checked()?;
+        let seeking = nixfied_runtime::control::ensure::resume_from_wire(
+            admission.common(),
+            placement.location(),
+            &cursor,
+            establishment,
+            &cancellation,
+        )?;
+        match nixfied_runtime::control::ensure::acquire_shared(
+            &actual,
+            placement.location(),
+            seeking,
+            &expected,
+            establishment,
+            &cancellation,
+        )? {
+            nixfied_runtime::control::ensure::SharedDecision::Selected(pinned) => {
+                establishment.selected(&pinned)
+            }
+            nixfied_runtime::control::ensure::SharedDecision::Establish(registry) => {
+                let launcher = match std::env::current_exe() {
+                    Ok(launcher) => launcher,
+                    Err(_) => {
+                        return nixfied_runtime::error::both(
+                            Err(RuntimeError::new(
+                                nixfied_runtime::ErrorCode::ProcEscape,
+                                "cannot locate workload gate executable",
+                            )),
+                            registry.close(),
+                        );
+                    }
+                };
+                let options = RunOptions {
+                    background: true,
+                    state_base: execution.state_base.into(),
+                    timeout_ms: execution.operation_timeout_ms,
+                    output_mode: RunOutputValue::Summary,
+                    slot: Some(execution.slot),
+                    task,
+                };
+                execute_owned(
+                    registry,
+                    &admission,
+                    &plan,
+                    &redactor,
+                    &options,
+                    &run_id,
+                    &selected_slot,
+                    &placement,
+                    &cancellation,
+                    &mut None,
+                    SessionPurpose::Shared(establishment),
+                    &launcher,
+                    Instant::now(),
+                )
+                .map(|_| ())
+            }
+        }
+    })();
+    result.map_err(|error| {
+        if error.details.get("sessionObservation").is_some() {
+            error
+        } else {
+            redactor.redact_error(error)
+        }
+    })
 }
 
 fn run_admitted(
@@ -821,7 +963,7 @@ fn run_admitted(
     run_id: String,
     cancellation: &CancellationToken,
     presenter: &mut Option<CommandPresenter>,
-    establishment: Option<&mut nixfied_runtime::background::Establishment>,
+    establishment: SessionPurpose<'_>,
 ) -> Result<RunOutput, RuntimeError> {
     let manifest = admission.common().manifest();
     cancellation.check()?;
@@ -846,6 +988,7 @@ fn run_admitted(
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
+    DeclaredRunRequest::new(admission, &options.task, options.timeout_ms)?.preflight(&placement)?;
     run_placed(
         admission,
         &plan,
@@ -917,7 +1060,7 @@ fn run_placed(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
     presenter: &mut Option<CommandPresenter>,
-    mut establishment: Option<&mut nixfied_runtime::background::Establishment>,
+    mut establishment: SessionPurpose<'_>,
 ) -> Result<RunOutput, RuntimeError> {
     let launcher = std::env::current_exe().map_err(|_| {
         RuntimeError::new(
@@ -928,9 +1071,7 @@ fn run_placed(
     let manifest = admission.common().manifest();
     let run_started = Instant::now();
     // Observed abandonment before slot acquisition starts no session work.
-    if let Some(establishment) = establishment.as_deref_mut() {
-        establishment.check_abandonment()?;
-    }
+    establishment.check_abandonment()?;
     let guard =
         nixfied_runtime::state::ownership::SlotGuard::acquire(placement.location(), cancellation)?;
     let registry = Registry::open_or_create(
@@ -974,7 +1115,7 @@ fn execute_owned(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
     presenter: &mut Option<CommandPresenter>,
-    mut establishment: Option<&mut nixfied_runtime::background::Establishment>,
+    mut establishment: SessionPurpose<'_>,
     launcher: &Path,
     run_started: Instant,
 ) -> Result<RunOutput, RuntimeError> {
@@ -984,18 +1125,14 @@ fn execute_owned(
     // SQLite and the slot guard through their checked consuming boundary.
     let setup = (|| {
         let identity = StateIdentity::from_selected_slot(admission.common(), selected_slot);
-        if let Some(establishment) = establishment.as_deref_mut() {
-            establishment.check_abandonment()?;
-        }
+        establishment.check_abandonment()?;
         // Exclusive recovery settles every predecessor before the state marker
         // decision, independently of manifest provenance.
         let recovery =
             nixfied_runtime::control::recover_slot(&mut registry, &identity, options.timeout_ms)?;
         // Recovery effects already settled are kept; abandonment observed now
         // still prevents any new generation or session.
-        if let Some(establishment) = establishment.as_deref_mut() {
-            establishment.check_abandonment()?;
-        }
+        establishment.check_abandonment()?;
         let preparation = prepare_slot_state(&identity, &mut registry, recovery.recovered)?;
         // The never-reused evidence directory: an existing one is an identity
         // collision, refused before any session fact is published.
@@ -1008,12 +1145,16 @@ fn execute_owned(
         )?;
         let mut diagnostics =
             SessionDiagnostics::create(&placement.run_dir(), options.output_mode.emit_summary())?;
-        if let Some(establishment) = establishment.as_deref_mut() {
-            establishment.check_abandonment()?;
-        }
+        establishment.check_abandonment()?;
         // This commit establishes the run for every owner mode. No workload
         // has been released, and no service transition can create this row.
-        record_run_created(&mut registry, run_id, admission, placement)?;
+        record_run_created(
+            &mut registry,
+            run_id,
+            &DeclaredRunRequest::new(admission, &options.task, options.timeout_ms)?,
+            placement,
+        )?;
+        establishment.mark_committed();
         if preparation.provenance_refreshed {
             diagnostics.write(format_args!(
                 "  updated slot provenance from manifest {} (data retained)",
@@ -1034,14 +1175,6 @@ fn execute_owned(
         .execution_manifest()
         .leaf(options.task.as_str())
         .is_some();
-
-    if let Some(establishment) = establishment {
-        establishment.acknowledge(nixfied_runtime::background::Acknowledgement {
-            run_id: run_id.to_owned(),
-            run_dir: placement.run_dir().clone(),
-            logs_dir: placement.logs_dir().clone(),
-        });
-    }
 
     // The slot's cross-service endpoint map, known deterministically before
     // anything spawns: `${port:<serviceId>}` substitution addresses each service's
@@ -1091,6 +1224,18 @@ fn execute_owned(
             session.extra_services = $extra_services;
             return session.finalize(Some(error), None);
         }};
+    }
+    if let Err(error) = establishment.acknowledge(
+        nixfied_runtime::background::Acknowledgement {
+            run_id: run_id.to_owned(),
+            run_dir: placement.run_dir().clone(),
+            logs_dir: placement.logs_dir().clone(),
+        },
+        admission.common(),
+        placement.location(),
+        cancellation,
+    ) {
+        finish_run!(error, Vec::new());
     }
     // The command-owned presenter exists before any workload is released; its
     // establishment failure releases no workload.
@@ -1771,6 +1916,377 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
         .map_err(|error| error.with_manifest_if_missing(manifest_path, computed_manifest_hash))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionCommand {
+    Context,
+    Observe,
+    Ensure,
+}
+
+enum SessionOperation {
+    Context,
+    Observe {
+        selector: nixfied_runtime::control::observation::Selector,
+        step: Option<String>,
+        wait_ms: std::num::NonZeroU64,
+    },
+    Ensure {
+        task: String,
+        step: String,
+        wait_ms: std::num::NonZeroU64,
+        timeout_ms: u64,
+    },
+}
+
+struct SessionControlOptions {
+    manifest_path: PathBuf,
+    allow_non_store: bool,
+    slot: Option<u32>,
+    state_base: PathBuf,
+    operation: SessionOperation,
+}
+
+fn syntax_error(message: impl Into<String>) -> RuntimeError {
+    RuntimeError::new(nixfied_runtime::ErrorCode::ManifestAdmission, message)
+}
+
+fn acquire_text(args: &[String], index: &mut usize, flag: &str) -> Result<String, RuntimeError> {
+    *index += 1;
+    args.get(*index)
+        .cloned()
+        .ok_or_else(|| syntax_error(format!("missing {flag} value")))
+}
+
+fn once<T>(place: &mut Option<T>, value: T, flag: &str) -> Result<(), RuntimeError> {
+    if place.replace(value).is_some() {
+        Err(syntax_error(format!("duplicate {flag}")))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_session_control(
+    command: SessionCommand,
+    args: &[String],
+) -> Result<SessionControlOptions, RuntimeError> {
+    use nixfied_runtime::control::observation::Selector;
+    let mut common = ManifestOptions::new();
+    let mut state_base = RUNTIME_STATE_BASE_INITIAL.map(PathBuf::from);
+    let mut current = OBSERVE_CURRENT_INITIAL.then_some(());
+    let mut exact = OBSERVE_RUN_ID_INITIAL.map(Selector::run_id).transpose()?;
+    let mut step = RUNTIME_UNTIL_STEP_INITIAL.map(str::to_owned);
+    let mut task = ENSURE_TASK_INITIAL.map(str::to_owned);
+    let mut wait = None;
+    let mut timeout_ms = ENSURE_TIMEOUT_MS_INITIAL;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            _ if common.consume(args, &mut index)? => {}
+            RUNTIME_STATE_BASE => {
+                index += 1;
+                state_base = args.get(index).map(PathBuf::from);
+            }
+            OBSERVE_CURRENT if command == SessionCommand::Observe => {
+                once(&mut current, (), OBSERVE_CURRENT)?
+            }
+            OBSERVE_RUN_ID if command == SessionCommand::Observe => {
+                let value = acquire_text(args, &mut index, OBSERVE_RUN_ID)?;
+                let selector = Selector::run_id(&value)?;
+                once(&mut exact, selector, OBSERVE_RUN_ID)?;
+            }
+            RUNTIME_UNTIL_STEP if command != SessionCommand::Context => {
+                let value = acquire_text(args, &mut index, RUNTIME_UNTIL_STEP)?;
+                once(&mut step, value, RUNTIME_UNTIL_STEP)?;
+            }
+            ENSURE_TASK if command == SessionCommand::Ensure => {
+                let value = acquire_text(args, &mut index, ENSURE_TASK)?;
+                once(&mut task, value, ENSURE_TASK)?;
+            }
+            RUNTIME_WAIT_TIMEOUT_MS if command != SessionCommand::Context => {
+                index += 1;
+                let value = parse_integer_arg::<std::num::NonZeroU64>(
+                    args.get(index),
+                    RUNTIME_WAIT_TIMEOUT_MS,
+                )?;
+                once(&mut wait, value, RUNTIME_WAIT_TIMEOUT_MS)?;
+            }
+            ENSURE_TIMEOUT_MS if command == SessionCommand::Ensure => {
+                index += 1;
+                timeout_ms =
+                    parse_integer_arg::<EnsureTimeoutMsValue>(args.get(index), ENSURE_TIMEOUT_MS)?;
+            }
+            other => {
+                return Err(syntax_error(format!(
+                    "unknown session control argument: {other}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    let default_wait: RuntimeWaitTimeoutMsValue = RUNTIME_WAIT_TIMEOUT_MS_INITIAL;
+    let wait_ms =
+        wait.unwrap_or_else(|| std::num::NonZeroU64::new(default_wait).expect("positive default"));
+    let operation = match command {
+        SessionCommand::Context => SessionOperation::Context,
+        SessionCommand::Observe => {
+            let selector = match (current, exact) {
+                (Some(()), None) => Selector::current(),
+                (None, Some(selector)) => selector,
+                _ => {
+                    return Err(syntax_error(
+                        "observe requires exactly one of --current or --run-id",
+                    ));
+                }
+            };
+            SessionOperation::Observe {
+                selector,
+                step,
+                wait_ms,
+            }
+        }
+        SessionCommand::Ensure => SessionOperation::Ensure {
+            task: task.ok_or_else(|| syntax_error("missing --task value"))?,
+            step: step.ok_or_else(|| syntax_error("missing --until-step value"))?,
+            wait_ms,
+            timeout_ms,
+        },
+    };
+    let (manifest_path, allow_non_store, slot) = common.finish()?;
+    Ok(SessionControlOptions {
+        manifest_path,
+        allow_non_store,
+        slot,
+        state_base: state_base.map(Ok).unwrap_or_else(state_base_from_env)?,
+        operation,
+    })
+}
+
+fn run_session_control(command: SessionCommand, args: &[String]) -> Result<(), RuntimeError> {
+    let help = match command {
+        SessionCommand::Context => CONTEXT_HELP,
+        SessionCommand::Observe => OBSERVE_HELP,
+        SessionCommand::Ensure => ENSURE_HELP,
+    };
+    if print_help_if_requested(args, help) {
+        return Ok(());
+    }
+    let options = parse_session_control(command, args)?;
+    match options.operation {
+        SessionOperation::Ensure {
+            ref task,
+            ref step,
+            wait_ms,
+            timeout_ms,
+        } => ensure_session(&options, task, step, wait_ms, timeout_ms),
+        _ => {
+            let admission =
+                load_admitted_manifest_for_control(options.manifest_path, options.allow_non_store)?;
+            let slot =
+                select_slot(admission.manifest(), options.slot).map_err(post_admission_error)?;
+            let location = derive_slot_location(
+                admission.project_id(),
+                slot.environment,
+                slot.slot,
+                &options.state_base,
+            )
+            .map_err(post_admission_error)?;
+            match options.operation {
+                SessionOperation::Context => print_json(
+                    &nixfied_runtime::control::observation::context(&admission, &location)?,
+                ),
+                SessionOperation::Observe {
+                    selector,
+                    step,
+                    wait_ms,
+                } => {
+                    let budget = nixfied_runtime::cancellation::WaitBudget::new(wait_ms);
+                    let cancellation = CancellationToken::new();
+                    match step {
+                        None => print_json(&nixfied_runtime::control::observation::inspect(
+                            &admission,
+                            &location,
+                            &selector,
+                            &budget,
+                            &cancellation,
+                        )?),
+                        Some(step) => print_json(
+                            &nixfied_runtime::control::observation::ObserveOutput::Satisfied {
+                                observation: nixfied_runtime::control::observation::await_selected(
+                                    &admission,
+                                    &location,
+                                    &selector,
+                                    &step,
+                                    &budget,
+                                    &cancellation,
+                                )?,
+                            },
+                        ),
+                    }
+                }
+                SessionOperation::Ensure { .. } => unreachable!("ensure handled above"),
+            }
+        }
+    }
+}
+
+fn ensure_session(
+    options: &SessionControlOptions,
+    task: &str,
+    step: &str,
+    wait_ms: std::num::NonZeroU64,
+    timeout_ms: u64,
+) -> Result<(), RuntimeError> {
+    use nixfied_runtime::control::{ensure, observation};
+    use nixfied_runtime::error::{
+        ObservationEstablishment, observation_establishment, observation_step,
+    };
+    let admission = nixfied_runtime::admit_run(
+        &options.manifest_path,
+        &admission_context(options.allow_non_store),
+    )?;
+    let redactor = Redactor::from_secrets(admission.secrets());
+    let prepared = (|| {
+        let task = validate_run_selection(
+            admission.common().execution_manifest(),
+            RunOutputValue::Summary,
+            Some(task),
+        )?;
+        let slot = select_slot(admission.common().manifest(), options.slot)
+            .map_err(post_admission_error)?;
+        let plan = plan(admission.common().execution_manifest(), &task, slot.slot)
+            .map_err(post_admission_error)?;
+        let step = observation::RootStepPath::parse(step)?;
+        let leaf = plan.root_leaf(step.as_str())?;
+        if !leaf.has_continuation() {
+            return Err(RuntimeError::new(
+                nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+                "ensure requires a root composite leaf with a continuation",
+            ));
+        }
+        reject_interactive_stdin(&plan)?;
+        let run_id = new_run_id()?;
+        let placement = derive_slot_placement(
+            admission.common().project_id(),
+            slot.environment,
+            slot.slot,
+            &run_id,
+            &options.state_base,
+        )
+        .map_err(post_admission_error)?;
+        DeclaredRunRequest::new(&admission, &task, timeout_ms)?.preflight(&placement)?;
+        observation::context(admission.common(), placement.location())?;
+        Ok((task, step, run_id, placement))
+    })()
+    .map_err(|error| redactor.redact_error(error))?;
+    let (task, step, run_id, placement) = prepared;
+    let budget = nixfied_runtime::cancellation::WaitBudget::new(wait_ms);
+    let cancellation = CancellationToken::new();
+    let enrollment = ensure::enroll(
+        &admission,
+        placement.location(),
+        &task,
+        timeout_ms,
+        &budget,
+        &cancellation,
+    )
+    .map_err(|error| observation_step(error, &step))?;
+    let (disposition, result, establishment) = match enrollment {
+        ensure::Enrollment::Pinned(pinned) => (
+            observation::EnsureDisposition::Observed,
+            observation::await_root(
+                admission.common(),
+                placement.location(),
+                pinned,
+                step.as_str(),
+                &budget,
+                &cancellation,
+            ),
+            ObservationEstablishment::not_requested(),
+        ),
+        ensure::Enrollment::Seeking(seeking) => {
+            let request = nixfied_runtime::background::Request::Shared {
+                run_id: run_id.clone(),
+                execution: nixfied_runtime::background::Execution {
+                    manifest_path: nixfied_runtime::output::utf8_locator(
+                        admission.common().manifest_path(),
+                        "manifestPath",
+                    )?
+                    .to_owned(),
+                    allow_non_store_manifest: options.allow_non_store,
+                    task: task.to_string(),
+                    slot: placement.location().slot().slot(),
+                    state_base: nixfied_runtime::output::utf8_locator(
+                        placement.state_base(),
+                        "stateBase",
+                    )?
+                    .to_owned(),
+                    operation_timeout_ms: timeout_ms,
+                },
+                expected_request: Box::new(
+                    nixfied_runtime::registry::session::RecordedRunRequestWire::from_recorded(
+                        &DeclaredRunRequest::new(&admission, &task, timeout_ms)?.recorded()?,
+                    ),
+                ),
+                cursor: seeking.cursor(),
+            };
+            let runtime = std::env::current_exe().map_err(|_| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::LifecycleFailed,
+                    "cannot locate runtime executable",
+                )
+            })?;
+            let launched = nixfied_runtime::background::launch_shared(
+                &runtime,
+                &request,
+                &seeking,
+                &step,
+                &budget,
+                &cancellation,
+            )?;
+            let (disposition, establishment) = match &launched.selection {
+                nixfied_runtime::background::SharedSelection::Established {
+                    acknowledgement,
+                    ..
+                } => (
+                    observation::EnsureDisposition::Established,
+                    ObservationEstablishment::established(&acknowledgement.run_id)?,
+                ),
+                nixfied_runtime::background::SharedSelection::Existing { .. } => (
+                    observation::EnsureDisposition::Observed,
+                    ObservationEstablishment::not_established(&run_id)?,
+                ),
+            };
+            let pinned = ensure::select_reply(
+                seeking,
+                &launched.selection,
+                &DeclaredRunRequest::new(&admission, &task, timeout_ms)?,
+                &budget,
+                &cancellation,
+            )
+            .map_err(|error| {
+                observation_establishment(observation_step(error, &step), &establishment)
+            })?;
+            (
+                disposition,
+                launched.await_root(
+                    admission.common(),
+                    placement.location(),
+                    pinned,
+                    step.as_str(),
+                    &budget,
+                    &cancellation,
+                ),
+                establishment,
+            )
+        }
+    };
+    let observation = result.map_err(|error| observation_establishment(error, &establishment))?;
+    print_json(&ensure::EnsureOutput {
+        disposition,
+        observation,
+    })
+}
+
 fn run_control_admitted(
     command: ControlCommand,
     admission: &ControlAdmission,
@@ -2195,5 +2711,9 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::OutputModeConflict => 36,
         nixfied_runtime::ErrorCode::TaskSelectionInvalid => 37,
         nixfied_runtime::ErrorCode::OutputProjectionFailed => 38,
+        nixfied_runtime::ErrorCode::SlotBusy => 39,
+        nixfied_runtime::ErrorCode::RequestMismatch => 40,
+        nixfied_runtime::ErrorCode::ObservationTimeout => 41,
+        nixfied_runtime::ErrorCode::SessionUnavailable => 42,
     }
 }

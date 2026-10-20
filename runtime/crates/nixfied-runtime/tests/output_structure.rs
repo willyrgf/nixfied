@@ -10,6 +10,44 @@ use serde_json::{Value, json};
 const TASK: &str = r#"{"taskId":"task","stepPath":"root.step","processKey":"process","exitCode":null,"timedOut":false,"canceled":false,"success":true,"durationMs":7,"stdoutPath":"/stdout","stderrPath":"/stderr","summaryPath":"/summary"}"#;
 
 #[test]
+fn evidence_locators_reject_lexical_aliases_and_keep_unix_backslashes_literal() {
+    use nixfied_runtime::output::EvidenceRelativePath;
+    for accepted in [
+        "diagnostics.log",
+        "logs/task.stdout.log",
+        "logs/.hidden",
+        "logs/name\\literal",
+    ] {
+        assert_eq!(
+            EvidenceRelativePath::parse(accepted).unwrap().as_str(),
+            accepted
+        );
+    }
+    assert!(EvidenceRelativePath::task("diagnostics.log").is_err());
+    for rejected in [
+        "",
+        "/logs/file",
+        "logs",
+        "logs/",
+        "logs//file",
+        "logs/./file",
+        "logs/file/",
+        "logs/file/..",
+        "logs/..",
+        "logs/.",
+        "./diagnostics.log",
+        "diagnostics.log/",
+        "logs/file\0tail",
+        "logs/a/b",
+    ] {
+        assert_eq!(
+            EvidenceRelativePath::parse(rejected).unwrap_err().code,
+            ErrorCode::RegistryCorrupt
+        );
+    }
+}
+
+#[test]
 fn task_evidence_keeps_unknown_field_tolerance_and_explicit_null() {
     for supplied in [false, true] {
         let mut input: Value = serde_json::from_str(TASK).unwrap();

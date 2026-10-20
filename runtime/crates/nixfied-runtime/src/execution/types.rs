@@ -195,7 +195,7 @@ impl EndpointSet {
 pub struct EndpointId(String);
 
 impl EndpointId {
-    pub(super) fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         let mut chars = value.chars();
         (chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
             && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))

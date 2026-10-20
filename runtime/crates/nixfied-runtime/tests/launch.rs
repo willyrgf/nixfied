@@ -502,7 +502,18 @@ fn native_task_registration_failure_cannot_execute_the_workload() {
     )
     .unwrap();
     registry.authority().claim_run_dir(&placement).unwrap();
-    record_run_created(&mut registry, "gated-task", &admission, &placement).unwrap();
+    record_run_created(
+        &mut registry,
+        "gated-task",
+        &nixfied_runtime::registry::session::DeclaredRunRequest::new(
+            &admission,
+            &nixfied_manifest::TaskId::new("smoke"),
+            5000,
+        )
+        .unwrap(),
+        &placement,
+    )
+    .unwrap();
     registry.connection().execute_batch("CREATE TRIGGER deny_task_registration BEFORE INSERT ON events WHEN NEW.event_type = 'task.running' BEGIN SELECT RAISE(ABORT, 'injected'); END").unwrap();
     let plan = nixfied_runtime::execution::plan(
         admission.common().execution_manifest(),

@@ -1,4 +1,6 @@
 use crate::registry::sql_error;
+pub mod ensure;
+pub mod observation;
 use crate::registry::sqlite::RegistryContext;
 
 use rusqlite::{OptionalExtension, params};
@@ -731,7 +733,18 @@ mod tests {
             &identity,
         )
         .unwrap();
-        record_run_created(&mut registry, "first", &admission, &placement).unwrap();
+        record_run_created(
+            &mut registry,
+            "first",
+            &crate::registry::session::DeclaredRunRequest::new(
+                &admission,
+                &nixfied_manifest::TaskId::new("smoke"),
+                5000,
+            )
+            .unwrap(),
+            &placement,
+        )
+        .unwrap();
         let hash = admission.common().computed_manifest_hash();
         record_execution_outcome(&mut registry, "first", hash, ExecutionOutcome::Succeeded)
             .unwrap();
@@ -765,7 +778,18 @@ mod tests {
             &cancellation,
         )
         .unwrap();
-        record_run_created(&mut registry, "successor", &admission, &successor).unwrap();
+        record_run_created(
+            &mut registry,
+            "successor",
+            &crate::registry::session::DeclaredRunRequest::new(
+                &admission,
+                &nixfied_manifest::TaskId::new("smoke"),
+                5000,
+            )
+            .unwrap(),
+            &successor,
+        )
+        .unwrap();
         let reader = RegistryReader::open_existing(registry.path(), &identity)
             .unwrap()
             .unwrap();
@@ -783,9 +807,9 @@ mod tests {
             .execute(
                 "INSERT INTO runs (
                run_id, manifest_path, computed_manifest_hash, runtime_abi, toolchain_id,
-               generator_json, target_json, source_json, owner_identity, diagnostic_path
+               generator_json, target_json, source_json, owner_identity, diagnostic_path, root_task, operation_timeout_ms
              ) SELECT NULL, manifest_path, computed_manifest_hash, runtime_abi, toolchain_id,
-               generator_json, target_json, source_json, owner_identity, diagnostic_path
+               generator_json, target_json, source_json, owner_identity, diagnostic_path, root_task, operation_timeout_ms
              FROM runs WHERE run_id = 'successor'",
                 [],
             )

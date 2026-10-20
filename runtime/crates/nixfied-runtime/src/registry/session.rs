@@ -7,10 +7,218 @@ use super::events::{EventInsert, insert_event};
 use super::sqlite::RegistryContext;
 use super::status::{DbStatus, FinalizationStatus};
 use crate::admission::RunAdmission;
+use crate::admission::source::RecordedSource;
+use crate::output::utf8_locator;
 use crate::state::HostPlacement;
 use crate::{ErrorCode, RuntimeError, RuntimeResult};
 
 pub use super::status::ExecutionOutcome;
+
+/// A declared request borrows actual run admission. Stored metadata cannot
+/// construct it or stand in for its source, secret, closure or host checks.
+pub struct DeclaredRunRequest<'a> {
+    admission: &'a RunAdmission,
+    root_task: &'a nixfied_manifest::TaskId,
+    operation_timeout_ms: u64,
+}
+
+impl<'a> DeclaredRunRequest<'a> {
+    pub fn admission(&self) -> &'a RunAdmission {
+        self.admission
+    }
+    pub fn root_task(&self) -> &'a nixfied_manifest::TaskId {
+        self.root_task
+    }
+    pub fn operation_timeout_ms(&self) -> u64 {
+        self.operation_timeout_ms
+    }
+    pub fn new(
+        admission: &'a RunAdmission,
+        root_task: &nixfied_manifest::TaskId,
+        operation_timeout_ms: u64,
+    ) -> RuntimeResult<Self> {
+        let (root_task, _) = admission
+            .common()
+            .execution_manifest()
+            .tasks()
+            .get_key_value(root_task)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::TaskSelectionInvalid,
+                    "selected root task is not declared",
+                )
+            })?;
+        Ok(Self {
+            admission,
+            root_task,
+            operation_timeout_ms,
+        })
+    }
+
+    pub fn recorded(&self) -> RuntimeResult<RecordedRunRequest> {
+        Ok(RecordedRunRequest {
+            computed_manifest_hash: self.admission.common().computed_manifest_hash().to_owned(),
+            root_task: self.root_task.clone(),
+            source: RecordedSource::from_admitted(self.admission.source())?,
+            operation_timeout_ms: self.operation_timeout_ms,
+        })
+    }
+
+    pub fn preflight(&self, placement: &HostPlacement) -> RuntimeResult<()> {
+        self.recorded()?;
+        utf8_locator(self.admission.common().manifest_path(), "manifestPath")?;
+        utf8_locator(placement.state_base(), "stateBase")?;
+        for (field, path) in [
+            ("stateRoot", placement.state_root()),
+            ("registryDir", placement.registry_dir()),
+            ("registryPath", placement.registry_path()),
+            ("runDir", placement.run_dir()),
+            ("logsDir", placement.logs_dir()),
+            ("summaryPath", placement.summary_path()),
+        ] {
+            utf8_locator(&path, field)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedRunRequest {
+    computed_manifest_hash: String,
+    root_task: nixfied_manifest::TaskId,
+    source: RecordedSource,
+    operation_timeout_ms: u64,
+}
+
+/// Strict transport data for comparison, never an admission proof.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordedRunRequestWire {
+    computed_manifest_hash: String,
+    root_task: String,
+    source: crate::admission::source::RecordedSourceWire,
+    operation_timeout_ms: u64,
+}
+
+impl RecordedRunRequestWire {
+    pub fn from_recorded(request: &RecordedRunRequest) -> Self {
+        Self {
+            computed_manifest_hash: request.computed_manifest_hash.clone(),
+            root_task: request.root_task.to_string(),
+            source: crate::admission::source::RecordedSourceWire::from_recorded(&request.source),
+            operation_timeout_ms: request.operation_timeout_ms,
+        }
+    }
+    pub fn checked(&self) -> RuntimeResult<RecordedRunRequest> {
+        let source = serde_json::to_string(&self.source)
+            .map_err(|_| invalid("cannot encode comparison source"))?;
+        RecordedRunRequest::decode(
+            &self.computed_manifest_hash,
+            &self.root_task,
+            &source,
+            &self.operation_timeout_ms.to_string(),
+        )
+    }
+}
+
+impl RecordedRunRequest {
+    pub fn decode(
+        hash: &str,
+        root_task: &str,
+        source_json: &str,
+        timeout: &str,
+    ) -> RuntimeResult<Self> {
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(invalid("invalid recorded computed_manifest_hash"));
+        }
+        if !nixfied_manifest::validation::is_step_safe_id(root_task) {
+            return Err(invalid("invalid recorded root_task"));
+        }
+        let operation_timeout_ms = timeout
+            .parse::<u64>()
+            .ok()
+            .filter(|value| value.to_string() == timeout)
+            .ok_or_else(|| invalid("invalid recorded operation_timeout_ms"))?;
+        Ok(Self {
+            computed_manifest_hash: hash.to_owned(),
+            root_task: nixfied_manifest::TaskId::new(root_task),
+            source: RecordedSource::decode(source_json)?,
+            operation_timeout_ms,
+        })
+    }
+
+    pub fn computed_manifest_hash(&self) -> &str {
+        &self.computed_manifest_hash
+    }
+    pub fn root_task(&self) -> &nixfied_manifest::TaskId {
+        &self.root_task
+    }
+    pub fn source(&self) -> &RecordedSource {
+        &self.source
+    }
+    pub fn operation_timeout_ms(&self) -> u64 {
+        self.operation_timeout_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "OwnerIdentityWire")]
+pub(crate) struct OwnerIdentity {
+    pid: std::num::NonZeroU32,
+    platform_start: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerIdentityWire {
+    pid: std::num::NonZeroU32,
+    platform_start: String,
+}
+
+impl TryFrom<OwnerIdentityWire> for OwnerIdentity {
+    type Error = &'static str;
+    fn try_from(value: OwnerIdentityWire) -> Result<Self, Self::Error> {
+        if value.pid.get() > i32::MAX as u32 || value.platform_start.is_empty() {
+            return Err("invalid owner identity fields");
+        }
+        Ok(Self {
+            pid: value.pid,
+            platform_start: value.platform_start,
+        })
+    }
+}
+
+impl OwnerIdentity {
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid.get()
+    }
+    pub(crate) fn start_identity(&self) -> &str {
+        &self.platform_start
+    }
+    fn current() -> RuntimeResult<Self> {
+        let pid = std::process::id();
+        match crate::service::sample_leader(pid)? {
+            crate::service::LeaderSample::Present {
+                start_identity,
+                zombie: false,
+                ..
+            } => Self::try_from(OwnerIdentityWire {
+                pid: pid.try_into().map_err(|_| invalid("invalid self PID"))?,
+                platform_start: start_identity,
+            })
+            .map_err(invalid),
+            _ => Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                "cannot establish exact live self identity",
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionProgress {
@@ -19,7 +227,7 @@ pub enum SessionProgress {
     Finalized(ExecutionOutcome),
 }
 
-fn decode(outcome: Option<&str>, finalization: &str) -> RuntimeResult<SessionProgress> {
+pub(crate) fn decode(outcome: Option<&str>, finalization: &str) -> RuntimeResult<SessionProgress> {
     let outcome = outcome.map(ExecutionOutcome::parse_db).transpose()?;
     match (outcome, FinalizationStatus::parse_db(finalization)?) {
         (None, FinalizationStatus::Unfinished) => Ok(SessionProgress::Executing),
@@ -92,18 +300,15 @@ pub fn valid_run_id(run_id: &str) -> bool {
 pub fn record_run_created(
     registry: &mut Registry,
     run_id: &str,
-    admission: &RunAdmission,
+    request: &DeclaredRunRequest<'_>,
     placement: &HostPlacement,
 ) -> RuntimeResult<()> {
-    let source_json =
-        serde_json::to_string(&admission.source()).map_err(|error| invalid(error.to_string()))?;
-    // The owner's own process identity is recovery evidence for its session.
-    let owner = std::process::id();
-    let owner_identity = serde_json::json!({
-        "pid": owner,
-        "platformStart": crate::service::platform_start_identity(owner),
-    })
-    .to_string();
+    request.preflight(placement)?;
+    let admission = request.admission;
+    let source_json = serde_json::to_string(&request.recorded()?.source)
+        .map_err(|_| invalid("cannot encode recorded source"))?;
+    let owner_identity = serde_json::to_string(&OwnerIdentity::current()?)
+        .map_err(|_| invalid("cannot encode owner identity"))?;
     let RegistryContext {
         connection,
         redactor,
@@ -115,21 +320,23 @@ pub fn record_run_created(
             INSERT INTO runs (
               run_id, manifest_path, computed_manifest_hash, runtime_abi,
               toolchain_id, generator_json, target_json, source_json,
-              summary_path, owner_identity, diagnostic_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              summary_path, owner_identity, diagnostic_path, root_task, operation_timeout_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ",
             params![
                 run_id,
-                admission.common().manifest_path().display().to_string(),
+                utf8_locator(admission.common().manifest_path(), "manifestPath")?,
                 admission.common().computed_manifest_hash(),
                 admission.common().runtime_abi(),
                 admission.common().toolchain_id(),
                 admission.common().generator_json(),
                 admission.common().target_json(),
                 source_json,
-                placement.summary_path().display().to_string(),
+                utf8_locator(&placement.summary_path(), "summaryPath")?,
                 owner_identity,
                 crate::output::DIAGNOSTIC_SOURCE,
+                request.root_task.as_str(),
+                request.operation_timeout_ms.to_string(),
             ],
         )
         .map_err(sql_error)?;
@@ -482,4 +689,33 @@ fn write_unknown_outcome(
 
 fn invalid(message: impl Into<String>) -> RuntimeError {
     RuntimeError::new(ErrorCode::RegistryCorrupt, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_owner_identity_has_one_exact_nonnullable_native_shape() {
+        for json in [
+            r#"{"pid":1,"platformStart":"expected"}"#,
+            r#"{"pid":2147483647,"platformStart":"expected"}"#,
+        ] {
+            let identity: OwnerIdentity = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&identity).unwrap(), json);
+        }
+        for json in [
+            r#"{}"#,
+            r#"{"pid":1}"#,
+            r#"{"platformStart":"expected"}"#,
+            r#"{"pid":0,"platformStart":"expected"}"#,
+            r#"{"pid":2147483648,"platformStart":"expected"}"#,
+            r#"{"pid":1,"platformStart":null}"#,
+            r#"{"pid":1,"platformStart":""}"#,
+            r#"{"pid":1,"platformStart":"expected","extra":true}"#,
+            r#"{"pid":1,"pid":2,"platformStart":"expected"}"#,
+        ] {
+            assert!(serde_json::from_str::<OwnerIdentity>(json).is_err());
+        }
+    }
 }

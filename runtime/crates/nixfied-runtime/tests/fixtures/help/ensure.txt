@@ -1,0 +1,12 @@
+Establish or observe one exactly matching shared service owner.
+
+Usage:
+  nix run .#ensure -- --task <id> --until-step <path> [options]
+
+Options:
+  --slot <number>             Select a declared project slot
+  --task <id>                 Select the declared root composite task
+  --until-step <path>         Await one canonical root task step
+  --timeout-ms <number>       Set the runtime operation timeout in milliseconds
+  --wait-timeout-ms <number>  Set the positive caller-local observation timeout in milliseconds
+  -h, --help                  Show this help

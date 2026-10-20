@@ -75,6 +75,7 @@ pub(crate) struct ProcessRecord<'a> {
 }
 
 pub(crate) struct InvocationProcessRecord<'a> {
+    pub(crate) root_step_path: Option<&'a str>,
     pub(crate) source: &'a EvidenceSource,
     pub(crate) run_id: &'a str,
     pub(crate) process_key: &'a str,
@@ -684,8 +685,8 @@ pub(crate) fn record_invocation_started(
             INSERT INTO processes (
               process_key, pid, pgid, start_identity, command_json, run_id,
               status, role, service_name, source_label, presentation,
-              stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+              stdout_path, stderr_path, stop_signal, stop_timeout_ms, containment, root_step_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ",
             params![
                 process.process_key,
@@ -704,6 +705,7 @@ pub(crate) fn record_invocation_started(
                 StopPolicy::INVOCATION.signal,
                 StopPolicy::INVOCATION.timeout_ms,
                 StopPolicy::INVOCATION.containment(),
+                process.root_step_path,
             ],
         )
         .map_err(sql_error)?;
@@ -1027,8 +1029,8 @@ mod tests {
                 INSERT INTO runs (
                   run_id, execution_outcome, manifest_path, computed_manifest_hash,
                   runtime_abi, toolchain_id, generator_json, target_json, source_json,
-                  summary_path, owner_identity, diagnostic_path
-                ) VALUES (?1, NULL, '/manifest', ?2, ?3, ?4, '{}', '{}', '{}', NULL, '{}', 'diagnostics.log')
+                  summary_path, owner_identity, diagnostic_path, root_task, operation_timeout_ms
+                ) VALUES (?1, NULL, '/manifest', ?2, ?3, ?4, '{}', '{}', '{}', NULL, '{}', 'diagnostics.log', 'smoke', '5000')
                 ",
                 params![
                     run_id,
@@ -1082,6 +1084,7 @@ mod tests {
             .execute("UPDATE runs SET sources = 'closed'", [])
             .unwrap();
         let task = InvocationProcessRecord {
+            root_step_path: None,
             source: fixture_source("task"),
             run_id: RUN_ID,
             process_key: PROCESS_KEY,
@@ -1120,6 +1123,7 @@ mod tests {
         record_invocation_started(
             registry,
             &InvocationProcessRecord {
+                root_step_path: None,
                 source: fixture_source("task"),
                 run_id: RUN_ID,
                 process_key: PROCESS_KEY,

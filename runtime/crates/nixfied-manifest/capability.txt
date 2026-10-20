@@ -55,7 +55,7 @@ placement-components: original-bytes single-normal no-slash no-nul no-dot no-dot
 
 # The hidden runtime command surfaces every manifest exposes. `manifest-check` is the
 # generated project-app name for `check`; installation is outside the manifest ABI.
-surface: check run ps down clean
+surface: check run ps down clean context observe ensure
 # down requests cancellation of one selected live session through its own FIFO
 # and observes that session; a dead owner is recovered only under slot authority.
 session-cancellation: descriptor-relative-mkfifoat private-session-directories runs-session-control-fifo any-byte-cancels separate-keeper-writer scoped-receiver-token-only nonblocking-sender select-once-including-absence never-successor observe-selected-settlement-and-authority-handoff idle-slot-or-later-exclusive-run-proves-handoff dead-owner-recovery-under-slot timeout-reports-incomplete no-pid-signaling endpoint-removed-before-release
@@ -65,7 +65,19 @@ session-cancellation: descriptor-relative-mkfifoat private-session-directories r
 internal-presenter: __presenter connected-unix-stream-fd NXP1 u32be-length json-init max-65536 finish-F cancel-C report-frame null-stdin env-clear failure-exit-125
 output-publication: exclusive-run-directory diagnostic-before-run-record closed-registration-enforced per-stream-nonblocking-queues seal-requires-result-artifact full-final-drain diagnostic-source source-registration-before-release selected-shown-hidden run-relative-paths capture-outcome-per-source sources-closed-after-teardown seal-after-writer-closure no-active-session-caller-writes post-release-drain labeled-human-lines fragment-8192 command-local-delivery
 # Private background session owner: the launcher holds no slot or registry.
-internal-session-owner: __session-owner connected-unix-stream-fd NXD1 u32be-length json-request max-1048576 json-reply setsid null-stdio launcher-allocated-run-id same-admission abandonment-check-before-commit committed-run-is-establishment reply-after-commit rejection-before-commit uncertain-without-reply no-terminal-presenter reject-inherited-stdin abandonment-checks-acquire-recovery-commit interrupt-half-close-grace-10000ms interrupted-rejection-canceled-with-cause cancel-won-race-via-fifo reap-unestablished-owner
+internal-session-owner: __session-owner connected-unix-stream-fd NXD2 u32be-length json-request max-1048576 json-reply setsid null-stdio launcher-allocated-run-id same-admission abandonment-check-before-commit committed-run-is-establishment reply-after-commit rejection-before-commit uncertain-without-reply no-terminal-presenter reject-inherited-stdin abandonment-checks-acquire-recovery-commit daemon-interrupt-half-close-grace-10000ms daemon-interrupted-rejection-canceled-with-cause daemon-cancel-won-race-via-fifo shared-complete-frame-independence shared-no-kill-no-fifo-no-grace selected-helper-nonblocking-reap
+session-owner-request: daemon-runId-args shared-runId-execution-expectedRequest-cursor closed-purpose-sum reject-unknown-missing-null-wrong-type absolute-utf8-effective-paths authoritative-helper-readmission
+session-owner-reply: daemon-established-runId-runDir-logsDir shared-established-runId-runDir-logsDir-cursor selected-existing-runId-createdSeq-cursor rejected-code-message-details-causes nonrecursive-safe-causes original-watermark-monotonic-history parent-canonical-reread
+session-observation: control-admission-context-observe full-admission-ensure exact-request-manifest-root-source-operation-timeout single-selection-including-absence first-native-post-watermark-creation no-retarget-no-restart guarded-selection-before-recovery one-owned-executor fresh-leader-sampling canonical-root-evidence accepted-present-exit settled-complete-capture service-group-ready-unresolved no-endpoint-health-claim
+observation-history: invocation-local-native-file-identity unseen-bootstrap-complete nonnegative-i64-watermark monotonic-greatest-sequence complete-zero-retained disappearance-replacement-reset-rewind-corrupt creation-marker-total-unique-exact no-payload-parsing
+registry-session-observation: schema-20 root-task-required operation-timeout-canonical-u64-text exact-self-owner-pid-start root-step-task-only unique-run-root-step attributed-before-release historical-source-no-host-admission utf8-metadata-preflight-before-slot-mutation
+evidence-locator: diagnostics.log logs-single-normal-filename literal-lexical-no-alias no-nul no-dot-no-dotdot no-forward-slash unix-backslash-literal task-logs-only
+observation-budget: elapsed-instant-saturating-duration positive-u64-milliseconds default-60000 same-budget-all-stages max-poll-10ms signal-before-expiry-before-success full-dispatch-uncertainty
+enum LeaderObservation: live absent identity-mismatch
+enum EnsureDisposition: established observed
+enum ObservationStage: selection establishment task
+enum RequestMismatchField: manifest root-task source operation-timeout
+enum SessionUnavailableReason: absent owner-gone owner-replaced service-gone service-identity-mismatch service-settled execution-settled task-failed evidence-incomplete authority-released
 internal-workload-gate: __workload-gate connected-unix-stream-fd NXG1 u32be-length json-unix-bytes max-1048576 write-half-eof deadline-10000ms failure-exit-125
 workload-gate-request: executable args env cwd
 workload-gate-failure: frame-1 request-2 setup-3 exec-4
@@ -83,6 +95,39 @@ run-output-mode: summary json both task-output
 # required fields or field meaning records a contract change here and rotates the
 # runtime ABI digest.
 output-schema run-daemon-json: runId runDir logsDir
+output-schema observation-context: projectId environment slot stateBase stateRoot registryDir registryPath
+output-schema observation-source: codebaseId logicalRoot observedRoot sourceMode sourceIdentity dirtyPolicy admissionFingerprintPolicy
+output-schema observation-request: computedManifestHash rootTask source operationTimeoutMs
+output-schema observation-leader: pid startIdentity observation
+output-schema observation-endpoint: endpointId host port
+output-schema observation-service: serviceId processKey leader endpoints
+output-schema observation-progress-pending: state
+output-schema observation-progress-finalizing: state outcome
+output-schema observation-progress-finalized: state outcome
+output-schema observation-session: runId manifestPath request progress runDir logsDir owner services
+output-schema observation-completed-task: stepPath taskId processKey exitCode stdoutPath stderrPath
+output-schema task-observation: context session task
+output-schema observe-absent: result context
+output-schema observe-session: result context session
+output-schema observe-satisfied: result observation
+output-schema ensure-json: disposition observation
+output-schema observation-selector-current: kind
+output-schema observation-selector-run-id: kind runId
+output-schema observation-selection-unenrolled: state
+output-schema observation-selection-absent: state selector
+output-schema observation-selection-seeking: state watermark
+output-schema observation-selection-pinned: state runId
+output-schema observation-establishment-not-requested: state
+output-schema observation-establishment-not-established: state candidateRunId
+output-schema observation-establishment-uncertain: state candidateRunId
+output-schema observation-establishment-established: state runId
+output-schema observation-error-slot-busy: kind context
+output-schema observation-error-request-mismatch: kind field selection
+output-schema observation-error-timeout: kind stage selection establishment stepPath?
+output-schema observation-error-canceled: kind stage selection establishment stepPath?
+output-schema observation-error-bootstrap-uncertain: kind selection establishment
+output-schema observation-evidence: stdoutPath stderrPath
+output-schema observation-error-unavailable: kind reason selection stepPath? evidence?
 output-schema run-json: runId manifestPath computedManifestHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
 output-schema run-summary-json: runId success durationMs services nodes tasks
 output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath
@@ -156,5 +201,5 @@ enum RoundReason: listener-missing listener-replaced probe-failed probe-timed-ou
 # runtime emits. These are public API for the current ABI, so a change rotates the
 # digest like any primitive field — old manifests and the new runtime cannot disagree
 # on the failure vocabulary without the identity check noticing.
-error-code: MANIFEST_NOT_STORE_OUTPUT MANIFEST_INVALID MANIFEST_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE SECRET_UNAVAILABLE SECRET_LEAK_BLOCKED OUTPUT_MODE_INVALID OUTPUT_MODE_CONFLICT TASK_SELECTION_INVALID OUTPUT_PROJECTION_FAILED
+error-code: MANIFEST_NOT_STORE_OUTPUT MANIFEST_INVALID MANIFEST_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE SECRET_UNAVAILABLE SECRET_LEAK_BLOCKED OUTPUT_MODE_INVALID OUTPUT_MODE_CONFLICT TASK_SELECTION_INVALID OUTPUT_PROJECTION_FAILED SLOT_BUSY REQUEST_MISMATCH OBSERVATION_TIMEOUT SESSION_UNAVAILABLE
 exit-class: ok error

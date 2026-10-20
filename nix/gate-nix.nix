@@ -1240,7 +1240,7 @@ FIXTURE
     empty_surface_apps=$(nix eval --no-write-lock-file --json "$path_project#apps.$current_system") \
       || fail "adoption: empty surface app metadata did not evaluate"
     printf '%s\n' "$empty_surface_apps" | jq -e '
-      (keys | sort) == ["clean", "docs", "down", "help", "manifest-check", "ps", "run"]
+      (keys | sort) == ["clean", "context", "docs", "down", "ensure", "help", "manifest-check", "observe", "ps", "run"]
     ' >/dev/null || fail "adoption: empty surface unexpectedly exported a task app"
     rm -rf "$path_project"
 
@@ -1267,7 +1267,7 @@ FIXTURE
     scaffold_apps=$(nix eval --no-write-lock-file --json "$project#apps.$current_system") \
       || fail "adoption: untouched scaffold app metadata did not evaluate"
     printf '%s\n' "$scaffold_apps" | jq -e '
-      (keys | sort) == ["clean", "docs", "down", "help", "manifest-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "context", "docs", "down", "ensure", "help", "manifest-check", "observe", "ps", "run", "smoke"]
       and all(.[];
         (.program | type == "string" and length > 0)
         and (.meta.description | type == "string" and length > 0)
@@ -1298,7 +1298,7 @@ FIXTURE
     surface_apps=$(nix eval --json "$project#apps.$current_system") \
       || fail "adoption: leaf/composite surface app metadata did not evaluate"
     printf '%s\n' "$surface_apps" | jq -e '
-      (keys | sort) == ["clean", "composite-smoke", "docs", "down", "help", "manifest-check", "ps", "run", "smoke"]
+      (keys | sort) == ["clean", "composite-smoke", "context", "docs", "down", "ensure", "help", "manifest-check", "observe", "ps", "run", "smoke"]
       and .smoke.meta.description == "Run the starter smoke test"
       and .["composite-smoke"].meta.description == "Run the composite smoke test"
     ' >/dev/null || fail "adoption: leaf/composite app descriptions were not copied exactly"
@@ -1357,13 +1357,16 @@ FIXTURE
       [ "$external_help" = "$project_help" ] \
         || fail "adoption: caller directory changed the generated catalog"
     done
-    for app in run manifest-check ps down clean smoke; do
+    for app in run manifest-check ps down clean context observe ensure smoke; do
       case "$app" in
         run) help_flag=--help; usage='nix run .#run' ;;
         manifest-check) help_flag=-h; usage='nix run .#manifest-check' ;;
         ps) help_flag=--help; usage='nix run .#ps' ;;
         down) help_flag=-h; usage='nix run .#down' ;;
         clean) help_flag=--help; usage='nix run .#clean' ;;
+        context) help_flag=--help; usage='nix run .#context' ;;
+        observe) help_flag=--help; usage='nix run .#observe' ;;
+        ensure) help_flag=--help; usage='nix run .#ensure' ;;
         smoke|composite-smoke) help_flag=-h; usage='nix run .#<verb>' ;;
       esac
       help_stdout="$wk/$app-help.stdout"
