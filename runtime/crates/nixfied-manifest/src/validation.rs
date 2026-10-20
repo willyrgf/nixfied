@@ -198,16 +198,7 @@ fn validate_slot_placements(manifest: &Manifest) -> Result<(), ValidationError> 
 
     let mut windows = Vec::new();
     for slot in slots {
-        let key = slot.to_string();
-        let placement = manifest
-            .placement
-            .slot_placements
-            .get(&key)
-            .ok_or_else(|| ValidationError::UnsupportedValue {
-                field: "placement.slotPlacements",
-                expected: "slotPolicy range",
-                actual: format!("missing slot {slot}"),
-            })?;
+        let placement = &manifest.placement.slot_placements[&slot.to_string()];
         if placement.slot != slot {
             return Err(ValidationError::UnsupportedValue {
                 field: "placement.slotPlacements.slot",
@@ -353,9 +344,6 @@ fn validate_services(manifest: &Manifest) -> Result<(), ValidationError> {
         });
     }
     for (name, service) in &manifest.services {
-        match service.containment {
-            ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
-        }
         validate_service_endpoints(name, service)?;
         validate_service_lifecycle(service)?;
     }

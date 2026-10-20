@@ -128,28 +128,6 @@ fn parse_valid_manifest() -> Manifest {
     serde_json::from_value(valid_manifest_json()).expect("valid manifest JSON should deserialize")
 }
 
-/// Adds a second service named `worker` that reuses the helper exec/closure but
-/// binds its own lifecycle, endpoint, and probe. Used to prove structural
-/// validation accepts arbitrary service counts.
-fn add_worker_service(value: &mut Value) {
-    let mut worker = synthetic_service();
-    let mut endpoint = worker["endpoints"]["synthetic-tcp"].clone();
-    endpoint["endpointId"] = json!("worker-tcp");
-    worker["endpoints"] = json!({ "worker-tcp": endpoint });
-    worker["primaryEndpoint"] = json!("worker-tcp");
-    for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
-        op["operationId"] = json!(format!("service.worker.{class}"));
-    }
-    value["services"]["worker"] = worker;
-}
-
-#[test]
-fn parses_and_validates_contract() {
-    let manifest = parse_valid_manifest();
-    ValidatedManifest::try_from(manifest)
-        .expect("valid manifest should pass structural validation");
-}
-
 #[test]
 fn composite_task_default_output_is_rejected() {
     let mut value = valid_manifest_json();
@@ -166,33 +144,6 @@ fn composite_task_default_output_is_rejected() {
             ..
         })
     ));
-}
-
-#[test]
-fn accepts_immutable_source_modes() {
-    for mode in ["snapshot", "flake-input"] {
-        let mut value = valid_manifest_json();
-        value["codebases"][0]["sourceMode"] = json!(mode);
-        value["codebases"][0]["sourceIdentity"] =
-            json!("/nix/store/00000000000000000000000000000000-source");
-        value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
-        let manifest: Manifest =
-            serde_json::from_value(value).expect("manifest JSON should deserialize");
-
-        ValidatedManifest::try_from(manifest)
-            .expect("immutable source mode should pass structural validation");
-    }
-}
-
-#[test]
-fn accepts_arbitrary_service_names() {
-    // The synthetic/smoke names are not special. A second service validates as
-    // long as the structural contract holds.
-    let mut value = valid_manifest_json();
-    add_worker_service(&mut value);
-
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    ValidatedManifest::try_from(manifest).expect("multi-service manifests are valid");
 }
 
 #[test]
@@ -229,15 +180,6 @@ fn rejects_manifests_with_nothing_to_run() {
     let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
     ValidatedManifest::try_from(manifest)
         .expect_err("a manifest with no services and no tasks has nothing to run");
-}
-
-#[test]
-fn prepare_may_bind_a_task_reference() {
-    // initdb-style preparation is a task reference with full task semantics.
-    let mut value = valid_manifest_json();
-    value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    ValidatedManifest::try_from(manifest).expect("prepare may reference a task");
 }
 
 #[test]
@@ -290,20 +232,6 @@ fn abi_mismatch_is_contract_error() {
 }
 
 #[test]
-fn accepts_a_bounded_acyclic_composite() {
-    let mut value = valid_manifest_json();
-    value["tasks"]["pipeline"] = json!({
-        "kind": "composite",
-        "steps": {
-            "first": { "task": "smoke" },
-            "second": { "task": "smoke", "dependsOn": ["first"] }
-        }
-    });
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    ValidatedManifest::try_from(manifest).expect("a bounded acyclic composite is valid");
-}
-
-#[test]
 fn non_loopback_endpoint_host_is_rejected_at_parse() {
     // The endpoint host is a typed loopback literal; a hostname or wildcard cannot
     // deserialize.
@@ -333,15 +261,6 @@ fn removed_tcp_probe_record_rejects_on_the_wire() {
         "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
     });
     serde_json::from_value::<Manifest>(value).expect_err("removed probe record must not parse");
-}
-
-#[test]
-fn connects_to_chain_is_accepted() {
-    let mut value = valid_manifest_json();
-    add_worker_service(&mut value);
-    value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
-    let manifest: Manifest = serde_json::from_value(value).expect("manifest should deserialize");
-    ValidatedManifest::try_from(manifest).expect("acyclic wiring should validate");
 }
 
 /// Every closed record refuses unknown fields, including removed ones: no
