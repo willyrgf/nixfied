@@ -67,6 +67,15 @@ in
   (control "ps" "ps" "Report recorded Nixfied processes for a slot"
     "Reads the selected slot's registry and observes process liveness without writing anything."
   )
+  (control "context" "context" "Print checked Nixfied slot coordinates"
+    "Admits the compiled manifest and derives coordinates without reading or changing runtime state."
+  )
+  (control "observe" "observe" "Inspect or await one fixed Nixfied session"
+    "Reads canonical recorded evidence and samples leader identities without starting, stopping or retargeting a session."
+  )
+  (control "ensure" "ensure" "Establish or observe one matching shared Nixfied session"
+    "Fully admits the declared request, establishes or selects one owner, then awaits canonical root evidence."
+  )
   (control "down" "down" "Cancel the slot's live Nixfied session"
     "Cancels the live session through its control endpoint, or recovers a dead owner's processes."
   )

@@ -1,4 +1,5 @@
 pub mod events;
+pub mod observation;
 pub mod records;
 pub mod schema;
 pub mod session;

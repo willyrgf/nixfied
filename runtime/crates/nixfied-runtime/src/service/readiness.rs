@@ -217,6 +217,7 @@ pub(crate) fn exec_probe_attempt(
         "args": command.args, "cwd": command_cwd, "stdoutPath": stdout_path, "stderrPath": stderr_path,
     }).to_string();
     let invocation = Invocation {
+        root_step_path: None,
         owner: InvocationOwner::Probe(service_name),
         run_id,
         manifest_hash,

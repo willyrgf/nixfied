@@ -254,12 +254,21 @@ pkgs.runCommand "nixfied-reference-check" { nativeBuildInputs = [ pkgs.jq ]; } '
     "$docs" api app root/regenerate | grep -F 'nix run .#regenerate' > /dev/null
     "$docs" api package check/rust-workspace | grep -F 'Clippy' > /dev/null
     "$docs" api error > errors.txt
-    test "$(wc -l < errors.txt)" -eq 25
+    test "$(wc -l < errors.txt)" -eq 29
+    for code in SLOT_BUSY REQUEST_MISMATCH OBSERVATION_TIMEOUT SESSION_UNAVAILABLE; do
+      grep -Fxq "$code" errors.txt
+    done
     "$docs" api error OUTPUT_PROJECTION_FAILED | grep -F 'docs topic outputs' > /dev/null
     "$docs" api record output-schema/runtime-error | grep -F 'open JSON' > /dev/null
     "$docs" api record local/RegistryIdentityDiagnostic | grep -F 'signed' > /dev/null
     "$docs" api record output-schema/run-task | grep -F 'IgnoreUnknown' > /dev/null
     "$docs" api command run > run-command.txt
+    "$docs" api command observe > observe-command.txt
+    grep -Fq 'output-schema/observe-absent' observe-command.txt
+    grep -Fq 'output-schema/observe-session' observe-command.txt
+    grep -Fq 'output-schema/observe-satisfied' observe-command.txt
+    "$docs" api command ensure | grep -F 'Initial value: 60000' > /dev/null
+    "$docs" api record output-schema/observation-request | grep -F 'operationTimeoutMs' > /dev/null
     grep -Fq -- '--allow-non-store-manifest' run-command.txt
     grep -Fq 'Initial value: 5000' run-command.txt
     grep -Fq 'Help visibility: Hidden' run-command.txt

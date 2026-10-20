@@ -7,6 +7,60 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Metadata locators must preserve Unix path bytes exactly in their JSON string.
+/// Projection cannot silently substitute replacement characters or encode NUL.
+pub fn utf8_locator<'a>(path: &'a Path, field: &'static str) -> crate::RuntimeResult<&'a str> {
+    path.to_str()
+        .filter(|value| !value.contains('\0'))
+        .ok_or_else(|| {
+            crate::RuntimeError::new(
+                crate::ErrorCode::LifecycleFailed,
+                format!("{field} cannot be serialized as a lossless UTF-8 path"),
+            )
+        })
+}
+
+/// A canonical run-relative evidence locator. Unix normal filenames may contain
+/// backslashes; aliases through separators, dot components and NUL never pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceRelativePath(String);
+
+impl EvidenceRelativePath {
+    pub fn parse(value: &str) -> crate::RuntimeResult<Self> {
+        let log = value.strip_prefix("logs/").is_some_and(|name| {
+            !name.is_empty() && name != "." && name != ".." && !name.contains('/')
+        });
+        if value.contains('\0') || (value != DIAGNOSTIC_SOURCE && !log) {
+            return Err(crate::RuntimeError::new(
+                crate::ErrorCode::RegistryCorrupt,
+                "invalid canonical run evidence locator",
+            ));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn task(value: &str) -> crate::RuntimeResult<Self> {
+        let path = Self::parse(value)?;
+        if !path.is_log() {
+            return Err(crate::RuntimeError::new(
+                crate::ErrorCode::RegistryCorrupt,
+                "task evidence locator must name a captured log",
+            ));
+        }
+        Ok(path)
+    }
+
+    pub fn is_log(&self) -> bool {
+        self.0.starts_with("logs/")
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn in_run(&self, placement: &crate::state::HostPlacement) -> PathBuf {
+        placement.run_dir().join(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputStream {

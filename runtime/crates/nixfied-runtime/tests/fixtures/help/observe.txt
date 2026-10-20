@@ -1,0 +1,12 @@
+Inspect or await one fixed recorded session without changing it.
+
+Usage:
+  nix run .#observe -- [options]
+
+Options:
+  --slot <number>             Select a declared project slot
+  --current                   Select the current recorded session once
+  --run-id <id>               Select one exact bounded run identity
+  --until-step <path>         Await one canonical root task step
+  --wait-timeout-ms <number>  Set the positive caller-local observation timeout in milliseconds
+  -h, --help                  Show this help

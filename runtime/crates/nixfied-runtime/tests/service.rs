@@ -3635,6 +3635,20 @@ fn repeated_prepares_and_root_keep_distinct_occurrence_evidence() {
         .unwrap();
         let tasks = summary["tasks"].as_array().unwrap();
         assert_eq!(tasks.len(), expected_count);
+        let attribution = registry_ro(state)
+            .prepare("SELECT root_step_path FROM processes WHERE role = 'task' ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| row.get::<_, Option<String>>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let expected = [
+            None,
+            None,
+            Some("pipeline.again".to_owned()),
+            Some("pipeline.final".to_owned()),
+        ];
+        assert_eq!(attribution, expected[..expected_count]);
         for (index, task) in tasks.iter().enumerate() {
             assert_eq!(task["taskId"], ["prep", "prep", "prep", "smoke"][index]);
             assert_eq!(

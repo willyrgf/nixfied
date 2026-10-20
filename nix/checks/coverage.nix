@@ -41,6 +41,13 @@ let
     session-cancellation = "runtime";
     internal-presenter = "runtime";
     internal-session-owner = "runtime";
+    session-owner-request = "runtime";
+    session-owner-reply = "runtime";
+    session-observation = "runtime";
+    observation-history = "runtime";
+    registry-session-observation = "runtime";
+    evidence-locator = "outputs";
+    observation-budget = "runtime";
     output-publication = "runtime";
   };
   covered = records ++ vocabularies ++ builtins.attrNames native;

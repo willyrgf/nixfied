@@ -328,6 +328,23 @@ each rule.
   the inherited ownership descriptor before exec, without unlocking the parent's
   shared lock; close failure refuses exec. Close-on-exec remains defense in depth.
   Task, prepare, service, and exec-probe spawning all use this boundary.
+- **Shared callers observe one owner.** `control/ensure.rs` enrolls against
+  checked native creation order. Its non-cloneable seeking value freezes the
+  watermark and registry continuity; a pinned value has no acquisition or
+  recovery interface. The shared helper rechecks under the existing slot guard
+  before moving one registry into the common executor. There is no membership,
+  coordinator, second lock or independent startup/finalizer implementation.
+- **Observation success has a constructor boundary.** `registry/observation.rs`
+  decodes canonical facts and invocation-local file/phase/high-water history.
+  `control/observation.rs` binds a recorded root to the admitted plan, samples
+  exact native leaders outside the transaction, rereads canonical evidence and
+  finally resamples the owner. Only that path constructs private-field output
+  proof values; stored metadata and private DTOs cannot mint admission or success.
+- **The run commit separates shared startup from observation.** NXD2 carries
+  explicit daemon/shared purposes. Shared transport tracks full frame delivery;
+  after full dispatch observer cancellation cannot kill the helper or send its
+  FIFO cancellation. Abandonment can prevent a new precommit run; a committed
+  owner continues even before ACK. One elapsed budget covers all observer phases.
 
 ## Ports, state, containment
 

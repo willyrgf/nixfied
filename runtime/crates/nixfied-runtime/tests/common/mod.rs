@@ -340,7 +340,16 @@ pub fn start_fixture_service(
     let slot = u32::try_from(registry.identity().slot).expect("registry slot is a u32");
     let selected_slot =
         nixfied_runtime::slot::select_slot(admission.common().manifest(), Some(slot))?;
-    record_run_created(registry, run_id, admission, placement)?;
+    record_run_created(
+        registry,
+        run_id,
+        &nixfied_runtime::registry::session::DeclaredRunRequest::new(
+            admission,
+            &nixfied_manifest::TaskId::new("smoke"),
+            5000,
+        )?,
+        placement,
+    )?;
     start_service_for_slot(
         admission,
         placement,
@@ -715,9 +724,9 @@ pub fn seed_run(connection: &rusqlite::Connection, run_id: &str, outcome: Option
         .execute(
             "INSERT INTO runs (run_id, execution_outcome, manifest_path,
                computed_manifest_hash, runtime_abi, toolchain_id, generator_json, target_json,
-               source_json, owner_identity, diagnostic_path)
+               source_json, owner_identity, diagnostic_path, root_task, operation_timeout_ms)
              SELECT ?1, ?2, '/nix/store/test-manifest/manifest.json', 'hash',
-               runtime_abi, toolchain_id, '{}', '{}', '[]', '{}', 'diagnostics.log'
+               runtime_abi, toolchain_id, '{}', '{}', '[]', '{}', 'diagnostics.log', 'smoke', '5000'
              FROM registry_meta",
             rusqlite::params![run_id, outcome],
         )

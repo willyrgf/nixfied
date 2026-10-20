@@ -96,6 +96,88 @@ fn command_args(values: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn new_control_parsers_preserve_common_operands_and_reject_new_operand_ambiguity() {
+    let parse = |command, extra: &[&str]| {
+        let mut args = command_args(&["--manifest", "manifest", "--state-base", "state"]);
+        args.extend(command_args(extra));
+        parse_session_control(command, &args)
+    };
+    for (command, args) in [
+        (SessionCommand::Observe, vec!["--current", "--current"]),
+        (SessionCommand::Observe, vec!["--current", "--run-id", "x"]),
+        (SessionCommand::Observe, vec![]),
+        (SessionCommand::Observe, vec!["--run-id", "../bad"]),
+        (
+            SessionCommand::Observe,
+            vec!["--current", "--wait-timeout-ms", "0"],
+        ),
+        (
+            SessionCommand::Observe,
+            vec![
+                "--current",
+                "--wait-timeout-ms",
+                "1",
+                "--wait-timeout-ms",
+                "bad",
+            ],
+        ),
+        (SessionCommand::Ensure, vec!["--task", "one", "--task"]),
+        (
+            SessionCommand::Ensure,
+            vec!["--task", "one", "--until-step", "x", "--until-step", "x"],
+        ),
+        (SessionCommand::Context, vec!["--current"]),
+        (SessionCommand::Context, vec!["--output", "json"]),
+    ] {
+        let error = parse(command, &args)
+            .err()
+            .expect("invalid arguments reject");
+        assert_eq!(error.code, nixfied_runtime::ErrorCode::ManifestAdmission);
+        if args.last() == Some(&"bad") {
+            assert!(error.message.starts_with("invalid --wait-timeout-ms"));
+        }
+    }
+    let parsed = parse(
+        SessionCommand::Ensure,
+        &[
+            "--task",
+            "x",
+            "--until-step",
+            "x.a",
+            "--timeout-ms",
+            "0",
+            "--timeout-ms",
+            "18446744073709551615",
+            "--wait-timeout-ms",
+            "+18446744073709551615",
+            "--slot",
+            "+1",
+            "--state-base",
+        ],
+    )
+    .unwrap();
+    assert_eq!(parsed.slot, Some(1));
+    match parsed.operation {
+        SessionOperation::Ensure {
+            timeout_ms,
+            wait_ms,
+            ..
+        } => {
+            assert_eq!(timeout_ms, u64::MAX);
+            assert_eq!(wait_ms.get(), u64::MAX);
+        }
+        _ => panic!("wrong operation"),
+    }
+    for command in ["context", "observe", "ensure"] {
+        assert_eq!(
+            error_output_projection(&command_args(&[command, "bad"])),
+            ErrorOutputProjection::Json
+        );
+        run(&command_args(&[command, "bad", "--help"])).unwrap();
+    }
+}
+
+#[test]
 fn native_run_acquisition_repetition_and_integer_domains() {
     let parse = |extra: &[&str]| {
         let mut args = command_args(&["--manifest", "manifest", "--state-base", "state"]);
@@ -377,6 +459,10 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         let counter = tmp.path.join("child-counter");
         value["tasks"]["smoke"]["invocation"]["run"] =
             json!([program, "output", "occurrence", counter, "0"]);
+        value["tasks"]["twice"] = json!({"kind": "composite", "steps": {
+            "first": {"task": "smoke"},
+            "again": {"task": "smoke", "dependsOn": ["first"]}
+        }});
         if secret {
             value["secrets"]["token"] = json!({"secretId": "token", "source": {"kind": "env-var", "envVar": "NIXFIED_TEST_CHILD"}});
             value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:token}");
@@ -396,7 +482,14 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
         )
         .unwrap();
         registry.authority().claim_run_dir(&placement).unwrap();
-        record_run_created(&mut registry, "evidence-test", &admission, &placement).unwrap();
+        record_run_created(
+            &mut registry,
+            "evidence-test",
+            &DeclaredRunRequest::new(&admission, &nixfied_manifest::TaskId::new("twice"), 5000)
+                .unwrap(),
+            &placement,
+        )
+        .unwrap();
         let redactor = Redactor::from_secrets(admission.secrets());
         let cancellation = CancellationToken::new();
         let launcher = common::runtime_binary();
@@ -411,11 +504,11 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
                 &redactor,
             ),
             cancellation: &cancellation,
-            direct_selected: true,
+            direct_selected: false,
         };
         let plan = plan(
             admission.common().execution_manifest(),
-            &nixfied_manifest::TaskId::new("smoke"),
+            &nixfied_manifest::TaskId::new("twice"),
             0,
         )
         .unwrap();
@@ -433,7 +526,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             &mut evidence,
             &[],
             &mut diagnostics,
-            TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
+            TaskOccurrence::Root(plan.root_leaf("twice.first").unwrap()),
         )
         .unwrap_err();
         assert_eq!(
@@ -470,7 +563,7 @@ fn occurrence_collisions_preserve_files_and_terminal_evidence() {
             &mut evidence,
             &[],
             &mut diagnostics,
-            TaskOccurrence::Root(plan.root_leaf("smoke").unwrap()),
+            TaskOccurrence::Root(plan.root_leaf("twice.again").unwrap()),
         )
         .unwrap();
         let task = evidence.tasks.last().unwrap();

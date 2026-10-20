@@ -73,9 +73,20 @@ let
     };
   };
   annotation = description: contextTopic: { inherit description contextTopic; };
+  observation = import ./observation-outputs.nix {
+    inherit
+      d
+      output
+      record
+      required
+      omitted
+      vocabulary
+      owner
+      ;
+  };
 in
 {
-  records = [
+  records = observation.records ++ [
     (record (local "CheckOutput") "NoDecoder"
       "Successful native manifest admission, without executing the declared task."
       [
@@ -94,7 +105,9 @@ in
       "Service evidence selected for the run, including an endpoint only when addressable."
       [
         (required "serviceId" text "Declared service identity.")
-        (required "serviceInstanceId" text "Run-scoped service reference derived from the run ID and declared name.")
+        (required "serviceInstanceId" text
+          "Run-scoped service reference derived from the run ID and declared name."
+        )
         (required "processKey" text "Registry evidence key for the selected service process.")
         (omitted "selectedEndpoint" (ref (
           output "selected-endpoint"
@@ -182,8 +195,12 @@ in
         (required "pid" u32 "Observed process id.")
         (required "pgid" i32 "Observed signed process-group id.")
         (required "registryStatus" text "Native registry status string.")
-        (required "observedStatus" text "Recorded status as currently observed on the host; observation writes nothing.")
-        (required "ownership" text "`unresolved` until process, group, and tracked descendants are proven gone; otherwise `settled`.")
+        (required "observedStatus" text
+          "Recorded status as currently observed on the host; observation writes nothing."
+        )
+        (required "ownership" text
+          "`unresolved` until process, group, and tracked descendants are proven gone; otherwise `settled`."
+        )
         (required "live" boolean "Native host liveness observation.")
       ]
     )
@@ -291,16 +308,14 @@ in
         } "Observed stable socket identity.")
       ]
     )
-    (record (output "linux-socket-identity") "NoDecoder"
-      "Linux TCP LISTEN socket identity."
-      [
-        (required "platform" text "Exactly linux.")
-        (required "inode" u32 "Nonzero socket inode.")
-        (required "cookie" (list u32) "Exactly two kernel cookie words, excluding the unavailable sentinel pair.")
-      ]
-    )
-    (record (output "macos-socket-identity") "NoDecoder"
-      "macOS SDK-decoded TCP LISTEN socket identity."
+    (record (output "linux-socket-identity") "NoDecoder" "Linux TCP LISTEN socket identity." [
+      (required "platform" text "Exactly linux.")
+      (required "inode" u32 "Nonzero socket inode.")
+      (required "cookie" (list u32)
+        "Exactly two kernel cookie words, excluding the unavailable sentinel pair."
+      )
+    ])
+    (record (output "macos-socket-identity") "NoDecoder" "macOS SDK-decoded TCP LISTEN socket identity."
       [
         (required "platform" text "Exactly macos.")
         (required "socketHandle" text "Nonzero handle encoded as 0x and sixteen lowercase hex digits.")
@@ -326,7 +341,7 @@ in
       ]
     )
   ];
-  vocabularies = [
+  vocabularies = observation.vocabularies ++ [
     (vocabulary "enum ProbePhase" "ProbePhase" (owner "readiness") "Service check phase.")
     (vocabulary "enum RoundReason" "RoundReason" (owner "readiness") "Retryable whole-round failure.")
     (vocabulary "run-output-mode" "RunOutputMode" main
@@ -365,6 +380,10 @@ in
           OUTPUT_MODE_CONFLICT = annotation "Output selections conflict under the native parser's rules." "outputs";
           TASK_SELECTION_INVALID = annotation "Native task/output selection validation rejected the request." "tasks";
           OUTPUT_PROJECTION_FAILED = annotation "Command-owned output delivery failed, was interrupted, or could not be confirmed; the session is already settled." "outputs";
+          SLOT_BUSY = annotation "The selected slot's exclusive session authority is contended." "state";
+          REQUEST_MISMATCH = annotation "The selected session has a different declared request." "services";
+          OBSERVATION_TIMEOUT = annotation "The caller-local session observation budget expired." "services";
+          SESSION_UNAVAILABLE = annotation "The fixed selected session cannot satisfy the requested task observation." "services";
         };
       }
     )

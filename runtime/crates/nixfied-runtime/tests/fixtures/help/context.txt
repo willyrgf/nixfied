@@ -1,0 +1,8 @@
+Print checked slot coordinates without reading or changing runtime state.
+
+Usage:
+  nix run .#context -- [options]
+
+Options:
+  --slot <number>             Select a declared project slot
+  -h, --help                  Show this help

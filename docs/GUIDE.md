@@ -331,6 +331,45 @@ nix run .#docs -- topic commands
 nix run .#docs -- api command run
 ```
 
+### Share a service owner
+
+Declare a root composite with an initialization leaf followed by a holding leaf
+when independent clients need one service group to remain available. Each client
+can request the same declared owner and wait for its initialization:
+
+```sh
+nix run .#context
+nix run .#ensure -- --task owner --until-step owner.initialize
+nix run .#observe -- --current --until-step owner.initialize
+nix run .#observe -- --run-id run-example
+nix run .#down
+```
+
+`context` prints slot coordinates without looking up source or secrets or reading
+runtime state. Inspection reports one selected session, including historical
+provenance; an unknown exact run ID returns `result: absent`. Awaiting absence
+fails. `ensure` always performs full admission and requires an exact match of
+manifest bytes, root task, source provenance and operation timeout before reuse.
+It returns `disposition: established` or `observed` with the same observation
+shape. The awaited leaf must have a continuation in the root plan. An ordinary
+background owner may also be observed or reused if its declared request matches.
+
+The default observation timeout is 60000 ms; change it with positive
+`--wait-timeout-ms`. `--timeout-ms` on ensure is the separate operation timeout
+and participates in matching. Canceling an observer leaves a committed shared
+owner and other clients running, including when the commit precedes its reply.
+Use explicit `down` to stop the owner. A wait never retargets or restarts a
+failed or settled selection. `REQUEST_MISMATCH`, `SESSION_UNAVAILABLE`, and
+`OBSERVATION_TIMEOUT` include structured `sessionObservation` details. Complete
+dispatch without a reply can leave establishment uncertain: inspect the slot
+before deciding what to do next.
+
+Successful observation supplies retained redacted capture paths, accepted exit
+evidence and fresh leader identities. It does not promise current endpoint health
+or perform application-specific target/schema checks; the client must validate
+those before connecting. New controls emit JSON, and accept neither `--output`
+nor `--daemon`.
+
 ### Choose output
 
 For an interactive run, use `summary` to follow progress and find the evidence

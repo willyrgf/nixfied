@@ -1969,6 +1969,7 @@ impl Drop for OwnedCapturedChild {
 /// captured outcomes are recorded.
 pub(crate) struct Invocation<'a> {
     pub owner: InvocationOwner<'a>,
+    pub root_step_path: Option<&'a str>,
     pub run_id: &'a str,
     pub manifest_hash: &'a str,
     pub source: &'a crate::output::EvidenceSource,
@@ -2036,6 +2037,7 @@ impl Invocation<'_> {
                         start_identity: &start_identity,
                         command_json: self.command_json,
                         computed_manifest_hash: self.manifest_hash,
+                        root_step_path: self.root_step_path,
                     },
                     self.owner,
                 )

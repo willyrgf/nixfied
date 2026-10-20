@@ -58,9 +58,9 @@ pub use task::{
 };
 
 pub(crate) use process::{
-    Leader, contain, platform_start_identity, poll_until, process_escape_start_identity,
+    Leader, LeaderSample, contain, poll_until, process_escape_start_identity,
     process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, process_present,
+    process_is_live_with_start_identity, process_present, sample_leader,
 };
 pub(crate) use registry::{
     InvocationIdentity, InvocationOwner, ProcessRecord, ServiceTerminal, StopPolicy,

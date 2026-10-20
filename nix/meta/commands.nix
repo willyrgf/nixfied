@@ -59,14 +59,28 @@ let
       kind = "Unsigned";
       bits = 64;
     } (literal 5000) (visible text "<number>");
+  wait = shared (
+    argument "waitTimeoutMs" "--wait-timeout-ms"
+      {
+        kind = "Unsigned";
+        bits = 64;
+      }
+      (literal 60000)
+      (visible "Set the positive caller-local observation timeout in milliseconds" "<number>")
+  );
+  until = shared (
+    argument "untilStep" "--until-step" (domain "Text") absent (
+      visible "Await one canonical root task step" "<path>"
+    )
+  );
   ref = kind: id: { inherit kind id; };
   runtime = name: description: arguments: column: output: {
     inherit name description arguments;
     references = [
       (ref "topic" "commands")
-      (ref "record" output)
-      (ref "record" "output-schema/runtime-error")
-    ];
+    ]
+    ++ map (ref "record") (if builtins.isList output then output else [ output ])
+    ++ [ (ref "record" "output-schema/runtime-error") ];
     renderHelp =
       facts:
       lib.concatStringsSep "\n" (
@@ -77,6 +91,9 @@ let
           (
             "  nix run .#${facts.apps.${name}.name} -- "
             + lib.optionalString (name == "run") "${presentation.label facts.args.task} "
+            + lib.optionalString (
+              name == "ensure"
+            ) "${presentation.label facts.args.task} ${presentation.label facts.args.untilStep} "
             + "[options]"
           )
         ]
@@ -138,6 +155,46 @@ in
     state
     slot
   ] 19 "output-schema/ps-json")
+  (runtime "context" "Print checked slot coordinates without reading or changing runtime state." [
+    manifest
+    allow
+    state
+    slot
+  ] 30 "output-schema/observation-context")
+  (runtime "observe" "Inspect or await one fixed recorded session without changing it."
+    [
+      manifest
+      allow
+      state
+      slot
+      (argument "current" "--current" (domain "Flag") (literal false) (
+        visible "Select the current recorded session once" null
+      ))
+      (argument "runId" "--run-id" (domain "Text") absent (
+        visible "Select one exact bounded run identity" "<id>"
+      ))
+      until
+      wait
+    ]
+    30
+    [
+      "output-schema/observe-absent"
+      "output-schema/observe-session"
+      "output-schema/observe-satisfied"
+    ]
+  )
+  (runtime "ensure" "Establish or observe one exactly matching shared service owner." [
+    manifest
+    allow
+    state
+    slot
+    (argument "task" "--task" (domain "Text") absent (
+      visible "Select the declared root composite task" "<id>"
+    ))
+    until
+    (timeout "Set the runtime operation timeout in milliseconds")
+    wait
+  ] 30 "output-schema/ensure-json")
   (runtime "down" "Cancel the slot's live session, or recover a dead owner." [
     manifest
     allow

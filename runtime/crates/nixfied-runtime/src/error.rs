@@ -110,6 +110,7 @@ fn cause_details(details: Value) -> Value {
         "runDir",
         "runId",
         "runSummaryPath",
+        "sessionObservation",
         "slot",
         "stateRoot",
         "summaryPath",
@@ -221,9 +222,405 @@ impl RuntimeError {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SelectorDetail {
+    Current,
+    RunId {
+        #[serde(rename = "runId")]
+        run: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum SelectionDetail {
+    Unenrolled,
+    Absent {
+        selector: SelectorDetail,
+    },
+    Seeking {
+        watermark: i64,
+    },
+    Pinned {
+        #[serde(rename = "runId")]
+        run: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct ObservationSelection(SelectionDetail);
+
+impl ObservationSelection {
+    pub fn unenrolled() -> Self {
+        Self(SelectionDetail::Unenrolled)
+    }
+    pub fn absent(selector: &crate::control::observation::Selector) -> Self {
+        Self(SelectionDetail::Absent {
+            selector: match selector.exact_run() {
+                None => SelectorDetail::Current,
+                Some(run) => SelectorDetail::RunId {
+                    run: run.to_owned(),
+                },
+            },
+        })
+    }
+    pub fn seeking(seeking: &crate::registry::observation::Seeking) -> Self {
+        Self(SelectionDetail::Seeking {
+            watermark: seeking.watermark(),
+        })
+    }
+    pub fn pinned(run: &crate::registry::observation::PinnedRun) -> Self {
+        Self(SelectionDetail::Pinned {
+            run: run.run_id().to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum EstablishmentDetail {
+    NotRequested,
+    NotEstablished {
+        #[serde(rename = "candidateRunId")]
+        run: String,
+    },
+    Uncertain {
+        #[serde(rename = "candidateRunId")]
+        run: String,
+    },
+    Established {
+        #[serde(rename = "runId")]
+        run: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct ObservationEstablishment(EstablishmentDetail);
+
+impl ObservationEstablishment {
+    pub fn not_requested() -> Self {
+        Self(EstablishmentDetail::NotRequested)
+    }
+    fn checked_run(run: &str) -> RuntimeResult<String> {
+        if !crate::registry::session::valid_run_id(run) {
+            return Err(RuntimeError::new(
+                ErrorCode::LifecycleFailed,
+                "invalid bootstrap candidate identity",
+            ));
+        }
+        Ok(run.to_owned())
+    }
+    pub fn not_established(run: &str) -> RuntimeResult<Self> {
+        Ok(Self(EstablishmentDetail::NotEstablished {
+            run: Self::checked_run(run)?,
+        }))
+    }
+    pub fn uncertain(run: &str) -> RuntimeResult<Self> {
+        Ok(Self(EstablishmentDetail::Uncertain {
+            run: Self::checked_run(run)?,
+        }))
+    }
+    pub fn established(run: &str) -> RuntimeResult<Self> {
+        Ok(Self(EstablishmentDetail::Established {
+            run: Self::checked_run(run)?,
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservationEvidence {
+    stdout_path: String,
+    stderr_path: String,
+}
+
+impl ObservationEvidence {
+    pub(crate) fn new(
+        placement: &crate::state::HostPlacement,
+        stdout: &crate::output::EvidenceRelativePath,
+        stderr: &crate::output::EvidenceRelativePath,
+    ) -> RuntimeResult<Self> {
+        Ok(Self {
+            stdout_path: crate::output::utf8_locator(&stdout.in_run(placement), "stdoutPath")?
+                .to_owned(),
+            stderr_path: crate::output::utf8_locator(&stderr.in_run(placement), "stderrPath")?
+                .to_owned(),
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SessionObservationDetail<'a> {
+    SlotBusy {
+        context: &'a crate::control::observation::Context,
+    },
+    RequestMismatch {
+        field: RequestMismatchField,
+        selection: &'a ObservationSelection,
+    },
+    Timeout {
+        stage: ObservationStage,
+        selection: &'a ObservationSelection,
+        establishment: &'a ObservationEstablishment,
+        #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
+        step: Option<&'a crate::control::observation::RootStepPath>,
+    },
+    Canceled {
+        stage: ObservationStage,
+        selection: &'a ObservationSelection,
+        establishment: &'a ObservationEstablishment,
+        #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
+        step: Option<&'a crate::control::observation::RootStepPath>,
+    },
+    BootstrapUncertain {
+        selection: &'a ObservationSelection,
+        establishment: &'a ObservationEstablishment,
+    },
+    Unavailable {
+        reason: SessionUnavailableReason,
+        selection: &'a ObservationSelection,
+        #[serde(rename = "stepPath", skip_serializing_if = "Option::is_none")]
+        step: Option<&'a crate::control::observation::RootStepPath>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence: Option<&'a ObservationEvidence>,
+    },
+}
+
+pub fn slot_busy(context: &crate::control::observation::Context) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::SlotBusy,
+        "slot is already owned by another session",
+    )
+    .with_detail(
+        "sessionObservation",
+        SessionObservationDetail::SlotBusy { context },
+    )
+}
+
+pub fn request_mismatch(
+    field: RequestMismatchField,
+    selection: &ObservationSelection,
+) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::RequestMismatch,
+        "selected session has a different declared request",
+    )
+    .with_detail(
+        "sessionObservation",
+        SessionObservationDetail::RequestMismatch { field, selection },
+    )
+}
+
+pub fn observation_checkpoint(
+    budget: &crate::cancellation::WaitBudget,
+    cancellation: &crate::cancellation::CancellationToken,
+    stage: ObservationStage,
+    selection: &ObservationSelection,
+    establishment: &ObservationEstablishment,
+    step: Option<&crate::control::observation::RootStepPath>,
+) -> RuntimeResult<()> {
+    if cancellation.is_canceled() {
+        return Err(
+            RuntimeError::new(ErrorCode::Canceled, "session observation was canceled").with_detail(
+                "sessionObservation",
+                SessionObservationDetail::Canceled {
+                    stage,
+                    selection,
+                    establishment,
+                    step,
+                },
+            ),
+        );
+    }
+    if budget.is_expired() {
+        return Err(RuntimeError::new(
+            ErrorCode::ObservationTimeout,
+            "session observation deadline expired",
+        )
+        .with_detail(
+            "sessionObservation",
+            SessionObservationDetail::Timeout {
+                stage,
+                selection,
+                establishment,
+                step,
+            },
+        ));
+    }
+    Ok(())
+}
+
+pub fn bootstrap_uncertain(
+    selection: &ObservationSelection,
+    establishment: &ObservationEstablishment,
+) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::LifecycleFailed,
+        "shared establishment reply is unavailable or malformed",
+    )
+    .with_detail(
+        "sessionObservation",
+        SessionObservationDetail::BootstrapUncertain {
+            selection,
+            establishment,
+        },
+    )
+}
+
+pub fn session_unavailable(
+    reason: SessionUnavailableReason,
+    selection: &ObservationSelection,
+    step: Option<&crate::control::observation::RootStepPath>,
+    evidence: Option<&ObservationEvidence>,
+) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::SessionUnavailable,
+        "selected session cannot satisfy observation",
+    )
+    .with_detail(
+        "sessionObservation",
+        SessionObservationDetail::Unavailable {
+            reason,
+            selection,
+            step,
+            evidence,
+        },
+    )
+}
+
+/// Enrich an already-native timeout/cancellation without deserializing a proof
+/// or recursively redacting its structural envelope.
+pub fn observation_establishment(
+    mut error: RuntimeError,
+    establishment: &ObservationEstablishment,
+) -> RuntimeError {
+    if matches!(
+        error.code,
+        ErrorCode::ObservationTimeout | ErrorCode::Canceled
+    ) && let Some(Value::Object(detail)) = error.details.get_mut("sessionObservation")
+        && matches!(
+            detail.get("kind").and_then(Value::as_str),
+            Some("timeout" | "canceled")
+        )
+    {
+        detail.insert(
+            "establishment".into(),
+            serde_json::to_value(establishment).expect("checked metadata serializes"),
+        );
+    }
+    error
+}
+
+pub fn observation_step(
+    mut error: RuntimeError,
+    step: &crate::control::observation::RootStepPath,
+) -> RuntimeError {
+    if matches!(
+        error.code,
+        ErrorCode::ObservationTimeout | ErrorCode::Canceled
+    ) && let Some(Value::Object(detail)) = error.details.get_mut("sessionObservation")
+        && matches!(
+            detail.get("kind").and_then(Value::as_str),
+            Some("timeout" | "canceled")
+        )
+    {
+        detail.insert(
+            "stepPath".into(),
+            serde_json::to_value(step).expect("checked step serializes"),
+        );
+    }
+    error
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_errors_keep_exact_tagged_envelopes_and_safe_nested_causes() {
+        let selection = ObservationSelection::unenrolled();
+        let establishment = ObservationEstablishment::uncertain("run-1").unwrap();
+        let step = crate::control::observation::RootStepPath::parse("owner.init").unwrap();
+        let canceled = crate::cancellation::CancellationToken::new();
+        canceled.cancel();
+        let budget = crate::cancellation::WaitBudget::new(std::num::NonZeroU64::new(1).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let error = observation_checkpoint(
+            &budget,
+            &canceled,
+            ObservationStage::Task,
+            &selection,
+            &establishment,
+            Some(&step),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            ErrorCode::Canceled,
+            "signal beats the already expired budget"
+        );
+        let canceled_detail = serde_json::json!({"kind":"canceled","stage":"task", "selection":{"state":"unenrolled"},
+            "establishment":{"state":"uncertain","candidateRunId":"run-1"},"stepPath":"owner.init"});
+        assert_eq!(
+            error.details,
+            serde_json::json!({"sessionObservation":canceled_detail})
+        );
+        let cause = RuntimeCause::from_error(error);
+        assert_eq!(
+            cause.details,
+            serde_json::json!({"sessionObservation":canceled_detail})
+        );
+        let timeout = observation_checkpoint(
+            &budget,
+            &crate::cancellation::CancellationToken::new(),
+            ObservationStage::Establishment,
+            &selection,
+            &establishment,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(timeout.code, ErrorCode::ObservationTimeout);
+        assert_eq!(
+            timeout.details,
+            serde_json::json!({"sessionObservation":{"kind":"timeout", "stage":"establishment",
+            "selection":{"state":"unenrolled"},"establishment":{"state":"uncertain","candidateRunId":"run-1"}}})
+        );
+        assert_eq!(
+            bootstrap_uncertain(&selection, &establishment).details,
+            serde_json::json!({"sessionObservation":{
+            "kind":"bootstrap-uncertain","selection":{"state":"unenrolled"},"establishment":{"state":"uncertain","candidateRunId":"run-1"}}})
+        );
+        assert_eq!(
+            request_mismatch(RequestMismatchField::Source, &selection).details,
+            serde_json::json!({"sessionObservation":{
+            "kind":"request-mismatch","field":"source","selection":{"state":"unenrolled"}}})
+        );
+        assert_eq!(
+            session_unavailable(
+                SessionUnavailableReason::Absent,
+                &selection,
+                Some(&step),
+                None
+            )
+            .details,
+            serde_json::json!({"sessionObservation":{"kind":"unavailable","reason":"absent",
+            "selection":{"state":"unenrolled"},"stepPath":"owner.init"}})
+        );
+        let location =
+            crate::state::derive_slot_location("project", "dev", 0, std::path::Path::new("/state"))
+                .unwrap();
+        let context = crate::control::observation::Context::from_location(&location).unwrap();
+        assert_eq!(
+            slot_busy(&context).details,
+            serde_json::json!({"sessionObservation":{"kind":"slot-busy","context":{
+            "projectId":"project","environment":"dev","slot":0,"stateBase":"/state","stateRoot":"/state/data/project/dev/0",
+            "registryDir":"/state/registry/project/dev/0","registryPath":"/state/registry/project/dev/0/registry.sqlite3"}}})
+        );
+    }
 
     #[test]
     fn causes_are_omitted_when_empty_and_are_non_recursive_when_present() {

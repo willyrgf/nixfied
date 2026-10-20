@@ -20,6 +20,14 @@ let
     (builtins.head (builtins.filter (v: v.coordinate == "error-code") outputs.vocabularies))
     .annotations;
   checked = check manifest;
+  checkOutputs =
+    bundle:
+    check (
+      bundle
+      // {
+        vocabularies = manifest.vocabularies ++ bundle.vocabularies;
+      }
+    );
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
   changeRecord =
     bundle: name: f:
@@ -44,7 +52,7 @@ let
     );
   badField = f: rejects (map (r: r.id) (check (changeField manifest "Project" "name" f)).records);
   badRecord = f: rejects (map (r: r.id) (check (changeRecord manifest "Project" f)).records);
-  badOutput = name: f: rejects (map (r: r.id) (check (changeRecord outputs name f)).records);
+  badOutput = name: f: rejects (map (r: r.id) (checkOutputs (changeRecord outputs name f)).records);
   make = name: checked.constructors.${"primitive/${name}"};
   invocation = {
     tools = [ "tool" ];
@@ -401,7 +409,7 @@ let
       expected = true;
     };
     outputConstructors = {
-      expr = (check outputs).constructors;
+      expr = (checkOutputs outputs).constructors;
       expected = { };
     };
     outputFieldProducer = {
@@ -432,7 +440,7 @@ let
     nativeOutputsHaveNoRustLayout = {
       expr = builtins.all (
         record: !(record ? rust) && builtins.all (field: !(field ? rust)) record.fields
-      ) (check outputs).records;
+      ) (checkOutputs outputs).records;
       expected = true;
     };
     errorAnnotations = {

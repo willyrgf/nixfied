@@ -84,7 +84,7 @@ when the manifest/runtime contract changes.
   Services stop when the session finishes, independently of application-data
   retention.
 - A writable registry owns the exclusive slot guard. Competing owners reject
-  before application-state mutation or child spawn. `ps` reads a coherent
+  with `SLOT_BUSY` before application-state mutation or child spawn. `ps` reads a coherent
   registry snapshot and observes process liveness without acquiring ownership
   or changing stored records. An absent registry yields an empty process list.
 - The state base, the slot's registry directory, and the application root must
@@ -376,6 +376,71 @@ when the manifest/runtime contract changes.
   abandoned, or uncertain owner is reaped within one second when it exits.
   Reply failure after the commit never cancels the session; `down` and signals
   remain its cancellation inputs.
+- `context` uses control admission and prints checked absolute UTF-8 slot
+  coordinates without source or secret admission, registry reads, or mutation.
+  `observe --current` selects the newest unfinished creation event once,
+  including absence; `--run-id` selects one bounded exact identity, including
+  historical runs. Inspection reports recorded provenance and fresh owner and
+  service leader samples. Absence succeeds. Neither command acquires authority.
+- `observe --until-step` requires the current manifest hash to match the
+  selected run before interpreting its recorded root plan. Success requires
+  that exact root occurrence's canonical status and outcome to be `succeeded`,
+  a present policy-accepted exit, settled ownership, and complete capture. The
+  run has no outcome; every service in the entire derived group is `ready`,
+  unresolved, without an outcome, and has an exact live leader. Missing services
+  after root attribution, changed endpoint sets, duplicate identities, and
+  contradictory canonical facts are corruption. Active tasks with finished
+  capture and partial terminal success without exit recording are incomplete
+  evidence, never success or endless pending.
+- `ensure --task --until-step` performs full run admission even for reuse.
+  The selected step must be a root composite leaf with a later root occurrence;
+  inherited stdin rejects before dispatch. Matching compares the raw manifest
+  digest, root task, all seven source fields, then operation timeout exactly.
+  One live unfinished owner is pinned, including a finalizing owner. Otherwise
+  enrollment freezes the native event high-water mark. The first subsequent
+  `run.created` publication wins regardless of its result or request; no caller
+  skips it, retargets, recovers a selected run, or starts a replacement.
+- Shared helpers use the same owned executor and finalizer. Under the one slot
+  guard they recheck the original watermark before writer initialization,
+  recovery, or state preparation. Acquired authority with a selected publication
+  reports request mismatch first, otherwise `SESSION_UNAVAILABLE` with
+  `authority-released`; it creates no successor. Precommit abandonment checks
+  occur before and after recovery and before run creation. The run commit makes
+  the shared owner independent, including before its acknowledgement arrives.
+  Only an incompletely delivered request permits terminating the unestablished
+  helper. After full dispatch, observer cancellation, timeout, EOF, malformed
+  reply, or reply failure never kills the helper or sends owner cancellation.
+  Shared observers have no daemon interruption grace.
+- Observation uses one elapsed positive-u64 millisecond budget (default 60000)
+  across selection, delivery, reply and task waiting. It never constructs an
+  overflowing full-duration `Instant` deadline. Signal wins over expiry and
+  success; polls are at most 10 ms. Operation timeout remains separate, accepts
+  zero and the full u64 range, and defaults to 5000. Local expiry reports
+  `OBSERVATION_TIMEOUT`; full dispatch without a conclusive reply carries
+  uncertain establishment. Premature EOF or malformed replies report
+  `LIFECYCLE_FAILED` with that uncertainty.
+- Every observer retains invocation-local registry file identity, initialization
+  phase and greatest sequence, including a complete history at sequence zero.
+  Disappearance, replacement, reset, rewind, missing/dangling/duplicate creation
+  markers, and malformed metadata reject. Only native absence, an exact empty
+  unversioned bootstrap, and primary SQLite BUSY/LOCKED are retryable read states.
+  The helper carries learned history back without changing the original watermark.
+- Registry schema 20 records a nonempty root task, canonical decimal-u64 TEXT
+  operation timeout, and exact nonempty self owner identity. Root task process
+  attribution is unique per run and comes from a checked plan occurrence before
+  workload release; preparations, services and probes have no root attribution.
+  Metadata publication requires lossless UTF-8 before new-run slot mutation.
+  Evidence locators are literally `diagnostics.log` or `logs/<one normal filename>`;
+  task captures require the latter. Aliases, traversal and NUL reject; a Unix
+  backslash remains literal. There is no old-schema reader or migration.
+- Successful observation drops its first read transaction before exact native
+  leader sampling, rereads canonical task/service/endpoint and run facts, then
+  samples the owner again and checks cancellation/expiry. Zombies are absent;
+  stopped leaders remain live without promising progress. Inspection errors are
+  never absence. Observation proves neither endpoint health nor an atomic
+  multi-process snapshot or future availability. Its fixed structural keys and
+  checked locators use the empty redactor; captured data and event payloads are
+  never parsed into successful observation evidence.
 - Each session creates a private FIFO named `control` (with `mkfifoat` through
   held `runs` and session directory descriptors that are never followed as
   symlinks and must be private to the effective user) in its never-reused
@@ -688,7 +753,7 @@ The related topic explains the relevant ownership and operating constraints;
 it does not promise that retrying is safe or will succeed.
 
 `nix run .#docs -- api error` lists the exact error vocabulary. Native constructors
-select the exit class; the command's native exit mapping produces statuses 12–38
+select the exit class; the command's native exit mapping produces statuses 12–42
 for these failures. Neither the record declarations nor the error reference
 select failure precedence or retry behavior.
 
@@ -699,6 +764,13 @@ shared declarations describe wire fields and vocabularies. Independent literal
 serialization tests preserve those bytes and native failure behavior.
 Native producers place task evidence under `taskRun`, projection issues under
 `projections`, and the contended endpoint under `portConflict`, and exhausted check evidence under `lastRound`.
+Session controls use typed `details.sessionObservation` alternatives inventoried
+as `observation-error-*` records. These retain selection, stage, establishment
+certainty and known evidence without captured data. Safe nonrecursive causes
+preserve this envelope. New controls emit JSON on both success and failure;
+help is plain text and completes before parsing or admission. New operands are
+single-use, acquiring and parsing a repeated value before duplicate rejection;
+common operand acquisition and repetition remain unchanged.
 `expectedRegistryIdentity` and `foundRegistryIdentity` share the diagnostic
 rendered by `nix run .#docs -- api record local/RegistryIdentityDiagnostic`;
 observed slot values stay signed, including negative corrupt values.

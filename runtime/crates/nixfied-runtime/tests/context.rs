@@ -7,6 +7,54 @@ use nixfied_runtime::{ErrorCode, admission::secrets::resolve_secrets, state::sta
 use serde_json::json;
 use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
 
+#[test]
+fn new_run_rejects_non_utf8_state_or_source_metadata_before_slot_or_workload_effects() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    for bad_source in [false, true] {
+        let temp = TempDir::new();
+        let non_utf8 = temp.path.join(OsString::from_vec(b"native-\xff".to_vec()));
+        let state = if bad_source {
+            temp.path.join("state")
+        } else {
+            non_utf8.clone()
+        };
+        let counter = temp.path.join("workload-counter");
+        let mut value = common::test_child_manifest(23080, 23080);
+        value["tasks"]["smoke"]["requires"] = json!([]);
+        let program = value["tasks"]["smoke"]["invocation"]["run"][0].clone();
+        value["tasks"]["smoke"]["invocation"]["run"] =
+            json!([program, "output", "occurrence", counter, "0"]);
+        let manifest = temp.path.join("manifest.json");
+        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+        let cwd = if bad_source {
+            fs::create_dir(&non_utf8).unwrap();
+            non_utf8
+        } else {
+            temp.path.clone()
+        };
+        let output = Command::new(common::runtime_binary())
+            .args(["run", "--allow-non-store-manifest", "--manifest"])
+            .arg(&manifest)
+            .args(["--task", "smoke", "--output", "json"])
+            .env("NIXFIED_STATE_DIR", &state)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(31),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "LIFECYCLE_FAILED");
+        assert!(output.stdout.is_empty());
+        assert!(!state.exists(), "preflight must precede slot mutation");
+        assert!(!counter.exists(), "preflight must precede workload release");
+    }
+}
+
 fn child(kind: &str, cwd: &std::path::Path) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -37,6 +85,16 @@ fn context_child() {
         }
         return;
     }
+    if kind == "absolute-placement-without-cwd" {
+        let cwd = std::env::current_dir().unwrap();
+        fs::remove_dir(cwd).unwrap();
+        let base = PathBuf::from(std::env::var_os("EXPECTED_PATH").unwrap());
+        let location =
+            nixfied_runtime::state::derive_slot_location("project", "dev", 0, &base).unwrap();
+        assert_eq!(location.state_base(), base);
+        assert!(!base.exists());
+        return;
+    }
     assert_eq!(kind, "secrets");
     let mut value = common::synthetic_manifest_default(23080, 23080);
     value["secrets"]["token"] = json!({"secretId":"token","source":{"kind":"file","path":"token"}});
@@ -48,6 +106,16 @@ fn context_child() {
     } else {
         assert_eq!(result.unwrap_err().code, ErrorCode::SecretUnavailable);
     }
+}
+
+#[test]
+fn absolute_placement_does_not_require_an_available_invocation_directory() {
+    let temp = TempDir::new();
+    let cwd = temp.path.join("removed-cwd");
+    fs::create_dir(&cwd).unwrap();
+    let mut command = child("absolute-placement-without-cwd", &cwd);
+    command.env("EXPECTED_PATH", temp.path.join("state"));
+    succeeds(&mut command);
 }
 
 #[test]

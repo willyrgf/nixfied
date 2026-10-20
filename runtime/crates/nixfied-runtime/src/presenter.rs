@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,9 +25,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::output::{
-    DIAGNOSTIC_SOURCE, OutputStream, ProjectionIssue, ProjectionOperation, SourcePresentation,
-};
+use crate::output::{OutputStream, ProjectionIssue, ProjectionOperation, SourcePresentation};
 use crate::registry::{RegistryIdentity, RegistryReader};
 
 pub const COMMAND: &str = "__presenter";
@@ -461,20 +459,9 @@ fn discover(init: &PresenterInit) -> RuntimeResult<Snapshot> {
 
 /// Machine locators are the run's diagnostic source or one `logs/<file>`.
 fn validated(relative: &str) -> RuntimeResult<String> {
-    let path = Path::new(relative);
-    let components: Vec<_> = path.components().collect();
-    let valid = relative == DIAGNOSTIC_SOURCE
-        || matches!(
-            components.as_slice(),
-            [Component::Normal(directory), Component::Normal(_)] if *directory == "logs"
-        );
-    if !valid {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            "source path escapes the run evidence directory",
-        ));
-    }
-    Ok(relative.to_owned())
+    Ok(crate::output::EvidenceRelativePath::parse(relative)?
+        .as_str()
+        .to_owned())
 }
 
 struct Tail {

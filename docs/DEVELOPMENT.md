@@ -424,6 +424,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Rust formatting/lint only | rustfmt + Clippy commands above |
 | `nixfied-manifest` shape/validation | manifest crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
+| Shared session selection/establishment | `--test observation`, native history and background protocol unit tests, parser/output/schema checks, then `.#ci -- --dirty` and release builds; real adopter and native macOS coverage are additional |
 | Live presentation and output sealing | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/build change | CLI/runtime/install builds |
@@ -452,8 +453,8 @@ pinned toolchain. Product builds compile checked-in files; the source
 check compares freshly rendered files for both runtime and CLI. Its synthetic
 structural fixture supplies its own file map to the same formatting step.
 
-`nix/checks/syntax.nix` checks malformed declarations, help laziness, seven exact
-help fixtures and an added optional argument without a formatter edit. Runtime
+`nix/checks/syntax.nix` checks malformed declarations, help laziness, ten exact
+help fixtures (including context, observe and ensure) and an added optional argument without a formatter edit. Runtime
 and CLI command tests exercise native parsing and encoding. The source check
 also runs `nix/checks/upgrade-syntax.nix` against the packaged shell parser;
 existing adoption and upgrade goldens cover its continuation. The gate's
@@ -474,7 +475,9 @@ acceptance evidence for later changes.
 | Structural fields and closed inventory vocabularies | `structure.nix`, `coverage.nix`, compiled projection fixtures, raw `wire_presence.rs` and independent Nix/Rust derivation vectors |
 | Native internal workload-gate protocol | `tests/launch.rs`: independent raw frames, rejection before effects, signal/descriptor hygiene, Unix bytes, and bounded waiting |
 | Native output/error views | `output_structure.rs`, main/output/registry/process tests and real redaction/write boundaries |
-| Shared command facts and native parsers | `syntax.nix`, seven exact helps, native parser/encoding tests and packaged upgrade parser |
+| Shared command facts and native parsers | `syntax.nix`, ten exact helps, native parser/encoding tests and packaged upgrade parser |
+| Shared owner request/reply, observation, history, registry observation and budgets | `background`/`ensure`/history unit tests and `tests/observation.rs`: delivery certainty, first-publication order, guarded recheck, continuity and independent native process/event counts; `coverage.nix` routes these native coordinates to runtime |
+| Evidence locators | `output_structure.rs`, context and output tests: exact lexical paths, lossless machine metadata and read-only controls; `coverage.nix` routes this coordinate to outputs |
 | Static revision-bound reference | `reference.nix`, downstream source switching, context/closure isolation and exact queries |
 | Product source isolation and generated freshness | `gate-nix.nix`, `generated.nix`, packaged `nixfied-regenerate` |
 

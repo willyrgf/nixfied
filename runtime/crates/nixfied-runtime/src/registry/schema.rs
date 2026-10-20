@@ -43,7 +43,7 @@ struct RegistryIdentityDiagnostic<'a> {
     toolchain_id: &'a str,
 }
 
-pub const SCHEMA_VERSION: i64 = 19;
+pub const SCHEMA_VERSION: i64 = 20;
 
 // The registry is per slot: `registry_meta` binds its project, environment and
 // slot once, so no other row repeats them. Endpoint rows are immutable evidence
@@ -71,6 +71,16 @@ const SCHEMA_SQL: &str = "
               generator_json TEXT NOT NULL,
               target_json TEXT NOT NULL,
               source_json TEXT NOT NULL,
+              root_task TEXT NOT NULL CHECK (length(root_task) > 0),
+              operation_timeout_ms TEXT NOT NULL CHECK (
+                typeof(operation_timeout_ms) = 'text'
+                AND length(operation_timeout_ms) BETWEEN 1 AND 20
+                AND operation_timeout_ms NOT GLOB '*[^0-9]*'
+                AND (operation_timeout_ms = '0'
+                     OR substr(operation_timeout_ms, 1, 1) BETWEEN '1' AND '9')
+                AND (length(operation_timeout_ms) < 20
+                     OR operation_timeout_ms COLLATE BINARY <= '18446744073709551615')
+              ),
               summary_path TEXT,
               owner_identity TEXT NOT NULL,
               diagnostic_path TEXT NOT NULL,
@@ -89,6 +99,9 @@ const SCHEMA_SQL: &str = "
               command_json TEXT NOT NULL,
               service_name TEXT,
               role TEXT NOT NULL CHECK (role IN ('task', 'service', 'probe')),
+              root_step_path TEXT CHECK (
+                root_step_path IS NULL OR (role = 'task' AND length(root_step_path) > 0)
+              ),
               execution_outcome TEXT CHECK (execution_outcome IN ('succeeded', 'failed', 'canceled', 'interrupted')),
               exit_code INTEGER,
               status TEXT NOT NULL,
@@ -138,6 +151,8 @@ const SCHEMA_SQL: &str = "
             );
 
             CREATE UNIQUE INDEX cleanups_one_pending ON cleanups (status) WHERE status = 'pending';
+            CREATE UNIQUE INDEX processes_unique_root_step ON processes (run_id, root_step_path)
+              WHERE root_step_path IS NOT NULL;
             ";
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {

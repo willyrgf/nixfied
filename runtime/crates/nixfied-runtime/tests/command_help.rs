@@ -15,6 +15,9 @@ fn existing_commands_print_help_without_touching_the_manifest_or_state() {
         ("ps", include_str!("fixtures/help/ps.txt")),
         ("down", include_str!("fixtures/help/down.txt")),
         ("clean", include_str!("fixtures/help/clean.txt")),
+        ("context", include_str!("fixtures/help/context.txt")),
+        ("observe", include_str!("fixtures/help/observe.txt")),
+        ("ensure", include_str!("fixtures/help/ensure.txt")),
     ] {
         let mut scenarios = vec![vec![]];
         if command == "run" {
