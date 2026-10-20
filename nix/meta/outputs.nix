@@ -229,7 +229,7 @@ in
         (omitted "targetPath" path "Absent application root; present only for `absent`.")
       ]
     )
-    (record (output "runtime-error-cause") "NoDecoder"
+    (record (output "runtime-error-cause") "RejectUnknown"
       "Non-recursive safe cause; native selection and allowlisting remove unsafe infrastructure text."
       errorFields
     )
@@ -387,8 +387,13 @@ in
         };
       }
     )
-    (vocabulary "exit-class" "ExitClass" error
-      "Native constructor-selected class; numeric process status is a separate native mapping."
+    (
+      (vocabulary "exit-class" "ExitClass" error
+        "Native constructor-selected class; numeric process status is a separate native mapping."
+      )
+      // {
+        decoder = "Closed";
+      }
     )
     (vocabulary "enum PortConflictReason" "PortConflictReason" process
       "The two inventoried proven host conflict facts."

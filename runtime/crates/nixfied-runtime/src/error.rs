@@ -1,14 +1,15 @@
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeCause {
     pub code: ErrorCode,
+    #[serde(deserialize_with = "cause_exit_class")]
     pub exit_class: ExitClass,
     pub message: String,
     pub details: serde_json::Value,
@@ -28,6 +29,13 @@ pub struct RuntimeError {
 }
 
 include!("generated/error.rs");
+
+fn cause_exit_class<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ExitClass, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    ExitClass::deserialize(serde::de::value::StringDeserializer::new(value))
+}
 
 impl RuntimeCause {
     pub fn from_error(error: RuntimeError) -> Self {
@@ -120,16 +128,11 @@ fn cause_details(details: Value) -> Value {
         "taskRun",
         "unknownTask",
     ];
-    let Value::Object(details) = details else {
+    let Value::Object(mut details) = details else {
         return Value::Object(Map::new());
     };
-    let mut safe = Map::new();
-    for key in SAFE_KEYS {
-        if let Some(value) = details.get(*key) {
-            safe.insert((*key).to_string(), value.clone());
-        }
-    }
-    Value::Object(safe)
+    details.retain(|key, _| SAFE_KEYS.contains(&key.as_str()));
+    Value::Object(details)
 }
 
 /// Both steps ran: the first failure stays primary and a second failure

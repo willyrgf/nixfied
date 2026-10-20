@@ -123,35 +123,7 @@ struct Rejection {
     code: ErrorCode,
     message: String,
     details: Value,
-    causes: Vec<CauseWire>,
-}
-
-/// The bounded, nonrecursive cause projection has its own input DTO.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CauseWire {
-    code: ErrorCode,
-    #[serde(deserialize_with = "cause_exit_class")]
-    exit_class: crate::error::ExitClass,
-    message: String,
-    details: Value,
-}
-
-fn cause_exit_class<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<crate::error::ExitClass, D::Error> {
-    let value = String::deserialize(deserializer)?;
-    for class in [crate::error::ExitClass::Ok, crate::error::ExitClass::Error] {
-        if serde_json::to_value(class)
-            .ok()
-            .as_ref()
-            .and_then(Value::as_str)
-            == Some(value.as_str())
-        {
-            return Ok(class);
-        }
-    }
-    Err(serde::de::Error::custom("invalid cause exit class"))
+    causes: Vec<crate::error::RuntimeCause>,
 }
 
 impl Rejection {
@@ -160,30 +132,12 @@ impl Rejection {
             code: error.code,
             message: error.message.clone(),
             details: error.details.clone(),
-            causes: error
-                .causes
-                .iter()
-                .map(|cause| CauseWire {
-                    code: cause.code,
-                    exit_class: cause.exit_class,
-                    message: cause.message.clone(),
-                    details: cause.details.clone(),
-                })
-                .collect(),
+            causes: (*error.causes).clone(),
         }
     }
     fn into_error(self) -> RuntimeError {
         let mut error = RuntimeError::new(self.code, self.message).with_details(self.details);
-        error.causes.extend(
-            self.causes
-                .into_iter()
-                .map(|cause| crate::error::RuntimeCause {
-                    code: cause.code,
-                    exit_class: cause.exit_class,
-                    message: cause.message,
-                    details: cause.details,
-                }),
-        );
+        *error.causes = self.causes;
         error
     }
 }
@@ -829,8 +783,45 @@ mod tests {
             serde_json::json!({"result":"selected-existing","runId":"run-1","createdSeq":0,"cursor":cursor()}),
             serde_json::json!({"result":"selected-existing","runId":"../bad","createdSeq":1,"cursor":cursor()}),
             serde_json::json!({"result":"rejected","code":"TASK_FAILED","message":"safe","details":{},"causes":[{"code":"CANCELED","exitClass":"error","message":"cause","details":{},"causes":[]}]}),
+            serde_json::json!({"result":"rejected","code":"TASK_FAILED","message":"safe","causes":[]}),
         ] {
             assert!(decode_shared_reply(&serde_json::to_vec(&raw).unwrap(), "run-1").is_err());
+        }
+        for class in ["ok", "error"] {
+            let raw = serde_json::json!({"result":"rejected","code":"TASK_FAILED","message":"safe","details":null,
+                "causes":[{"code":"CANCELED","exitClass":class,"message":"cause","details":null}]});
+            let Ok(Err(decoded)) = decode_shared_reply(&serde_json::to_vec(&raw).unwrap(), "run-1")
+            else {
+                panic!("lost rejection with exitClass {class}");
+            };
+            assert_eq!(
+                serde_json::to_value(SharedReply::Rejected(Rejection::from_error(&decoded)))
+                    .unwrap(),
+                raw
+            );
+        }
+        for cause in [
+            r#"null"#,
+            r#"{}"#,
+            r#"{"exitClass":"error","message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":"Error","message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":1,"message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":null,"message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":{"error":null},"message":"cause","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":"error","details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":"error","message":null,"details":{}}"#,
+            r#"{"code":"CANCELED","exitClass":"error","message":"cause"}"#,
+            r#"{"code":"CANCELED","exitClass":"error","message":"cause","details":{},"extra":true}"#,
+            r#"{"code":"CANCELED","exitClass":"error","message":"cause","details":{},"code":"TASK_FAILED"}"#,
+        ] {
+            let raw = format!(
+                r#"{{"result":"rejected","code":"TASK_FAILED","message":"safe","details":{{}},"causes":[{cause}]}}"#
+            );
+            assert!(
+                decode_shared_reply(raw.as_bytes(), "run-1").is_err(),
+                "{cause}"
+            );
         }
         let original = RuntimeError::new(ErrorCode::RequestMismatch, "safe").with_cause(
             RuntimeError::new(ErrorCode::RegistryCorrupt, "unsafe OS error"),
