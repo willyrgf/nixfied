@@ -492,93 +492,66 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
             escaped_process = status::unsettled_terminal_sql(),
         ))
         .map_err(sql_error)?;
-    let rows = statement
-        .query_map([], |row| {
-            let start_identity: String = row.get(3)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, u32>(1)?,
-                row.get::<_, i32>(2)?,
-                start_identity,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)? != 0,
-                row.get::<_, String>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                (
-                    row.get::<_, i32>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, String>(13)?,
-                ),
-            ))
-        })
-        .map_err(sql_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_error)?;
-    rows.into_iter()
-        .map(
-            |(
-                process_key,
-                pid,
-                pgid,
-                start_identity_json,
-                command_json,
-                run_id,
-                status,
-                computed_manifest_hash,
-                unsettled,
-                role,
-                service_name,
-                (stop_signal, stop_timeout_ms, containment),
-            )| {
-                let role = ProcessRole::parse_db(&role)?;
-                let stop = StopPolicy {
-                    signal: stop_signal,
-                    timeout_ms: u64::try_from(stop_timeout_ms).map_err(|_| {
-                        RuntimeError::new(ErrorCode::RegistryCorrupt, "invalid stop timeout")
-                    })?,
-                    containment: StopPolicy::parse_containment(&containment)?,
-                };
-                let coherent = match role {
-                    ProcessRole::Task => service_name.is_none(),
-                    ProcessRole::Service | ProcessRole::Probe => {
-                        service_name.as_ref().is_some_and(|name| !name.is_empty())
-                    }
-                };
-                if !coherent {
-                    return Err(RuntimeError::new(
-                        ErrorCode::RegistryCorrupt,
-                        "process role and service attribution disagree",
-                    ));
-                }
-                let start_identity = serde_json::from_str::<StoredProcessIdentity>(
-                    &start_identity_json,
+    let mut rows = statement.query([]).map_err(sql_error)?;
+    let mut processes = Vec::new();
+    while let Some(row) = rows.next().map_err(sql_error)? {
+        let start_identity_json: String = row.get(3).map_err(sql_error)?;
+        let process_key: String = row.get(0).map_err(sql_error)?;
+        let pid = row.get(1).map_err(sql_error)?;
+        let pgid = row.get(2).map_err(sql_error)?;
+        let command_json = row.get(4).map_err(sql_error)?;
+        let run_id = row.get(5).map_err(sql_error)?;
+        let status: String = row.get(6).map_err(sql_error)?;
+        let computed_manifest_hash = row.get(7).map_err(sql_error)?;
+        let unsettled = row.get::<_, i64>(8).map_err(sql_error)? != 0;
+        let role: String = row.get(9).map_err(sql_error)?;
+        let service_name: Option<String> = row.get(10).map_err(sql_error)?;
+        let stop_signal = row.get(11).map_err(sql_error)?;
+        let stop_timeout_ms: i64 = row.get(12).map_err(sql_error)?;
+        let containment: String = row.get(13).map_err(sql_error)?;
+        let role = ProcessRole::parse_db(&role)?;
+        let stop = StopPolicy {
+            signal: stop_signal,
+            timeout_ms: u64::try_from(stop_timeout_ms).map_err(|_| {
+                RuntimeError::new(ErrorCode::RegistryCorrupt, "invalid stop timeout")
+            })?,
+            containment: StopPolicy::parse_containment(&containment)?,
+        };
+        let coherent = match role {
+            ProcessRole::Task => service_name.is_none(),
+            ProcessRole::Service | ProcessRole::Probe => {
+                service_name.as_ref().is_some_and(|name| !name.is_empty())
+            }
+        };
+        if !coherent {
+            return Err(RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                "process role and service attribution disagree",
+            ));
+        }
+        let start_identity = serde_json::from_str::<StoredProcessIdentity>(&start_identity_json)
+            .map_err(|error| {
+                RuntimeError::new(
+                    ErrorCode::RegistryCorrupt,
+                    format!("invalid start identity for process {process_key}: {error}"),
                 )
-                .map_err(|error| {
-                    RuntimeError::new(
-                        ErrorCode::RegistryCorrupt,
-                        format!("invalid start identity for process {process_key}: {error}"),
-                    )
-                })?;
-                Ok(ProcessRow {
-                    role,
-                    service_name,
-                    process_key,
-                    pid,
-                    pgid,
-                    start_identity,
-                    command_json,
-                    run_id,
-                    status: ProcessStatus::parse_db(&status)?,
-                    computed_manifest_hash,
-                    unsettled,
-                    stop,
-                })
-            },
-        )
-        .collect()
+            })?;
+        processes.push(ProcessRow {
+            role,
+            service_name,
+            process_key,
+            pid,
+            pgid,
+            start_identity,
+            command_json,
+            run_id,
+            status: ProcessStatus::parse_db(&status)?,
+            computed_manifest_hash,
+            unsettled,
+            stop,
+        });
+    }
+    Ok(processes)
 }
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {

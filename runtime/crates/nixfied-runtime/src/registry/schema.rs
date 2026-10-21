@@ -1,6 +1,5 @@
 use crate::registry::sql_error;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
-use serde_json::{Value, json};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
@@ -31,16 +30,6 @@ impl From<ReadFailure> for RuntimeError {
             ReadFailure::Checked(error) => error,
         }
     }
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistryIdentityDiagnostic<'a> {
-    project_id: &'a str,
-    environment: &'a str,
-    slot: i64,
-    runtime_abi: &'a str,
-    toolchain_id: &'a str,
 }
 
 pub const SCHEMA_VERSION: i64 = 20;
@@ -357,22 +346,12 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> Result<(),
             )
         };
         return Err(RuntimeError::new(code, message)
-            .with_detail("expectedRegistryIdentity", registry_identity_json(identity))
-            .with_detail("foundRegistryIdentity", registry_identity_json(&found))
+            .with_detail("expectedRegistryIdentity", identity)
+            .with_detail("foundRegistryIdentity", &found)
             .with_detail("mismatchedFields", mismatched_fields)
             .into());
     }
     Ok(())
-}
-
-fn registry_identity_json(identity: &RegistryIdentity) -> Value {
-    json!(RegistryIdentityDiagnostic {
-        project_id: &identity.project_id,
-        environment: &identity.environment,
-        slot: identity.slot,
-        runtime_abi: &identity.runtime_abi,
-        toolchain_id: &identity.toolchain_id,
-    })
 }
 
 /// Validate an existing registry without repairing, initializing or changing its
