@@ -1186,20 +1186,6 @@ pub fn start_service_for_slot(
     // Exec probe args/env are substituted once here, with the same scope as the
     // start exec, so probe attempts later need no endpoint context.
     let addressing = SelectedAddressing::bind(&service.addressing, &substitution)?;
-    // Stable backing storage for process-bound endpoint evidence.
-    let addresses: Vec<String> = own_endpoints
-        .values()
-        .map(|endpoint| endpoint.host.to_string())
-        .collect();
-    let endpoints_to_record: Vec<EndpointRecord<'_>> = own_endpoints
-        .values()
-        .zip(&addresses)
-        .map(|(endpoint, address)| EndpointRecord {
-            endpoint_id: &endpoint.endpoint_id,
-            address,
-            port: endpoint.port,
-        })
-        .collect();
     let evidence = crate::output::EvidenceSource::in_logs(
         &placement.logs_dir(),
         service_name,
@@ -1367,7 +1353,11 @@ pub fn start_service_for_slot(
                     start_identity: &start_identity,
                     command_json: &command_json,
                 },
-                &endpoints_to_record,
+                own_endpoints.values().map(|endpoint| EndpointRecord {
+                    endpoint_id: &endpoint.endpoint_id,
+                    address: endpoint.host.to_string(),
+                    port: endpoint.port,
+                }),
             )
         },
         || {

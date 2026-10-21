@@ -60,7 +60,7 @@ impl StopPolicy {
 /// kernel preflight protect the earlier startup interval.
 pub(crate) struct EndpointRecord<'a> {
     pub(crate) endpoint_id: &'a str,
-    pub(crate) address: &'a str,
+    pub(crate) address: String,
     pub(crate) port: u16,
 }
 
@@ -163,13 +163,13 @@ pub(crate) fn settle_service_start(
     )
 }
 
-pub(crate) fn record_service_start(
+pub(crate) fn record_service_start<'a>(
     registry: &mut Registry,
     run_id: &str,
     computed_manifest_hash: &str,
     service: &ServiceRecord<'_>,
     process: &ProcessRecord<'_>,
-    endpoints: &[EndpointRecord<'_>],
+    endpoints: impl IntoIterator<Item = EndpointRecord<'a>>,
 ) -> RuntimeResult<()> {
     let (connection, redactor) = registry.context()?;
     let process_command_json = redactor.redact_json_str(process.command_json)?;
@@ -925,7 +925,7 @@ mod tests {
     fn endpoint() -> EndpointRecord<'static> {
         EndpointRecord {
             endpoint_id: "endpoint",
-            address: "127.0.0.1",
+            address: "127.0.0.1".to_owned(),
             port: 24222,
         }
     }
@@ -979,7 +979,7 @@ mod tests {
             MANIFEST_HASH,
             &service_record(),
             &process_record(123),
-            &[endpoint()],
+            [endpoint()],
         )
         .expect("test service should be recorded");
     }
@@ -1012,7 +1012,7 @@ mod tests {
             MANIFEST_HASH,
             &service_record(),
             &process_record(123),
-            &[],
+            [],
         )
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::LifecycleFailed);
@@ -1170,7 +1170,7 @@ mod tests {
             MANIFEST_HASH,
             &service_record(),
             &process_record(123),
-            &[endpoint()],
+            [endpoint()],
         )
         .unwrap();
         let owner: String = fixture
@@ -1202,7 +1202,7 @@ mod tests {
                 MANIFEST_HASH,
                 &service_record(),
                 &process_record(123),
-                &[endpoint()],
+                [endpoint()],
             )
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::RegistryCorrupt);
@@ -1346,8 +1346,8 @@ mod tests {
             MANIFEST_HASH,
             &service_record(),
             &process_record(123),
-            &[EndpointRecord {
-                address: "0:0:0:0:0:0:0:1",
+            [EndpointRecord {
+                address: "0:0:0:0:0:0:0:1".to_owned(),
                 ..endpoint()
             }],
         )
