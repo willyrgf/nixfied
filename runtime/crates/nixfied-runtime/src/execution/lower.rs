@@ -584,6 +584,7 @@ fn lifecycle_op_ids(lifecycle: &Lifecycle) -> [&str; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nixfied_manifest::fixtures::{SyntheticManifestOptions, synthetic_manifest};
     use serde_json::{Value, json};
 
     fn invocation_value(executable: &str, run: Value) -> Value {
@@ -599,97 +600,64 @@ mod tests {
     }
 
     fn manifest_value() -> Value {
-        json!({
-            "manifestVersion": 1,
-            "toolchainId": "nixfied-toolchain:1",
-            "runtimeAbi": nixfied_manifest::runtime_abi(),
-            "generator": { "name": "n", "version": "1", "emitter": "e" },
-            "project": { "projectId": "p", "name": "P" },
-            "target": {
-                "system": "x86_64-linux", "os": "linux", "arch": "x86_64",
-                "closureSystem": "x86_64-linux"
-            },
-            "codebases": [{
-                "codebaseId": "main", "logicalRoot": ".", "sourceMode": "live-workspace",
-                "sourceIdentity": "live",
-                "sourcePolicy": { "dirtyPolicy": "warn", "admissionFingerprintPolicy": "live" }
-            }],
-            "secrets": {},
-            "environments": ["dev"],
-            "slotPolicy": { "min": 0, "default": 0, "max": 0 },
-            "placement": {
-                "slotPlacements": {
-                    "0": {
-                        "slot": 0,
-                        "candidatePorts": { "start": 23080, "end": 23090 }
-                    }
-                }
-            },
-            "state": {
-                "markerIdentity": "nixfied-state",
-                "persistence": "run-scoped"
-            },
-            "closures": {
-                "c": {
-                    "kind": "executable", "storePath": "/nix/store/c", "executable": "/nix/store/c/bin/svc",
-                    "targetSystem": "x86_64-linux",
+        let mut value = synthetic_manifest(&SyntheticManifestOptions {
+            executable: "/nix/store/c/bin/svc".into(),
+            start_args: vec!["serve".into(), "--port".into(), "${port}".into()],
+            port_start: 23080,
+            port_end: 23090,
+            project_id: "p".into(),
+            project_name: "P".into(),
+            system: "x86_64-linux".into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        });
+        value["generator"] = json!({"name": "n", "version": "1", "emitter": "e"});
+        value["codebases"][0]["sourcePolicy"]["admissionFingerprintPolicy"] = json!("live");
+        let closure = value["closures"]["synthetic-helper"].take();
+        value["closures"] = json!({"c": closure});
+        value["closures"]["ct"] = value["closures"]["c"].clone();
+        value["closures"]["ct"]["storePath"] = json!("/nix/store/ct");
+        value["closures"]["ct"]["executable"] = json!("/nix/store/ct/bin/task");
+        value["closures"]["ct"]["effects"] = json!(["process"]);
 
-                    "requiresExecutable": true, "effects": ["process", "network-listener"]
-                },
-                "ct": {
-                    "kind": "executable", "storePath": "/nix/store/ct", "executable": "/nix/store/ct/bin/task",
-                    "targetSystem": "x86_64-linux",
+        let mut service = value["services"]["synthetic"].take();
+        for (class, operation) in service["lifecycle"].as_object_mut().unwrap() {
+            operation["operationId"] = json!(format!("svc.{class}"));
+            if matches!(class.as_str(), "ready" | "health") {
+                operation["policy"] =
+                    json!({"timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20});
+            }
+        }
+        service["lifecycle"]["start"]["invocation"]["tools"] = json!(["c"]);
+        let mut endpoint = service["endpoints"]["synthetic-tcp"].take();
+        endpoint["endpointId"] = json!("svc-tcp");
+        for phase in ["readyProbe", "healthProbe"] {
+            endpoint[phase] = invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"]));
+        }
+        service["endpoints"] = json!({"svc-tcp": endpoint});
+        service["primaryEndpoint"] = json!("svc-tcp");
+        service["stateRefs"] = json!([]);
+        service["logRefs"] = json!([]);
+        value["services"] = json!({"svc": service});
 
-                    "requiresExecutable": true, "effects": ["process"]
-                }
-            },
-            "services": { "svc": service_value() },
-            "tasks": {
-                "t": {
-                    "kind": "leaf",
-                    "operationId": "task.t.run",
-                    "invocation": {
-                        "tools": ["ct"],
-                        "run": ["task", "--port", "${port}"],
-                        "executable": "/nix/store/ct/bin/task",
-                        "env": {},
-                        "codebaseId": "main",
-                        "cwd": ".",
-                        "stdin": "null",
-                        "timeoutMs": 1000
-                    },
-                    "requires": ["svc"],
-
-                    "exitPolicy": { "successCodes": [0] },
-                    "artifactRefs": [], "logRefs": [], "summaryRefs": []
-                }
-            },
-        })
-    }
-
-    fn service_value() -> Value {
-        json!({
-            "lifecycle": {
-                "start": {
-                    "operationId": "svc.start",
-                    "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "serve", "--port", "${port}"])),
-                    "terminal": { "success": "spawned", "failure": "failed" }
-                },
-                "ready": { "operationId": "svc.ready", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "svc.health", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
-                "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
-                "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
-            },
-            "endpoints": { "svc-tcp": { "endpointId": "svc-tcp", "host": "127.0.0.1", "readyProbe": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])), "healthProbe": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])) } },
-            "primaryEndpoint": "svc-tcp",
-            "connectsTo": [],
-            "stateRefs": [], "logRefs": [],
-            "containment": "process-group"
-        })
+        let mut task = value["tasks"]["smoke"].take();
+        task.as_object_mut().unwrap().remove("defaultOutput");
+        task["operationId"] = json!("task.t.run");
+        task["invocation"] = invocation_value(
+            "/nix/store/ct/bin/task",
+            json!(["task", "--port", "${port}"]),
+        );
+        task["invocation"]["tools"] = json!(["ct"]);
+        task["invocation"]["timeoutMs"] = json!(1000);
+        task["requires"] = json!(["svc"]);
+        task["logRefs"] = json!([]);
+        task["summaryRefs"] = json!([]);
+        value["tasks"] = json!({"t": task});
+        value
     }
 
     fn named_service_value(name: &str) -> Value {
-        let mut service = service_value();
+        let mut service = manifest_value()["services"]["svc"].take();
         service["lifecycle"]["start"]["operationId"] = json!(format!("{name}.start"));
         service["lifecycle"]["ready"]["operationId"] = json!(format!("{name}.ready"));
         service["lifecycle"]["health"]["operationId"] = json!(format!("{name}.health"));
@@ -1366,41 +1334,26 @@ mod tests {
     /// An endpoint-less sibling service `worker` with invocation probes; the
     /// closure binds its ops.
     fn with_endpoint_less_worker(value: &mut Value) {
-        value["closures"]["cw"] = json!({
-            "kind": "executable", "storePath": "/nix/store/cw", "executable": "/nix/store/cw/bin/worker",
-            "targetSystem": "x86_64-linux",
-
-            "requiresExecutable": true, "effects": ["process"]
-        });
+        value["closures"]["cw"] = value["closures"]["ct"].clone();
+        value["closures"]["cw"]["storePath"] = json!("/nix/store/cw");
+        value["closures"]["cw"]["executable"] = json!("/nix/store/cw/bin/worker");
         let worker_invocation = |run: Value| {
-            json!({
-                "tools": ["cw"],
-                "run": run,
-                "executable": "/nix/store/cw/bin/worker",
-                "env": {},
-                "codebaseId": "main",
-                "cwd": ".",
-                "stdin": "null"
-            })
+            let mut invocation = invocation_value("/nix/store/cw/bin/worker", run);
+            invocation["tools"] = json!(["cw"]);
+            invocation
         };
         let probe = worker_invocation(json!(["worker", "ping"]));
         let policy = json!({"timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5});
-        value["services"]["worker"] = json!({
-            "lifecycle": {
-                "start": {
-                    "operationId": "worker.start",
-                    "invocation": worker_invocation(json!(["worker", "consume"])),
-                    "terminal": { "success": "spawned", "failure": "failed" }
-                },
-                "ready": { "operationId": "worker.ready", "probe": probe.clone(), "policy": policy.clone(), "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "worker.health", "probe": probe, "policy": policy, "terminal": { "success": "healthy", "failure": "unhealthy" } },
-                "stop": { "operationId": "worker.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
-                "clean": { "operationId": "worker.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
-            },
-            "connectsTo": [],
-            "stateRefs": [], "logRefs": [],
-            "containment": "process-group"
-        });
+        let mut worker = named_service_value("worker");
+        worker.as_object_mut().unwrap().remove("endpoints");
+        worker.as_object_mut().unwrap().remove("primaryEndpoint");
+        worker["lifecycle"]["start"]["invocation"] =
+            worker_invocation(json!(["worker", "consume"]));
+        for phase in ["ready", "health"] {
+            worker["lifecycle"][phase]["probe"] = probe.clone();
+            worker["lifecycle"][phase]["policy"] = policy.clone();
+        }
+        value["services"]["worker"] = worker;
     }
 
     #[test]

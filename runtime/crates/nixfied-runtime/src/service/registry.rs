@@ -1444,50 +1444,6 @@ mod tests {
     }
 
     #[test]
-    fn event_failure_rolls_back_service_process_ports_and_prior_event() {
-        let mut fixture = TestRegistry::new();
-        insert_run(&fixture.registry, RUN_ID);
-        record_intent(&mut fixture.registry, RUN_ID);
-        fixture
-            .registry
-            .connection()
-            .execute_batch(
-                "CREATE TRIGGER deny_start_event BEFORE INSERT ON events
-             WHEN NEW.event_type = 'service.starting'
-             BEGIN SELECT RAISE(ABORT, 'test event rejection'); END;",
-            )
-            .unwrap();
-        let error = record_service_start(
-            &mut fixture.registry,
-            RUN_ID,
-            MANIFEST_HASH,
-            &service_record(),
-            &process_record(123),
-            &[endpoint()],
-        )
-        .unwrap_err();
-        assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-        let state: (i64, i64, i64, i64) = fixture
-            .registry
-            .connection()
-            .query_row(
-                "SELECT (SELECT count(*) FROM sqlite_master WHERE name = 'services'), (SELECT count(*) FROM processes),
-                    (SELECT count(*) FROM ports),
-                    (SELECT count(*) FROM events)",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(state, (0, 0, 0, 1));
-        let event: String = fixture
-            .registry
-            .connection()
-            .query_row("SELECT event_type FROM events", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(event, "service.start-intent");
-    }
-
-    #[test]
     fn start_intent_waits_for_the_registry_writer() {
         let mut waiting = TestRegistry::new();
         insert_run(&waiting.registry, RUN_ID);

@@ -54,10 +54,20 @@ fn service_registration_event_failure_prevents_workload_effects() {
     assert_eq!(fixture.query::<i64>("SELECT count(*) FROM ports", []), 0);
     assert_eq!(
         fixture.query::<i64>(
-            "SELECT count(*) FROM events WHERE event_type='service.starting'",
+            "SELECT count(*) FROM sqlite_master WHERE name='services'",
             []
         ),
         0
+    );
+    assert_eq!(
+        fixture.query::<String>(
+            "SELECT group_concat(event_type, ',') FROM (SELECT event_type FROM events ORDER BY seq)",
+            []
+        ),
+        concat!(
+            "run.created,service.start-intent,service.lifecycle.started,",
+            "service.start-failed"
+        )
     );
 }
 
