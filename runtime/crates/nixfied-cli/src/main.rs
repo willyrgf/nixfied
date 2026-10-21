@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::slice::Iter;
 
 include!("generated/commands.rs");
 
@@ -55,27 +56,23 @@ impl InstallOptions {
         let mut project_id = INSTALL_PROJECT_ID_INITIAL.map(str::to_string);
         let mut name = INSTALL_NAME_INITIAL.map(str::to_string);
         let mut nixfied_url = INSTALL_NIXFIED_URL_INITIAL.to_string();
-        let mut index = 0;
-        while index < args.len() {
-            let Some(arg) = args[index].to_str() else {
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            let Some(arg) = arg.to_str() else {
                 return Err(CliError::usage("arguments must be valid UTF-8"));
             };
             match arg {
                 INSTALL_ROOT => {
-                    index += 1;
-                    root = take_value(args, index, INSTALL_ROOT)?.into();
+                    root = take_value(&mut args, INSTALL_ROOT)?.into();
                 }
                 INSTALL_PROJECT_ID => {
-                    index += 1;
-                    project_id = Some(take_value(args, index, INSTALL_PROJECT_ID)?.to_string());
+                    project_id = Some(take_value(&mut args, INSTALL_PROJECT_ID)?.to_string());
                 }
                 INSTALL_NAME => {
-                    index += 1;
-                    name = Some(take_value(args, index, INSTALL_NAME)?.to_string());
+                    name = Some(take_value(&mut args, INSTALL_NAME)?.to_string());
                 }
                 INSTALL_NIXFIED_URL => {
-                    index += 1;
-                    nixfied_url = take_value(args, index, INSTALL_NIXFIED_URL)?.to_string();
+                    nixfied_url = take_value(&mut args, INSTALL_NIXFIED_URL)?.to_string();
                 }
                 other => {
                     return Err(CliError::usage(format!(
@@ -83,7 +80,6 @@ impl InstallOptions {
                     )));
                 }
             }
-            index += 1;
         }
         Ok(Self {
             root,
@@ -322,8 +318,8 @@ fn nix_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn take_value<'a>(args: &'a [OsString], index: usize, flag: &str) -> Result<&'a str, CliError> {
-    args.get(index)
+fn take_value<'a>(args: &mut Iter<'a, OsString>, flag: &str) -> Result<&'a str, CliError> {
+    args.next()
         .and_then(|arg| arg.to_str())
         .ok_or_else(|| CliError::usage(format!("missing {flag} value")))
 }

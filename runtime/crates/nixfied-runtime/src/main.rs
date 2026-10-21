@@ -5,6 +5,7 @@ use nixfied_runtime::registry::session::{
 use std::fmt::Display;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::slice::Iter;
 use std::time::Instant;
 
 use nixfied_manifest::TaskDefaultOutput;
@@ -495,17 +496,14 @@ fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
     if args.first().map(String::as_str) != Some(RUN_COMMAND) {
         return ErrorOutputProjection::Human;
     }
-    let args = args.get(1..).unwrap_or(&[]);
+    let mut args = args.iter().skip(1);
     let mut mode = None;
-    let mut index = 0;
-    while index < args.len() {
-        if args[index].as_str() == RUN_OUTPUT
-            && let Some(value) = args.get(index + 1).map(String::as_str)
+    while let Some(arg) = args.next() {
+        if arg == RUN_OUTPUT
+            && let Some(value) = args.next().map(String::as_str)
         {
             mode = Some(value);
-            index += 1;
         }
-        index += 1;
     }
     match mode {
         Some(RUN_OUTPUT_MODE_BOTH) => ErrorOutputProjection::Both,
@@ -638,10 +636,10 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         return Ok(());
     }
     let mut common = ManifestOptions::new();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            _ if common.consume(args, &mut index)? => {}
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            _ if common.consume(arg, &mut args)? => {}
             other => {
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::ManifestAdmission,
@@ -649,7 +647,6 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
                 ));
             }
         }
-        index += 1;
     }
     let (manifest_path, allow_non_store, slot) = common.finish()?;
     let admission = load_admitted_manifest(manifest_path, allow_non_store)?;
@@ -1922,9 +1919,8 @@ fn syntax_error(message: impl Into<String>) -> RuntimeError {
     RuntimeError::new(nixfied_runtime::ErrorCode::ManifestAdmission, message)
 }
 
-fn acquire_text(args: &[String], index: &mut usize, flag: &str) -> Result<String, RuntimeError> {
-    *index += 1;
-    args.get(*index)
+fn acquire_text(args: &mut Iter<'_, String>, flag: &str) -> Result<String, RuntimeError> {
+    args.next()
         .cloned()
         .ok_or_else(|| syntax_error(format!("missing {flag} value")))
 }
@@ -1950,42 +1946,39 @@ fn parse_session_control(
     let mut task = ENSURE_TASK_INITIAL.map(str::to_owned);
     let mut wait = None;
     let mut timeout_ms = ENSURE_TIMEOUT_MS_INITIAL;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            _ if common.consume(args, &mut index)? => {}
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            _ if common.consume(arg, &mut args)? => {}
             RUNTIME_STATE_BASE => {
-                index += 1;
-                state_base = args.get(index).map(PathBuf::from);
+                state_base = args.next().map(PathBuf::from);
             }
             OBSERVE_CURRENT if command == SessionCommand::Observe => {
                 once(&mut current, (), OBSERVE_CURRENT)?
             }
             OBSERVE_RUN_ID if command == SessionCommand::Observe => {
-                let value = acquire_text(args, &mut index, OBSERVE_RUN_ID)?;
+                let value = acquire_text(&mut args, OBSERVE_RUN_ID)?;
                 let selector = Selector::run_id(&value)?;
                 once(&mut exact, selector, OBSERVE_RUN_ID)?;
             }
             RUNTIME_UNTIL_STEP if command != SessionCommand::Context => {
-                let value = acquire_text(args, &mut index, RUNTIME_UNTIL_STEP)?;
+                let value = acquire_text(&mut args, RUNTIME_UNTIL_STEP)?;
                 once(&mut step, value, RUNTIME_UNTIL_STEP)?;
             }
             ENSURE_TASK if command == SessionCommand::Ensure => {
-                let value = acquire_text(args, &mut index, ENSURE_TASK)?;
+                let value = acquire_text(&mut args, ENSURE_TASK)?;
                 once(&mut task, value, ENSURE_TASK)?;
             }
             RUNTIME_WAIT_TIMEOUT_MS if command != SessionCommand::Context => {
-                index += 1;
                 let value = parse_integer_arg::<std::num::NonZeroU64>(
-                    args.get(index),
+                    args.next(),
                     RUNTIME_WAIT_TIMEOUT_MS,
                 )?;
                 once(&mut wait, value, RUNTIME_WAIT_TIMEOUT_MS)?;
             }
             ENSURE_TIMEOUT_MS if command == SessionCommand::Ensure => {
-                index += 1;
                 timeout_ms =
-                    parse_integer_arg::<EnsureTimeoutMsValue>(args.get(index), ENSURE_TIMEOUT_MS)?;
+                    parse_integer_arg::<EnsureTimeoutMsValue>(args.next(), ENSURE_TIMEOUT_MS)?;
             }
             other => {
                 return Err(syntax_error(format!(
@@ -1993,7 +1986,6 @@ fn parse_session_control(
                 )));
             }
         }
-        index += 1;
     }
     let default_wait: RuntimeWaitTimeoutMsValue = RUNTIME_WAIT_TIMEOUT_MS_INITIAL;
     let wait_ms =
@@ -2329,16 +2321,14 @@ impl ManifestOptions {
         }
     }
 
-    fn consume(&mut self, args: &[String], index: &mut usize) -> Result<bool, RuntimeError> {
-        match args[*index].as_str() {
+    fn consume(&mut self, arg: &str, args: &mut Iter<'_, String>) -> Result<bool, RuntimeError> {
+        match arg {
             RUNTIME_MANIFEST => {
-                *index += 1;
-                self.manifest_path = args.get(*index).map(PathBuf::from);
+                self.manifest_path = args.next().map(PathBuf::from);
             }
             RUNTIME_ALLOW_NON_STORE_MANIFEST => self.allow_non_store = true,
             RUNTIME_SLOT => {
-                *index += 1;
-                self.slot = Some(parse_integer_arg(args.get(*index), RUNTIME_SLOT)?);
+                self.slot = Some(parse_integer_arg(args.next(), RUNTIME_SLOT)?);
             }
             _ => return Ok(false),
         }
@@ -2363,18 +2353,16 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
     let mut output_mode = RUN_OUTPUT_INITIAL;
     let mut task = RUN_TASK_INITIAL.map(str::to_string);
     let mut daemon = RUN_DAEMON_INITIAL;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            _ if common.consume(args, &mut index)? => {}
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            _ if common.consume(arg, &mut args)? => {}
             RUNTIME_STATE_BASE => {
-                index += 1;
-                state_base = args.get(index).map(PathBuf::from);
+                state_base = args.next().map(PathBuf::from);
             }
             RUN_TASK => {
-                index += 1;
                 let value = args
-                    .get(index)
+                    .next()
                     .ok_or_else(|| {
                         RuntimeError::new(
                             nixfied_runtime::ErrorCode::TaskSelectionInvalid,
@@ -2391,13 +2379,10 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
             }
             RUN_DAEMON => daemon = true,
             RUN_TIMEOUT_MS => {
-                index += 1;
-                timeout_ms =
-                    parse_integer_arg::<RunTimeoutMsValue>(args.get(index), RUN_TIMEOUT_MS)?;
+                timeout_ms = parse_integer_arg::<RunTimeoutMsValue>(args.next(), RUN_TIMEOUT_MS)?;
             }
             RUN_OUTPUT => {
-                index += 1;
-                let value = args.get(index).ok_or_else(|| {
+                let value = args.next().ok_or_else(|| {
                     RuntimeError::new(
                         nixfied_runtime::ErrorCode::OutputModeInvalid,
                         format!("missing {RUN_OUTPUT} value"),
@@ -2414,10 +2399,7 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
             "--summary" | "--json" | "--both" | "--task-output" => {
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::OutputModeInvalid,
-                    format!(
-                        "unsupported output flag {}; use {RUN_OUTPUT} <mode>",
-                        args[index]
-                    ),
+                    format!("unsupported output flag {}; use {RUN_OUTPUT} <mode>", arg),
                 ));
             }
             other => {
@@ -2427,7 +2409,6 @@ fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> 
                 ));
             }
         }
-        index += 1;
     }
     let (manifest_path, allow_non_store, slot) = common.finish()?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
@@ -2492,21 +2473,18 @@ fn parse_control_options(
     } else {
         nixfied_runtime::state::CleanupMode::Standard
     };
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            _ if common.consume(args, &mut index)? => {}
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            _ if common.consume(arg, &mut args)? => {}
             value if value == RUNTIME_STATE_BASE => {
-                index += 1;
-                state_base = args.get(index).map(PathBuf::from);
+                state_base = args.next().map(PathBuf::from);
             }
             CLEAN_PURGE if matches!(command, ControlCommand::Clean) => {
                 cleanup_mode = nixfied_runtime::state::CleanupMode::Purge;
             }
             DOWN_TIMEOUT_MS if matches!(command, ControlCommand::Down) => {
-                index += 1;
-                timeout_ms =
-                    parse_integer_arg::<DownTimeoutMsValue>(args.get(index), DOWN_TIMEOUT_MS)?;
+                timeout_ms = parse_integer_arg::<DownTimeoutMsValue>(args.next(), DOWN_TIMEOUT_MS)?;
             }
             other => {
                 return Err(RuntimeError::new(
@@ -2515,7 +2493,6 @@ fn parse_control_options(
                 ));
             }
         }
-        index += 1;
     }
     let (manifest_path, allow_non_store, slot) = common.finish()?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
