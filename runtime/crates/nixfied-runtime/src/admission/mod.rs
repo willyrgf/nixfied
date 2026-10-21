@@ -47,20 +47,9 @@ impl AdmissionContext {
 pub struct ControlAdmission {
     loaded: LoadedManifest,
     execution_manifest: ExecutionManifest,
-    generator_json: String,
-    target_json: String,
 }
 
 impl ControlAdmission {
-    fn new(loaded: LoadedManifest, execution_manifest: ExecutionManifest) -> Self {
-        Self {
-            generator_json: serde_json::to_string(&loaded.manifest().generator).unwrap_or_default(),
-            target_json: serde_json::to_string(&loaded.manifest().target).unwrap_or_default(),
-            loaded,
-            execution_manifest,
-        }
-    }
-
     pub fn manifest(&self) -> &nixfied_manifest::ValidatedManifest {
         self.loaded.manifest()
     }
@@ -87,12 +76,6 @@ impl ControlAdmission {
     }
     pub fn execution_manifest(&self) -> &ExecutionManifest {
         &self.execution_manifest
-    }
-    pub fn generator_json(&self) -> &str {
-        &self.generator_json
-    }
-    pub fn target_json(&self) -> &str {
-        &self.target_json
     }
 }
 
@@ -131,7 +114,10 @@ pub fn admit_run(path: &Path, context: &AdmissionContext) -> RuntimeResult<RunAd
         )
     })?;
     Ok(RunAdmission {
-        common: ControlAdmission::new(loaded, execution_manifest),
+        common: ControlAdmission {
+            loaded,
+            execution_manifest,
+        },
         source,
         secrets,
     })
@@ -150,7 +136,10 @@ pub fn admit_control(path: &Path, context: &AdmissionContext) -> RuntimeResult<C
             loaded.computed_manifest_hash().to_owned(),
         )
     })?;
-    Ok(ControlAdmission::new(loaded, execution_manifest))
+    Ok(ControlAdmission {
+        loaded,
+        execution_manifest,
+    })
 }
 
 fn load_for_admission<'a>(
