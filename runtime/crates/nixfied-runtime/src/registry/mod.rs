@@ -12,6 +12,8 @@ pub use schema::SCHEMA_VERSION;
 pub use sqlite::{Registry, RegistryReader};
 
 /// The one mapping of a SQLite failure: the registry evidence cannot be trusted.
-pub(crate) fn sql_error(error: rusqlite::Error) -> crate::RuntimeError {
-    crate::RuntimeError::new(crate::ErrorCode::RegistryCorrupt, error.to_string())
+impl From<rusqlite::Error> for crate::RuntimeError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::new(crate::ErrorCode::RegistryCorrupt, error.to_string())
+    }
 }

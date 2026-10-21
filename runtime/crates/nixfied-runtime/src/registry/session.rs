@@ -1,5 +1,4 @@
 //! The session owner records execution outcome; workload transitions cannot.
-use super::sql_error;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::Registry;
@@ -253,8 +252,7 @@ pub(crate) fn require_run(
             params![run_id, manifest_hash],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()
-        .map_err(sql_error)?;
+        .optional()?;
     let (outcome, finalization) =
         row.ok_or_else(|| invalid("session provenance does not match its owner"))?;
     decode(outcome.as_deref(), &finalization)
@@ -262,13 +260,11 @@ pub(crate) fn require_run(
 
 /// Closed source registration forbids every new process source for the run.
 pub(crate) fn require_open_sources(connection: &Connection, run_id: &str) -> RuntimeResult<()> {
-    let sources: String = connection
-        .query_row(
-            "SELECT sources FROM runs WHERE run_id = ?1",
-            [run_id],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
+    let sources: String = connection.query_row(
+        "SELECT sources FROM runs WHERE run_id = ?1",
+        [run_id],
+        |row| row.get(0),
+    )?;
     if sources != "open" {
         return Err(RuntimeError::new(
             ErrorCode::LifecycleFailed,
@@ -315,32 +311,30 @@ pub fn record_run_created(
     let path = registry.path().to_path_buf();
     let identity = registry.identity().clone();
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Deferred)?;
-    transaction
-        .execute(
-            "
+    transaction.execute(
+        "
             INSERT INTO runs (
               run_id, manifest_path, computed_manifest_hash, runtime_abi,
               toolchain_id, generator_json, target_json, source_json,
               summary_path, owner_identity, diagnostic_path, root_task, operation_timeout_ms
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ",
-            params![
-                run_id,
-                utf8_locator(admission.common().manifest_path(), "manifestPath")?,
-                admission.common().computed_manifest_hash(),
-                admission.common().runtime_abi(),
-                admission.common().toolchain_id(),
-                serde_json::to_string(&admission.common().manifest().generator).unwrap_or_default(),
-                serde_json::to_string(&admission.common().manifest().target).unwrap_or_default(),
-                source_json,
-                utf8_locator(&placement.summary_path(), "summaryPath")?,
-                owner_identity,
-                crate::output::DIAGNOSTIC_SOURCE,
-                request.root_task().as_str(),
-                request.operation_timeout_ms().to_string(),
-            ],
-        )
-        .map_err(sql_error)?;
+        params![
+            run_id,
+            utf8_locator(admission.common().manifest_path(), "manifestPath")?,
+            admission.common().computed_manifest_hash(),
+            admission.common().runtime_abi(),
+            admission.common().toolchain_id(),
+            serde_json::to_string(&admission.common().manifest().generator).unwrap_or_default(),
+            serde_json::to_string(&admission.common().manifest().target).unwrap_or_default(),
+            source_json,
+            utf8_locator(&placement.summary_path(), "summaryPath")?,
+            owner_identity,
+            crate::output::DIAGNOSTIC_SOURCE,
+            request.root_task().as_str(),
+            request.operation_timeout_ms().to_string(),
+        ],
+    )?;
     insert_event(
         &transaction,
         redactor,
@@ -363,7 +357,7 @@ pub fn record_run_created(
             Ok((cursor, next))
         })
         .transpose()?;
-    transaction.commit().map_err(sql_error)?;
+    transaction.commit()?;
     if let Some((cursor, next)) = publication {
         *cursor = next;
     }
@@ -406,7 +400,7 @@ pub fn record_execution_outcome(
             payload_json: &payload,
         },
     )?;
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// Called by the exclusive successor before beginning its own session. Validate
@@ -415,8 +409,7 @@ pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()>
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let rows = {
         let mut statement = transaction
-            .prepare("SELECT run_id, execution_outcome, finalization FROM runs ORDER BY run_id")
-            .map_err(sql_error)?;
+            .prepare("SELECT run_id, execution_outcome, finalization FROM runs ORDER BY run_id")?;
         statement
             .query_map([], |row| {
                 Ok((
@@ -424,10 +417,8 @@ pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()>
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                 ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?
+            })?
+            .collect::<Result<Vec<_>, _>>()?
     };
     let mut interrupted = Vec::new();
     for (run_id, outcome, finalization) in rows {
@@ -448,7 +439,7 @@ pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()>
             },
         )?;
     }
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// The session owner's settlement writer. Complete finalization requires a
@@ -480,7 +471,7 @@ pub fn record_finalization_complete(
             payload_json: "{}",
         },
     )?;
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// Attempt to record that the live owner could not settle its obligations.
@@ -502,12 +493,10 @@ pub fn record_finalization_unfinished(
 pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let rows = {
-        let mut statement = transaction
-            .prepare(
-                "SELECT run_id, execution_outcome, finalization
+        let mut statement = transaction.prepare(
+            "SELECT run_id, execution_outcome, finalization
                  FROM runs WHERE finalization = 'unfinished' ORDER BY run_id",
-            )
-            .map_err(sql_error)?;
+        )?;
         statement
             .query_map([], |row| {
                 Ok((
@@ -515,10 +504,8 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                 ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?
+            })?
+            .collect::<Result<Vec<_>, _>>()?
     };
     for (run_id, outcome, finalization) in rows {
         if decode(outcome.as_deref(), &finalization)? == SessionProgress::Executing {
@@ -538,7 +525,7 @@ pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
             },
         )?;
     }
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// Whether the owner could publish a checked output seal.
@@ -558,12 +545,10 @@ pub fn close_source_registration(
 ) -> RuntimeResult<()> {
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, manifest_hash)?;
-    let changed = transaction
-        .execute(
-            "UPDATE runs SET sources = 'closed' WHERE run_id = ?1 AND sources = 'open'",
-            params![run_id],
-        )
-        .map_err(sql_error)?;
+    let changed = transaction.execute(
+        "UPDATE runs SET sources = 'closed' WHERE run_id = ?1 AND sources = 'open'",
+        params![run_id],
+    )?;
     if changed == 1 {
         insert_event(
             &transaction,
@@ -576,7 +561,7 @@ pub fn close_source_registration(
             },
         )?;
     }
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// Publish the run's output seal only when registration is closed and every
@@ -589,32 +574,28 @@ pub fn seal_output(
 ) -> RuntimeResult<OutputPublication> {
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, manifest_hash)?;
-    let (sources, pending): (String, i64) = transaction
-        .query_row(
-            "SELECT sources, (SELECT count(*) FROM processes WHERE run_id = ?1 AND capture = 'pending')
+    let (sources, pending): (String, i64) = transaction.query_row(
+        "SELECT sources, (SELECT count(*) FROM processes WHERE run_id = ?1 AND capture = 'pending')
              FROM runs WHERE run_id = ?1",
-            params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(sql_error)?;
+        params![run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
     if sources != "closed" {
         return Err(invalid(
             "output cannot be sealed while source registration is open",
         ));
     }
     if pending > 0 {
-        transaction.commit().map_err(sql_error)?;
+        transaction.commit()?;
         return Ok(OutputPublication::Unsealed);
     }
     // A repeated seal is harmless and records no second event.
-    let changed = transaction
-        .execute(
-            "UPDATE runs SET output = 'sealed' WHERE run_id = ?1 AND output = 'unsealed'",
-            params![run_id],
-        )
-        .map_err(sql_error)?;
+    let changed = transaction.execute(
+        "UPDATE runs SET output = 'sealed' WHERE run_id = ?1 AND output = 'unsealed'",
+        params![run_id],
+    )?;
     if changed == 0 {
-        transaction.commit().map_err(sql_error)?;
+        transaction.commit()?;
         return Ok(OutputPublication::Sealed);
     }
     insert_event(
@@ -627,18 +608,16 @@ pub fn seal_output(
             payload_json: "{}",
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
+    transaction.commit()?;
     Ok(OutputPublication::Sealed)
 }
 
 fn write_complete(transaction: &Transaction<'_>, run_id: &str) -> RuntimeResult<()> {
-    let changed = transaction
-        .execute(
-            "UPDATE runs SET finalization = 'complete'
+    let changed = transaction.execute(
+        "UPDATE runs SET finalization = 'complete'
              WHERE run_id = ?1 AND execution_outcome IS NOT NULL AND finalization = 'unfinished'",
-            params![run_id],
-        )
-        .map_err(sql_error)?;
+        params![run_id],
+    )?;
     if changed != 1 {
         return Err(invalid(
             "finalization update did not affect exactly one settled session",
@@ -652,13 +631,11 @@ fn write_unknown_outcome(
     run_id: &str,
     outcome: ExecutionOutcome,
 ) -> RuntimeResult<()> {
-    let changed = transaction
-        .execute(
-            "UPDATE runs SET execution_outcome = ?2
+    let changed = transaction.execute(
+        "UPDATE runs SET execution_outcome = ?2
          WHERE run_id = ?1 AND execution_outcome IS NULL AND finalization = 'unfinished'",
-            params![run_id, outcome.as_str()],
-        )
-        .map_err(sql_error)?;
+        params![run_id, outcome.as_str()],
+    )?;
     if changed != 1 {
         return Err(invalid(
             "execution outcome update did not affect exactly one pending session",

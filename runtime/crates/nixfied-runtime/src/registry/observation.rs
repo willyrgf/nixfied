@@ -14,7 +14,7 @@ use crate::state::SlotLocation;
 use super::session::{OwnerIdentity, RecordedRunRequest, SessionProgress, valid_run_id};
 use super::sqlite::{RegistryRead, read_existing};
 use super::status::{DbStatus, ExecutionOutcome, Ownership, ProcessRole, ProcessStatus};
-use super::{RegistryIdentity, RegistryReader, sql_error};
+use super::{RegistryIdentity, RegistryReader};
 use crate::output::EvidenceRelativePath;
 use crate::redaction::CaptureOutcome;
 
@@ -359,7 +359,7 @@ impl Snapshot {
         };
         let run: Option<String> = reader.connection().query_row(
             "SELECT run_id FROM events WHERE event_type = 'run.created' AND run_id IN (SELECT run_id FROM runs WHERE finalization = 'unfinished') ORDER BY seq DESC LIMIT 1",
-            [], |row| row.get(0)).optional().map_err(sql_error)?;
+            [], |row| row.get(0)).optional()?;
         run.map(|run| {
             self.publication(&run)
                 .cloned()
@@ -399,7 +399,7 @@ impl Snapshot {
         let (manifest, hash, root, source, timeout, owner, outcome, finalization):
             (String, String, String, String, String, String, Option<String>, String) = reader.connection().query_row(
                 "SELECT manifest_path, computed_manifest_hash, root_task, source_json, operation_timeout_ms, owner_identity, execution_outcome, finalization FROM runs WHERE run_id = ?1",
-                [run], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))).map_err(sql_error)?;
+                [run], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)))?;
         if manifest.contains('\0') || !std::path::Path::new(&manifest).is_absolute() {
             return Err(invalid("invalid recorded manifest_path"));
         }
@@ -435,19 +435,19 @@ impl Snapshot {
         let connection = reader.connection();
         let rows = connection.prepare(
             "SELECT process_key, pid, pgid, start_identity, role, service_name, root_step_path, status, ownership, capture, execution_outcome, exit_code, stdout_path, stderr_path FROM processes WHERE run_id = ?1 ORDER BY process_key COLLATE BINARY"
-        ).map_err(sql_error)?.query_map([run], |row| Ok(RawProcess {
+        )?.query_map([run], |row| Ok(RawProcess {
             key: row.get(0)?, pid: row.get(1)?, pgid: row.get(2)?, start: row.get(3)?,
             role: row.get(4)?, service: row.get(5)?, root: row.get(6)?, status: row.get(7)?,
             ownership: row.get(8)?, capture: row.get(9)?, outcome: row.get(10)?, exit: row.get(11)?,
             stdout: row.get(12)?, stderr: row.get(13)?,
-        })).map_err(sql_error)?.collect::<Result<Vec<_>, _>>().map_err(sql_error)?;
+        }))?.collect::<Result<Vec<_>, _>>()?;
         let mut roots = BTreeMap::new();
         let mut services = BTreeMap::new();
         for row in rows {
             let (attribution, process) = row.decode()?;
-            let endpoints = connection.prepare("SELECT endpoint_id, address, port FROM ports WHERE owner_process_key = ?1 ORDER BY endpoint_id COLLATE BINARY").map_err(sql_error)?
+            let endpoints = connection.prepare("SELECT endpoint_id, address, port FROM ports WHERE owner_process_key = ?1 ORDER BY endpoint_id COLLATE BINARY")?
                 .query_map([&process.key], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, u16>(2)?)))
-                .map_err(sql_error)?.collect::<Result<Vec<_>, _>>().map_err(sql_error)?;
+                ?.collect::<Result<Vec<_>, _>>()?;
             if !matches!(attribution, Attribution::Service(_)) && !endpoints.is_empty() {
                 return Err(invalid(
                     "endpoint evidence belongs to a non-service process",
@@ -695,40 +695,32 @@ impl RawProcess {
 fn publications(
     connection: &rusqlite::Connection,
 ) -> RuntimeResult<(i64, BTreeMap<String, Publication>)> {
-    let invalid_sequence: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE seq <= 0)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
+    let invalid_sequence: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE seq <= 0)",
+        [],
+        |row| row.get(0),
+    )?;
     if invalid_sequence {
         return Err(invalid(
             "event sequence is outside the positive native domain",
         ));
     }
-    let maximum = connection
-        .query_row("SELECT coalesce(max(seq), 0) FROM events", [], |row| {
-            row.get(0)
-        })
-        .map_err(sql_error)?;
-    let runs: usize = connection
-        .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
-        .map_err(sql_error)?;
-    let mut statement = connection.prepare("SELECT e.seq, e.run_id, e.process_key, r.run_id IS NOT NULL FROM events e LEFT JOIN runs r ON r.run_id = e.run_id WHERE e.event_type = 'run.created' ORDER BY e.seq").map_err(sql_error)?;
-    let markers = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, bool>(3)?,
-            ))
-        })
-        .map_err(sql_error)?;
+    let maximum = connection.query_row("SELECT coalesce(max(seq), 0) FROM events", [], |row| {
+        row.get(0)
+    })?;
+    let runs: usize = connection.query_row("SELECT count(*) FROM runs", [], |row| row.get(0))?;
+    let mut statement = connection.prepare("SELECT e.seq, e.run_id, e.process_key, r.run_id IS NOT NULL FROM events e LEFT JOIN runs r ON r.run_id = e.run_id WHERE e.event_type = 'run.created' ORDER BY e.seq")?;
+    let markers = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, bool>(3)?,
+        ))
+    })?;
     let mut publications = BTreeMap::new();
     for marker in markers {
-        let (sequence, run, process, exists) = marker.map_err(sql_error)?;
+        let (sequence, run, process, exists) = marker?;
         if !valid_run_id(&run)
             || process.is_some()
             || !exists

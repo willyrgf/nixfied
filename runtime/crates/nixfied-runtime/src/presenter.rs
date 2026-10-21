@@ -395,23 +395,19 @@ fn discover(init: &PresenterInit) -> RuntimeResult<Snapshot> {
             RuntimeError::new(ErrorCode::RegistryCorrupt, "session registry is missing")
         })?;
     let connection = reader.connection();
-    let (diagnostic, output): (String, String) = connection
-        .query_row(
-            "SELECT diagnostic_path, output FROM runs WHERE run_id = ?1",
-            [&init.run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(crate::registry::sql_error)?;
+    let (diagnostic, output): (String, String) = connection.query_row(
+        "SELECT diagnostic_path, output FROM runs WHERE run_id = ?1",
+        [&init.run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
     let mut sources = vec![DiscoveredSource {
         relative: validated(&diagnostic)?,
         route: Route::Raw(OutputStream::Stderr),
     }];
-    let mut statement = connection
-        .prepare(
-            "SELECT source_label, presentation, stdout_path, stderr_path FROM processes
+    let mut statement = connection.prepare(
+        "SELECT source_label, presentation, stdout_path, stderr_path FROM processes
              WHERE run_id = ?1 ORDER BY rowid",
-        )
-        .map_err(crate::registry::sql_error)?;
+    )?;
     let rows = statement
         .query_map([&init.run_id], |row| {
             Ok((
@@ -420,10 +416,8 @@ fn discover(init: &PresenterInit) -> RuntimeResult<Snapshot> {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
             ))
-        })
-        .map_err(crate::registry::sql_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(crate::registry::sql_error)?;
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     for (label, presentation, stdout, stderr) in rows {
         let presentation = SourcePresentation::parse(&presentation).ok_or_else(|| {
             RuntimeError::new(ErrorCode::RegistryCorrupt, "unknown source presentation")

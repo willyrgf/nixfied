@@ -1,4 +1,3 @@
-use crate::registry::sql_error;
 pub mod ensure;
 pub mod observation;
 
@@ -130,14 +129,13 @@ fn session_selection(reader: &RegistryReader) -> RuntimeResult<(Option<String>, 
             [],
             |row| row.get(0),
         )
-        .optional()
-        .map_err(sql_error)?;
-    let latest_rowid = reader
-        .connection()
-        .query_row("SELECT coalesce(max(rowid), 0) FROM runs", [], |row| {
-            row.get(0)
-        })
-        .map_err(sql_error)?;
+        .optional()?;
+    let latest_rowid =
+        reader
+            .connection()
+            .query_row("SELECT coalesce(max(rowid), 0) FROM runs", [], |row| {
+                row.get(0)
+            })?;
     Ok((selected, latest_rowid))
 }
 
@@ -157,7 +155,7 @@ fn session_handed_off(
             params![latest_rowid, selected],
             |row| row.get(0),
         )
-        .map_err(sql_error)
+        .map_err(RuntimeError::from)
 }
 
 pub fn ps(registry: &RegistryReader) -> RuntimeResult<PsReport> {
@@ -475,9 +473,8 @@ fn settle_control_escape(
 }
 
 fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessRow>> {
-    let mut statement = connection
-        .prepare(&format!(
-            "
+    let mut statement = connection.prepare(&format!(
+        "
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
               p.run_id, p.status, r.computed_manifest_hash,
@@ -488,26 +485,25 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
             JOIN runs r ON r.run_id = p.run_id
             ORDER BY p.process_key
             ",
-            escaped_process = status::unsettled_terminal_sql(),
-        ))
-        .map_err(sql_error)?;
-    let mut rows = statement.query([]).map_err(sql_error)?;
+        escaped_process = status::unsettled_terminal_sql(),
+    ))?;
+    let mut rows = statement.query([])?;
     let mut processes = Vec::new();
-    while let Some(row) = rows.next().map_err(sql_error)? {
-        let start_identity_json: String = row.get(3).map_err(sql_error)?;
-        let process_key: String = row.get(0).map_err(sql_error)?;
-        let pid = row.get(1).map_err(sql_error)?;
-        let pgid = row.get(2).map_err(sql_error)?;
-        let command_json = row.get(4).map_err(sql_error)?;
-        let run_id = row.get(5).map_err(sql_error)?;
-        let status: String = row.get(6).map_err(sql_error)?;
-        let computed_manifest_hash = row.get(7).map_err(sql_error)?;
-        let unsettled = row.get::<_, i64>(8).map_err(sql_error)? != 0;
-        let role: String = row.get(9).map_err(sql_error)?;
-        let service_name: Option<String> = row.get(10).map_err(sql_error)?;
-        let stop_signal = row.get(11).map_err(sql_error)?;
-        let stop_timeout_ms: i64 = row.get(12).map_err(sql_error)?;
-        let containment: String = row.get(13).map_err(sql_error)?;
+    while let Some(row) = rows.next()? {
+        let start_identity_json: String = row.get(3)?;
+        let process_key: String = row.get(0)?;
+        let pid = row.get(1)?;
+        let pgid = row.get(2)?;
+        let command_json = row.get(4)?;
+        let run_id = row.get(5)?;
+        let status: String = row.get(6)?;
+        let computed_manifest_hash = row.get(7)?;
+        let unsettled = row.get::<_, i64>(8)? != 0;
+        let role: String = row.get(9)?;
+        let service_name: Option<String> = row.get(10)?;
+        let stop_signal = row.get(11)?;
+        let stop_timeout_ms: i64 = row.get(12)?;
+        let containment: String = row.get(13)?;
         let role = ProcessRole::parse_db(&role)?;
         let stop = StopPolicy {
             signal: stop_signal,
@@ -555,12 +551,10 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Deferred)?;
-    transaction
-        .execute(
-            "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1",
-            params![row.process_key, ProcessStatus::Stale.as_str()],
-        )
-        .map_err(sql_error)?;
+    transaction.execute(
+        "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1",
+        params![row.process_key, ProcessStatus::Stale.as_str()],
+    )?;
     let payload_json = serde_json::json!({
         "pid": row.pid,
         "pgid": row.pgid,
@@ -578,7 +572,7 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             payload_json: &payload_json,
         },
     )?;
-    transaction.commit().map_err(sql_error)?;
+    transaction.commit()?;
     Ok(())
 }
 

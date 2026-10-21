@@ -5,7 +5,6 @@
 //! symlinks, keeps the root marker until every payload entry is gone, and then
 //! commits completion. A pending intent is resumed by the same operation ID;
 //! it is never replaced by a new attempt identity.
-use crate::registry::sql_error;
 use std::io;
 use std::path::PathBuf;
 
@@ -352,14 +351,11 @@ fn require_settled_slot(registry: &Registry) -> RuntimeResult<()> {
     // Quiescence is the absence of recorded process obligations; endpoint
     // evidence settles with its owning process. Leader exit or a terminal
     // status alone settles nothing.
-    let unresolved_process_count = registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM processes WHERE ownership = 'unresolved'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(sql_error)?;
+    let unresolved_process_count = registry.connection().query_row(
+        "SELECT count(*) FROM processes WHERE ownership = 'unresolved'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
     if unresolved_process_count > 0 {
         return Err(RuntimeError::new(
             ErrorCode::CleanupRefused,
@@ -387,8 +383,7 @@ fn pending_cleanup(registry: &Registry) -> RuntimeResult<Option<CleanupRecord>> 
                 ))
             },
         )
-        .optional()
-        .map_err(sql_error)?
+        .optional()?
         .map(
             |(cleanup_id, target, generation, marker_json, purge, root)| {
                 decode_record(cleanup_id, target, generation, &marker_json, purge, &root)
@@ -451,14 +446,11 @@ pub(crate) fn refuse_deleted_generation(
     registry: &Registry,
     marker: &StateMarker,
 ) -> RuntimeResult<()> {
-    let deletions = registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM cleanups WHERE data_generation = ?1",
-            [&marker.data_generation],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(sql_error)?;
+    let deletions = registry.connection().query_row(
+        "SELECT count(*) FROM cleanups WHERE data_generation = ?1",
+        [&marker.data_generation],
+        |row| row.get::<_, i64>(0),
+    )?;
     if deletions > 0 {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
@@ -487,43 +479,39 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
     })?;
     let payload = payload(record);
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
-    transaction
-        .execute(
-            "INSERT INTO cleanups (
+    transaction.execute(
+        "INSERT INTO cleanups (
                cleanup_id, target, data_generation, marker_json, purge, root_identity, status
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                record.cleanup_id,
-                record.target,
-                record.marker.data_generation,
-                marker_json,
-                i64::from(record.purge),
-                record.root.to_string(),
-                CleanupStatus::Pending.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
+        params![
+            record.cleanup_id,
+            record.target,
+            record.marker.data_generation,
+            marker_json,
+            i64::from(record.purge),
+            record.root.to_string(),
+            CleanupStatus::Pending.as_str(),
+        ],
+    )?;
     insert_event(
         &transaction,
         redactor,
         EventInsert::new("cleanup.intent", &payload),
     )?;
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()> {
     let payload = payload(record);
     let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
-    let changed = transaction
-        .execute(
-            "UPDATE cleanups SET status = ?2 WHERE cleanup_id = ?1 AND status = ?3",
-            params![
-                record.cleanup_id,
-                CleanupStatus::Completed.as_str(),
-                CleanupStatus::Pending.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
+    let changed = transaction.execute(
+        "UPDATE cleanups SET status = ?2 WHERE cleanup_id = ?1 AND status = ?3",
+        params![
+            record.cleanup_id,
+            CleanupStatus::Completed.as_str(),
+            CleanupStatus::Pending.as_str(),
+        ],
+    )?;
     if changed != 1 {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
@@ -535,7 +523,7 @@ fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()
         redactor,
         EventInsert::new("cleanup.completed", &payload),
     )?;
-    transaction.commit().map_err(sql_error)
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 /// Keep the committed intent pending; attempt to record the safe failure.

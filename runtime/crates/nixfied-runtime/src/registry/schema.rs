@@ -1,4 +1,3 @@
-use crate::registry::sql_error;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -26,7 +25,7 @@ impl From<RuntimeError> for ReadFailure {
 impl From<ReadFailure> for RuntimeError {
     fn from(error: ReadFailure) -> Self {
         match error {
-            ReadFailure::Sql(error) => sql_error(error),
+            ReadFailure::Sql(error) => RuntimeError::from(error),
             ReadFailure::Checked(error) => error,
         }
     }
@@ -145,69 +144,58 @@ const SCHEMA_SQL: &str = "
             ";
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
-    conn.busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(sql_error)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     // Existing bytes are admitted in a read snapshot before journal conversion
     // or any schema write. An empty unversioned database is the only bootstrap.
     {
-        let snapshot = conn.transaction().map_err(sql_error)?;
+        let snapshot = conn.transaction()?;
         if !is_empty_unversioned(&snapshot)? {
             verify_existing(&snapshot, identity)?;
         }
-        snapshot.commit().map_err(sql_error)?;
+        snapshot.commit()?;
     }
     configure_durability(conn)?;
-    let transaction = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if !is_empty_unversioned(&transaction)? {
         verify_existing(&transaction, identity)?;
-        return transaction.commit().map_err(sql_error);
+        return transaction.commit().map_err(RuntimeError::from);
     }
 
-    transaction.execute_batch(SCHEMA_SQL).map_err(sql_error)?;
+    transaction.execute_batch(SCHEMA_SQL)?;
 
-    transaction
-        .execute(
-            &format!(
-                "
+    transaction.execute(
+        &format!(
+            "
             INSERT INTO registry_meta (
               id, schema_version, project_id, environment, slot,
               runtime_abi, toolchain_id, created_at
             ) VALUES (1, {SCHEMA_VERSION}, ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             "
-            ),
-            (
-                &identity.project_id,
-                &identity.environment,
-                identity.slot,
-                &identity.runtime_abi,
-                &identity.toolchain_id,
-            ),
-        )
-        .map_err(sql_error)?;
+        ),
+        (
+            &identity.project_id,
+            &identity.environment,
+            identity.slot,
+            &identity.runtime_abi,
+            &identity.toolchain_id,
+        ),
+    )?;
 
-    transaction
-        .pragma_update(None, "user_version", SCHEMA_VERSION)
-        .map_err(sql_error)?;
-    transaction.commit().map_err(sql_error)
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit().map_err(RuntimeError::from)
 }
 
 fn configure_durability(conn: &Connection) -> RuntimeResult<()> {
-    let mode: String = conn
-        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
-        .map_err(sql_error)?;
+    let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     if mode != "wal" {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             "registry requires WAL journal mode",
         ));
     }
-    conn.execute_batch("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
-        .map_err(sql_error)?;
+    conn.execute_batch("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")?;
     #[cfg(target_os = "macos")]
-    conn.execute_batch("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;")
-        .map_err(sql_error)?;
+    conn.execute_batch("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;")?;
     for (setting, required) in [("synchronous", 2), ("foreign_keys", 1)] {
         verify_setting(conn, setting, required)?;
     }
@@ -219,9 +207,7 @@ fn configure_durability(conn: &Connection) -> RuntimeResult<()> {
 }
 
 fn verify_setting(conn: &Connection, setting: &str, required: i64) -> RuntimeResult<()> {
-    let actual: i64 = conn
-        .query_row(&format!("PRAGMA {setting}"), [], |row| row.get(0))
-        .map_err(sql_error)?;
+    let actual: i64 = conn.query_row(&format!("PRAGMA {setting}"), [], |row| row.get(0))?;
     if actual != required {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,

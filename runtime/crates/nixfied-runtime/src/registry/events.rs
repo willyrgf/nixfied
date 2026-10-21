@@ -28,9 +28,9 @@ pub(crate) fn append_event(
     redactor: &Redactor,
     event: EventInsert<'_>,
 ) -> RuntimeResult<i64> {
-    let transaction = conn.transaction().map_err(super::sql_error)?;
+    let transaction = conn.transaction()?;
     let seq = insert_event(&transaction, redactor, event)?;
-    transaction.commit().map_err(super::sql_error)?;
+    transaction.commit()?;
     Ok(seq)
 }
 
@@ -40,19 +40,17 @@ pub(crate) fn insert_event(
     event: EventInsert<'_>,
 ) -> RuntimeResult<i64> {
     let payload_json = redactor.redact_json_str(event.payload_json)?;
-    transaction
-        .execute(
-            "
+    transaction.execute(
+        "
             INSERT INTO events (at, event_type, run_id, process_key, payload_json)
             VALUES (strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4)
             ",
-            params![
-                event.event_type,
-                event.run_id,
-                event.process_key,
-                payload_json,
-            ],
-        )
-        .map_err(super::sql_error)?;
+        params![
+            event.event_type,
+            event.run_id,
+            event.process_key,
+            payload_json,
+        ],
+    )?;
     Ok(transaction.last_insert_rowid())
 }

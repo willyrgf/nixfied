@@ -99,12 +99,7 @@ impl Registry {
         behavior: TransactionBehavior,
     ) -> RuntimeResult<(Transaction<'_>, &Redactor)> {
         let (connection, redactor) = self.context()?;
-        Ok((
-            connection
-                .transaction_with_behavior(behavior)
-                .map_err(super::sql_error)?,
-            redactor,
-        ))
+        Ok((connection.transaction_with_behavior(behavior)?, redactor))
     }
 
     pub fn path(&self) -> &Path {
@@ -160,7 +155,7 @@ impl RegistryReader {
                 ),
                 path,
             )),
-            RegistryRead::Busy(error) => Err(with_registry_path(super::sql_error(error), path)),
+            RegistryRead::Busy(error) => Err(with_registry_path(RuntimeError::from(error), path)),
         }
     }
 
