@@ -1,127 +1,17 @@
-use nixfied_manifest::{
-    MANIFEST_VERSION, Manifest, TOOLCHAIN_ID, ValidatedManifest, ValidationError, runtime_abi,
-};
+use nixfied_manifest::{Manifest, ValidatedManifest, ValidationError, constants, runtime_abi};
 use serde_json::{Value, json};
 
-fn valid_manifest_json() -> Value {
-    json!({
-        "manifestVersion": MANIFEST_VERSION,
-        "toolchainId": TOOLCHAIN_ID,
-        "runtimeAbi": runtime_abi(),
-        "generator": {
-            "name": "nixfied",
-            "version": "1",
-            "emitter": "nix/compiler/emit-manifest.nix"
-        },
-        "project": {
-            "projectId": "example",
-            "name": "M0 Example"
-        },
-        "target": {
-            "system": "aarch64-darwin",
-            "os": "darwin",
-            "arch": "aarch64",
-            "closureSystem": "aarch64-darwin"
-        },
-        "codebases": [{
-            "codebaseId": "main",
-            "logicalRoot": ".",
-            "sourceMode": "live-workspace",
-            "sourceIdentity": "live",
-            "sourcePolicy": {
-                "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "live-fingerprint"
-            }
-        }],
-        "secrets": {},
-        "environments": ["dev"],
-        "slotPolicy": {
-            "min": 0,
-            "default": 0,
-            "max": 0
-        },
-        "placement": {
-            "slotPlacements": {
-                "0": {
-                    "slot": 0,
-                    "candidatePorts": {
-                        "start": 23080,
-                        "end": 23090
-                    }
-                }
-            }
-        },
-        "state": {
-            "markerIdentity": "nixfied-state",
-            "persistence": "run-scoped"
-        },
-        "closures": {
-            "synthetic-helper": {
-                "kind": "executable",
-                "storePath": "/nix/store/00000000000000000000000000000000-synthetic-helper",
-                "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
-                "targetSystem": "aarch64-darwin",
+#[path = "../src/fixtures.rs"]
+mod fixtures;
 
-                "requiresExecutable": true,
-                "effects": ["process", "network-listener"]
-            }
-        },
-        "services": {
-            "synthetic": synthetic_service()
-        },
-        "tasks": {
-            "smoke": smoke_task()
-        }
-    })
+fn valid_manifest_json() -> Value {
+    fixtures::synthetic_manifest(&Default::default())
 }
 
 fn helper_invocation(run: Value) -> Value {
-    json!({
-        "tools": ["synthetic-helper"],
-        "run": run,
-        "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
-        "env": {},
-        "codebaseId": "main",
-        "cwd": ".",
-        "stdin": "null"
-    })
-}
-
-fn synthetic_service() -> Value {
-    json!({
-        "lifecycle": {
-            "start": { "operationId": "service.synthetic.start", "invocation": helper_invocation(json!(["synthetic-helper", "service", "--host", "127.0.0.1", "--port", "${port}"])), "terminal": { "success": "spawned", "failure": "failed" } },
-            "ready": { "operationId": "service.synthetic.ready", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-            "health": { "operationId": "service.synthetic.health", "policy": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
-            "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
-            "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
-        },
-        "endpoints": { "synthetic-tcp": {
-            "endpointId": "synthetic-tcp", "host": "127.0.0.1",
-            "readyProbe": helper_invocation(json!(["synthetic-helper", "task", "${host}", "${port}"])),
-            "healthProbe": helper_invocation(json!(["synthetic-helper", "task", "${host}", "${port}"]))
-        } },
-        "primaryEndpoint": "synthetic-tcp",
-                "connectsTo": [],
-        "stateRefs": ["slot"],
-        "logRefs": ["service.synthetic"],
-        "containment": "process-group"
-    })
-}
-
-fn smoke_task() -> Value {
-    json!({
-        "kind": "leaf",
-        "defaultOutput": "summary",
-        "operationId": "task.smoke.run",
-        "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
-        "requires": ["synthetic"],
-
-        "exitPolicy": { "successCodes": [0] },
-        "artifactRefs": [],
-        "logRefs": ["task.smoke"],
-        "summaryRefs": ["summary"]
-    })
+    let mut invocation = valid_manifest_json()["tasks"]["smoke"]["invocation"].clone();
+    invocation["run"] = run;
+    invocation
 }
 
 fn parse_valid_manifest() -> Manifest {
