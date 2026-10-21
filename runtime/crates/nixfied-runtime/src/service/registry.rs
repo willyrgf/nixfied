@@ -10,7 +10,6 @@ use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
 use crate::registry::session::{require_open_sources, require_run};
 use crate::registry::sql_error;
-use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{self, DbStatus, Ownership, ProcessRole, ProcessStatus};
 
 pub(crate) struct ServiceRecord<'a> {
@@ -127,13 +126,7 @@ pub(crate) fn record_service_start_intent(
     computed_manifest_hash: &str,
     service_name: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, computed_manifest_hash)?;
     ensure_predecessor_settled(&transaction, run_id)?;
     refuse_active_service(&transaction, run_id, service_name)?;
@@ -179,10 +172,7 @@ pub(crate) fn record_service_start(
     process: &ProcessRecord<'_>,
     endpoints: &[EndpointRecord<'_>],
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
+    let (connection, redactor) = registry.context()?;
     let process_command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -258,13 +248,7 @@ pub(crate) fn commit_service_check(
 ) -> RuntimeResult<()> {
     use super::readiness::ProbePhase;
     let (operation_id, terminal_success) = lifecycle;
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let stored = recorded_endpoints(&transaction, process_key)?;
     let expected = round
         .endpoints()
@@ -402,13 +386,7 @@ pub(crate) fn settle_service_terminal(
     process_key: &str,
     terminal: ServiceTerminal<'_>,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let (process_status, event_type, payload_json, ownership, capture) = match terminal {
         ServiceTerminal::Stopped(capture) => (
             ProcessStatus::Stopped,
@@ -490,7 +468,7 @@ pub(crate) fn record_capture_outcome(
     process_key: &str,
     capture: CaptureOutcome,
 ) -> RuntimeResult<()> {
-    let RegistryContext { connection, .. } = registry.context()?;
+    let (connection, _) = registry.context()?;
     let changed = connection
         .execute(
             "UPDATE processes SET capture = ?3 WHERE process_key = ?1 AND run_id = ?2 AND capture = 'pending'",
@@ -514,13 +492,7 @@ pub(crate) fn mark_process_escape(
     platform_start: Option<&str>,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let changed_process = transaction
         .execute(
             &format!(
@@ -585,13 +557,7 @@ pub(crate) fn settle_unresolved_process(
     process_key: &str,
     run_id: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let changed = transaction
         .execute(
             &format!(
@@ -654,10 +620,7 @@ pub(crate) fn record_invocation_started(
     process: &InvocationProcessRecord<'_>,
     owner: InvocationOwner<'_>,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
+    let (connection, redactor) = registry.context()?;
     let command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = connection.transaction().map_err(sql_error)?;
     require_run(&transaction, process.run_id, process.computed_manifest_hash)?;
@@ -720,13 +683,7 @@ pub(crate) fn record_invocation_observed(
         manifest_hash,
         owner,
     } = invocation;
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, manifest_hash)?;
     let changed = transaction
         .execute(
@@ -813,11 +770,7 @@ pub(crate) fn mark_invocation_finished(
             TaskTerminalStatus::Canceled => "probe.canceled",
         },
     };
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Deferred)?;
     let changed = transaction
         .execute(
             "UPDATE processes SET status = ?2, ownership = 'settled', capture = coalesce(?5, capture)

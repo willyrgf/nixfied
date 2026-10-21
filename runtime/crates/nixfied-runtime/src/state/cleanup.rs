@@ -16,7 +16,6 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::{Directory, EntryKind, FileIdentity};
 use crate::registry::Registry;
 use crate::registry::events::{EventInsert, insert_event};
-use crate::registry::sqlite::RegistryContext;
 use crate::registry::status::{CleanupStatus, DbStatus};
 use crate::state::marker::{StateIdentity, StateMarker, refuse_unmarked_state_root};
 use crate::state::tree::{ApplicationTree, MARKER, Observed, read_root_marker};
@@ -487,13 +486,7 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
         )
     })?;
     let payload = payload(record);
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     transaction
         .execute(
             "INSERT INTO cleanups (
@@ -520,13 +513,7 @@ fn record_intent(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResu
 
 fn complete(registry: &mut Registry, record: &CleanupRecord) -> RuntimeResult<()> {
     let payload = payload(record);
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let changed = transaction
         .execute(
             "UPDATE cleanups SET status = ?2 WHERE cleanup_id = ?1 AND status = ?3",

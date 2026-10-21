@@ -1,9 +1,8 @@
 use crate::registry::sql_error;
 pub mod ensure;
 pub mod observation;
-use crate::registry::sqlite::RegistryContext;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -555,11 +554,7 @@ fn process_rows(connection: &rusqlite::Connection) -> RuntimeResult<Vec<ProcessR
 }
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Deferred)?;
     transaction
         .execute(
             "UPDATE processes SET status = ?2, ownership = 'settled' WHERE process_key = ?1",

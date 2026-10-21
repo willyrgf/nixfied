@@ -1,7 +1,7 @@
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::filesystem::FileIdentity;
@@ -19,11 +19,6 @@ pub struct Registry {
     redactor: Redactor,
     // SQLite drops before the guard on unwind.
     guard: SlotGuard,
-}
-
-pub(crate) struct RegistryContext<'a> {
-    pub(crate) connection: &'a mut Connection,
-    pub(crate) redactor: &'a Redactor,
 }
 
 impl Registry {
@@ -94,12 +89,22 @@ impl Registry {
         crate::error::both(database, guard.release())
     }
 
-    pub(crate) fn context(&mut self) -> RuntimeResult<RegistryContext<'_>> {
+    pub(crate) fn context(&mut self) -> RuntimeResult<(&mut Connection, &Redactor)> {
         self.guard.validate()?;
-        Ok(RegistryContext {
-            connection: &mut self.conn,
-            redactor: &self.redactor,
-        })
+        Ok((&mut self.conn, &self.redactor))
+    }
+
+    pub(crate) fn transaction(
+        &mut self,
+        behavior: TransactionBehavior,
+    ) -> RuntimeResult<(Transaction<'_>, &Redactor)> {
+        let (connection, redactor) = self.context()?;
+        Ok((
+            connection
+                .transaction_with_behavior(behavior)
+                .map_err(super::sql_error)?,
+            redactor,
+        ))
     }
 
     pub fn path(&self) -> &Path {
@@ -123,8 +128,8 @@ impl Registry {
     }
 
     pub fn append_event(&mut self, event: EventInsert<'_>) -> RuntimeResult<i64> {
-        self.guard.validate()?;
-        append_event(&mut self.conn, &self.redactor, event)
+        let (connection, redactor) = self.context()?;
+        append_event(connection, redactor, event)
     }
 }
 

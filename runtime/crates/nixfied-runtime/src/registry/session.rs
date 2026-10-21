@@ -4,7 +4,6 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use super::Registry;
 use super::events::{EventInsert, insert_event};
-use super::sqlite::RegistryContext;
 use super::status::{DbStatus, FinalizationStatus};
 use crate::admission::RunAdmission;
 use crate::admission::source::RecordedSource;
@@ -315,11 +314,7 @@ pub fn record_run_created(
     let file = registry.file_identity();
     let path = registry.path().to_path_buf();
     let identity = registry.identity().clone();
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection.transaction().map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Deferred)?;
     transaction
         .execute(
             "
@@ -388,13 +383,7 @@ pub fn record_execution_outcome(
             "only predecessor recovery may record interrupted execution",
         ));
     }
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     match require_run(&transaction, run_id, manifest_hash)? {
         SessionProgress::Executing => {}
         SessionProgress::Finalizing(stored) | SessionProgress::Finalized(stored) => {
@@ -423,13 +412,7 @@ pub fn record_execution_outcome(
 /// Called by the exclusive successor before beginning its own session. Validate
 /// the complete stored set first; preserve every known predecessor outcome.
 pub fn record_interrupted_sessions(registry: &mut Registry) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let rows = {
         let mut statement = transaction
             .prepare("SELECT run_id, execution_outcome, finalization FROM runs ORDER BY run_id")
@@ -476,13 +459,7 @@ pub fn record_finalization_complete(
     run_id: &str,
     manifest_hash: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     match require_run(&transaction, run_id, manifest_hash)? {
         SessionProgress::Executing => {
             return Err(invalid(
@@ -523,13 +500,7 @@ pub fn record_finalization_unfinished(
 /// deletion, and retention obligations. Known outcomes are preserved; the
 /// successor completes finalization without adopting any predecessor work.
 pub fn record_recovered_sessions(registry: &mut Registry) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     let rows = {
         let mut statement = transaction
             .prepare(
@@ -585,13 +556,7 @@ pub fn close_source_registration(
     run_id: &str,
     manifest_hash: &str,
 ) -> RuntimeResult<()> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, manifest_hash)?;
     let changed = transaction
         .execute(
@@ -622,13 +587,7 @@ pub fn seal_output(
     run_id: &str,
     manifest_hash: &str,
 ) -> RuntimeResult<OutputPublication> {
-    let RegistryContext {
-        connection,
-        redactor,
-    } = registry.context()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
+    let (transaction, redactor) = registry.transaction(TransactionBehavior::Immediate)?;
     require_run(&transaction, run_id, manifest_hash)?;
     let (sources, pending): (String, i64) = transaction
         .query_row(
