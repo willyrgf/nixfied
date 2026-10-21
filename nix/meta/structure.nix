@@ -529,30 +529,6 @@ let
         ) (refs field.value)
       ) record.fields
     );
-  # Functions in native domain predicates are deliberately not deep-forced.
-  metadata = map (record: {
-    inherit (record)
-      id
-      description
-      decoder
-      produced
-      ;
-    fields = map (
-      field:
-      builtins.removeAttrs field [ "value" ]
-      // {
-        value = map (
-          v:
-          builtins.removeAttrs v [
-            "producerCheck"
-            "wire"
-            "element"
-            "value"
-          ]
-        ) (walk (v: [ v ]) field.value);
-      }
-    ) record.fields;
-  }) recordList;
   bindingNames = map (r: builtins.toJSON { inherit (r.rust) file name; }) (
     (builtins.filter (record: record ? rust) recordList) ++ vocabularyList
   );
@@ -565,7 +541,7 @@ let
       )
       "duplicate structural identity or Rust binding"
       (
-        builtins.deepSeq metadata (
+        builtins.deepSeq recordList (
           builtins.deepSeq vocabularyList (
             require (builtins.all (checkGraph [ ]) recordList) "invalid structural references" true
           )
