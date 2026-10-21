@@ -146,20 +146,14 @@ fn lower_service(
             .iter()
             .any(|effect| matches!(effect, nixfied_manifest::ClosureEffect::NetworkListener));
         if !endpoint_less && !listens {
-            return Err(Rejection::EffectsIncoherent {
-                service: name.to_string(),
-                closure_id: closure_id.to_string(),
-                expected: "declared endpoints require `network-listener` on the start closure",
-            }
-            .into());
+            return Err(admission_error(format!(
+                "service {name} start closure {closure_id}: declared endpoints require `network-listener` on the start closure"
+            )));
         }
         if endpoint_less && listens {
-            return Err(Rejection::EffectsIncoherent {
-                service: name.to_string(),
-                closure_id: closure_id.to_string(),
-                expected: "an endpoint-less service's start closure must not declare `network-listener` (an unreservable listener)",
-            }
-            .into());
+            return Err(admission_error(format!(
+                "service {name} start closure {closure_id}: an endpoint-less service's start closure must not declare `network-listener` (an unreservable listener)"
+            )));
         }
     }
     let start = StartOp {
@@ -398,26 +392,21 @@ impl<'a> InvocationResolver<'a> {
             timeout_ms: _,
         } = invocation;
         let Some(program) = run.first() else {
-            return Err(Rejection::RunUnresolvable {
-                owner: owner(),
-                program: String::new(),
-            }
-            .into());
+            return Err(unresolvable(owner(), ""));
         };
         // PATH is runtime-owned: it is assembled from the tool roots at spawn, so a
         // declared PATH would be silently overwritten — reject it instead.
         if env.contains_key("PATH") {
-            return Err(Rejection::ReservedEnvVar {
-                owner: owner(),
-                name: "PATH",
-            }
-            .into());
+            return Err(admission_error(format!(
+                "{} declares runtime-owned environment variable PATH",
+                owner()
+            )));
         }
         let mut tool_roots = Vec::with_capacity(tools.len());
         let mut selected = None;
         for tool in tools.iter() {
             let Some((id, closure)) = self.closures.get_key_value(tool.as_str()) else {
-                return Err(undeclared("invocation.tools", tool.as_str()).into());
+                return Err(undeclared("invocation.tools", tool.as_str()));
             };
             if selected.is_none()
                 && Path::new(&closure.executable)
@@ -434,19 +423,14 @@ impl<'a> InvocationResolver<'a> {
             tool_roots.push(root);
         }
         let Some((closure_id, resolved)) = selected else {
-            return Err(Rejection::RunUnresolvable {
-                owner: owner(),
-                program: program.clone(),
-            }
-            .into());
+            return Err(unresolvable(owner(), program));
         };
         if resolved.executable != *executable {
-            return Err(Rejection::ExecutableMismatch {
-                owner: owner(),
-                carried: executable.clone(),
-                resolved: resolved.executable.clone(),
-            }
-            .into());
+            return Err(admission_error(format!(
+                "{} carries executable {executable} but its tools resolve run[0] to {}",
+                owner(),
+                resolved.executable
+            )));
         }
         Ok((
             ResolvedInvocation {
@@ -464,8 +448,9 @@ impl<'a> InvocationResolver<'a> {
                         ))
                     })
                     .collect::<RuntimeResult<_>>()?,
-                cwd: RelativeCwd::new(cwd)
-                    .ok_or_else(|| Rejection::InvalidCwd { owner: owner() })?,
+                cwd: RelativeCwd::new(cwd).ok_or_else(|| {
+                    admission_error(format!("{} cwd must be a confined relative path", owner()))
+                })?,
                 stdin: *stdin,
                 tool_roots,
             },
@@ -475,110 +460,28 @@ impl<'a> InvocationResolver<'a> {
     }
 }
 
-/// The closed set of reasons the manifest cannot be lowered into an executable
-/// program. Every relational/reference check the runtime needs lives here, so a
-/// successful `lower` is a proof the references resolve.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Rejection {
-    InvalidCwd {
-        owner: String,
-    },
-    UndeclaredReference {
-        kind: &'static str,
-        id: String,
-    },
-    DuplicateOperationId {
-        id: String,
-    },
-    ClosureTargetMismatch {
-        closure_id: String,
-        target_system: String,
-        closure_system: String,
-    },
-    RunUnresolvable {
-        owner: String,
-        program: String,
-    },
-    ExecutableMismatch {
-        owner: String,
-        carried: String,
-        resolved: String,
-    },
-    ReservedEnvVar {
-        owner: String,
-        name: &'static str,
-    },
-    EffectsIncoherent {
-        service: String,
-        closure_id: String,
-        expected: &'static str,
-    },
-    ServiceGraphCycle {
-        cycle: String,
-    },
+pub(super) fn admission_error(message: impl Into<String>) -> RuntimeError {
+    RuntimeError::new(ErrorCode::ManifestAdmission, message)
 }
 
-impl Rejection {
-    fn message(&self) -> String {
-        match self {
-            Rejection::InvalidCwd { owner } => {
-                format!("{owner} cwd must be a confined relative path")
-            }
-            Rejection::UndeclaredReference { kind, id } => {
-                format!("{kind} references undeclared {id}")
-            }
-            Rejection::DuplicateOperationId { id } => {
-                format!("operation id {id} is declared more than once")
-            }
-            Rejection::ClosureTargetMismatch {
-                closure_id,
-                target_system,
-                closure_system,
-            } => format!(
-                "closure {closure_id} targetSystem {target_system} does not match closureSystem {closure_system}"
-            ),
-            Rejection::RunUnresolvable { owner, program } => format!(
-                "{owner} run[0] {program:?} is not the executable of any declared tool closure"
-            ),
-            Rejection::ExecutableMismatch {
-                owner,
-                carried,
-                resolved,
-            } => format!(
-                "{owner} carries executable {carried} but its tools resolve run[0] to {resolved}"
-            ),
-            Rejection::ReservedEnvVar { owner, name } => {
-                format!("{owner} declares runtime-owned environment variable {name}")
-            }
-            Rejection::EffectsIncoherent {
-                service,
-                closure_id,
-                expected,
-            } => format!("service {service} start closure {closure_id}: {expected}"),
-            Rejection::ServiceGraphCycle { cycle } => format!(
-                "the combined connectsTo + prepare-requires service graph has a cycle: {cycle}"
-            ),
-        }
-    }
+fn unresolvable(owner: String, program: &str) -> RuntimeError {
+    admission_error(format!(
+        "{owner} run[0] {program:?} is not the executable of any declared tool closure"
+    ))
 }
 
-impl From<Rejection> for RuntimeError {
-    fn from(rejection: Rejection) -> Self {
-        RuntimeError::new(ErrorCode::ManifestAdmission, rejection.message())
-    }
+fn duplicate_operation_id(id: &str) -> RuntimeError {
+    admission_error(format!("operation id {id} is declared more than once"))
 }
 
-fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
-    Rejection::UndeclaredReference {
-        kind,
-        id: id.into(),
-    }
+fn undeclared(kind: &'static str, id: &str) -> RuntimeError {
+    admission_error(format!("{kind} references undeclared {id}"))
 }
 
 /// Check cross-reference membership and operation identity before local invocation
 /// resolution. Graph algorithms consume these facts without repeating membership
 /// checks; cycles and capacity are proved after local resolution.
-fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
+fn prove_references(manifest: &Manifest) -> RuntimeResult<()> {
     let codebase_ids = manifest
         .codebases
         .iter()
@@ -598,11 +501,10 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
 
     for (closure_id, closure) in &manifest.closures {
         if closure.target_system != manifest.target.closure_system {
-            return Err(Rejection::ClosureTargetMismatch {
-                closure_id: closure_id.to_string(),
-                target_system: closure.target_system.clone(),
-                closure_system: manifest.target.closure_system.clone(),
-            });
+            return Err(admission_error(format!(
+                "closure {closure_id} targetSystem {} does not match closureSystem {}",
+                closure.target_system, manifest.target.closure_system
+            )));
         }
     }
 
@@ -610,9 +512,7 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
     for service in manifest.services.values() {
         for operation_id in lifecycle_op_ids(&service.lifecycle) {
             if !declared_operations.insert(operation_id) {
-                return Err(Rejection::DuplicateOperationId {
-                    id: operation_id.to_string(),
-                });
+                return Err(duplicate_operation_id(operation_id));
             }
         }
     }
@@ -622,9 +522,7 @@ fn prove_references(manifest: &Manifest) -> Result<(), Rejection> {
         .filter_map(|task| task.operation_id.as_ref())
     {
         if !declared_operations.insert(operation_id.as_str()) {
-            return Err(Rejection::DuplicateOperationId {
-                id: operation_id.to_string(),
-            });
+            return Err(duplicate_operation_id(operation_id.as_str()));
         }
     }
 
@@ -1037,8 +935,10 @@ mod tests {
         assert!(error.message.contains("resolve"));
     }
 
-    fn reject_reason(value: Value) -> Rejection {
-        prove_references(&manifest_from(value)).expect_err("references must not resolve")
+    fn reject_reason(value: Value) -> String {
+        let error = lower(&manifest_from(value)).expect_err("references must not resolve");
+        assert_eq!(error.code, ErrorCode::ManifestAdmission);
+        error.message
     }
 
     #[test]
@@ -1047,7 +947,7 @@ mod tests {
         value["tasks"]["t"]["invocation"]["codebaseId"] = json!("ghost");
         assert_eq!(
             reject_reason(value),
-            undeclared("invocation.codebaseId", "ghost")
+            "invocation.codebaseId references undeclared ghost"
         );
     }
 
@@ -1055,10 +955,10 @@ mod tests {
     fn closure_target_must_match_closure_system() {
         let mut value = manifest_value();
         value["closures"]["c"]["targetSystem"] = json!("aarch64-darwin");
-        assert!(matches!(
+        assert_eq!(
             reject_reason(value),
-            Rejection::ClosureTargetMismatch { .. }
-        ));
+            "closure c targetSystem aarch64-darwin does not match closureSystem x86_64-linux"
+        );
     }
 
     #[test]
@@ -1067,9 +967,7 @@ mod tests {
         value["services"]["svc"]["lifecycle"]["health"]["operationId"] = json!("svc.start");
         assert_eq!(
             reject_reason(value),
-            Rejection::DuplicateOperationId {
-                id: "svc.start".to_string()
-            }
+            "operation id svc.start is declared more than once"
         );
     }
 
@@ -1171,9 +1069,7 @@ mod tests {
         value["tasks"]["odd"]["operationId"] = json!("task.t.run");
         assert_eq!(
             reject_reason(value),
-            Rejection::DuplicateOperationId {
-                id: "task.t.run".into()
-            }
+            "operation id task.t.run is declared more than once"
         );
     }
 

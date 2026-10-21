@@ -1,5 +1,5 @@
 //! One graph interpretation for candidate admission and selected execution.
-use super::lower::Rejection;
+use super::lower::admission_error;
 use super::types::{ExecutableTask, ExecutionManifest, PortWindow, Program};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use nixfied_manifest::{NodeId, ServiceId, TaskId};
@@ -218,7 +218,9 @@ fn prove_service_cycles(edges: &Edges) -> RuntimeResult<()> {
             for (target, kind) in cycle {
                 rendered.push_str(&format!(" -[{kind}]-> {target}"));
             }
-            return Err(Rejection::ServiceGraphCycle { cycle: rendered }.into());
+            return Err(admission_error(format!(
+                "the combined connectsTo + prepare-requires service graph has a cycle: {rendered}"
+            )));
         }
     }
     Ok(())
