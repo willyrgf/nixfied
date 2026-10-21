@@ -14,19 +14,20 @@ documentation.
 
 ## Core design
 
-**Design for correctness, low complexity, simplicity, and reuse.** Make invalid
-states unrepresentable or reject them at the owning boundary before effects.
-Give each fact one owner and minimize concepts, dependencies, and coordinated
-change sites. Prefer the smallest explicit design that satisfies the contract.
-Reuse cohesive components through clear interfaces and ordinary composition;
-introduce abstractions for demonstrated shared meaning, not speculative
-flexibility. Prove invariants with independent checks and tests.
+**Design for correctness, low complexity, simplicity, and reuse.** Minimize
+concepts, mutable state, indirection, dependencies, coordinated change sites,
+and total maintained code together. Prefer the smallest readable implementation
+that preserves the contract and its independent proofs. Make invalid states
+unrepresentable or reject them at the owning boundary before effects. Give each
+fact one owner. Reuse cohesive components through clear interfaces and ordinary
+composition; introduce abstractions for demonstrated shared meaning, not
+speculative flexibility.
 
 - **Represent the domain.** Use product types for facts that coexist and sum
   types for alternatives. Use newtypes, private constructors, fallible
-  conversions, and typestate for invariants. Match closed alternatives
-  exhaustively. Use `Option` only for genuine absence, never for hidden
-  alternatives or correlated state.
+  conversions, and typestate where they enforce a required invariant more simply
+  than the existing design. Match closed alternatives exhaustively. Use `Option`
+  only for genuine absence, never for hidden alternatives or correlated state.
 - **Close the boundary.** Parse untrusted input into domain types at the
   earliest boundary with enough information. Use fallible validation, lowering,
   or admission for cross-field, graph, host, time, and concurrency invariants
@@ -40,13 +41,19 @@ flexibility. Prove invariants with independent checks and tests.
   explicit checked outcomes. Keep admission, execution, lifecycle, output,
   containment, and cleanup failures distinct. Invalid admission starts no
   child process.
-- **Prefer subtraction.** Extend the existing owner and execution path first.
-  Compare the proposed design with a concrete smaller alternative. Justify new
-  representations, conversions, queries, handoffs, and effect phases by the
-  required guarantee or boundary that the smaller design cannot preserve.
-  Remove superseded machinery in the same change.
+- **Prefer subtraction.** Reuse the existing owner and execution path first.
+  Identify the machinery that disappears and estimate the complete production,
+  test, and support delta before a simplification change. Compare with a concrete
+  smaller alternative; justify added representations, conversions, queries,
+  handoffs, and effect phases by guarantees the alternative cannot preserve.
+  Remove superseded machinery in the same change. Judge reduction work
+  cumulatively against a pinned baseline, including existing branch growth.
 - **Prove the guarantee.** Test accepted construction, rejected inputs,
   invariant-preserving transformations, and runtime or relational behavior.
+  Reuse or extend existing proofs first; justify added tests and infrastructure
+  by distinct guarantees or failure boundaries. Remove superseded proofs only
+  when their guarantees remain independently established. Include proof
+  maintenance in the design's cost. Never weaken coverage to meet a line target.
   Use compile-time proofs where the language supports them and runtime tests
   for runtime facts; tests support the design but do not replace it.
 
@@ -67,10 +74,15 @@ For every non-trivial change, answer briefly in the discussion or PR:
   retaining independent regression proofs.
 - Before freezing added public fields or diagnostic variants, justify each by
   a concrete consumer need. Keep internal bookkeeping private.
-- At completion, report measured added/deleted production and test lines, with
-  generated files, fixtures, and docs accounted separately. Explain growth
-  against the smallest complete design; never compress code or weaken guarantees
-  to meet a line target.
+- At completion, report measured added/deleted/net production and test/support
+  lines, classifying embedded tests as tests. Account for fixtures, generated
+  files, and docs separately, and report the combined total. Moving code between
+  categories is not reduction. Justify growth against the smallest complete
+  design; never compress code or weaken guarantees to meet a line target.
+- For simplification tasks, completion requires lower complexity and fewer
+  combined production/test/support lines against a pinned comparison base.
+  Report deltas against both that base and starting HEAD, including existing
+  branch growth; report an unmet objective if the requirement is not achieved.
 
 ## Boundaries
 
