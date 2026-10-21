@@ -23,19 +23,16 @@ let
   windowsInRange = lib.all (window: window.start >= 1 && window.end <= 65535) windows;
   windowsDoNotOverlap = portPolicy.slotStride >= portPolicy.windowSize;
   services = config.nixfied.services;
+  acyclic =
+    nodes: edges:
+    # Native topological sorting considers distinct vertices; reject self edges
+    # separately so a one-vertex cycle is also invalid.
+    lib.all (node: !(builtins.elem node (edges node))) nodes
+    && (lib.toposort (before: after: builtins.elem before (edges after)) nodes) ? result;
   connectsToDeclared = lib.all (
     name: lib.all (target: builtins.hasAttr target services) services.${name}.connectsTo
   ) (builtins.attrNames services);
-  # Cycle check: a service may not reach itself through connectsTo. Walking
-  # with a `seen` set terminates even on cyclic graphs; reaching the start
-  # service again is the cycle proof.
-  reaches =
-    start: current: seen:
-    lib.any (
-      target:
-      target == start || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
-    ) (services.${current}.connectsTo or [ ]);
-  connectsToAcyclic = lib.all (name: !(reaches name name [ ])) (builtins.attrNames services);
+  connectsToAcyclic = acyclic (builtins.attrNames services) (name: services.${name}.connectsTo);
   # Mirror the runtime's `LoopbackHost` wire type so a manifest that the runtime
   # cannot even parse fails at evaluation instead of admission. The runtime
   # accepts any loopback IP literal; this check admits the canonical forms
@@ -138,17 +135,12 @@ let
   ) (builtins.attrNames compositeTasks);
   # Sibling dependsOn acyclicity per composite, and task-reference acyclicity
   # through nesting (a composite may not reach itself through step task refs).
-  stepReaches =
-    steps: start: current: seen:
-    lib.any (
-      dep: dep == start || (!(builtins.elem dep seen) && stepReaches steps start dep (seen ++ [ dep ]))
-    ) steps.${current}.dependsOn;
   stepGraphsAcyclic = lib.all (
     name:
     let
       steps = compositeTasks.${name}.steps;
     in
-    lib.all (step: !(stepReaches steps step step [ ])) (builtins.attrNames steps)
+    acyclic (builtins.attrNames steps) (step: steps.${step}.dependsOn)
   ) (builtins.attrNames compositeTasks);
   taskRefsOf =
     name:
@@ -156,16 +148,7 @@ let
       map (step: step.task) (builtins.attrValues tasks.${name}.steps)
     else
       [ ];
-  taskReaches =
-    start: current: seen:
-    lib.any (
-      target:
-      builtins.hasAttr target tasks
-      && (
-        target == start || (!(builtins.elem target seen) && taskReaches start target (seen ++ [ target ]))
-      )
-    ) (taskRefsOf current);
-  taskGraphAcyclic = lib.all (name: !(taskReaches name name [ ])) taskNames;
+  taskGraphAcyclic = acyclic taskNames taskRefsOf;
   leafRequiresDeclared = lib.all (
     name: lib.all (target: builtins.hasAttr target services) leafTasks.${name}.requires
   ) (builtins.attrNames leafTasks);
@@ -275,19 +258,7 @@ let
         lib.concatMap (leaf: tasks.${leaf}.requires) (deriveFacts.leavesOf tasks (prepareTaskOf name))
       );
   combinedEdges = name: services.${name}.connectsTo ++ prepareRequiresOf name;
-  combinedReaches =
-    start: current: seen:
-    lib.any (
-      target:
-      builtins.hasAttr target services
-      && (
-        target == start
-        || (!(builtins.elem target seen) && combinedReaches start target (seen ++ [ target ]))
-      )
-    ) (combinedEdges current);
-  combinedGraphAcyclic = lib.all (name: !(combinedReaches name name [ ])) (
-    builtins.attrNames services
-  );
+  combinedGraphAcyclic = acyclic (builtins.attrNames services) combinedEdges;
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")

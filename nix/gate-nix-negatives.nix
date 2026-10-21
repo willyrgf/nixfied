@@ -99,6 +99,14 @@ else
       nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "verify" ];
     })
 
+    (reject "a self-cycle in a step graph" {
+      nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "probe" ];
+    })
+
+    (reject "a self-cycle in connectsTo" {
+      nixfied.services.synthetic.connectsTo = [ "synthetic" ];
+    })
+
     (reject "a runtime-owned PATH declared in env" {
       nixfied.tasks.smoke.invocation.env.PATH = "/usr/bin";
     })
@@ -145,6 +153,10 @@ else
         kind = "composite";
         steps.next.task = "loop-a";
       };
+    })
+
+    (reject "a self-cycle in task references" {
+      nixfied.tasks.pipeline.steps.loop.task = "pipeline";
     })
 
     (reject "a duplicate effective operation id" {
